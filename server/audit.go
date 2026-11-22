@@ -794,6 +794,10 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		}
 		e.Detail["status"] = status
 		e.Detail["reason"] = reasonOf(buf.body.Bytes())
+		if m := buf.header.Get(linkReasonHeader); m != "" && !mutServer("link_reason_html") {
+			// A page (an ack link's, #715): its words, not its HTML.
+			e.Detail["reason"] = capText(m, reasonMax)
+		}
 		if t.failed != nil {
 			for k, v := range t.failed(buf.body.Bytes()) {
 				e.Detail[k] = v
@@ -802,6 +806,7 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 	}
 	e.Before, e.After = audit.Cap(e.Before, valueCap), audit.Cap(e.After, valueCap)
 	a.s.audit.record(e)
+	buf.header.Del(linkReasonHeader) // the seam's, never the client's
 	w.WriteHeader(status)
 	w.Write(buf.body.Bytes())
 }

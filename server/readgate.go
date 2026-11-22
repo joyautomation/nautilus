@@ -200,5 +200,5 @@ func signInPath(p string) bool {
 	return p == "/signin" || p == oidcStartPath || p == oidcCallbackPath || p == oidcElevatedPath ||
 		// An ack link's confirm page (#715): the link is the credential,
 		// and the page sends a browser that must sign in to /signin itself.
-		strings.HasPrefix(p, acklink.Path)
+		(strings.HasPrefix(p, acklink.Path) && !strings.Contains(p[len(acklink.Path):], "/"))
 }

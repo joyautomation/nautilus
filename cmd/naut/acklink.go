@@ -30,6 +30,10 @@ import (
 // (internal/pairkey), so both members check each other's links.
 const AckLinkKeyName = "alarm-link.key"
 
+// minPeerToken is the shortest peer token naut run derives ack links
+// from without a warning.
+const minPeerToken = 32
+
 // linkKinds are the channel kinds whose pages carry an ack link: what a
 // person reads and can tap. A voice call cannot (3b-2 answers by
 // keypress); a webhook goes to a system, not a person, and the link would
@@ -48,6 +52,11 @@ func ackLinkKeyring(proj *project.Project, stateDir, peerToken string, stderr io
 		return nil, errors.New("alarms.oncall.ack-from-notification: sign-in, but nobody can sign in here (no auth: users or auth.oidc): add users (naut users add) or use the default (link)")
 	}
 	if peerToken != "" {
+		if len(peerToken) < minPeerToken {
+			// Every link carries a MAC under a key derived from the token,
+			// so anyone holding a page can test guesses at it offline.
+			fmt.Fprintf(stderr, "naut run: warning: NAUTILUS_PEER_TOKEN is %d characters: ack links let anyone who holds a page test guesses at it offline; use a random token of at least %d (naut redundancy new-pair makes one)\n", len(peerToken), minPeerToken)
+		}
 		k, err := pairkey.Derive([]byte(peerToken), pairkey.AckLink)
 		if err != nil {
 			return nil, err
@@ -67,22 +76,19 @@ func ackLinkKeyring(proj *project.Project, stateDir, peerToken string, stderr io
 	return acklink.New(k)
 }
 
-// loadAckLinkKey reads the key at path, making it first when absent.
+// loadAckLinkKey reads the key at path, making it first when absent. It
+// reads only a plain file, mode 0600, that this process's user owns (a
+// key another local user planted would let them forge any link). Two
+// starts at once make one key: the file appears whole (a hard link of a
+// finished temporary file) or not at all, and the second start reads the
+// first's.
 func loadAckLinkKey(path string) ([]byte, error) {
-	const noun, secret = "the ack-link key file", "the key that signs alarm acknowledgement links"
-	if err := securefile.CheckMode(path, noun, secret); err != nil {
-		return nil, err
-	}
-	b, err := os.ReadFile(path)
+	b, err := readAckLinkKey(path)
 	if errors.Is(err, os.ErrNotExist) {
-		k := make([]byte, 32)
-		if _, err := rand.Read(k); err != nil {
-			return nil, err
-		}
-		if err := securefile.WriteAtomic(path, ".alarm-link-*.key", []byte(hex.EncodeToString(k)+"\n"), os.Geteuid() == 0); err != nil {
+		if err := makeAckLinkKey(path); err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		return k, nil
+		b, err = readAckLinkKey(path)
 	}
 	if err != nil {
 		return nil, err
@@ -92,6 +98,60 @@ func loadAckLinkKey(path string) ([]byte, error) {
 		return nil, fmt.Errorf("%s does not hold an ack-link key: remove it and start again (links already sent stop working)", path)
 	}
 	return k, nil
+}
+
+// ackLinkEuid is os.Geteuid, a variable so a test can be another user.
+var ackLinkEuid = os.Geteuid
+
+// readAckLinkKey reads path after the mode and owner checks.
+func readAckLinkKey(path string) ([]byte, error) {
+	const noun, secret = "the ack-link key file", "the key that signs alarm acknowledgement links"
+	if err := securefile.CheckMode(path, noun, secret); err != nil {
+		return nil, err
+	}
+	st, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := securefile.CheckOwner(path, st, ackLinkEuid(), "naut run"); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+// makeAckLinkKey writes a new random key to a temporary file in path's
+// directory, then links it to path: os.ErrExist when another start made
+// one first.
+func makeAckLinkKey(path string) error {
+	k := make([]byte, 32)
+	if _, err := rand.Read(k); err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".alarm-link-*.key")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.WriteString(hex.EncodeToString(k) + "\n"); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Link(tmp.Name(), path)
 }
 
 // ackLinkHook is the dispatcher's AckLink: the server mints (it holds the

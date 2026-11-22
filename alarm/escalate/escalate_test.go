@@ -170,6 +170,7 @@ func TestPrepareErrors(t *testing.T) {
 		{`oncall: {ack-url: "https://hmi.example/?a=b"}`, "no query"},
 		{`oncall: {ack-url: "hmi.example"}`, "plain URL"},
 		{`oncall: {ack-url-insecure: true}`, "without an ack-url"},
+		{`oncall: {ack-url: "https://hmi.example", ack-url-insecure: true}`, "only for an http"},
 		{`oncall: {ack-url: "https://hmi.example", ack-from-notification: email}`, "ack-from-notification"},
 	}
 	for _, tc := range cases {

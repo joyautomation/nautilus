@@ -454,6 +454,9 @@ var table = []mutation{
 	{"link_ignores_standing", []string{"TestAckLinkStopsWithItsPerson"}},
 	{"link_sign_in_ignored", []string{"TestAckLinkSignInMode"}},
 	{"link_needs_write_rule", []string{"TestAckLinkNeedsNoOtherCredential"}},
+	{"link_not_forwarded", []string{"TestAckLinkIsForwardedByAStandby"}},
+	{"link_reason_html", []string{"TestAckLinkRefusalReasonIsWords", "TestAckLinkWithNoLeaderSaysSo"}},
+	{"link_acks_on_standby", []string{"TestAckLinkNotLeadingNeverAcksItsEngine"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -559,6 +562,9 @@ var rowPkgs = map[string][]string{
 	"link_ignores_standing":             {"./server"},
 	"link_sign_in_ignored":              {"./server"},
 	"link_needs_write_rule":             {"./server"},
+	"link_not_forwarded":                {"./server"},
+	"link_reason_html":                  {"./server"},
+	"link_acks_on_standby":              {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},
 	"redundancy_same_origin":            {"./server"},

@@ -1059,7 +1059,11 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			mux.ServeHTTP(w, r)
 			return
 		}
-		if !strings.HasPrefix(r.URL.Path, "/api/") ||
+		// An ack link (#715) acts on the leader's alarms, as an API write
+		// does: a standby forwards it (the leader checks it with the same
+		// pair-derived key), and never answers it from its own engine.
+		link := strings.HasPrefix(r.URL.Path, acklink.Path) && !mutServer("link_not_forwarded")
+		if (!strings.HasPrefix(r.URL.Path, "/api/") && !link) ||
 			r.URL.Path == "/api/cluster" ||
 			// The pair's operator commands act on this controller and its
 			// members, never on the leader's tag store, and are needed
@@ -1070,6 +1074,19 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			return
 		}
 		st := s.cluster.Status()
+		if link && (noLeaderKnown(st) || heldHere(st)) {
+			// Nobody here can act on the alarm: say so on the page, for a
+			// GET too (this store's engine does not scan).
+			const msg = "No controller is leading right now, so the alarm cannot be acknowledged from here. Try the link again in a minute, or open the HMI."
+			if r.Method == http.MethodPost {
+				auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
+					s.linkRefused(w, http.StatusServiceUnavailable, msg)
+				})
+				return
+			}
+			s.linkPage(w, http.StatusServiceUnavailable, linkPageData{Title: "Not acknowledged", Error: msg})
+			return
+		}
 		if noLeaderKnown(st) {
 			// A redundant pair's standby that knows no leader (an election
 			// under way, the leader gone, a pair not yet commissioned): a
@@ -1121,7 +1138,7 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 		// (only the leader can revoke the session) and any request with
 		// the sign-in cookie and no bearer credential are referred to it.
 		s.endSessionsAsStandby()
-		if standbyRefers(r) {
+		if standbyRefers(r) && !link {
 			auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
 				s.referToLeader(w, s.leaderURLs[st.Leader])
 			})

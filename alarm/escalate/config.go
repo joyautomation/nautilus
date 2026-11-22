@@ -99,6 +99,9 @@ func (o *Oncall) prepareAck() error {
 	}
 	switch u.Scheme {
 	case "https":
+		if o.AckURLInsecure {
+			return fmt.Errorf("alarms.oncall.ack-url-insecure: true is only for an http:// ack-url; %q is https, so remove the option", o.AckURL)
+		}
 	case "http":
 		if !o.AckURLInsecure {
 			return fmt.Errorf("alarms.oncall.ack-url: %q is http: a link acknowledges as the person paged, so it must not cross the network in plaintext; use https, or set ack-url-insecure: true to accept that", o.AckURL)

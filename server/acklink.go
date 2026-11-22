@@ -216,8 +216,7 @@ func linkAuditTarget(r *http.Request, _ []byte) auditTarget {
 func (s *Server) checkLink(route *auditedRoute, w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	refuseWith := func(r *http.Request, t auditTarget, code int, msg string) (*http.Request, bool) {
 		route.answer(w, s.withActor(r), t, func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set(outcomeHeader, "refused")
-			s.linkPage(w, code, linkPageData{Title: "Not acknowledged", Error: msg})
+			s.linkRefused(w, code, msg)
 		})
 		return r, false
 	}
@@ -257,12 +256,16 @@ func linkRefusal(err error) (int, string, auditTarget) {
 // handleAckLink acknowledges by a checked link, behind the audit seam.
 func (s *Server) handleAckLink(w http.ResponseWriter, r *http.Request) {
 	c, _ := linkOf(r)
-	fail := func(code int, msg string) {
-		w.Header().Set(outcomeHeader, "refused")
-		s.linkPage(w, code, linkPageData{Title: "Not acknowledged", Error: msg})
-	}
+	fail := func(code int, msg string) { s.linkRefused(w, code, msg) }
 	if s.alarms == nil {
 		fail(http.StatusNotFound, noAlarms)
+		return
+	}
+	if s.cluster != nil && !s.cluster.Status().IsLeader && !mutServer("link_acks_on_standby") {
+		// A replica that does not lead never acts on its own engine (the
+		// standby proxy forwards a link; this is a replica with no
+		// leader's address to forward to).
+		fail(http.StatusServiceUnavailable, "This controller is not leading, so it cannot acknowledge the alarm. Try the link again in a minute, or open the HMI.")
 		return
 	}
 	if code, msg := s.authorize(r, PermAck, s.alarmTag(c.Alarm)); code != 0 {
@@ -309,6 +312,7 @@ func (s *Server) handleAckLink(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(msg, alarm.ErrOtherOccurrence.Error()) {
 			msg = "The alarm returned to normal and activated again since this page was sent, so this link no longer applies. Open the HMI to see it."
 		}
+		w.Header().Set(linkReasonHeader, msg)
 		s.linkPage(w, status, linkPageData{Title: "Not acknowledged", Error: msg})
 		return
 	}
@@ -387,6 +391,19 @@ func (s *Server) linkPageFor(c acklink.Claim) linkPageData {
 		}
 	}
 	return d
+}
+
+// linkReasonHeader carries a refused link page's message from the
+// handler to the audit seam, which journals it as the reason (the body is
+// HTML) and strips the header before answering.
+const linkReasonHeader = "X-Nautilus-Link-Reason"
+
+// linkRefused answers a refused link press: the page with msg, marked
+// refused for the seam, msg as the journal's reason.
+func (s *Server) linkRefused(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set(outcomeHeader, "refused")
+	w.Header().Set(linkReasonHeader, msg)
+	s.linkPage(w, code, linkPageData{Title: "Not acknowledged", Error: msg})
 }
 
 // linkPage answers with the confirm (or result) page.

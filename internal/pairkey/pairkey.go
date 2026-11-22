@@ -5,7 +5,10 @@
 // Each purpose gets its own key, by its label, so no two uses ever share
 // one: the peer token itself authenticates the peer channel and keys the
 // contacts digest, and a key derived here for ack links says nothing
-// about either. A key is never stored: both members derive the same one
+// about either. The token must be random and long (naut redundancy
+// new-pair makes one): a key derived here may sign things that leave the
+// box (an ack link in an email), and anyone holding one can test guesses
+// at a short token offline. A key is never stored: both members derive the same one
 // from the same token, so it survives a takeover with nothing to copy.
 package pairkey
 

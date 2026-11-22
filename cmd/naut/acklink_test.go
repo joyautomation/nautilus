@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -163,5 +164,52 @@ func TestAckLinkHookKinds(t *testing.T) {
 				t.Errorf("%s: claim %+v %v", via, c, err)
 			}
 		}
+	}
+}
+
+// A short peer token is warned about: every link is an offline check of
+// a guess at it. A random one (naut redundancy new-pair) is not.
+func TestAckLinkWarnsOfAShortPeerToken(t *testing.T) {
+	proj := linkProject(t, "    ack-url: https://hmi.example\n")
+	var out bytes.Buffer
+	ackLinkKeyring(proj, "", "short", &out)
+	if !strings.Contains(out.String(), "NAUTILUS_PEER_TOKEN is 5 characters") {
+		t.Fatalf("no warning: %q", out.String())
+	}
+	out.Reset()
+	ackLinkKeyring(proj, "", strings.Repeat("r", minPeerToken), &out)
+	if out.Len() != 0 {
+		t.Fatalf("a long token warned: %q", out.String())
+	}
+}
+
+// Two starts at once on one state directory make one key, and both read
+// it; a key file another user owns is refused (it could forge links).
+func TestAckLinkKeyFileIsMadeOnceAndOwned(t *testing.T) {
+	sd := t.TempDir()
+	os.Chmod(sd, 0o700)
+	path := filepath.Join(sd, AckLinkKeyName)
+	const n = 8
+	keys := make([][]byte, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() { defer wg.Done(); keys[i], errs[i] = loadAckLinkKey(path) }()
+	}
+	wg.Wait()
+	for i := range n {
+		if errs[i] != nil || !bytes.Equal(keys[i], keys[0]) {
+			t.Fatalf("start %d: %x %v; want everyone on %x", i, keys[i], errs[i], keys[0])
+		}
+	}
+	if left, _ := filepath.Glob(filepath.Join(sd, ".alarm-link-*")); len(left) != 0 {
+		t.Fatalf("temporary files left: %v", left)
+	}
+	old := ackLinkEuid
+	ackLinkEuid = func() int { return os.Geteuid() + 1 }
+	t.Cleanup(func() { ackLinkEuid = old })
+	if _, err := loadAckLinkKey(path); err == nil || !strings.Contains(err.Error(), "owned by uid") {
+		t.Fatalf("another user's key file: %v", err)
 	}
 }

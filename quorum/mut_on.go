@@ -314,6 +314,9 @@ var Mutations = []string{
 	"link_ignores_standing",             // server: an ack link acts for a user who is not enabled or not in the users file (#715)
 	"link_sign_in_ignored",              // server: ack-from-notification: sign-in lets the link alone acknowledge (#715)
 	"link_needs_write_rule",             // server: an ack link without an auth: block needs NAUTILUS_TOKEN too (#715)
+	"link_not_forwarded",                // server: a standby answers an ack link itself instead of forwarding it to the leader (#715)
+	"link_reason_html",                  // server: a refused ack link is journalled with its page's HTML as the reason (#715)
+	"link_acks_on_standby",              // server: a replica that does not lead acknowledges an ack link on its own engine (#715)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

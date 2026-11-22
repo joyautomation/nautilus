@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http/httptest"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -15,6 +17,7 @@ import (
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/internal/pairkey"
+	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
 )
 
@@ -473,5 +476,116 @@ func TestAckLinkUnknownOutcomePage(t *testing.T) {
 func TestAckLinkRoutesAreAcklinkPath(t *testing.T) {
 	if acklink.Path != "/alarm-ack/" {
 		t.Fatalf("acklink.Path is %q: change the two routes in server.go with it", acklink.Path)
+	}
+}
+
+// A link that lands on a standby is the leader's to answer: GET and POST
+// are forwarded (the leader checks the link with the same pair key), with
+// a sign-in cookie or without; the standby's own engine is never asked.
+func TestAckLinkIsForwardedByAStandby(t *testing.T) {
+	var paths []string
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		w.Write([]byte("from-leader"))
+	}))
+	defer backend.Close()
+	s := auditServer(t, Options{Cluster: fakeCluster{status: leader.Status{
+		Mode: "quorum", Pod: "b", Leader: "a", LeaderAddr: standbyAddr(backend)}}})
+	withLinks(t, s)
+	path, _ := linkPath(t, s, "HiTemp", "alice")
+	for _, m := range []string{"GET", "POST"} {
+		rec := call(t, s, m, path, "", withCookie("some-session"))
+		if !strings.Contains(rec.Body.String(), "from-leader") {
+			t.Fatalf("%s on the standby: %d %s", m, rec.Code, rec.Body)
+		}
+	}
+	if len(paths) != 2 || paths[0] != "GET "+path || paths[1] != "POST "+path {
+		t.Fatalf("the leader saw %v", paths)
+	}
+	if st := state(s.alarms, "HiTemp"); st != alarm.UnackActive {
+		t.Fatalf("the standby's engine was acked: %s", st)
+	}
+}
+
+// With no leader known, a link can do nothing here: GET and POST answer a
+// page that says so (not "retry" on a standby's engine), the press is
+// journalled with that reason in words, and nothing is acknowledged.
+func TestAckLinkWithNoLeaderSaysSo(t *testing.T) {
+	s := auditServer(t, Options{Cluster: fakeCluster{status: leader.Status{Mode: "quorum", Pod: "b"}}})
+	withLinks(t, s)
+	path, _ := linkPath(t, s, "HiTemp", "alice")
+	for _, m := range []string{"GET", "POST"} {
+		rec := call(t, s, m, path, "")
+		if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "No controller is leading") {
+			t.Fatalf("%s with no leader: %d %s", m, rec.Code, rec.Body)
+		}
+		if rec.Header().Get(linkReasonHeader) != "" {
+			t.Fatal("the seam's reason header reached the client")
+		}
+	}
+	if e := lastAudit(t, s); e.Result == audit.ResultOK || !strings.Contains(fmt.Sprint(e.Detail["reason"]), "No controller is leading") {
+		t.Fatalf("audit %+v", e)
+	}
+	if st := state(s.alarms, "HiTemp"); st != alarm.UnackActive {
+		t.Fatalf("acked %s", st)
+	}
+}
+
+// A replica that does not lead and has no leader's address (the proxy
+// lets it answer) never acknowledges on its own engine.
+func TestAckLinkNotLeadingNeverAcksItsEngine(t *testing.T) {
+	s := auditServer(t, Options{Cluster: fakeCluster{status: leader.Status{Mode: "cluster", Pod: "b"}}})
+	withLinks(t, s)
+	path, _ := linkPath(t, s, "HiTemp", "alice")
+	rec := call(t, s, "POST", path, "")
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "not leading") {
+		t.Fatalf("POST on a replica not leading: %d %s", rec.Code, rec.Body)
+	}
+	if st := state(s.alarms, "HiTemp"); st != alarm.UnackActive {
+		t.Fatalf("acked %s", st)
+	}
+}
+
+// A refused press is journalled with the page's words as its reason,
+// never its HTML.
+func TestAckLinkRefusalReasonIsWords(t *testing.T) {
+	s := auditServer(t, Options{})
+	withLinks(t, s)
+	path, _ := linkPath(t, s, "HiTemp", "alice")
+	call(t, s, "POST", path, "")
+	rec := call(t, s, "POST", path, "")
+	r := fmt.Sprint(lastAudit(t, s).Detail["reason"])
+	if !strings.Contains(r, "already used") || strings.Contains(r, "<") {
+		t.Fatalf("reason %q", r)
+	}
+	if rec.Header().Get(linkReasonHeader) != "" {
+		t.Fatal("the seam's reason header reached the client")
+	}
+	call(t, s, "POST", acklink.Path+"forged", "")
+	if r := fmt.Sprint(lastAudit(t, s).Detail["reason"]); !strings.Contains(r, "not valid") || strings.Contains(r, "<") {
+		t.Fatalf("forged link reason %q", r)
+	}
+}
+
+// A superseded history drops the view's acks, not the spent links: a link
+// refused once too often costs a visit to the HMI, one honoured twice an
+// ack nobody gave.
+func TestSpentLinksOutliveADroppedView(t *testing.T) {
+	var lead atomic.Bool
+	_, _, al, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true}, &lead)
+	al.Apply(oplog.Entry{Kind: oplog.KindAck, IDs: []string{"HiTemp"}, By: "a", Link: "l1", TS: 1})
+	al.dropView()
+	if !al.LinkSpent("l1") {
+		t.Fatal("dropping the view forgot a spent link")
+	}
+}
+
+// The read gate lets through only the link's own page, one segment: a
+// deeper path under it is a page like any other.
+func TestReadGateExemptsOnlyTheLinkPage(t *testing.T) {
+	for p, want := range map[string]bool{acklink.Path + "tok": true, acklink.Path + "a/b": false, "/alarm-acks": false, "/signin": true} {
+		if signInPath(p) != want {
+			t.Errorf("signInPath(%q) = %v", p, !want)
+		}
 	}
 }
