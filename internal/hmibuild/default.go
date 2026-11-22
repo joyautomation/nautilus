@@ -83,7 +83,7 @@ type galleryComp struct {
 func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSource, error) {
 	mimics := Mimics(project)
 	mimics = schemesLast(mimics, areas)
-	if len(mimics) == 0 && len(extra) == 0 && len(areas) == 0 {
+	if len(mimics) == 0 && len(extra) == 0 {
 		return nil, &Error{Messages: []string{"nothing to build: the project has no hmi/ app (src/routes) and no *.mimic.json"}}
 	}
 	sources := componentSources(project)

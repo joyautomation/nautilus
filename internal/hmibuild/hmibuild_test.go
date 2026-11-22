@@ -528,3 +528,10 @@ func TestLayoutNavWrapsOnAPhone(t *testing.T) {
 		t.Error("the nav does not wrap at phone width")
 	}
 }
+
+// Areas with no equipment that makes a page do not make an HMI with no pages.
+func TestAreasAloneAreNothingToBuild(t *testing.T) {
+	if _, err := Build(Options{Project: t.TempDir(), Title: "t", Areas: []json.RawMessage{json.RawMessage(`{"id":"A","label":"A","assets":[]}`)}}); err == nil {
+		t.Error("an area with no assets must say there is nothing to build")
+	}
+}

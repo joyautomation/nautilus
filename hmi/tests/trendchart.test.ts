@@ -70,6 +70,11 @@ describe('niceDomain', () => {
 		const none = niceDomain(Infinity, -Infinity);
 		expect(none.hi > none.lo).toBe(true);
 	});
+	it('a series flat at zero has room above the line', () => {
+		const d = niceDomain(0, 0);
+		expect(d.lo).toBe(0);
+		expect(d.hi > 0).toBe(true);
+	});
 	it('data crossing zero keeps both sides', () => {
 		const d = niceDomain(-10, 30);
 		expect(d.lo <= -10 && d.hi >= 30).toBe(true);

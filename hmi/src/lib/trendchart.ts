@@ -60,5 +60,6 @@ export function niceDomain(min: number, max: number): { lo: number; hi: number }
 	let hi = Math.ceil((max + span * 0.12) / step) * step;
 	if (min >= 0 && lo < 0) lo = 0;
 	if (max <= 0 && hi > 0) hi = 0;
+	if (hi <= lo) hi = lo + step; // data flat at zero: room above it
 	return { lo, hi };
 }
