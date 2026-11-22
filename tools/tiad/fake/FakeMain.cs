@@ -267,6 +267,7 @@ namespace Tiad.Fake
         bool noIdentify;
         PasswordPolicy policy = new PasswordPolicy();
         string uploadAccess = UploadedAccessControl;
+        bool uploadWeb;
         string accessRecords = "";
 
         // AccessRecords is what an open does to tiad's records in a saved
@@ -298,6 +299,19 @@ namespace Tiad.Fake
                 lock (mu)
                 {
                     return new PasswordPolicy { MinLength = policy.MinLength, MinDigits = policy.MinDigits, MinSpecial = policy.MinSpecial, UpperAndLower = policy.UpperAndLower };
+                }
+            }
+        }
+
+        // UploadWebServer is whether an upload brings a CPU whose web
+        // server is on (the bench CPU's is off).
+        public bool UploadWebServer
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadWeb;
                 }
             }
         }
@@ -697,6 +711,7 @@ namespace Tiad.Fake
                 pol.UpperAndLower = pr.Bool("upperAndLower");
             }
             string upAccess = r.Str("uploadAccessControl");
+            bool upWeb = r.Bool("uploadWebServer");
             string records = r.Str("accessRecords");
             if (upAccess == "") upAccess = UploadedAccessControl;
             var qs = new List<Question>();
@@ -734,6 +749,7 @@ namespace Tiad.Fake
                 noIdentify = noId;
                 policy = pol;
                 uploadAccess = upAccess;
+                uploadWeb = upWeb;
                 accessRecords = records;
             }
             return new Obj();
@@ -779,7 +795,7 @@ namespace Tiad.Fake
         // WebServer and WebInterface are the CPU's WebserverActivate and
         // its interface's UseWebServerForInterface: off on a new CPU, as on
         // the bench CPU an upload brings.
-        public bool WebServer, WebInterface;
+        public bool WebServer, WebInterface, WebHttpsOnly;
         // AccessControl is the CPU's PLC access control (AccessRule's
         // states): a new CPU is EnabledWithAccessControl, as TIA makes one;
         // an upload brings the bench CPU's Disabled. Users and Roles are
@@ -840,6 +856,7 @@ namespace Tiad.Fake
             AccessControl = from.AccessControl;
             WebServer = from.WebServer;
             WebInterface = from.WebInterface;
+            WebHttpsOnly = from.WebHttpsOnly;
             Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
             foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Comment = kv.Value.Comment, History = new List<string>(kv.Value.History), Roles = new HashSet<string>(kv.Value.Roles) };
             Roles = new Dictionary<string, bool>(from.Roles, StringComparer.Ordinal);
@@ -881,9 +898,15 @@ namespace Tiad.Fake
             return p.WebInterface;
         }
 
+        public bool HttpsOnly()
+        {
+            return p.WebHttpsOnly;
+        }
+
         public void Set(bool on)
         {
             p.WebServer = on;
+            if (on) p.WebHttpsOnly = true;
             p.WebInterface = on;
         }
     }
@@ -1644,8 +1667,9 @@ namespace Tiad.Fake
             up.Protection = ConfigProtection.None;
             up.ProtectedWith = "";
             up.AccessControl = script.UploadAccessControl;
-            up.WebServer = false;
-            up.WebInterface = false;
+            up.WebServer = script.UploadWebServer;
+            up.WebInterface = script.UploadWebServer;
+            up.WebHttpsOnly = false;
             up.DropGrants();
             DeviceIdentity d = script.Device;
             up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };

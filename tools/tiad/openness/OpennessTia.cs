@@ -991,11 +991,12 @@ namespace Tiad.Openness
             // It never fails an apply: a read it cannot make is logged.
             public void LogRights()
             {
-                if (rightsLogged || State() != AccessRule.Enabled) return;
-                rightsLogged = true;
+                if (rightsLogged) return;
                 try
                 {
+                    if (State() != AccessRule.Enabled) return;
                     LogRightsNow();
+                    rightsLogged = true;
                 }
                 catch (Exception e)
                 {
@@ -1068,22 +1069,31 @@ namespace Tiad.Openness
                 return (bool)Interface().GetAttribute("UseWebServerForInterface");
             }
 
+            // WebserverHttpsOnly shows only while the server is on (seen on
+            // the TIA machine, 2026-11-22).
+            public bool HttpsOnly()
+            {
+                return (bool)cpu.GetAttribute("WebserverHttpsOnly");
+            }
+
+            // Set reads each switch first and writes only one that differs,
+            // so an apply that leaves a server off writes nothing.
             public void Set(bool on)
             {
                 DeviceItem i = Interface();
+                IWebServer self = this;
                 if (on)
                 {
-                    tia.Set("DeviceItem", cpu, "WebserverActivate", true);
-                    // Attributes that only show once the server is on (an
-                    // HTTPS-only switch, a certificate) are logged here.
-                    tia.Attributes("DeviceItem (web server on)", cpu);
-                    tia.Set("Interface", i, "UseWebServerForInterface", true);
-                    tia.Attributes("Interface (web server on)", i);
+                    if (!self.Server()) tia.Set("DeviceItem", cpu, "WebserverActivate", true);
+                    // WebserverHttpsOnly shows only once the server is on;
+                    // Set checks it is offered.
+                    if (!HttpsOnly()) tia.Set("DeviceItem (web server on)", cpu, "WebserverHttpsOnly", true);
+                    if (!self.Interface()) tia.Set("Interface", i, "UseWebServerForInterface", true);
                 }
                 else
                 {
-                    tia.Set("Interface", i, "UseWebServerForInterface", false);
-                    tia.Set("DeviceItem", cpu, "WebserverActivate", false);
+                    if (self.Interface()) tia.Set("Interface", i, "UseWebServerForInterface", false);
+                    if (self.Server()) tia.Set("DeviceItem", cpu, "WebserverActivate", false);
                 }
             }
         }

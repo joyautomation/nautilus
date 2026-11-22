@@ -70,6 +70,47 @@ func contractWebServer(t *testing.T, start Starter) {
 		})
 	}
 
+	t.Run("KeptAsFound", func(t *testing.T) {
+		// An uploaded CPU serving the web over access control off: left
+		// out, it is kept as found, never silently; off turns it off.
+		a := start(t, Config{Targets: []string{benchCPU}})
+		a.SetAccess(t, AccessScript{UploadWebServer: true})
+		c := a.Client()
+		installGSD(t, c)
+		s, err := c.CreateProject(ctx, "web", BenchStation(), BenchSecrets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil {
+			t.Fatal(err)
+		}
+		r, err := s.ApplyStation(ctx, adoptedStation(), BenchSecrets)
+		if err != nil || !noteWith(r.Notes, WebAnonymousNote) {
+			t.Fatalf("a kept CPU serving Anonymous, webServer left out: %+v %v", r, err)
+		}
+		// Kept as found: applying it again still says so.
+		if r, err := s.ApplyStation(ctx, adoptedStation(), BenchSecrets); err != nil || !noteWith(r.Notes, WebAnonymousNote) {
+			t.Fatalf("again: %+v %v", r, err)
+		}
+		off := adoptedStation()
+		off.WebServer = &tiad.WebServer{Enabled: false}
+		if r, err := s.ApplyStation(ctx, off, BenchSecrets); err != nil || noteWith(r.Notes, WebAnonymousNote) {
+			t.Fatalf("turned off: %+v %v", r, err)
+		}
+		if r, err := s.ApplyStation(ctx, adoptedStation(), BenchSecrets); err != nil || noteWith(r.Notes, WebAnonymousNote) {
+			t.Fatalf("left out after turning it off: %+v %v", r, err)
+		}
+
+		// Over access control on, a server found on is nothing to say.
+		a.SetAccess(t, AccessScript{UploadWebServer: true, UploadAccessControl: AccessEnabled})
+		if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil {
+			t.Fatal(err)
+		}
+		if r, err := s.ApplyStation(ctx, adoptedStation(), BenchSecrets); err != nil || noteWith(r.Notes, WebAnonymousNote) {
+			t.Fatalf("a kept CPU serving the web over access control on: %+v %v", r, err)
+		}
+	})
+
 	t.Run("KeptEnabled", func(t *testing.T) {
 		a := start(t, Config{Targets: []string{benchCPU}})
 		a.SetAccess(t, AccessScript{UploadAccessControl: AccessEnabled})

@@ -13,7 +13,7 @@ namespace Tiad.Test
         // make a write leave that switch as it was.
         sealed class ScriptedWeb : IWebServer
         {
-            public bool On, Iface, IgnoreServer, IgnoreInterface;
+            public bool On, Iface, Https, IgnoreServer, IgnoreInterface, IgnoreHttps;
             public List<string> Calls = new List<string>();
 
             public bool Server()
@@ -26,10 +26,16 @@ namespace Tiad.Test
                 return Iface;
             }
 
+            public bool HttpsOnly()
+            {
+                return Https;
+            }
+
             public void Set(bool on)
             {
                 Calls.Add(on ? "on" : "off");
                 if (!IgnoreServer) On = on;
+                if (on && !IgnoreHttps) Https = true;
                 if (!IgnoreInterface) Iface = on;
             }
         }
@@ -70,7 +76,7 @@ namespace Tiad.Test
             var w = new ScriptedWeb();
             var notes = new List<string>();
             WebSteps.Run(w, new ScriptedAccess(), on, false, notes);
-            True(w.On && w.Iface, "on over access control on");
+            True(w.On && w.Iface && w.Https, "on over access control on, HTTPS only");
             Eq(string.Join(",", w.Calls.ToArray()), "on", "one write");
             Eq(string.Join("|", notes.ToArray()), WebSteps.OnNote, "the note");
 
@@ -91,10 +97,22 @@ namespace Tiad.Test
                 }
             }
 
-            w = new ScriptedWeb { On = true, Iface = true };
-            WebSteps.Run(w, new ScriptedAccess { State_ = "Disabled" }, null, false, new List<string>());
-            Eq(w.Calls.Count, 0, "absent leaves a kept CPU's server as found");
-            True(w.On, "still on");
+            foreach (string st in NotEnabled)
+            {
+                w = new ScriptedWeb { On = true, Iface = true };
+                notes = new List<string>();
+                WebSteps.Run(w, new ScriptedAccess { State_ = st }, null, false, notes);
+                Eq(w.Calls.Count, 0, st + ": absent leaves a kept CPU's server as found");
+                True(w.On, st + ": still on");
+                Eq(string.Join("|", notes.ToArray()), WebSteps.AnonymousNote, st + ": but says it serves Anonymous");
+            }
+            w = new ScriptedWeb { On = true, Iface = true, Https = true };
+            notes = new List<string>();
+            WebSteps.Run(w, new ScriptedAccess(), null, false, notes);
+            Eq(notes.Count, 0, "on over access control on, left out: nothing to say");
+            w = new ScriptedWeb();
+            WebSteps.Run(w, new ScriptedAccess { State_ = "Disabled" }, null, false, notes);
+            Eq(notes.Count + w.Calls.Count, 0, "off over access control off, left out: nothing");
             w = new ScriptedWeb { On = true, Iface = true };
             WebSteps.Run(w, new ScriptedAccess { State_ = "Disabled" }, null, true, new List<string>());
             True(!w.On && !w.Iface, "absent turns a new CPU's server off");
@@ -109,6 +127,12 @@ namespace Tiad.Test
             w = new ScriptedWeb { On = true, Iface = true, IgnoreServer = true };
             e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = false }, false, new List<string>()); }, "server ignored");
             if (e != null) Eq(e.Message, "after turning the web server off the CPU reads WebserverActivate true and UseWebServerForInterface false", "server ignored");
+            w = new ScriptedWeb { IgnoreHttps = true };
+            e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = true }, true, new List<string>()); }, "HTTPS only ignored");
+            if (e != null) Eq(e.Message, "after turning the web server on the CPU reads WebserverHttpsOnly false", "HTTPS only ignored");
+            // Off does not need HTTPS only.
+            w = new ScriptedWeb { On = true, Iface = true, IgnoreHttps = true };
+            WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = false }, false, new List<string>());
         }
     }
 }

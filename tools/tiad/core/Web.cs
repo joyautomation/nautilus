@@ -10,9 +10,9 @@ using System.Collections.Generic;
 namespace Tiad
 {
     // IWebServer is the CPU's web server as TIA's Openness offers it: the
-    // CPU's WebserverActivate and its PROFINET interface's
-    // UseWebServerForInterface. tiad.Openness wraps TIA's; the fakes model
-    // it.
+    // CPU's WebserverActivate and WebserverHttpsOnly, and its PROFINET
+    // interface's UseWebServerForInterface. tiad.Openness wraps TIA's; the
+    // fakes model it.
     public interface IWebServer
     {
         // Server is the CPU's WebserverActivate.
@@ -20,8 +20,12 @@ namespace Tiad
         // Interface is UseWebServerForInterface on the interface that
         // carries the CPU's address.
         bool Interface();
-        // Set writes both: on turns the server on, then the interface;
-        // off turns the interface off, then the server.
+        // HttpsOnly is the CPU's WebserverHttpsOnly (TIA offers it only
+        // while the server is on).
+        bool HttpsOnly();
+        // Set writes the switches that differ: on turns the server on,
+        // HTTPS only, then the interface; off turns the interface off,
+        // then the server.
         void Set(bool on);
     }
 
@@ -65,7 +69,18 @@ namespace Tiad
         // EnabledWithAccessControl before writing.
         public static void Run(IWebServer w, IAccessControl c, WebServer want, bool madeCpu, List<string> notes)
         {
-            if (want == null && !madeCpu) return;
+            if (want == null && !madeCpu)
+            {
+                // As found, but never silently: a kept CPU serving the web
+                // over access control off serves "Anonymous" with full
+                // rights, and a download would load that.
+                if (w.Server() && WebRule.Refusal(c.State()) != null)
+                {
+                    Log.Line("WARNING web server: the kept CPU's web server is on over access control {0}, left as found (webServer left out)", Json.Quote(c.State()));
+                    notes.Add(AnonymousNote);
+                }
+                return;
+            }
             bool on = want != null && want.Enabled;
             if (on)
             {
@@ -79,10 +94,16 @@ namespace Tiad
                 throw new TiaException("after turning the web server " + (on ? "on" : "off") + " the CPU reads WebserverActivate " +
                     (server ? "true" : "false") + " and UseWebServerForInterface " + (iface ? "true" : "false"));
             }
+            // Every CPU tiad serves a web server on has a user with a
+            // password (the Full access user at least): never over plain
+            // HTTP.
+            if (on && !w.HttpsOnly()) throw new TiaException("after turning the web server on the CPU reads WebserverHttpsOnly false");
             Log.Line("web server: {0}", on ? "on" : "off");
             if (on) notes.Add(OnNote);
         }
 
-        public const string OnNote = "the web server is on, over access control EnabledWithAccessControl: a web client may do what the runtime rights of its user's roles on this CPU allow";
+        public const string AnonymousNote = "WARNING: the kept CPU's web server is on and its access control is not on, so it lets anyone in as \"Anonymous\" with full rights; webServer is left out, so tiad leaves it as found, and a download loads it so: set webServer.enabled to false to turn it off";
+
+        public const string OnNote = "the web server is on, HTTPS only, over access control EnabledWithAccessControl: a web client may do what the runtime rights of its user's roles on this CPU allow";
     }
 }

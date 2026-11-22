@@ -76,6 +76,7 @@ type Fake struct {
 	// ("": Disabled). Set them with SetAccess.
 	policy        *PasswordPolicy
 	uploadAccess  string
+	uploadWeb     bool
 	accessRecords string
 
 	// fingerprint scripts the fingerprint reads (SetFingerprint).
@@ -1727,7 +1728,7 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	// its IO device, which the CPU's station does not hold.
 	s.protection, s.protectedWith = ProtectionNone, ""
 	s.accessControl = f.uploadAccessControl()
-	s.webServer = false
+	s.webServer = f.uploadWeb
 	s.access.dropGrants()
 	// What this session made in the users and roles belongs to the
 	// station the upload replaces.
