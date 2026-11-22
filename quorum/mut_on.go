@@ -339,6 +339,16 @@ var Mutations = []string{
 	"empty_pair_needs_accept",           // oplog: a new pair's vouch after a restart needs --accept-loss though no copy holds anything (#1029 3c-3c-2b, S2)
 	"set_aside_forgotten",               // oplog: a second identity change before a copy synced forgets the first one's set-aside log (#1207 re-check)
 	"empty_pair_unchecked",              // oplog: the plain vouch for a new pair skips its four conditions (#1029 3c-3c-2b, S2)
+	"peer_tls_short_token",              // peertls: a peer token under 32 characters keys peer TLS (#710)
+	"peer_tls_server_any_client",        // peertls: a peer listener asks for no client certificate (#710)
+	"peer_tls_client_any_server",        // peertls: a peer call accepts any server key (#710)
+	"peer_tls_default_off",              // naut: a pair and a witness run plain HTTP unless peer TLS is asked for (#710)
+	"peer_tls_log_plain",                // oplog: the log's calls ignore peer TLS and go out plain (#710)
+	"peer_bind_gives_up",                // naut: a peer port whose address is not up yet refuses the start (#1230 review)
+	"peer_bind_loopback_taken",          // naut: a peers: name that binds to loopback is served (#1230 review)
+	"peer_bind_wildcard",                // naut: a pair member's peer listener binds every interface, not the address peers: names (#710)
+	"peer_tls_handshake_unbounded",      // node: a peer TLS handshake has no bound of its own (#1230 review)
+	"peer_tls_mismatch_unnamed",         // node: a peer that speaks the other protocol, or holds another key, raises nothing (#710)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

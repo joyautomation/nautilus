@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -86,6 +87,11 @@ type forceEntry struct {
 	path    []string // member path below the root; nil = the whole tag
 	val     ir.Value // the forced value, already coerced to the member's type
 	sinceMs int64
+	// gen is which force this is: a number nothing else has, stamped each time
+	// the entry is set. A caller that must remove only the force it put there
+	// (an I/O checkout, #719) keeps it and asks UnforceIf, so a force someone
+	// else set or changed since is left alone.
+	gen uint64
 }
 
 // apply lays every force of the set over v and returns the result. Forces
@@ -129,6 +135,14 @@ func declaredPath(v ir.Value, path []string) []string {
 	copy(out, path)
 	for i, seg := range out {
 		if strings.HasPrefix(seg, "[") {
+			// one spelling of an index: "[01]" and "[+1]" name element 1, kept
+			// as "[1]", so the force is found (and its overlaps seen) however
+			// it was typed
+			if strings.HasSuffix(seg, "]") {
+				if n, err := strconv.Atoi(strings.TrimSpace(seg[1 : len(seg)-1])); err == nil {
+					out[i] = "[" + strconv.Itoa(n) + "]"
+				}
+			}
 			if v.Kind != ir.TypeArray || len(v.Arr) == 0 {
 				break
 			}
@@ -168,19 +182,121 @@ func (t *Tags) ForceLenient(addr string, v any) error {
 }
 
 func (t *Tags) force(addr string, v any, strict bool) error {
+	_, _, err := t.forceGen(addr, v, strict, false)
+	return err
+}
+
+// forceKeyLocked is addr as the force table keys it: the root tag in the
+// store's spelling, members as the struct declares them, one "[n]" per index
+// (spaces, a sign, leading zeros and "[i,j]" all reduced to it). It is the
+// one place an address becomes a key: every function of the table that takes
+// an address (set, remove, look up, overlap) goes through it, so two spellings
+// of one element are one entry, never two and never one with two names. An
+// address that resolves to no tag is its own key. The caller holds t.mu.
+func (t *Tags) forceKeyLocked(addr string) string {
+	if root, path, _, err := t.resolveForceAddr(addr); err == nil {
+		return ir.JoinPath(root, path)
+	}
+	return addr
+}
+
+// ForceKey is the name the table keeps a force on addr under (forceKeyLocked).
+func (t *Tags) ForceKey(addr string) string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.forceKeyLocked(addr)
+}
+
+// ErrAlreadyForced is what ForceIfFree answers for an address (or a member
+// or the whole tag around it) that is forced already.
+var ErrAlreadyForced = fmt.Errorf("already forced")
+
+// ForceIfFree is Force that refuses, atomically, an address already forced
+// (by itself, a member of it or the tag around it), and returns the force's
+// generation for UnforceIf and the name the table keeps it under (the address
+// as the table spells it: "M[1][2]" for "M[1,2]", the struct's own member
+// names): ForceGen and UnforceIf take that name. Nothing about Force changes.
+func (t *Tags) ForceIfFree(addr string, v any) (uint64, string, error) {
+	return t.forceGen(addr, v, true, true)
+}
+
+// ForceGen is the generation of the force on exactly addr, if there is one.
+func (t *Tags) ForceGen(addr string) (uint64, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	key := ir.NameKey(t.forceKeyLocked(addr))
+	for _, fs := range t.forces {
+		for i := range fs.entries {
+			if ir.NameKey(fs.entries[i].name) == key {
+				return fs.entries[i].gen, fs.entries[i].gen != 0
+			}
+		}
+	}
+	return 0, false
+}
+
+// ForceHolds reports whether the force with that generation is still in the
+// table (by generation alone: unique store-wide, and not dependent on how a
+// name resolves).
+func (t *Tags) ForceHolds(gen uint64) bool {
+	if gen == 0 {
+		return false
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, fs := range t.forces {
+		for i := range fs.entries {
+			if fs.entries[i].gen == gen {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// UnforceIf removes the force on addr only if it is still the one with that
+// generation, atomically, and reports whether it did. A force set or changed
+// meanwhile has another generation and is left alone.
+func (t *Tags) UnforceIf(addr string, gen uint64) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	// by generation: unique store-wide, and not dependent on how the name
+	// resolves (a tag literally named like an element must not hide the force)
+	_ = addr
+	for root, fs := range t.forces {
+		for i := range fs.entries {
+			if gen == 0 || fs.entries[i].gen != gen {
+				continue
+			}
+			fs.entries = append(fs.entries[:i], fs.entries[i+1:]...)
+			t.releaseLocked(root, fs)
+			t.forceRev++
+			return true
+		}
+	}
+	return false
+}
+
+func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	root, path, tv, err := t.resolveForceAddr(addr)
 	if err != nil {
-		return err
+		return 0, "", err
+	}
+	if ifFree {
+		// by the name the table keeps the force under, not as typed
+		if f := t.overlapUnderLocked(root, ir.JoinPath(root, path)); f != "" {
+			return 0, "", fmt.Errorf("%s: %w (as %s)", addr, ErrAlreadyForced, f)
+		}
 	}
 	if tv.v.Kind == ir.TypeFB {
-		return fmt.Errorf("tag %s is a function-block instance — force one of its pins' tags instead", root)
+		return 0, "", fmt.Errorf("tag %s is a function-block instance — force one of its pins' tags instead", root)
 	}
 	if tv.owned {
 		// The runtime stores a companion past the force layer: a force on
 		// one would show in the table and hold nothing.
-		return fmt.Errorf("tag %s is set by the runtime from the substitute table and cannot be forced: %w", root, ErrReadOnly)
+		return 0, "", fmt.Errorf("tag %s is set by the runtime from the substitute table and cannot be forced: %w", root, ErrReadOnly)
 	}
 	fs := t.forces[root]
 	base := tv.v
@@ -196,14 +312,14 @@ func (t *Tags) force(addr string, v any, strict bool) error {
 	}
 	nv, err := set(base, rootT, path, v, "tag "+root)
 	if err != nil {
-		return err
+		return 0, "", err
 	}
 	fv, _, err := ir.FieldAt(nv, rootT, path, root)
 	if err != nil {
-		return err
+		return 0, "", err
 	}
 	if fv.Kind == ir.TypeFB {
-		return fmt.Errorf("%s is a function-block instance — it has no value to force", addr)
+		return 0, "", fmt.Errorf("%s is a function-block instance — it has no value to force", addr)
 	}
 	if fs == nil {
 		fs = &forceSet{actual: tv.v, typ: rootT}
@@ -214,7 +330,8 @@ func (t *Tags) force(addr string, v any, strict bool) error {
 		tv.forced = true
 	}
 	name := ir.JoinPath(root, path)
-	e := forceEntry{name: name, path: path, val: ir.CopyValue(fv), sinceMs: t.NowMs()}
+	t.forceSeq++
+	e := forceEntry{name: name, path: path, val: ir.CopyValue(fv), sinceMs: t.NowMs(), gen: t.forceSeq}
 	replaced := false
 	for i := range fs.entries {
 		if fs.entries[i].name == name {
@@ -232,7 +349,7 @@ func (t *Tags) force(addr string, v any, strict bool) error {
 	}
 	t.storeLocked(root, tv, fs.apply(fs.actual))
 	t.forceRev++
-	return nil
+	return e.gen, name, nil
 }
 
 // Unforce removes the force on one address and reports whether there was
@@ -242,9 +359,10 @@ func (t *Tags) force(addr string, v any, strict bool) error {
 func (t *Tags) Unforce(addr string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	key := ir.NameKey(t.forceKeyLocked(addr))
 	for root, fs := range t.forces {
 		for i := range fs.entries {
-			if !strings.EqualFold(fs.entries[i].name, addr) {
+			if ir.NameKey(fs.entries[i].name) != key {
 				continue
 			}
 			fs.entries = append(fs.entries[:i], fs.entries[i+1:]...)
@@ -363,16 +481,28 @@ func (t *Tags) forcedOverlapLocked(addr string) string {
 	if len(t.forces) == 0 {
 		return ""
 	}
+	if root, path, _, err := t.resolveForceAddr(addr); err == nil {
+		return t.overlapUnderLocked(root, ir.JoinPath(root, path))
+	}
+	// an address that names no tag: as before, by the root as typed
 	root := addr
 	if _, _, ok := t.lookupLocked(addr); !ok {
 		root, _ = ir.SplitAddress(addr)
 	}
 	_, root, _ = t.lookupLocked(root)
+	return t.overlapUnderLocked(root, addr)
+}
+
+// overlapUnderLocked is the forced address under tag root that name is, is in
+// or contains. The root is the one the address resolved to: a name is never
+// resolved a second time (a tag literally named "A[1]" beside an array "A"
+// would send it to the wrong root).
+func (t *Tags) overlapUnderLocked(root, name string) string {
 	fs := t.forces[root]
 	if fs == nil {
 		return ""
 	}
-	a := ir.NameKey(addr)
+	a := ir.NameKey(name)
 	for _, e := range fs.entries {
 		n := ir.NameKey(e.name)
 		if n == a || under(n, a) || under(a, n) {

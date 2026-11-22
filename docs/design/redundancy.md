@@ -1008,8 +1008,8 @@ redundancy:
 - **Peer calls carry a peer token** (`NAUTILUS_PEER_TOKEN`), compared in constant time as
   `oplog` does. It is a separate secret from the client token `NAUTILUS_TOKEN`, so a client
   that can write tags can't cast a vote. `naut run` refuses to start a pair member or a witness
-  without one, and `tools/deploy` installs it on all three boxes. Mutual TLS can follow #708.
-  How peer traffic meets the server's Host rule is §6.1.
+  without one, and `tools/deploy` installs it on all three boxes. Every peer call runs TLS
+  keyed by it (§6.1, peer TLS). How peer traffic meets the server's Host rule is §6.1.
 
 ## 3. Election and self-fencing
 
@@ -1619,6 +1619,51 @@ when its members address each other by DNS name, so peer traffic is kept apart f
   path or an OS error, since `/api/cluster` answers without a token: those stay in the log. It is **report only**: it never holds a campaign
   or closes the gate, since a users change or a certificate renewal reaches A and B at slightly
   different times.
+- **Peer TLS (#710), on by default.** Every peer port (both controllers' and the witness's)
+  serves TLS 1.3 only, and every peer call (votes, adopt, hello, the `oplog` copies) dials it.
+  - **The key is the peer token's.** `internal/peertls` derives an Ed25519 key with
+    `pairkey.Derive(token, "peer-tls")` on each box at start; nothing is written to disk,
+    distributed or re-pinned when a box is replaced. A listener requires a client certificate,
+    and each end accepts the other only if its leaf holds that key (`VerifyConnection`, which
+    also runs on a resumed session; the listener issues no tickets anyway). There is no CA,
+    no host name and no date check: peers are reached by name or IP (the witness also through
+    a floating address), and
+    §3's rule against comparing wall clocks across hosts holds (a test runs the two ends
+    years apart).
+  - **What it buys.** A party without the token can't read peer traffic, can't learn the
+    token from it, and can't pass as a member on either end: a relay in the middle has
+    another key, so the caller refuses it before a request (or the token) leaves. The token
+    header still travels, inside TLS, so the listener's check is unchanged.
+  - **What it doesn't.** Anyone with the token holds the key: one leaked env file is still
+    every member. Per-box keys pinned at commissioning are the next step (#710 PR 2), and
+    `experimental` waits for them. A witness serving several pairs holds one token, so those
+    pairs share a key until then.
+  - **A short token is refused.** The key's public half is visible to anyone who reaches a
+    peer port, so a token could be guessed from it offline: `naut run` and `naut witness`
+    refuse one under 32 characters, naming `naut redundancy new-pair` (64 hex digits), and
+    `naut check` warns about one in its environment.
+  - **Seams.** `quorum` and `oplog` are substrates, so `cmd/naut` builds the configurations
+    and hands them down as `tls.Config` (`node.Options.TLS`, `oplog.Options.TLS`). `oplog`
+    keeps naming its peers by their `http://` URLs, which its files record (an operator's
+    acceptance names peers by them), and only sends them as https.
+  - **Mismatches are named on the side that dials:** `redundancy.peer-tls-mismatch` (the
+    other protocol at a voter: peer TLS off there, or an older release) and
+    `redundancy.peer-identity` (a key that is not the pair's), each per voter on
+    `/api/cluster` and the banner, cleared when a call gets through again; a state change is
+    recorded only once its event is queued, so a dropped event is raised again at the next
+    call. A listener sees a failed handshake only in its error log. The plain-HTTP text never
+    suggests turning peer TLS off: what answers may be something else. A plain call reads a
+    TLS listener's 400 as "speaks TLS"; a TLS call never does.
+  - **Bounded handshakes.** Both transports bound the dial and the TLS handshake (2 s): a
+    call's deadline ends the call, not the transport's own handshake, so without the bound a
+    peer that accepts and never speaks would hold one connection per call.
+  - **Off** (`redundancy.peer-tls: off`, `naut witness --peer-tls=off`) is for a lab bench:
+    plain HTTP as before, a warning at every start and a standing one on `/api/cluster`, and
+    the guide's trusted-link rule applies.
+  - **No mixed mode.** A listener that took both would let anyone downgrade it. So a TLS box
+    and a plain one don't vote together, and switching a running pair costs one control stop:
+    witness first, then the standby (the leader fences when it stops; about the standby's
+    restart plus a lease plus an election), then the old leader. The guide gives the order.
 - **Clients that follow the leader (#716).** `/api/cluster` advertises each controller's API
   address, and a browser HMI that follows it can't send a token.
   - **What has to be trusted.** Each advertised name must be in `NAUTILUS_ALLOWED_HOSTS` on
@@ -1638,6 +1683,7 @@ same driver contract as the simulator.
   204. The client-token check is `GET …/hello`. Connections are kept alive, and each call has
   a deadline of lease/8. A grant waiting for its voter's fsync is answered when the write
   completes, or not at all.
+- **Peer TLS** (§6.1) wraps every call below; the frames and headers are the same either way.
 - **Three headers on every call.**
   - `X-Nautilus-Cluster` carries the peer token, the header `oplog` already uses, so one check
     guards the whole peer port.
@@ -1706,8 +1752,15 @@ same driver contract as the simulator.
   fingerprint on a controller; `w`, the pair's cluster ID and no box on the witness. A file another member or pair wrote stops the start
   (`ErrNotOwner`) and is left where it is.
 - **Controllers** refuse to start without `CLOCK_BOOTTIME` (Linux). The witness runs anywhere.
-- **In `naut run`** (#710 PR 3b-1), a member's peer listener binds its own `peers:` port on
-  every address, behind the peer token, with the witness's timeouts and at most 64
+- **In `naut run`** (#710 PR 3b-1), a member's peer listener binds the address its own `peers:`
+  entry names, and no other (#710 peer TLS narrowed it from every address), or
+  `NAUTILUS_PEER_LISTEN` on a box behind NAT or in a container. An address that is not the
+  box's yet never stops the start (a refused start would spend systemd's start limit and leave
+  the controller down for good, the #1230 review): the member starts, raises `peer-bind` on
+  `/api/cluster`, and binds once it can. A host name that binds to loopback (a stock
+  `/etc/hosts` maps the box's name to 127.0.1.1; systemd-resolved does while no network is
+  up) is never served, and is the same standing condition, logged as an error, until it
+  resolves to a network address. The listener is behind the peer token, with the witness's timeouts and at most 64
   connections. The state file's lock is taken first, so a second process of the same
   controller stops before it binds or votes. The listener closes only after the election's
   last `Release`. A member is a voter even with no leader to elect, so it sends systemd

@@ -307,6 +307,9 @@ var moduleAllowed = map[string][]string{
 	// identity-audit.md §4). The trailing slash makes the audit entry an
 	// exact match, not a prefix of auditpg itself.
 	"internal/auditpg": {module + "/audit/", "github.com/lib/pq"},
+	// internal/peertls: a pair's peer TLS, its key derived from the peer
+	// token (#710): the standard library and internal/pairkey only.
+	"internal/peertls": {module + "/internal/pairkey"},
 }
 
 // oidcModules are the modules only auth/oidc may link, and oidcFree the
@@ -361,7 +364,8 @@ var (
 		module + "/auth/users",         // the user store (argon2, blake2b)
 		"golang.org/x/crypto/argon2",
 		"golang.org/x/crypto/blake2b",
-		module + "/notes", // operator notes store
+		module + "/notes",    // operator notes store
+		module + "/checkout", // the I/O checkout (#719): controller-only, mounted by cmd/naut
 		"html/template",
 		"github.com/lib/pq", // the Postgres driver
 		"database/sql",

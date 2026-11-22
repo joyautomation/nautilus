@@ -152,7 +152,11 @@ func (s *Sheet) Point(id string) (Point, bool) {
 // Progress counts the points by their latest result, for a view by device
 // or by area.
 type Progress struct {
-	Total, Pass, Fail, Noted, Pending int
+	Total   int `json:"total"`
+	Pass    int `json:"pass"`
+	Fail    int `json:"fail"`
+	Noted   int `json:"noted"`
+	Pending int `json:"pending"`
 }
 
 // ProgressBy groups the sheet's points by key (a device or an area; "" is

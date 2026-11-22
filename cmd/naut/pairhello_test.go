@@ -37,7 +37,7 @@ func newHelloRig(t *testing.T) *helloRig {
 		r.lnA.Close()
 		t.Skip("no 127.0.0.2 on this host:", err)
 	}
-	cluster, token := node.NewClusterID(), "peer-secret"
+	cluster, token := node.NewClusterID(), testPeerToken
 	wctx, wstop := context.WithCancel(context.Background())
 	wready, wdone := make(chan string, 1), make(chan int, 1)
 	go func() {

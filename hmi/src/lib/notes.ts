@@ -449,3 +449,20 @@ function browserStorage(): DraftStorage | null {
 		return null; // blocked storage throws on access
 	}
 }
+
+/**
+ * A note's time as the cards show it: `Nov 22, 2026, 1:00 PM EST`. The parts
+ * are named one by one: `dateStyle` may not be combined with `timeZoneName`
+ * (the browser throws a TypeError, and a card that throws leaves its panel
+ * on "Reading the notes…").
+ */
+export function noteTime(ms: number, locale?: string | string[]): string {
+	return new Date(ms).toLocaleString(locale ?? [], {
+		year: 'numeric',
+		month: 'short',
+		day: 'numeric',
+		hour: 'numeric',
+		minute: '2-digit',
+		timeZoneName: 'short'
+	});
+}

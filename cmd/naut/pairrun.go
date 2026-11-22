@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
@@ -62,10 +64,14 @@ const pairMaxConns = 64
 
 // pairMember is a pair member's election and its peer listener.
 type pairMember struct {
-	q     *leader.Quorum
-	srv   *http.Server
-	o     node.Options
-	peers map[string]string // the manifest's peers:, by name
+	q   *leader.Quorum
+	srv *http.Server
+	// bindStop ends a late bind (bindLater); bindDone closes once the peer
+	// port is bound or the late bind has stopped.
+	bindStop, bindDone chan struct{}
+	closeOnce          sync.Once
+	o                  node.Options
+	peers              map[string]string // the manifest's peers:, by name
 
 	// The replicated log of operator intent, mounted on the peer listener
 	// once the runtime exists (startLog); 503 until then.
@@ -118,7 +124,17 @@ type pairDeps struct {
 	// creds, when set, is this controller's credentials, read at every
 	// hello (pairCredentials, #708).
 	creds func() node.Credentials
+	// bindEvery is how often a peer listener whose address is not up yet
+	// tries again (0: bindEveryDefault).
+	bindEvery time.Duration
 }
+
+// bindEveryDefault is how often a member retries binding its peer port
+// while the address is not this box's yet (a boot whose network or DNS is
+// late, a cable out). It never gives up and never exits for it: a start
+// refused for a late network would spend the unit's start limit and leave
+// the controller down for good (#1230 review).
+const bindEveryDefault = time.Second
 
 func osPairDeps() pairDeps {
 	return pairDeps{getenv: os.Getenv, listen: func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) }, box: hostBox}
@@ -191,9 +207,15 @@ func linkMAC(addr string) (string, bool) {
 // checkout ("" for a built controller), which the state directory must not
 // be inside. The election's Run is the caller's.
 func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps) (*pairMember, error) {
-	o, listenAddr, err := pairOptions(r, apiAddr, dir, d.getenv)
+	o, listenAddr, srvTLS, err := pairOptions(r, apiAddr, dir, d.getenv)
 	if err != nil {
 		return nil, err
+	}
+	// What an operator edits to move the peer port: the override, else
+	// this controller's peers: entry.
+	listenKey := "redundancy.peers." + string(o.Self)
+	if strings.TrimSpace(d.getenv("NAUTILUS_PEER_LISTEN")) != "" {
+		listenKey = "NAUTILUS_PEER_LISTEN"
 	}
 	if d.box != nil {
 		links := []string{o.PeerAddr, o.WitnessAddr}
@@ -217,6 +239,11 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		return nil, err
 	}
 	m.q, m.o = q, o
+	if srvTLS == nil {
+		// Loud at every start, and standing on /api/cluster (#710).
+		slog.Warn("redundancy: " + peerTLSOff)
+		q.Warn(peerTLSOff)
+	}
 	// One listener, one token: the vote protocol and the operator-intent
 	// log's replication (design §6.1). Nothing here is a browser surface.
 	mux := http.NewServeMux()
@@ -229,31 +256,128 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		q.Node().Close()
 		return nil, err
 	}
+	m.srv = peerServer(h)
+	m.bindStop, m.bindDone = make(chan struct{}), make(chan struct{})
 	ln, err := d.listen(listenAddr)
-	if err != nil {
+	var later string // why the bind waits (the peer-bind condition)
+	switch {
+	case err == nil:
+		if why := loopbackSurprise(listenAddr, ln.Addr(), listenKey); why != "" {
+			// Not refused: a name can resolve to loopback only until the
+			// network is up (systemd-resolved with no carrier), and a
+			// refused start would spend the start limit (#1230 re-check).
+			ln.Close()
+			slog.Error("redundancy: " + why)
+			later = why
+			break
+		}
+		m.serve(ln, srvTLS)
+		close(m.bindDone)
+	case notHere(err) && !mutNaut("peer_bind_gives_up"):
+		later = notBoundMsg(listenAddr, listenKey, err)
+		slog.Warn("redundancy: " + later)
+	default:
 		q.Node().Close()
+		if notHere(err) {
+			return nil, fmt.Errorf("peer port %s: %w: %s must name an address of this box", listenAddr, err, listenKey)
+		}
 		return nil, fmt.Errorf("peer port %s: %w: is another controller (this one's service?) running?", listenAddr, err)
 	}
-	m.srv = peerServer(h)
-	go func() {
-		if err := m.srv.Serve(node.LimitListener(ln, pairMaxConns)); !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("redundancy: the peer listener stopped: the peer and the witness no longer reach this controller's voter", "err", err)
+	if later != "" {
+		// The address is not usable yet: keep trying, never exit.
+		m.q.SetCondition("peer-bind", later)
+		every := d.bindEvery
+		if every <= 0 {
+			every = bindEveryDefault
 		}
-	}()
+		go m.bindLater(d.listen, listenAddr, listenKey, srvTLS, every)
+	}
 	return m, nil
 }
 
-// pairOptions resolves a member's elector options and the address its peer
-// listener binds.
-func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(string) string) (node.Options, string, error) {
+// serve serves the peer listener on ln, with peer TLS when srvTLS is set.
+func (m *pairMember) serve(ln net.Listener, srvTLS *tls.Config) {
+	slog.Info("redundancy: peer port bound", "addr", ln.Addr().String(), "tls", srvTLS != nil)
+	served := node.LimitListener(ln, pairMaxConns)
+	if srvTLS != nil {
+		served = tls.NewListener(served, srvTLS)
+	}
+	go func() {
+		if err := m.srv.Serve(served); !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("redundancy: the peer listener stopped: the peer and the witness no longer reach this controller's voter", "err", err)
+		}
+	}()
+}
+
+// bindLater binds the peer port once its address is this box's, trying
+// every every until Close; the peer-bind condition stands until then.
+func (m *pairMember) bindLater(listen func(string) (net.Listener, error), addr, key string, srvTLS *tls.Config, every time.Duration) {
+	defer close(m.bindDone)
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-m.bindStop:
+			return
+		case <-t.C:
+		}
+		ln, err := listen(addr)
+		if err != nil {
+			m.q.SetCondition("peer-bind", notBoundMsg(addr, key, err))
+			continue
+		}
+		if why := loopbackSurprise(addr, ln.Addr(), key); why != "" {
+			ln.Close()
+			m.q.SetCondition("peer-bind", why)
+			continue
+		}
+		m.serve(ln, srvTLS)
+		m.q.SetCondition("peer-bind", "")
+		return
+	}
+}
+
+// notBoundMsg is the peer-bind condition while the address is not up.
+func notBoundMsg(addr, key string, err error) string {
+	return fmt.Sprintf("the peer port %s is not bound yet (%v): until it is, the other controller and the witness can't reach this controller's voter. naut run keeps trying; if the address never comes up, %s must name an address of this box", addr, err, key)
+}
+
+// notHere reports a bind that failed because the address is not (yet)
+// this box's: not configured on any interface, or a name that does not
+// resolve.
+func notHere(err error) bool {
+	var dns *net.DNSError
+	return errors.Is(err, syscall.EADDRNOTAVAIL) || errors.As(err, &dns)
+}
+
+// loopbackSurprise is why a bind of configured (a host name, not an IP)
+// that landed on a loopback address is refused: the peer and the witness
+// could never reach it (a stock /etc/hosts maps the box's own name to
+// 127.0.1.1). "" when configured is an IP or empty, or bound is not
+// loopback.
+func loopbackSurprise(configured string, bound net.Addr, key string) string {
+	host, _, err := net.SplitHostPort(configured)
+	if err != nil || host == "" || net.ParseIP(strings.Trim(host, "[]")) != nil {
+		return ""
+	}
+	tcp, ok := bound.(*net.TCPAddr)
+	if !ok || !tcp.IP.IsLoopback() || mutNaut("peer_bind_loopback_taken") {
+		return ""
+	}
+	return fmt.Sprintf("%s names %s, which resolves to %s on this box, a loopback address the other controller and the witness can't reach (check /etc/hosts): name this box's network address (an IP), or set NAUTILUS_PEER_LISTEN", key, host, tcp.IP)
+}
+
+// pairOptions resolves a member's elector options, the address its peer
+// listener binds and the TLS it serves there (nil: peer TLS off).
+func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(string) string) (node.Options, string, *tls.Config, error) {
 	var o node.Options
 	self := strings.ToLower(strings.TrimSpace(getenv("NAUTILUS_NODE")))
 	switch self {
 	case "a", "b":
 	case "":
-		return o, "", errors.New("NAUTILUS_NODE is not set: a pair member must say which controller it is, a or b as redundancy.peers names them (set it per box, beside NAUTILUS_PEER_TOKEN in /etc/nautilus/env under naut deploy)")
+		return o, "", nil, errors.New("NAUTILUS_NODE is not set: a pair member must say which controller it is, a or b as redundancy.peers names them (set it per box, beside NAUTILUS_PEER_TOKEN in /etc/nautilus/env under naut deploy)")
 	default:
-		return o, "", fmt.Errorf("NAUTILUS_NODE=%q: want a or b, as redundancy.peers names the pair's controllers", self)
+		return o, "", nil, fmt.Errorf("NAUTILUS_NODE=%q: want a or b, as redundancy.peers names the pair's controllers", self)
 	}
 	peer := "b"
 	if self == "b" {
@@ -261,21 +385,21 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 	}
 	token := getenv("NAUTILUS_PEER_TOKEN")
 	if token == "" {
-		return o, "", errors.New("NAUTILUS_PEER_TOKEN is not set: every peer request must carry it, so a pair member refuses to start without one (the same secret on both controllers and the witness)")
+		return o, "", nil, errors.New("NAUTILUS_PEER_TOKEN is not set: every peer request must carry it, so a pair member refuses to start without one (the same secret on both controllers and the witness)")
 	}
 	cluster := strings.TrimSpace(getenv("NAUTILUS_CLUSTER"))
 	switch {
 	case cluster == "":
-		return o, "", errors.New("NAUTILUS_CLUSTER is not set: a new pair's cluster ID (32 hex digits) and peer token are drawn by `naut redundancy new-pair`, which writes each box's env lines (/etc/nautilus/env under naut deploy); then start all three and run `naut redundancy commission`. The operator guide covers it")
+		return o, "", nil, errors.New("NAUTILUS_CLUSTER is not set: a new pair's cluster ID (32 hex digits) and peer token are drawn by `naut redundancy new-pair`, which writes each box's env lines (/etc/nautilus/env under naut deploy); then start all three and run `naut redundancy commission`. The operator guide covers it")
 	case !node.ValidCluster(cluster):
-		return o, "", fmt.Errorf("NAUTILUS_CLUSTER=%q: want the 32 lowercase hex digits naut redundancy new-pair drew", cluster)
+		return o, "", nil, fmt.Errorf("NAUTILUS_CLUSTER=%q: want the 32 lowercase hex digits naut redundancy new-pair drew", cluster)
 	}
 	stateDir, err := pairStateDir(r, dir, getenv)
 	if err != nil {
-		return o, "", err
+		return o, "", nil, err
 	}
 	if err := checkAPIReachable(apiAddr, r.Peers[self]); err != nil {
-		return o, "", err
+		return o, "", nil, err
 	}
 	_, peerPort, _ := net.SplitHostPort(r.Peers[self]) // Load checked the form
 	o = node.Options{
@@ -290,7 +414,33 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 		Caps:    []string{node.KeepsLiveIO},
 		SelfAPI: apiOn(r.Peers[self], apiAddr), PeerAPI: apiOn(r.Peers[peer], apiAddr),
 	}
-	return o, net.JoinHostPort("", peerPort), nil
+	pt, err := buildPeerTLS(token, peerTLSIsOff(r.PeerTLS), "redundancy.peer-tls: off")
+	if err != nil {
+		return o, "", nil, err
+	}
+	var srv *tls.Config
+	if pt != nil {
+		o.TLS, srv = pt.Client, pt.Server
+	}
+	// The address peers: names, not every interface: a peer port reachable
+	// from networks that don't need it (a VPN, a second NIC) is exposure
+	// for nothing, and two controllers on one host can share a port number
+	// on two addresses.
+	listen := r.Peers[self]
+	if mutNaut("peer_bind_wildcard") {
+		listen = net.JoinHostPort("", peerPort)
+	}
+	// NAUTILUS_PEER_LISTEN, per box, binds another address: a controller
+	// behind NAT or in a container with mapped ports, whose peers: entry
+	// is where the others reach it, not an address it has.
+	if v := strings.TrimSpace(getenv("NAUTILUS_PEER_LISTEN")); v != "" {
+		_, port, err := net.SplitHostPort(v)
+		if n, perr := strconv.Atoi(port); err != nil || perr != nil || n < 1 || n > 65535 {
+			return o, "", nil, fmt.Errorf("NAUTILUS_PEER_LISTEN=%q: want host:port (or :port for every address) for this controller's peer port", v)
+		}
+		listen = v
+	}
+	return o, listen, srv, nil
 }
 
 // checkAPIReachable refuses a tag API bound to loopback only while this
@@ -375,6 +525,10 @@ func (m *pairMember) onEvent(ev node.Event) {
 		m.q.SetCondition("oplog-yield", ev.Detail+" (at "+time.Now().UTC().Format(time.RFC3339)+")")
 	case node.EventSpare:
 		m.q.SetCondition("spare", ev.Detail)
+	case node.EventPeerTLS:
+		m.q.SetCondition("peer-tls-mismatch/"+string(ev.Voter), ev.Detail) // "" clears it (#710)
+	case node.EventPeerIdentity:
+		m.q.SetCondition("peer-identity/"+string(ev.Voter), ev.Detail)
 	}
 }
 
@@ -477,6 +631,10 @@ func (m *pairMember) untrustedAPIs(allowed []string) []string {
 // after the election's Run has returned and Release has run: the peer
 // listener answers votes until then.
 func (m *pairMember) Close() {
+	if m.bindStop != nil {
+		m.closeOnce.Do(func() { close(m.bindStop) })
+		<-m.bindDone
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = m.srv.Shutdown(ctx)
@@ -595,7 +753,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		Lapse: func(e oplog.Entry, now time.Time) bool {
 			return sl.Lapse(e, now) || (al != nil && al.Lapse(e, now))
 		},
-		Token: m.o.Token, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
+		Token: m.o.Token, TLS: m.o.TLS, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
 		// A copy superseded by another history (#1029 3c-3c-2a): the
 		// runtime ends the old history's substitutes at once, leading or
 		// not (driveLog repeats it).

@@ -29,7 +29,6 @@ import (
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/auth"
-	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/dialect"
@@ -71,8 +70,8 @@ type Manifest struct {
 	// Checkout is the I/O checkout (#719): the sheet's file and the
 	// sign-off rule. checkoutSheet is the sheet, read by ReadManifest.
 	Checkout      *CheckoutConfig `yaml:"checkout"`
-	checkoutSheet *checkout.Sheet
-	Tasks         []TaskConfig `yaml:"tasks"`
+	checkoutSheet any             // the sheet (*checkout.Sheet), read by checkout.go: not in the browser build
+	Tasks         []TaskConfig    `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
 	// tag set stays a separate reviewable artifact instead of a 500-line
@@ -498,6 +497,13 @@ type RedundancyConfig struct {
 	// gate closes. Optional for clients (they follow public-urls and the
 	// OPC UA ServiceLevel); a PROFINET device will need it. Pair only.
 	FloatingIP *FloatingIPConfig `yaml:"floating-ip"`
+	// PeerTLS is the pair's peer TLS (#710): on (the default, "" too) or
+	// off. On, every call on a peer port runs TLS 1.3, both ends keyed by
+	// the peer token. Off is for a lab bench: votes, the operator-intent
+	// log and the peer token cross the network in the clear, and the pair
+	// says so at every start and on /api/cluster. The witness takes the
+	// same setting as `naut witness --peer-tls`.
+	PeerTLS string `yaml:"peer-tls"`
 }
 
 // FloatingIPConfig is redundancy.floating-ip. The process needs
@@ -591,6 +597,8 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.public-urls applies to a redundant pair (peers:): the pair's controllers as a browser reaches them")
 		case r.FloatingIP != nil:
 			return errors.New("redundancy.floating-ip applies to a redundant pair (peers:): the address the leader holds")
+		case r.PeerTLS != "":
+			return errors.New("redundancy.peer-tls applies to a redundant pair (peers:): the TLS of its controllers' and witness's peer ports")
 		}
 		return nil
 	}
@@ -609,6 +617,11 @@ func checkRedundancy(r *RedundancyConfig) error {
 	}
 	if r.Peers["a"] == r.Peers["b"] {
 		return fmt.Errorf("redundancy.peers: a and b are both %s: each controller has its own peer listener", r.Peers["a"])
+	}
+	switch r.PeerTLS {
+	case "", "on", "off":
+	default:
+		return fmt.Errorf("redundancy.peer-tls %q: want on (the default) or off (a lab bench only: peer traffic in the clear)", r.PeerTLS)
 	}
 	if r.Witness == "" {
 		return errors.New("redundancy.witness is required with peers:: the pair's third voter (host:port of `naut witness`)")
@@ -1194,6 +1207,9 @@ type Project struct {
 	// HMIScreens is a project with no server.hmi and *.mimic.json in it:
 	// the caller builds the default app, a page per mimic.
 	HMIScreens bool
+	// HMIPlant is a project with no server.hmi and no mimic, whose plant
+	// model has equipment: naut builds the asset and area pages from it.
+	HMIPlant bool
 
 	// PWA and PWAIcon are the manifest's pwa: section and its icon file's
 	// bytes (nil without one); the caller that builds the HMI gives them
@@ -1204,7 +1220,7 @@ type Project struct {
 	// Checkout is the manifest's checkout: section (#719), nil without one;
 	// CheckoutSheet is the sheet it names.
 	Checkout *CheckoutConfig
-	checkout *checkout.Sheet
+	checkout any // the sheet, see CheckoutSheet
 
 	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
@@ -1528,25 +1544,13 @@ func (m *Manifest) readCheckout(fsys fs.FS, readSheet bool) error {
 	if !readSheet {
 		return nil
 	}
-	raw, err := fs.ReadFile(fsys, fp)
+	sh, err := loadCheckoutSheet(fsys, fp)
 	if err != nil {
-		return fmt.Errorf("checkout: no %s in the project: `naut checkout init` writes one from the project's I/O tags", fp)
+		return err
 	}
-	var sh checkout.Sheet
-	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
-	dec.KnownFields(true)
-	if err := dec.Decode(&sh); err != nil {
-		return fmt.Errorf("%s: %w", fp, err)
-	}
-	if err := sh.Validate(); err != nil {
-		return fmt.Errorf("%s: %w", fp, err)
-	}
-	m.checkoutSheet = &sh
+	m.checkoutSheet = sh
 	return nil
 }
-
-// CheckoutSheet is the checkout sheet, nil without a checkout: section.
-func (p *Project) CheckoutSheet() *checkout.Sheet { return p.checkout }
 
 // maxPWAIcon bounds the icon file read at load.
 const maxPWAIcon = 4 << 20
@@ -1897,7 +1901,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			hmiFS, hmiApp, hmiMissing = sub, "", false
 		}
 	}
-	screens := m.Server.HMI == "" && hmiFS == nil && hasMimics(fsys)
+	noApp := m.Server.HMI == "" && hmiFS == nil
+	mimics := noApp && hasMimics(fsys)
+	// a plant model with equipment is enough for the asset and area pages
+	plantPages := noApp && !mimics && m.plant != nil && len(m.plant.Equipment) > 0
+	screens := mimics
 	return &Project{
 		Notices: platformNotices(m),
 		Name:    projName,
@@ -1928,6 +1936,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		HMIMissing:  hmiMissing,
 		HMIApp:      hmiApp,
 		HMIScreens:  screens,
+		HMIPlant:    plantPages,
 		PWA:         m.PWA,
 		PWAIcon:     m.pwaIcon,
 		Checkout:    m.Checkout,

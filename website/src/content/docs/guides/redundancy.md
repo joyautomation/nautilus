@@ -362,6 +362,20 @@ redundancy:
   lease: 2s
 ```
 
+Each controller's peer listener binds exactly the address its own
+`peers:` entry names, so the peer port is not open on the box's other
+networks. Name an address of that box: an IP, or a name that resolves to
+one of its network addresses. When the address is not usable yet (a
+boot whose network or DNS is late, a cable out, or a name that resolves
+to loopback here: a stock `/etc/hosts` maps the box's own name to
+`127.0.1.1`) the controller starts anyway, says so in `GET /api/cluster`
+and its log, and binds as soon as it can; until then the other two can't
+reach its voter. A name that stays on loopback is a standing condition
+until you fix it. A controller behind NAT, or in a container
+with mapped ports, whose `peers:` entry is where the others reach it
+rather than an address it has, sets `NAUTILUS_PEER_LISTEN` (for example
+`:9450`) in its own environment to bind that instead.
+
 :::caution[Retained values are not replicated yet]
 Until state streaming lands, each controller keeps its own retained
 values. A takeover starts from the **new** leader's own retain file, so
@@ -433,9 +447,16 @@ under `naut deploy`):
 - `NAUTILUS_NODE`: `a` or `b`, which of the two it is. **It differs per
   box**: never copy one controller's env file to the other unchanged;
 - `NAUTILUS_PEER_TOKEN`: the secret every peer and witness request
-  carries, the same on all three boxes;
+  carries, the same on all three boxes. It also keys the pair's peer TLS
+  (below), so it must be at least 32 characters: `naut redundancy
+  new-pair` draws 64 random hex digits, and `naut run` refuses a shorter
+  one. Length is not randomness: a 32-character phrase passes the check
+  but is far easier to guess, so use what `new-pair` draws;
 - `NAUTILUS_CLUSTER`: the pair's cluster ID, the same on both
-  controllers (the witness keys each pair by it as they first vote).
+  controllers (the witness keys each pair by it as they first vote);
+- `NAUTILUS_PEER_LISTEN` (optional, per box): the address its peer port
+  binds, when its `peers:` entry is not an address it has (NAT, mapped
+  container ports). Unset, it binds its `peers:` entry.
 
 #### Commissioning a new pair
 
@@ -1073,12 +1094,70 @@ who started or stopped a substitute (and the tag and the value), who
 acknowledged or shelved which alarm, and when. Guard the witness host
 like a controller; its files are readable by the service user only.
 
-The peer token authenticates every peer and witness request, but it
-travels as an HTTP header, and peer traffic is **not encrypted**: on an
-open network it can be read, and the token replayed. Run the pair's and
-the witness's peer ports only over a **trusted link**: a dedicated
-network or VLAN, or a VPN such as WireGuard or a tailnet.
+Peer traffic, this log included, is encrypted by peer TLS (below),
+unless it is turned off.
 :::
+
+#### Peer TLS
+
+Every call on a peer port (votes, the handshake, the operator-intent
+log's copies) runs **TLS 1.3 by default**, with nothing to configure. The
+two controllers and the witness derive one key from the peer token they
+already share, and each end of a connection checks that the other holds
+it: a box without the token can neither read peer traffic nor pass as a
+member, and the token itself never crosses the network in the clear. The
+check is the key alone, with no certificate authority, host name or
+dates, so peers can be addressed by name or by IP (and the witness
+through a floating address), and a controller whose clock is off still
+connects. Nothing is
+copied or re-pinned when a box is replaced.
+
+What it does not do yet: anyone who holds the token holds the key, so a
+leaked env file is still enough to act as any member. Keys of each box's
+own, pinned when the pair is commissioned, will follow (#710). Keep the
+env files as secret as before, and keep peer ports off networks that
+don't need them.
+
+- **A token under 32 characters is refused at start**, by `naut run`
+  and `naut witness`: the key's public half is visible to anyone who
+  reaches a peer port, and a short token could be guessed from it
+  offline. Draw a new one with `naut redundancy new-pair` and give it to
+  all three. `naut check` warns about a short `NAUTILUS_PEER_TOKEN` in
+  its environment before you upgrade.
+- **A mismatch is named on the controller that calls.** A controller
+  that reaches a peer speaking the other protocol (peer TLS off on one
+  side, a release from before peer TLS, or something else answering at
+  that address), or holding another key (another token, or something
+  else answering), says so in `GET /api/cluster` and on the banner,
+  naming the peer, until a call gets through again. The side that is
+  called sees only a failed handshake in its log, and the witness has no
+  `/api/cluster`: look at the controllers. The pair runs on any two
+  members that agree. **Never turn peer TLS off to clear a mismatch**:
+  turn it on where it is off, or upgrade the old release; off would send
+  the token to whatever answers.
+- **Turning it off is for a lab bench only.** `redundancy: peer-tls:
+  off` in the manifest, and `naut witness --peer-tls=off`, run the peer
+  ports as plain HTTP: votes, the log and the token can then be read and
+  replayed by anyone on the path. Each member says so at every start, in
+  `GET /api/cluster` and on the banner, and `naut check` warns. Off, run
+  the peer ports only over a **trusted link**: a dedicated network or
+  VLAN, or a VPN such as WireGuard or a tailnet.
+
+**Upgrading a running pair to peer TLS stops control briefly.** A box
+with peer TLS and one without can't vote with each other, so while the
+second box restarts no two members agree. Plan a maintenance window and
+go in this order:
+
+1. **The witness.** The controllers keep the lead between them.
+2. **The standby.** When it stops, the leader holds only its own vote
+   and fences itself. Control stops until the standby is back, has
+   waited out its restart lease, and has won the election with the
+   witness: about 5 to 10 seconds at the default 2 s lease, plus the
+   standby's own start time. The takeover is cold, as after any restart.
+3. **The former leader.** It rejoins as the standby.
+
+Turning peer TLS on or off on a running pair costs the same stop, in the
+same order.
 
 **Rebuilding the witness loses nothing while both controllers are up**:
 `naut witness --rebuild`, or a fresh state directory, is a new
@@ -1171,7 +1250,9 @@ box salts its own password hashes and the same password still makes a
 different file. A certificate renewal shows as a difference for the few
 minutes it takes to reach both. "Could not be verified" means the two
 controllers hold different `NAUTILUS_PEER_TOKEN`s (or something else
-answers in the peer's place), not that the files differ.
+answers in the peer's place), not that the files differ. With peer TLS
+on, different tokens show earlier, as a peer whose TLS key is not the
+pair's.
 
 The same goes for the **alarm contacts** when a channel pages people:
 each controller keeps its own `alarm-contacts.json` and

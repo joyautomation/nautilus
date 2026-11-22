@@ -5,6 +5,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -170,28 +171,86 @@ func trustedHost(host string) bool {
 	return strings.EqualFold(h, "localhost") || net.ParseIP(strings.Trim(h, "[]")) != nil
 }
 
-// baseURL turns a peer address from the manifest (host:port, or a URL)
-// into the base URL calls go to.
-func baseURL(addr string) string {
+// baseURL turns a peer address from the manifest (host:port, or a URL in
+// tests) into the base URL calls go to: https with peer TLS on.
+func baseURL(addr string, tls bool) string {
 	if strings.Contains(addr, "://") {
 		return strings.TrimRight(addr, "/")
+	}
+	if tls {
+		return "https://" + addr
 	}
 	return "http://" + addr
 }
 
 // newClient is the HTTP client for peer calls: connections kept alive,
 // a few per peer, and no overall timeout (each call has its own deadline).
-func newClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
+// conf, when set, is peer TLS's client side (#710): the handshake rides
+// the same dial, so a close is still a reset.
+func newClient(dial func(ctx context.Context, network, addr string) (net.Conn, error), conf *tls.Config) *http.Client {
 	if dial == nil {
 		dial = (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 15 * time.Second}).DialContext
 	}
+	handshake := tlsHandshakeTimeout
+	if mut("peer_tls_handshake_unbounded") {
+		handshake = 0
+	}
 	return &http.Client{Transport: &http.Transport{
-		Proxy:               nil, // peers are reached directly, never through an HTTP proxy
-		DialContext:         resetOnClose(dial),
+		Proxy:           nil, // peers are reached directly, never through an HTTP proxy
+		DialContext:     resetOnClose(dial),
+		TLSClientConfig: conf,
+		// A call's deadline ends the call, not the transport's own dial and
+		// handshake: without a bound, a peer that accepts and never speaks
+		// (a hung process) would keep one connection per call (#1230 review).
+		TLSHandshakeTimeout: handshake,
 		MaxIdleConnsPerHost: 4,
 		IdleConnTimeout:     90 * time.Second,
 		ForceAttemptHTTP2:   false,
 	}}
+}
+
+// tlsHandshakeTimeout bounds a peer TLS handshake.
+var tlsHandshakeTimeout = 2 * time.Second
+
+// httpsAnswer is how Go's TLS listener answers a plain HTTP request (a 400
+// with this body): the peer speaks TLS and this side doesn't.
+const httpsAnswer = "HTTP request to an HTTPS server"
+
+// errPeerSpeaksTLS is a plain call answered by a TLS listener.
+var errPeerSpeaksTLS = errors.New("the peer port answers with TLS")
+
+// linkFault says what a failed peer call shows about peer TLS: nothing
+// (a timeout, a refused connection, an HTTP error), the other protocol at
+// the peer, or a key that is not the pair's on one end.
+type linkFault int
+
+const (
+	faultNone       linkFault = iota
+	faultPeerPlain            // this side TLS, the peer plain HTTP
+	faultPeerTLS              // this side plain HTTP, the peer TLS
+	faultForeignKey           // the peer's key is not the pair's
+	faultKeyRefused           // the peer refused this side's key
+)
+
+// faultOf classifies a peer call's error.
+func faultOf(err error) linkFault {
+	var id interface{ PeerIdentity() bool }
+	var op *net.OpError
+	switch {
+	case err == nil:
+		return faultNone
+	case errors.Is(err, http.ErrSchemeMismatch):
+		return faultPeerPlain
+	case errors.Is(err, errPeerSpeaksTLS):
+		return faultPeerTLS
+	case errors.As(err, &id) && id.PeerIdentity():
+		return faultForeignKey
+	case errors.As(err, &op) && op.Op == "remote error" && strings.Contains(op.Err.Error(), "certificate"):
+		// A TLS 1.3 client learns that the server refused its key only
+		// at its first read: an alert, "bad certificate".
+		return faultKeyRefused
+	}
+	return faultNone
 }
 
 // resetOnClose dials with SO_LINGER 0, so every close of a peer
@@ -217,6 +276,12 @@ type caller struct {
 	token   string
 	lease   time.Duration
 	members string
+	// note, when set, hears every call's outcome at the transport: nil
+	// for an answer (any status), else the error (noteLink).
+	note func(url string, err error)
+	// tls: calls go out with peer TLS. Only a plain call can meet a TLS
+	// listener's 400, so only then is that answer read as one.
+	tls bool
 }
 
 // call sends one request with a deadline of d and returns the body of a
@@ -240,10 +305,15 @@ func (c *caller) call(ctx context.Context, d time.Duration, method, url string, 
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
+		c.noted(url, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxFrame))
+	if err == nil && !c.tls && resp.StatusCode == http.StatusBadRequest && bytes.Contains(b, []byte(httpsAnswer)) {
+		err = fmt.Errorf("%s %s: %w", method, url, errPeerSpeaksTLS)
+	}
+	c.noted(url, err)
 	switch {
 	case err != nil:
 		return nil, err
@@ -254,6 +324,12 @@ func (c *caller) call(ctx context.Context, d time.Duration, method, url string, 
 			msg: fmt.Sprintf("%s %s: %s: %s", method, url, resp.Status, bytes.TrimSpace(b))}
 	}
 	return b, nil
+}
+
+func (c *caller) noted(url string, err error) {
+	if c.note != nil {
+		c.note(url, err)
+	}
 }
 
 // statedLease reads a vote request's stated lease: 0 when missing or bad,

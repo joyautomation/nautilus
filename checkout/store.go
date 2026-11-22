@@ -37,13 +37,30 @@ var (
 	ErrNotOpen = errors.New("checkout: that run is not open")
 	ErrRunOpen = errors.New("checkout: a run is already open: finish or abandon it first")
 	ErrCorrupt = errors.New("checkout: the checkout file is damaged")
+	// ErrForceActive: a checkout force already stands (one at a time).
+	ErrForceActive = errors.New("checkout: a checkout force already stands: release it first")
+	// ErrNoForce: there is no checkout force to end.
+	ErrNoForce = errors.New("checkout: no checkout force stands")
+)
+
+// How a checkout force ended.
+const (
+	ForceReleased    = "released"                  // by a person
+	ForceExpired     = "expired"                   // its time ran out
+	ForceAbandoned   = "run abandoned"             // its run was abandoned
+	ForceInterrupted = "interrupted"               // the controller restarted, or lost the force
+	ForceReplaced    = "replaced"                  // someone else changed or cleared it
+	ForceRefused     = "not applied"               // the force table refused the value
+	ForceInterlock   = "equipment back in service" // its interlock stopped holding
 )
 
 // Kinds of entry in the file.
 const (
-	kindRun     = "run"
-	kindResult  = "result"
-	kindAbandon = "abandon"
+	kindRun      = "run"
+	kindResult   = "result"
+	kindAbandon  = "abandon"
+	kindForce    = "force"    // a checkout force began on a point
+	kindForceEnd = "forceend" // and ended
 )
 
 // entry is one line of the file.
@@ -64,6 +81,11 @@ type entry struct {
 	Outcome string `json:"outcome,omitempty"`
 	Seen    any    `json:"seen,omitempty"`
 	Quality string `json:"quality,omitempty"`
+
+	// kind force: the value forced and the seconds it may stand; kind
+	// forceend: how it ended (Reason)
+	Forced  any `json:"forced,omitempty"`
+	Seconds int `json:"seconds,omitempty"`
 
 	// kinds result and abandon
 	Note   string `json:"note,omitempty"`
@@ -88,6 +110,32 @@ type Result struct {
 	Quality   string `json:"quality,omitempty"`
 	By        string `json:"by"`
 	Principal string `json:"principal,omitempty"`
+	// Force is the checkout force the point last had in the run, when it had
+	// one: what was forced, how long it was allowed, how it ended (empty while
+	// it stands), and the sequence number of the entry that began it, so the
+	// sheet can be checked against the audit journal.
+	Force *ForceRef `json:"force,omitempty"`
+}
+
+// ForceRef says a point was forced during the checkout.
+type ForceRef struct {
+	Seq     int64  `json:"seq"`
+	Value   any    `json:"value"`
+	Seconds int    `json:"seconds"`
+	Ended   string `json:"ended,omitempty"`
+}
+
+// ForceRec is a checkout force: the point, the value, who began it and when,
+// and the seconds it may stand.
+type ForceRec struct {
+	Run       string `json:"run"`
+	Point     string `json:"point"`
+	Seq       int64  `json:"seq"`
+	At        int64  `json:"at"`
+	Value     any    `json:"value"`
+	Seconds   int    `json:"seconds"`
+	By        string `json:"by"`
+	Principal string `json:"principal,omitempty"`
 }
 
 // Run is one checkout against a sheet.
@@ -106,6 +154,15 @@ type Run struct {
 	EndedBy     string `json:"endedBy,omitempty"`
 	Results     int    `json:"results"`
 	lastResults map[string][]Result
+	// forces is each point's checkout forces in the run, oldest first.
+	forces map[string][]*forceState
+	// standing is the checkout force that has begun and not ended.
+	standing *forceState
+}
+
+type forceState struct {
+	rec   ForceRec
+	ended string
 }
 
 // Store is the runs and their results, kept in one append-only file.
@@ -249,20 +306,46 @@ func (s *Store) apply(e entry) error {
 			return errors.New("a run that is empty or already begun")
 		}
 		s.runs[e.Run] = &Run{ID: e.Run, State: StateOpen, Rehearsal: e.Rehearsal, SheetHash: e.SheetHash, Title: e.Title,
-			At: e.At, By: e.By, Principal: e.Principal, lastResults: map[string][]Result{}}
+			At: e.At, By: e.By, Principal: e.Principal, lastResults: map[string][]Result{}, forces: map[string][]*forceState{}}
 		s.ord = append(s.ord, e.Run)
 	case kindResult:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
 			return errors.New("a result for a run that is not open")
 		}
-		r.lastResults[e.Point] = append(r.lastResults[e.Point], Result{Run: e.Run, Seq: e.Seq, At: e.At, Point: e.Point,
-			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, By: e.By, Principal: e.Principal})
+		res := Result{Run: e.Run, Seq: e.Seq, At: e.At, Point: e.Point,
+			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, By: e.By, Principal: e.Principal}
+		if fs := r.forces[e.Point]; len(fs) > 0 {
+			last := fs[len(fs)-1]
+			res.Force = &ForceRef{Seq: last.rec.Seq, Value: last.rec.Value, Seconds: last.rec.Seconds, Ended: last.ended}
+		}
+		r.lastResults[e.Point] = append(r.lastResults[e.Point], res)
 		r.Results++
+	case kindForce:
+		r := s.runs[e.Run]
+		if r == nil || r.State != StateOpen {
+			return errors.New("a force for a run that is not open")
+		}
+		if r.standing != nil {
+			return errors.New("a force while another stands")
+		}
+		fs := &forceState{rec: ForceRec{Run: e.Run, Point: e.Point, Seq: e.Seq, At: e.At, Value: e.Forced, Seconds: e.Seconds, By: e.By, Principal: e.Principal}}
+		r.forces[e.Point] = append(r.forces[e.Point], fs)
+		r.standing = fs
+	case kindForceEnd:
+		r := s.runs[e.Run]
+		if r == nil || r.standing == nil || r.standing.rec.Point != e.Point {
+			return errors.New("the end of a force that does not stand")
+		}
+		r.standing.ended = e.Reason
+		r.standing = nil
 	case kindAbandon:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
 			return errors.New("an abandon of a run that is not open")
+		}
+		if r.standing != nil {
+			return errors.New("an abandon while a force stands")
 		}
 		r.State, r.Reason, r.EndedAt, r.EndedBy = StateAbandoned, e.Reason, e.At, e.By
 	default:
@@ -388,6 +471,82 @@ func (s *Store) Record(run, point, outcome, note string, seen any, quality, by, 
 	return rs[len(rs)-1], nil
 }
 
+// StartForce records that a checkout force began on a point of an open run:
+// the value, and the seconds it may stand. One force stands at a time.
+func (s *Store) StartForce(run, point string, value any, seconds int, by, principal string) (ForceRec, error) {
+	if point == "" || utf8.RuneCountInString(point) > MaxID {
+		return ForceRec{}, invalid("a force names a point")
+	}
+	if seconds < 1 {
+		return ForceRec{}, invalid("a force stands for at least a second")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.runs[run]
+	if r == nil {
+		return ForceRec{}, ErrNoRun
+	}
+	if r.State != StateOpen {
+		return ForceRec{}, ErrNotOpen
+	}
+	if r.standing != nil {
+		return ForceRec{}, ErrForceActive
+	}
+	if err := s.append(entry{Kind: kindForce, Run: run, Point: point, Forced: value, Seconds: seconds, By: by, Principal: principal}); err != nil {
+		return ForceRec{}, err
+	}
+	return r.standing.rec, nil
+}
+
+// EndForce records that the standing checkout force of an open run ended, and
+// how (one of the Force... constants).
+func (s *Store) EndForce(run, how, by string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.runs[run]
+	if r == nil {
+		return ErrNoRun
+	}
+	return s.endForceLocked(r, how, by)
+}
+
+func (s *Store) endForceLocked(r *Run, how, by string) error {
+	if r.standing == nil {
+		return ErrNoForce
+	}
+	return s.append(entry{Kind: kindForceEnd, Run: r.ID, Point: r.standing.rec.Point, Reason: how, By: by})
+}
+
+// Standing is the checkout force that has begun and not ended, in the open
+// run.
+func (s *Store) Standing() (ForceRec, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r := s.openRun(); r != nil && r.standing != nil {
+		return r.standing.rec, true
+	}
+	return ForceRec{}, false
+}
+
+// InterruptStanding ends a force the file says is still standing: the forces
+// of a controller do not survive it, so one left standing in the file belongs
+// to a process that is gone. It returns how many it ended. The controller
+// calls it once, at start.
+func (s *Store) InterruptStanding() (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, id := range s.ord {
+		if r := s.runs[id]; r.State == StateOpen && r.standing != nil {
+			if err := s.endForceLocked(r, ForceInterrupted, "controller"); err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
 // Abandon ends an open run without sealing it. Its results stay in the file
 // and in the view; it can no longer take results.
 func (s *Store) Abandon(run, reason, by, principal string) (Run, error) {
@@ -405,6 +564,11 @@ func (s *Store) Abandon(run, reason, by, principal string) (Run, error) {
 	}
 	if r.State != StateOpen {
 		return Run{}, ErrNotOpen
+	}
+	if r.standing != nil {
+		if err := s.endForceLocked(r, ForceAbandoned, by); err != nil {
+			return Run{}, err
+		}
 	}
 	if err := s.append(entry{Kind: kindAbandon, Run: run, Reason: reason, By: by, Principal: principal}); err != nil {
 		return Run{}, err

@@ -33,6 +33,17 @@ import "os"
 //   - superseded_lead_keeps_substitutes: a controller that learns it is
 //     superseded keeps running the old history's substitutes until a
 //     takeover.
+//
+// Peer TLS (#710):
+//
+//   - peer_tls_default_off: a pair member and the witness run plain HTTP
+//     unless peer TLS is asked for;
+//   - peer_bind_wildcard: a member's peer listener binds every interface,
+//     not the address peers: names;
+//   - peer_bind_gives_up: a peer port whose address is not up yet
+//     refuses the start (#1230 review);
+//   - peer_bind_loopback_taken: a peers: name that binds to loopback is
+//     served (#1230 review).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutNaut(name string) bool { return name == mutOn }
