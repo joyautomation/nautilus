@@ -1,4 +1,4 @@
-package channel_test
+package send_test
 
 import (
 	"context"
@@ -17,6 +17,7 @@ import (
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/channel/channeltest"
+	"github.com/joyautomation/nautilus/alarm/channel/send"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 )
 
@@ -25,8 +26,8 @@ const (
 	aliceMail  = "alice@example.com"
 )
 
-func opts() channel.Options {
-	return channel.Options{Timeout: 2 * time.Second}
+func opts() send.Options {
+	return send.Options{Timeout: 2 * time.Second}
 }
 
 func dir() channeltest.Dir {
@@ -83,7 +84,7 @@ func email(t *testing.T, o channeltest.SMTPOptions, mut func(*channel.Email)) (e
 	if mut != nil {
 		mut(e)
 	}
-	ch, err := channel.Build(&channel.Config{Email: e}, dir(), opts())
+	ch, err := send.Build(&channel.Config{Email: e}, dir(), opts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,8 +187,8 @@ func TestEmailTransientRetried(t *testing.T) {
 
 func TestEmailHungServerEndsWithContext(t *testing.T) {
 	s := channeltest.NewSMTP(t, channeltest.SMTPOptions{Hang: true, Implicit: false})
-	ch, err := channel.Build(&channel.Config{Email: &channel.Email{SMTP: s.Addr, From: "alerts@example.com",
-		TLSConf: channel.TLS{CAFile: s.CAFile}}}, dir(), channel.Options{Timeout: 30 * time.Second})
+	ch, err := send.Build(&channel.Config{Email: &channel.Email{SMTP: s.Addr, From: "alerts@example.com",
+		TLSConf: channel.TLS{CAFile: s.CAFile}}}, dir(), send.Options{Timeout: 30 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +260,7 @@ func TestDirectoryErrorIsConfig(t *testing.T) {
 	s := channeltest.NewSMTP(t, channeltest.SMTPOptions{})
 	d := dir()
 	d.Err = errors.New("read /secret/path: boom")
-	ch, _ := channel.Build(&channel.Config{Email: &channel.Email{SMTP: s.Addr, From: "alerts@example.com",
+	ch, _ := send.Build(&channel.Config{Email: &channel.Email{SMTP: s.Addr, From: "alerts@example.com",
 		TLSConf: channel.TLS{CAFile: s.CAFile}}}, d, opts())
 	err := ch["email"].Send(context.Background(), message("x"))
 	class(t, err, escalate.FailConfig)
@@ -270,19 +271,19 @@ func TestMissingSecretIsConfig(t *testing.T) {
 	s := channeltest.NewSMTP(t, channeltest.SMTPOptions{User: "mailer", Pass: "x"})
 	d := dir()
 	delete(d.Secrets, "email.password")
-	ch, _ := channel.Build(&channel.Config{Email: &channel.Email{SMTP: s.Addr, From: "alerts@example.com", Username: "mailer",
+	ch, _ := send.Build(&channel.Config{Email: &channel.Email{SMTP: s.Addr, From: "alerts@example.com", Username: "mailer",
 		TLSConf: channel.TLS{CAFile: s.CAFile}}}, d, opts())
 	class(t, ch["email"].Send(context.Background(), message("x")), escalate.FailConfig)
 	if s.AuthTried() {
 		t.Fatal("dialed")
 	}
 	d.Secrets["email.password"] = ""
-	ch, _ = channel.Build(&channel.Config{Email: &channel.Email{SMTP: s.Addr, From: "alerts@example.com", Username: "mailer",
+	ch, _ = send.Build(&channel.Config{Email: &channel.Email{SMTP: s.Addr, From: "alerts@example.com", Username: "mailer",
 		TLSConf: channel.TLS{CAFile: s.CAFile}}}, d, opts())
 	class(t, ch["email"].Send(context.Background(), message("x")), escalate.FailConfig)
 }
 
-func provider(t *testing.T, o channel.Options, mut func(*channel.Config)) (map[string]escalate.Channel, *channeltest.Provider) {
+func provider(t *testing.T, o send.Options, mut func(*channel.Config)) (map[string]escalate.Channel, *channeltest.Provider) {
 	t.Helper()
 	p := channeltest.NewProvider(t)
 	tl := channel.TLS{CAFile: p.CAFile}
@@ -293,7 +294,7 @@ func provider(t *testing.T, o channel.Options, mut func(*channel.Config)) (map[s
 	if mut != nil {
 		mut(c)
 	}
-	ch, err := channel.Build(c, dir(), o)
+	ch, err := send.Build(c, dir(), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +341,7 @@ func TestProviderUntrustedCert(t *testing.T) {
 }
 
 func TestProviderAuthNotRetried(t *testing.T) {
-	ch, p := provider(t, channel.Options{Timeout: time.Second}, nil)
+	ch, p := provider(t, send.Options{Timeout: time.Second}, nil)
 	p.SetStatus(401, "bad creds")
 	se := class(t, ch["sms"].Send(context.Background(), message("x")), escalate.FailAuth)
 	if se.Code != 401 || se.Proto != "http" {
@@ -352,7 +353,7 @@ func TestProviderAuthNotRetried(t *testing.T) {
 }
 
 func TestProviderRejectedNoLeak(t *testing.T) {
-	ch, p := provider(t, channel.Options{Timeout: time.Second}, nil)
+	ch, p := provider(t, send.Options{Timeout: time.Second}, nil)
 	p.SetStatus(400, `{"message":"The number `+alicePhone+` is not valid","account":"AC0000example"}`)
 	err := ch["sms"].Send(context.Background(), message("x"))
 	class(t, err, escalate.FailRejected)
@@ -365,7 +366,7 @@ func TestProviderRejectedNoLeak(t *testing.T) {
 // A provider's 5xx is transient (the dispatcher retries it, asking the
 // gate again first); the channel itself makes one attempt.
 func TestProviderServerErrorIsTransient(t *testing.T) {
-	ch, p := provider(t, channel.Options{Timeout: time.Second}, nil)
+	ch, p := provider(t, send.Options{Timeout: time.Second}, nil)
 	p.SetStatus(500, alicePhone)
 	err := ch["voice"].Send(context.Background(), message("x"))
 	class(t, err, escalate.FailProvider)
@@ -379,7 +380,7 @@ func TestProviderRedirectNotFollowed(t *testing.T) {
 	var other atomic.Int32
 	evil := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { other.Add(1) }))
 	defer evil.Close()
-	ch, p := provider(t, channel.Options{Timeout: time.Second}, nil)
+	ch, p := provider(t, send.Options{Timeout: time.Second}, nil)
 	p.SetRedirect(evil.URL)
 	err := ch["sms"].Send(context.Background(), message("x"))
 	se := class(t, err, escalate.FailRejected)
@@ -398,7 +399,7 @@ func TestProviderNeedsToken(t *testing.T) {
 	p := channeltest.NewProvider(t)
 	d := dir()
 	delete(d.Secrets, "sms.token")
-	ch, _ := channel.Build(&channel.Config{SMS: &channel.Provider{URL: p.URL, Account: "AC1", From: "+15550100",
+	ch, _ := send.Build(&channel.Config{SMS: &channel.Provider{URL: p.URL, Account: "AC1", From: "+15550100",
 		TLSConf: channel.TLS{CAFile: p.CAFile}}}, d, opts())
 	class(t, ch["sms"].Send(context.Background(), message("x")), escalate.FailConfig)
 	if p.Hits() != 0 {
@@ -406,7 +407,7 @@ func TestProviderNeedsToken(t *testing.T) {
 	}
 	m := message("x")
 	m.To = "bob"
-	ch, _ = channel.Build(&channel.Config{SMS: &channel.Provider{URL: p.URL, Account: "AC1", From: "+15550100",
+	ch, _ = send.Build(&channel.Config{SMS: &channel.Provider{URL: p.URL, Account: "AC1", From: "+15550100",
 		TLSConf: channel.TLS{CAFile: p.CAFile}}}, dir(), opts())
 	class(t, ch["sms"].Send(context.Background(), m), escalate.FailNoContact)
 }
@@ -414,7 +415,7 @@ func TestProviderNeedsToken(t *testing.T) {
 func TestWebhook(t *testing.T) {
 	h := channeltest.NewWebhook(t)
 	c := &channel.Config{Webhook: &channel.Webhook{URL: h.URL, Header: "Authorization", TLSConf: channel.TLS{CAFile: h.CAFile}}}
-	ch, err := channel.Build(c, dir(), opts())
+	ch, err := send.Build(c, dir(), opts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +454,7 @@ func TestWebhook(t *testing.T) {
 
 func TestWebhookNoContactNeeded(t *testing.T) {
 	h := channeltest.NewWebhook(t)
-	ch, _ := channel.Build(&channel.Config{Webhook: &channel.Webhook{URL: h.URL, TLSConf: channel.TLS{CAFile: h.CAFile}}}, dir(), opts())
+	ch, _ := send.Build(&channel.Config{Webhook: &channel.Webhook{URL: h.URL, TLSConf: channel.TLS{CAFile: h.CAFile}}}, dir(), opts())
 	m := message("x")
 	m.To = "nobody-with-contacts"
 	if err := ch["webhook"].Send(context.Background(), m); err != nil {
@@ -469,12 +470,12 @@ func TestWebhookMissingSecretAndStatus(t *testing.T) {
 	d := dir()
 	delete(d.Secrets, "webhook.header")
 	c := &channel.Config{Webhook: &channel.Webhook{URL: h.URL, Header: "X-Key", TLSConf: channel.TLS{CAFile: h.CAFile}}}
-	ch, _ := channel.Build(c, d, opts())
+	ch, _ := send.Build(c, d, opts())
 	class(t, ch["webhook"].Send(context.Background(), message("x")), escalate.FailConfig)
 	if len(h.Hooks()) != 0 {
 		t.Fatal("sent without its secret")
 	}
-	ch, _ = channel.Build(c, dir(), opts())
+	ch, _ = send.Build(c, dir(), opts())
 	h.SetStatus(403)
 	class(t, ch["webhook"].Send(context.Background(), message("x")), escalate.FailAuth)
 }
@@ -485,11 +486,11 @@ func TestWebhookPlaintextWithHeaderRefused(t *testing.T) {
 	defer srv.Close()
 	// Build's Validate refuses this; a plaintext webhook with no header and
 	// insecure: true is the one that goes out.
-	_, err := channel.Build(&channel.Config{Webhook: &channel.Webhook{URL: srv.URL, Header: "X-Key", TLSConf: channel.TLS{Insecure: true}}}, dir(), opts())
+	_, err := send.Build(&channel.Config{Webhook: &channel.Webhook{URL: srv.URL, Header: "X-Key", TLSConf: channel.TLS{Insecure: true}}}, dir(), opts())
 	if err == nil {
 		t.Fatal("plaintext + header accepted")
 	}
-	ch, err := channel.Build(&channel.Config{Webhook: &channel.Webhook{URL: srv.URL, TLSConf: channel.TLS{Insecure: true}}}, dir(), opts())
+	ch, err := send.Build(&channel.Config{Webhook: &channel.Webhook{URL: srv.URL, TLSConf: channel.TLS{Insecure: true}}}, dir(), opts())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -510,25 +511,25 @@ func TestBuildCAFile(t *testing.T) {
 		{"alarms.channels.sms.ca-file", channel.Config{SMS: &channel.Provider{URL: "https://api.example.com", Account: "AC1", From: "+15550100", TLSConf: channel.TLS{CAFile: "/nonexistent/ca.pem"}}}},
 		{"alarms.channels.webhook.ca-file", channel.Config{Webhook: &channel.Webhook{URL: "https://hook.example.com", TLSConf: channel.TLS{CAFile: "/nonexistent/ca.pem"}}}},
 	} {
-		_, err := channel.Build(&tc.c, dir(), opts())
+		_, err := send.Build(&tc.c, dir(), opts())
 		if err == nil || !strings.Contains(err.Error(), tc.key) {
 			t.Errorf("%s: err = %v", tc.key, err)
 		}
 	}
 	junk := filepath.Join(t.TempDir(), "junk.pem")
 	_ = os.WriteFile(junk, []byte("not a cert"), 0o600)
-	_, err := channel.Build(&channel.Config{Webhook: &channel.Webhook{URL: "https://hook.example.com", TLSConf: channel.TLS{CAFile: junk}}}, dir(), opts())
+	_, err := send.Build(&channel.Config{Webhook: &channel.Webhook{URL: "https://hook.example.com", TLSConf: channel.TLS{CAFile: junk}}}, dir(), opts())
 	if err == nil || !strings.Contains(err.Error(), "alarms.channels.webhook.ca-file") {
 		t.Errorf("junk ca: %v", err)
 	}
 }
 
 func TestBuildKinds(t *testing.T) {
-	ch, err := channel.Build(nil, dir(), opts())
+	ch, err := send.Build(nil, dir(), opts())
 	if err != nil || len(ch) != 0 {
 		t.Fatalf("%v %v", ch, err)
 	}
-	ch, err = channel.Build(&channel.Config{Webhook: &channel.Webhook{URL: "https://hook.example.com"}}, dir(), opts())
+	ch, err = send.Build(&channel.Config{Webhook: &channel.Webhook{URL: "https://hook.example.com"}}, dir(), opts())
 	if err != nil || len(ch) != 1 || ch["webhook"] == nil {
 		t.Fatalf("%v %v", ch, err)
 	}
@@ -544,7 +545,7 @@ func TestUnreachableAndRetry(t *testing.T) {
 	addr := ln.Addr().String()
 	ln.Close()
 	c := &channel.Config{Webhook: &channel.Webhook{URL: "https://" + addr, TLSConf: channel.TLS{CAFile: h.CAFile}}}
-	ch, err := channel.Build(c, dir(), channel.Options{Timeout: time.Second})
+	ch, err := send.Build(c, dir(), send.Options{Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -571,7 +572,7 @@ func TestProviderSchemeCase(t *testing.T) {
 // without one is refused at start, not at the first page.
 func TestPushKindUsesTheHook(t *testing.T) {
 	cfg := &channel.Config{Push: &channel.Push{Subject: "mailto:ops@example.com"}}
-	if _, err := channel.Build(cfg, dir(), opts()); err == nil || !strings.Contains(err.Error(), "alarms.channels.push") {
+	if _, err := send.Build(cfg, dir(), opts()); err == nil || !strings.Contains(err.Error(), "alarms.channels.push") {
 		t.Fatalf("no hook: %v", err)
 	}
 	var got escalate.Message
@@ -580,7 +581,7 @@ func TestPushKindUsesTheHook(t *testing.T) {
 		got = m
 		return escalate.Failed(escalate.FailNoContact)
 	}
-	chans, err := channel.Build(cfg, dir(), o)
+	chans, err := send.Build(cfg, dir(), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +594,7 @@ func TestPushKindUsesTheHook(t *testing.T) {
 	o.Push = func(context.Context, escalate.Message) error {
 		return errors.New("https://fcm.example/send/SECRET failed")
 	}
-	chans, _ = channel.Build(cfg, dir(), o)
+	chans, _ = send.Build(cfg, dir(), o)
 	err = chans["push"].Send(context.Background(), message("x"))
 	if strings.Contains(err.Error(), "SECRET") {
 		t.Errorf("the endpoint is in the error: %v", err)
