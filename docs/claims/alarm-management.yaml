@@ -625,3 +625,59 @@ claims:
     note: >-
       In one process, against a test SMTP server and a fake provider; no
       real mail or SMS service.
+
+  - id: AMG-050
+    claim: >-
+      An alarm chatters at 3 activations within 60 seconds (inclusive), a
+      flap from unack-rtn counts, overlapping bursts are one episode, and
+      the episode ends 60 seconds after its last burst, by time, even while
+      the alarm is shelved or suppressed; the live rule finds the episodes
+      the chatter report finds in the same journal.
+    source: "#chattering-and-floods-live"
+    tests:
+      - go ./alarm TestChatterStartsAndEndsByTime
+      - go ./alarm TestChatterWindowIsInclusiveOnly
+      - go ./alarm TestChatterOverlappingWindowsAreOneEpisode
+      - go ./alarm TestChatterEndsWhileShelvedOrSuppressed
+      - go ./alarm/rationalize TestLiveChatterMatchesTheReport
+
+  - id: AMG-051
+    claim: >-
+      A flood is more than 10 activations within 10 minutes and ends once
+      the rate has stayed at or under 10 for a full window; the list
+      carries its first three alarms in time order and its equipment, and
+      naut alarms report flood -sliding finds the floods the controller
+      journalled.
+    source: "#chattering-and-floods-live"
+    tests:
+      - go ./alarm TestFloodStartsOverTheThreshold
+      - go ./alarm TestFloodHysteresis
+      - go ./alarm/rationalize TestSlidingFloodsMatchLive
+      - go ./server TestJournalHidesDetectionUnlessAsked
+
+  - id: AMG-052
+    claim: >-
+      A condition that stood through a restart, a takeover or a return from
+      suppression, and an activation inside a standalone start's grace, do
+      not count toward chattering or a flood.
+    source: "#chattering-and-floods-live"
+    tests:
+      - go ./alarm TestReactivationsAfterARebaselineDoNotCount
+      - go ./alarm TestResetForgetsEpisodes
+
+  - id: AMG-053
+    claim: >-
+      alarms.chatter and alarms.flood change the rules, and naut check
+      refuses a setting the detector cannot use; detection rows are
+      journalled with their counts, left out of the journal view unless
+      asked for, and reach no notifier.
+    source: "#chattering-and-floods-live"
+    tests:
+      - go ./internal/project TestAlarmDetectionConfig
+      - go ./alarm TestDetectConfigValidate
+      - go ./alarm TestDetectionRowsReachNoNotifier
+      - go ./server TestJournalHidesDetectionUnlessAsked
+      - go ./alarm/pgjournal TestPGJournal
+    partial: true
+    note: >-
+      The Postgres round trip runs only with NAUTILUS_TEST_DATABASE_URL set.

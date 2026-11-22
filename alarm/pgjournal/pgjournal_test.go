@@ -134,6 +134,23 @@ func TestPGJournal(t *testing.T) {
 	if len(rest) != 2 || rest[0].Level != 0 || rest[0].To != "" {
 		t.Fatalf("ExceptKinds notify = %+v, want the 2 state changes with empty notify fields", rest)
 	}
+
+	// A detection row (#1249) keeps its numbers and episode.
+	flood := alarm.Event{TS: base.Add(4 * time.Minute).UnixMilli(), ID: alarm.FloodJournalID, Name: "alarm flood ended", Kind: alarm.KindFloodEnd,
+		By: "system", Count: 23, Peak: 14, WindowMs: 600000, SinceMs: base.UnixMilli(), Episode: "flood-x-1"}
+	if err := j.Append(flood); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	floods, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindFloodEnd}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(floods) != 1 || floods[0] != flood {
+		t.Fatalf("flood row = %+v, want %+v", floods, flood)
+	}
 }
 
 // A table an older nautilus created (no notify columns) is migrated in

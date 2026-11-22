@@ -30,6 +30,19 @@ import "os"
 //     a false reading;
 //   - carry_wait_reset: a carried unacknowledged occurrence starts its
 //     wait afresh, so escalation restarts at level 1.
+//
+// And of live detection (#1249):
+//
+//   - chatter_never: no activation ever chatters;
+//   - chatter_no_merge: an overlapping window does not continue an
+//     episode, so one burst reads as several;
+//   - flood_no_hysteresis: a flood ends the moment the count is at the
+//     threshold, not a full window later;
+//   - grace_counts: activations inside a standalone start's grace count;
+//   - restart_counts: a condition that stood through a re-baseline
+//     counts when it activates;
+//   - first_out_repeats: a flood's first out names one alarm as often as
+//     it activated.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutAlarm(name string) bool { return name == mutOn }

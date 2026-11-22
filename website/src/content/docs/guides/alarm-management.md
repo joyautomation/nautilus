@@ -484,6 +484,65 @@ flag, so a token never sits in the shell history; a refusal (401 or
 A signal on a [substitute value](/guides/substitutes/) suppresses the
 alarm on it too, as `signal substituted`.
 
+## Chattering and floods, live
+
+The controller watches for the two problems that bury operators, with
+nothing to configure: the ISA-18.2 numbers are the defaults.
+
+- **An alarm chatters** when it activates 3 or more times within 60
+  seconds. A flap from unack-rtn back to active counts. Bursts whose
+  windows overlap are one episode, which ends 60 seconds after its last
+  burst.
+- **The plant is in a flood** when more than 10 alarms activate within
+  10 minutes. The flood ends once the rate has stayed at or under 10 for
+  a full 10 minutes, so it does not flicker at its edge.
+
+Change either rule in `alarms:` (both are optional):
+
+```yaml
+alarms:
+  chatter: { window: 60s, count: 3 }
+  flood:   { window: 10m, threshold: 10 }
+```
+
+`naut check` refuses settings the detector cannot use: a window under a
+second, a chatter count under 2, or a flood threshold under 1 or of 1024
+and over.
+
+What counts is a new activation. These do not count:
+
+- an alarm whose condition stood through a restart, a takeover or a
+  return from suppression and then activates again;
+- an activation inside a standalone controller's first minute, while its
+  drivers may still read defaults.
+
+A controller coming back with fifty alarms standing is not a flood.
+
+**What you see.** While an alarm chatters, its row in `/api/alarms`
+carries `chatter` (since when, how many activations, how many episodes),
+and the summary counts `chattering`. During a flood the summary carries
+`flood` (activations in the window, since the flood began, and the peak).
+The list also carries the flood's first three alarms in time order and
+the equipment the activations came from. The first alarm of a flood is
+the best free guess at its cause.
+
+**The journal.** Each episode writes a start row and an end row: `chatter`
+and `chatter-end` for an alarm, `flood` and `flood-end` (id
+`__nautilus.flood`) for the plant. Each row carries its counts, its
+window and when the episode began. The journal view leaves them out
+unless you ask for them (`?kind=chatter,flood`), as it does notify rows.
+
+Detection only marks and journals. Nothing is shelved, suppressed or
+paged because an alarm chatters or the plant floods.
+
+`naut alarms report flood -sliding` finds floods in the journal by the
+same rule, so the report matches the controller. Without `-sliding`, the
+report counts fixed 10-minute windows from the start of its range, and
+its floods can differ at the edges. Give `-window` and `-threshold` (or
+`-count` for chatter) when `alarms:` changes the defaults. The live rule
+leaves restart re-activations out, and the journal does not mark them, so
+around a restart the report may count a burst the controller did not.
+
 ## Measuring the alarm system
 
 The ISA-18.2 performance numbers come from the alarm journal, either a

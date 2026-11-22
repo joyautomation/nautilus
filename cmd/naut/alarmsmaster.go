@@ -78,6 +78,14 @@ Flags:
   -suggest       chatter only: for each chattering alarm the smallest longer
                  on-/off-delay that would have stopped it; -project DIR gives
                  the current delays (shelved/suppressed spans are left out)
+  -sliding       flood: find floods by the controller's live rule (more
+                 than the threshold within any window, ending once the
+                 count stayed at or under it for a full window), so the
+                 report matches the flood banner and journal rows; the
+                 rate numbers stay per fixed window
+  -window D, -threshold N   flood: the window and threshold (default 10m
+                 and 10; give alarms.flood:'s if the controller sets them)
+  -window D, -count N       chatter: the window and count (default 60s, 3)
   -o table|json
 
 The range runs from -from up to, not including, -to. An alarm is counted
@@ -287,6 +295,10 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	projDir := fs.String("project", "", "with -suggest: the project whose alarm delays are the current ones (default: none set)")
 	projManifest := fs.String("m", "", manifestFlagUsage)
 	format := fs.String("o", "table", "table or json")
+	sliding := fs.Bool("sliding", false, "flood: the controller's live (sliding) rule")
+	window := fs.Duration("window", 0, "flood or chatter: the window")
+	threshold := fs.Int("threshold", rationalize.FloodThreshold, "flood: more than this many in a window")
+	count := fs.Int("count", rationalize.ChatterCount, "chatter: this many or more in a window")
 	pos, err := parseInterspersed(fs, args[1:])
 	if errors.Is(err, flag.ErrHelp) {
 		return 0
@@ -313,6 +325,22 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	if *topN < 1 {
 		return fail(fmt.Errorf("-top %d: want 1 or more", *topN))
 	}
+	if *sliding && kind != "flood" {
+		return fail(errors.New("-sliding is for the flood report"))
+	}
+	floodCfg := alarm.FloodConfig{Window: alarm.Duration(*window), Threshold: *threshold}
+	chatCfg := alarm.ChatterConfig{Window: alarm.Duration(*window), Count: *count}
+	switch kind {
+	case "flood":
+		if err := floodCfg.Validate(); err != nil {
+			return fail(err)
+		}
+	case "chatter":
+		if err := chatCfg.Validate(); err != nil {
+			return fail(err)
+		}
+	}
+	floodCfg, chatCfg = floodCfg.Resolved(), chatCfg.Resolved()
 	to := now
 	if *toS != "" {
 		if to, err = parseReportTime(*toS); err != nil {
@@ -391,10 +419,15 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	var rep any
 	switch kind {
 	case "flood":
-		rep = rationalize.Floods(acts, from, to, rationalize.FloodWindow, rationalize.FloodThreshold)
+		w := time.Duration(floodCfg.Window)
+		if *sliding {
+			rep = rationalize.SlidingFloods(acts, from, to, w, floodCfg.Threshold)
+		} else {
+			rep = rationalize.Floods(acts, from, to, w, floodCfg.Threshold)
+		}
 	case "chatter":
-		ch := rationalize.Chattering(acts, rationalize.ChatterWindow, rationalize.ChatterCount)
-		rep = ch
+		ch := rationalize.Chattering(acts, time.Duration(chatCfg.Window), chatCfg.Count)
+		rep = chatterReport{ch, chatCfg}
 		if *suggest {
 			cur := map[string]rationalize.Delays{}
 			if *projDir != "" {
@@ -406,7 +439,7 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 					cur[d.ID] = rationalize.Delays{On: d.OnDelay, Off: d.OffDelay}
 				}
 			}
-			rep = chatterSuggestions{Chattering: ch, Suggestions: suggestAll(ch, inRange, cur), Known: *projDir != ""}
+			rep = chatterSuggestions{Chattering: ch, Suggestions: suggestAll(ch, inRange, cur, chatCfg), Known: *projDir != ""}
 		}
 	case "bad-actors":
 		rep = struct {
@@ -433,10 +466,10 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	switch r := rep.(type) {
 	case rationalize.FloodReport:
 		printFloods(stdout, r)
-	case []rationalize.Chatter:
+	case chatterReport:
 		printChatter(stdout, r)
 	case chatterSuggestions:
-		printChatter(stdout, r.Chattering)
+		printChatter(stdout, chatterReport{r.Chattering, chatCfg})
 		printSuggestions(stdout, r)
 	case []rationalize.Stale:
 		printStale(stdout, r, to)
@@ -501,14 +534,14 @@ type chatterSuggestions struct {
 
 // suggestAll is a suggestion for each chattering alarm that has one, in the
 // report's order.
-func suggestAll(ch []rationalize.Chatter, events []alarm.Event, cur map[string]rationalize.Delays) []rationalize.Suggestion {
+func suggestAll(ch []rationalize.Chatter, events []alarm.Event, cur map[string]rationalize.Delays, rule alarm.ChatterConfig) []rationalize.Suggestion {
 	byID := map[string][]alarm.Event{}
 	for _, e := range events {
 		byID[e.ID] = append(byID[e.ID], e)
 	}
 	out := []rationalize.Suggestion{}
 	for _, c := range ch {
-		if s, ok := rationalize.Suggest(byID[c.ID], cur[c.ID], rationalize.ChatterWindow, rationalize.ChatterCount); ok {
+		if s, ok := rationalize.Suggest(byID[c.ID], cur[c.ID], time.Duration(rule.Window), rule.Count); ok {
 			out = append(out, s)
 		}
 	}
@@ -654,6 +687,9 @@ func humanSpan(d time.Duration) string {
 
 func printFloods(w io.Writer, r rationalize.FloodReport) {
 	fmt.Fprintf(w, "alarm rate, %s windows, flood = more than %d in a window\n", shortDur(r.Window), r.Threshold)
+	if r.Sliding {
+		fmt.Fprintf(w, "floods by the live rule: more than %d within any %s, ending after a full %s at or under it\n", r.Threshold, shortDur(r.Window), shortDur(r.Window))
+	}
 	fmt.Fprintf(w, "  alarms          %d (%.1f per hour, %.2f per window; ISA-18.2: about 1 per 10 min is likely acceptable, 2 is the most manageable)\n",
 		r.Activations, r.PerHour, r.PerWindow)
 	if r.Max > 0 {
@@ -677,9 +713,19 @@ func printFloods(w io.Writer, r rationalize.FloodReport) {
 	fmt.Fprintf(w, "\n%d flood(s)\n", len(r.Floods))
 }
 
-func printChatter(w io.Writer, cs []rationalize.Chatter) {
+// chatterReport is the chatter list with the rule it was found by; it
+// marshals as the bare list, as it always did.
+type chatterReport struct {
+	list []rationalize.Chatter
+	cfg  alarm.ChatterConfig
+}
+
+func (c chatterReport) MarshalJSON() ([]byte, error) { return json.Marshal(c.list) }
+
+func printChatter(w io.Writer, r chatterReport) {
+	cs, n, win := r.list, r.cfg.Count, time.Duration(r.cfg.Window)
 	if len(cs) == 0 {
-		fmt.Fprintf(w, "no chattering alarms (%d or more activations within %s)\n", rationalize.ChatterCount, shortDur(rationalize.ChatterWindow))
+		fmt.Fprintf(w, "no chattering alarms (%d or more activations within %s)\n", n, shortDur(win))
 		return
 	}
 	wID := colWidth("ID", len(cs), func(i int) string { return cs[i].ID })
@@ -688,7 +734,7 @@ func printChatter(w io.Writer, cs []rationalize.Chatter) {
 		fmt.Fprintf(w, "%-*s  %-8s  %8d  %4d  %11d  %-16s  %s\n", wID, c.ID, c.Priority, c.Episodes, c.Peak,
 			c.Activations, c.First.Format(reportTime), c.Name)
 	}
-	fmt.Fprintf(w, "\n%d chattering alarm(s): %d or more activations within %s\n", len(cs), rationalize.ChatterCount, shortDur(rationalize.ChatterWindow))
+	fmt.Fprintf(w, "\n%d chattering alarm(s): %d or more activations within %s\n", len(cs), n, shortDur(win))
 }
 
 func printBadActors(w io.Writer, bs []rationalize.BadActor, total int) {
