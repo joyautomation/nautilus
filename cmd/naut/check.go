@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/internal/hmibuild"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/stproject"
@@ -922,6 +923,24 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 	}
 	for _, r := range mreports {
 		fmt.Printf("%s: screen %s: %d equipment, %d pipes\n", loc.file, r.File, r.Equipment, r.Pipes)
+	}
+
+	// The plant model (plant:): its own rules, its tags and devices, the
+	// alarms' equipment and what the drawings name (docs/design/plant-model.md).
+	var eqKeys []string
+	for _, d := range defs {
+		eqKeys = append(eqKeys, alarm.EquipmentOf(d))
+	}
+	if prep, perrs, pwarns := proj.CheckPlant(os.DirFS(dir), eqKeys); proj.Plant != nil {
+		for _, m := range perrs {
+			errs++
+			fmt.Printf("%s: error: %s\n", loc.file, m)
+		}
+		for _, m := range pwarns {
+			warns++
+			fmt.Printf("%s: warning: %s\n", loc.file, m)
+		}
+		fmt.Printf("%s: plant: %s, %d %s, %s, %s\n", loc.file, plural(prep.Areas, "area"), prep.Equipment, map[bool]string{true: "piece of equipment", false: "pieces of equipment"}[prep.Equipment == 1], plural(prep.Flows, "flow"), plural(prep.Types, "asset type"))
 	}
 	if src := hmiSource(proj); src != "" {
 		res, err := buildHMI(proj, dir)

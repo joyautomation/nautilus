@@ -94,6 +94,17 @@ func defaultApp(project, title string, extra []json.RawMessage) (*appSource, err
 	used := map[string]bool{}
 	takenSlug := map[string]bool{}
 	var assets []json.RawMessage
+	// the ids the caller's descriptors make pages for: a mimic piece that
+	// names one of them (plant:) leaves its page to it
+	fromPlant := map[string]bool{}
+	for _, d := range extra {
+		var h struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(d, &h) == nil && h.ID != "" {
+			fromPlant[assetSlug(h.ID)] = true
+		}
+	}
 	for i, m := range mimics {
 		raw, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(m)))
 		if err != nil {
@@ -111,7 +122,7 @@ func defaultApp(project, title string, extra []json.RawMessage) (*appSource, err
 			problems = append(problems, fmt.Sprintf("%s: not a mimic: %v", m, err))
 			continue
 		}
-		assets = append(assets, assetsOf(raw)...)
+		assets = append(assets, assetsOf(raw, fromPlant)...)
 		var imports, registry []string
 		seen := map[string]bool{}
 		for _, eq := range doc.Equipment {
@@ -169,6 +180,9 @@ func defaultApp(project, title string, extra []json.RawMessage) (*appSource, err
 		// session without the config permission (the controller refuses the
 		// rest in any case).
 		{"configuration", "Configuration", defaultConfiguration, "config"},
+		// the audit journal, for whoever may read it (who acknowledged what,
+		// by link or by hand, who wrote which tag)
+		{"audit", "Audit", defaultAudit, "audit"},
 		{"alarms", "", defaultAlarms, ""},
 	} {
 		if takenSlug[pg.slug] {
@@ -455,6 +469,33 @@ const defaultConfiguration = `<script>
 
 <style>
 	.nx-page { max-width: 1100px; margin: 0 auto; display: grid; gap: 16px; }
+	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
+	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
+	p { color: var(--muted); margin: 0; }
+</style>
+`
+
+// defaultAudit is the audit journal (#709) as a page: the engineer's and the
+// administrator's, hidden from a session without the audit permission.
+const defaultAudit = `<script>
+	import { AuditTable, currentAuth } from '@joyautomation/nautilus-hmi';
+	const auth = $derived(currentAuth());
+	const allowed = $derived(!auth || auth.holds('audit'));
+</script>
+
+<div class="nx-page">
+	<section>
+		<h2>Audit</h2>
+		{#if allowed}
+			<AuditTable />
+		{:else}
+			<p>This page needs the audit permission. Sign in as an engineer.</p>
+		{/if}
+	</section>
+</div>
+
+<style>
+	.nx-page { max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
 	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
 	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
 	p { color: var(--muted); margin: 0; }
@@ -758,11 +799,12 @@ const componentsPageText = `<script>
 // assetsOf is the asset descriptors a mimic's equipment make: each piece
 // with a panel (its own, or the one it shares, followed once) is an asset
 // of the same id, titled as its panel is.
-func assetsOf(raw []byte) []json.RawMessage {
+func assetsOf(raw []byte, fromPlant map[string]bool) []json.RawMessage {
 	var doc struct {
 		Equipment []struct {
 			ID    string          `json:"id"`
 			Label string          `json:"label"`
+			Plant string          `json:"plant"`
 			Panel json.RawMessage `json:"panel"`
 		} `json:"equipment"`
 	}
@@ -777,6 +819,9 @@ func assetsOf(raw []byte) []json.RawMessage {
 	}
 	var out []json.RawMessage
 	for _, e := range doc.Equipment {
+		if e.Plant != "" && fromPlant[assetSlug(e.Plant)] {
+			continue // a piece of the plant model: its page comes from the plant
+		}
 		panel := e.Panel
 		if len(panel) > 0 && panel[0] == '"' {
 			var other string
@@ -843,7 +888,7 @@ func dedupeAssets(list []json.RawMessage) json.RawMessage {
 
 // defaultAssetsIndex lists the project's assets, each a link to its page.
 const defaultAssetsIndex = `<script>
-	import { assetTitle, assetSlug } from '@joyautomation/nautilus-hmi';
+	import { assetTitle, assetSlug, assetGroups } from '@joyautomation/nautilus-hmi';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { assets } from 'nx:default/assets';
@@ -851,18 +896,23 @@ const defaultAssetsIndex = `<script>
 
 <div class="nx-page">
 	<h1>Assets</h1>
-	<ul>
-		{#each assets as a (a.id)}
-			<li><a href={resolve('/assets/' + assetSlug(a.id)) + page.url.search}>{assetTitle(a)}</a></li>
-		{/each}
-	</ul>
+	{#each assetGroups(assets) as g (g.area)}
+		{#if g.area}<h2>{g.area}</h2>{/if}
+		<ul>
+			{#each g.assets as a (a.id)}
+				<li><a href={resolve('/assets/' + assetSlug(a.id)) + page.url.search}>{assetTitle(a)}</a>{#if a.subtitle}<span class="sub"> {a.subtitle}</span>{/if}</li>
+			{/each}
+		</ul>
+	{/each}
 </div>
 
 <style>
 	.nx-page { max-width: 900px; margin: 0 auto; display: grid; gap: 12px; }
 	h1 { margin: 0; font-size: var(--font-lg); }
+	h2 { margin: 8px 0 0; font-size: var(--font-md, 1rem); color: var(--muted); }
 	ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 	a { color: var(--ink); }
+	.sub { color: var(--muted); font-size: var(--font-xs); }
 </style>
 `
 

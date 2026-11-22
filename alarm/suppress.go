@@ -114,6 +114,15 @@ func systemAlarm(d Def) bool {
 	return strings.HasPrefix(d.Tag, "__nautilus.") || strings.HasPrefix(d.ID, "nautilus.")
 }
 
+// EquipmentOf is a definition's equipment as the engine takes it: the
+// definition's own, else the root of its condition path.
+func EquipmentOf(d Def) string {
+	if d.Equipment != "" {
+		return d.Equipment
+	}
+	return defaultEquipment(d)
+}
+
 // defaultEquipment is a definition's equipment when it names none: the
 // root of its condition path.
 func defaultEquipment(d Def) string {

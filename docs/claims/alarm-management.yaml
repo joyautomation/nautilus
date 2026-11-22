@@ -1,0 +1,627 @@
+page: website/src/content/docs/guides/alarm-management.md
+title: Alarm management
+prefix: AMG
+claims:
+  - id: AMG-001
+    claim: >-
+      An alarm (or a rule, copying them to every alarm it generates) takes
+      consequence, response and a rationalization state; a reviewed or
+      approved alarm without by and at fails to load, so naut check refuses
+      it.
+    source: "#rationalize-first"
+    tests:
+      - go ./alarm TestRationalizationLoadsOnDefsAndRules
+      - go ./alarm TestRationalizationRefusesAtLoad
+    partial: true
+    note: >-
+      The load refusal is tested; that naut check surfaces it is by naut
+      check reporting load errors, not by a test of this case.
+
+  - id: AMG-002
+    claim: >-
+      naut alarms master export writes one row per alarm, sorted by id, with
+      the rationalization counts and the high and critical alarms still
+      pending; master check exits 0 when the master matches the manifest, 1
+      naming every difference by alarm id and where the alarm is declared,
+      and 2 when the master cannot be read.
+    source: "#rationalize-first"
+    tests:
+      - go ./cmd/naut TestAlarmsMasterExportThenCheck
+      - go ./alarm/rationalize TestMasterRoundTrip
+      - go ./alarm/rationalize TestMasterCompare
+      - go ./alarm/rationalize TestCoverage
+    partial: true
+    note: >-
+      The printed counts line is checked for its numbers by TestCoverage (the
+      function behind it), not as CLI output.
+
+  - id: AMG-003
+    claim: >-
+      A master opened and saved by a spreadsheet (columns reordered, a BOM,
+      CRLF line endings, padded cells, blank rows) is not a difference.
+    source: "#rationalize-first"
+    tests:
+      - go ./alarm/rationalize TestMasterReadsASpreadsheetsCSV
+    note: >-
+      "A date rewritten in the spreadsheet's own format is a difference" is
+      advice on the page and has no test of its own.
+
+  - id: AMG-004
+    claim: >-
+      A roster names people, never addresses: everyone always, a daily or
+      weekly rotation with a handover time, or shifts by day and time, read
+      in the roster's time zone; naut alarms oncall says who is on call at a
+      given moment, offline.
+    source: "#who-is-on-call"
+    tests:
+      - go ./alarm/escalate TestRosterRotation
+      - go ./alarm/escalate TestRosterShifts
+      - go ./cmd/naut TestAlarmsEscalationCommands
+
+  - id: AMG-005
+    claim: >-
+      A handover in the hour a daylight-saving change repeats happens once;
+      one in the hour it skips happens just after the gap.
+    source: "#who-is-on-call"
+    tests:
+      - go ./alarm/escalate TestRosterHandoverInRepeatedHour
+      - go ./alarm/escalate TestHandoverInSkippedHour
+
+  - id: AMG-006
+    claim: >-
+      Policies are tried in order and the first whose match (all of its
+      fields) and when cover the alarm runs it; an alarm no policy covers
+      pages nobody.
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./alarm/escalate TestSelectAndSteps
+      - go ./alarm/escalate TestNoPolicyNoPage
+    partial: true
+    note: >-
+      Priority and area matching together, an hours window and first-match
+      order are tested; class, id and site in match, and days in when, are
+      not.
+
+  - id: AMG-007
+    claim: >-
+      Unacknowledged, an alarm climbs every level at its after time and then
+      repeats the last level every interval, the given number of times.
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./alarm/escalate TestClimbsAndRepeats
+      - go ./alarm/escalate TestSelectAndSteps
+
+  - id: AMG-008
+    claim: >-
+      The escalation clock starts when the alarm begins waiting on a person:
+      a latched alarm flapping between active and returned to normal keeps
+      climbing, while one acknowledged and back is a new wait from level 1.
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./alarm/escalate TestFlappingKeepsClimbing
+      - go ./alarm/escalate TestAckAndBackIsANewWait
+
+  - id: AMG-009
+    claim: >-
+      An acknowledgement or a shelf stops an escalation; with stop:
+      ack-or-rtn a return to normal does too.
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./alarm/escalate TestTwoLevelsTwoChannelsAckStops
+      - go ./alarm/escalate TestShelveStops
+      - go ./alarm/escalate TestStopOnRTN
+
+  - id: AMG-010
+    claim: >-
+      A roster is read when its level falls due: a handover between levels
+      pages the new person, and never re-sends the levels already sent.
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./alarm/escalate TestRosterReadAtSend
+      - go ./alarm/escalate TestHandoverNoBurst
+      - go ./cmd/naut TestAlarmsEscalationCommands
+
+  - id: AMG-011
+    claim: >-
+      An alarm with ack-required false pages while it is active and stops at
+      a return to normal (or a shelf).
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./alarm/escalate TestAnnunciateOnlyPagesWhileActive
+      - go ./alarm/escalate TestAnnunciateOnlyShelvedIsSilent
+      - go ./alarm/escalate TestAnnunciateOnlyRTNBeforeSend
+
+  - id: AMG-012
+    claim: >-
+      naut alarms escalation says how many alarms each policy covers and,
+      with -id, the steps one alarm would page (who, when, which channel),
+      offline from the manifest.
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./cmd/naut TestAlarmsEscalationCommands
+    partial: true
+    note: >-
+      A policy's alarm count, step times and who are asserted (through the
+      print functions, not -at parsing); the uncovered-alarms row, the VIA
+      column and repeat rows are not.
+
+  - id: AMG-013
+    claim: >-
+      Every page is a notify row naming the level, the person, the channel
+      and the result (sent, failed with a reason class only, or
+      nobody-on-call), never an address; the journal API leaves notify rows
+      out unless asked for kind=notify.
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./internal/project TestEscalationTwoChannelsAckStopsLevelThree
+      - go ./internal/project TestEscalationFailuresNeverCarryAnAddress
+      - go ./alarm/escalate TestNobodyOnCall
+      - go ./alarm/escalate TestFailureReasonIsClassOnly
+      - go ./server TestJournalHidesNotifyUnlessAsked
+
+  - id: AMG-014
+    claim: >-
+      The log channel pages and journals a sent notify row, with nothing
+      leaving the box.
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./internal/project TestEscalationStaleRoleSendsNothing
+    partial: true
+    note: >-
+      The sent row by log is asserted; the log line itself is not.
+
+  - id: AMG-015
+    claim: >-
+      An engine built for a test run (naut test, the acceptance harness) has
+      no escalation dispatcher, so it pages nobody.
+    source: "#an-escalation-policy-tried-on-the-log"
+    tests:
+      - go ./internal/project TestEscalationOnlyUnderNautRun
+
+  - id: AMG-016
+    claim: >-
+      Email goes over TLS (STARTTLS or implicit) with the server's
+      certificate verified, and a server that offers no STARTTLS is refused;
+      the SMS and voice provider and the webhook are https, verified, and a
+      redirect is never followed. insecure true turns verification off and
+      allows plaintext only where no password or token is sent, and naut run
+      journals it at start.
+    source: "#channels-email-sms-voice-webhook-push"
+    tests:
+      - go ./alarm/channel TestEmailSTARTTLSWithAuth
+      - go ./alarm/channel TestEmailImplicitTLS
+      - go ./alarm/channel TestEmailUntrustedCert
+      - go ./alarm/channel TestEmailNoSTARTTLSWithUsername
+      - go ./alarm/channel TestEmailNoSTARTTLSNoUsername
+      - go ./alarm/channel TestProviderUntrustedCert
+      - go ./alarm/channel TestProviderRedirectNotFollowed
+      - go ./alarm/channel TestWebhookPlaintextWithHeaderRefused
+      - go ./alarm/channel TestValidate
+      - go ./cmd/naut TestRunJournalsInsecureChannels
+      - go ./cmd/naut TestCheckContacts
+    partial: true
+    note: >-
+      Against a test SMTP server and test https servers, not a real mail
+      or SMS provider.
+
+  - id: AMG-017
+    claim: >-
+      A failed send is tried again only for a reason that can pass (a
+      timeout, the provider's own error), never for an authentication
+      failure, and the alarm and the write gate are asked again before each
+      try.
+    source: "#channels-email-sms-voice-webhook-push"
+    tests:
+      - go ./alarm/escalate TestDispatcherRetriesTransientOnly
+      - go ./alarm/escalate TestRetryAsksAgainBeforeEachAttempt
+      - go ./alarm/channel TestProviderAuthNotRetried
+      - go ./alarm/channel TestProviderServerErrorIsTransient
+
+  - id: AMG-018
+    claim: >-
+      Each channel kind has its own sender: a mail server that hangs does not
+      hold up an SMS, and a hung send is cut off and journalled failed.
+    source: "#channels-email-sms-voice-webhook-push"
+    tests:
+      - go ./alarm/escalate TestHungChannelDelaysOnlyItsOwnKind
+      - go ./alarm/escalate TestSendTimeout
+
+  - id: AMG-019
+    claim: >-
+      A channel that fails three sends in a row raises the system alarm
+      nautilus.alarm-notify until a send on it succeeds.
+    source: "#channels-email-sms-voice-webhook-push"
+    tests:
+      - go ./alarm/escalate TestFailingChannel
+      - go ./internal/project TestEscalationDeclaresSystemAlarm
+    partial: true
+    note: >-
+      The dispatcher's failing flag (three, then cleared by a success) and
+      naut run declaring the system alarm are tested separately; no test
+      watches the alarm rise in a running controller.
+
+  - id: AMG-020
+    claim: >-
+      naut alarms contacts check names every person a level pages by email,
+      SMS or voice (roster members included) with no address for it, and
+      every channel secret not set, each with the command that fixes it, and
+      exits 1; a fresh state directory fails it.
+    source: "#addresses-and-secrets-on-the-box"
+    tests:
+      - go ./cmd/naut TestCheckContacts
+      - go ./cmd/naut TestContactsCheckOnTheBox
+      - go ./cmd/naut TestContactsCheckFreshBoxAndCase
+
+  - id: AMG-021
+    claim: >-
+      The contacts and secrets files are written mode 0600 in the state
+      directory, list masks addresses unless asked, a secret is read from
+      stdin and never printed, and a malformed address or an unknown key is
+      refused; the controller refuses a file others may read, a symbolic
+      link, or one another user owns.
+    source: "#addresses-and-secrets-on-the-box"
+    tests:
+      - go ./cmd/naut TestContactsCLI
+      - go ./alarm/oncall TestStoreRefusesWhatIsNotItsOwn
+      - go ./alarm/oncall TestContactsRefuseMalformed
+
+  - id: AMG-022
+    claim: >-
+      naut check makes the contacts findings where it can see the files and
+      warns once where it cannot; naut run refuses channels with no state
+      directory and warns about a missing address at start, and a page to
+      someone with no address fails no-contact without dialling.
+    source: "#addresses-and-secrets-on-the-box"
+    tests:
+      - go ./cmd/naut TestCheckContacts
+      - go ./cmd/naut TestRunNeedsAStateDirForChannels
+      - go ./internal/project TestChannelsNeedADirectory
+      - go ./cmd/naut TestContactsCheckOnTheBox
+      - go ./alarm/channel TestNoContactDoesNotDial
+      - go ./internal/project TestEscalationFailuresNeverCarryAnAddress
+    partial: true
+    note: >-
+      That a no-contact failure counts toward nautilus.alarm-notify is not
+      tested for that reason specifically (AMG-019 counts failures in
+      general).
+
+  - id: AMG-023
+    claim: >-
+      With ack-url set, email, SMS and push pages carry an ack link (a voice
+      call and a webhook never do); opening it changes nothing, and pressing
+      Acknowledge acknowledges that occurrence as the person paged,
+      journalled via link, and stops the escalation.
+    source: "#acknowledging-from-a-page"
+    tests:
+      - go ./internal/project TestEscalationAckByLinkStopsLevelThree
+      - go ./server TestAckLinkConfirmsThenAcks
+      - go ./alarm/channel TestPagesCarryTheAckLink
+      - go ./cmd/naut TestAckLinkHookKinds
+
+  - id: AMG-049
+    claim: >-
+      The confirm page says, before the button, that pressing it acts
+      as the person the page was sent to, and names anyone else
+      signed in on that browser; it is laid out for a phone (device-width
+      viewport, no text below the browser's own size, a thumb-sized
+      button).
+    source: "#acknowledging-from-a-page"
+    tests:
+      - go ./server TestAckLinkPageSaysWhoItAcknowledgesAs
+      - go ./server TestAckLinkPageIsReadableOnAPhone
+    partial: true
+    note: >-
+      The page's HTML and CSS are asserted; no test renders it on a phone.
+      The line names whom the press acts as; whether that person may still
+      acknowledge is checked at the press (AMG-025), not on the page. A
+      signed-in OIDC person as the other is not tested (local users are).
+
+  - id: AMG-024
+    claim: >-
+      A link is spent once, names one occurrence, and lasts 24 hours at
+      most; a link pressed again, for an alarm since on another occurrence,
+      expired or altered acknowledges nothing and says why.
+    source: "#acknowledging-from-a-page"
+    tests:
+      - go ./server TestAckLinkIsSpentOnce
+      - go ./server TestAckLinkIsBoundToItsOccurrence
+      - go ./server TestAckLinkRefusesWhatDoesNotCheck
+      - go ./alarm/acklink TestTTLIsClampedToADay
+      - go ./alarm/acklink TestExpiry
+
+  - id: AMG-025
+    claim: >-
+      Under an auth: block a link acts only while the person is an enabled
+      user holding ack for that alarm; with ack-from-notification: sign-in it
+      acknowledges only for a browser signed in as that person.
+    source: "#acknowledging-from-a-page"
+    tests:
+      - go ./server TestAckLinkActsOnlyAsAPersonWhoMayAck
+      - go ./server TestAckLinkStopsWithItsPerson
+      - go ./server TestAckLinkSignInMode
+
+  - id: AMG-026
+    claim: >-
+      ack-url must be https unless ack-url-insecure is set (warned and
+      journalled), and naut check warns, naming NAUTILUS_ALLOWED_HOSTS, when
+      its host is a name the controller does not answer by; the variable,
+      where naut check runs, clears the warning.
+    source: "#acknowledging-from-a-page"
+    tests:
+      - go ./alarm/escalate TestPrepareErrors
+      - go ./alarm/escalate TestAckURLAccepted
+      - go ./cmd/naut TestAckLinkChecks
+    partial: true
+    note: >-
+      naut check's warnings and the audit entry are tested; naut run printing
+      the warning as it starts is not.
+
+  - id: AMG-027
+    claim: >-
+      With inbound SMS on, an SMS page ends "Reply ACK <code> to
+      acknowledge."; a reply with the code, signed by the provider, from the
+      number in a person's contacts acknowledges that occurrence as them and
+      is answered "Acknowledged"; an unsigned reply or a stranger's number
+      acknowledges nothing.
+    source: "#by-sms-reply-or-a-keypress"
+    tests:
+      - go ./internal/project TestEscalationAckBySMSReplyStopsLevelThree
+      - go ./server TestInboundSMSAcks
+      - go ./alarm/channel TestSMSCarriesTheReplyCodeWhole
+    partial: true
+    note: Against a fake provider in the test, not a real SMS account.
+
+  - id: AMG-028
+    claim: >-
+      A call says "Press 1 to acknowledge." and names, in the call itself,
+      the URL the provider posts the key to; 1 from the number called
+      acknowledges as the person called, and another key does nothing.
+    source: "#by-sms-reply-or-a-keypress"
+    tests:
+      - go ./alarm/channel TestVoiceGathersAKeypress
+      - go ./server TestInboundVoiceKeypress
+    partial: true
+    note: Against a fake provider; no real call has been placed by a test.
+
+  - id: AMG-029
+    claim: >-
+      An inbound request is believed only with the provider's signature,
+      under the channel's token, over the configured url (never the address
+      the request arrived at); a forged or unsigned one is refused and
+      journalled. Inbound is off (404) until alarms.oncall.inbound turns it
+      on.
+    source: "#by-sms-reply-or-a-keypress"
+    tests:
+      - go ./server TestInboundSignatureIsOverTheConfiguredURL
+      - go ./alarm/channel TestCheckSignatureVectors
+      - go ./alarm/channel TestCheckSignatureRefuses
+      - go ./server TestInboundOff
+      - go ./server TestInboundRoutesAreTheirPaths
+
+  - id: AMG-030
+    claim: >-
+      Five wrong codes from one person in an hour refuse their codes for the
+      hour; ten wrong codes in a day suspend SMS acknowledgements, with a
+      system alarm and SMS pages carrying no code, until the oldest is a day
+      old.
+    source: "#by-sms-reply-or-a-keypress"
+    tests:
+      - go ./server TestInboundWrongCodesAreLimited
+      - go ./server TestSMSAckSuspended
+      - go ./cmd/naut TestSMSAckSuspendedAlarm
+
+  - id: AMG-031
+    claim: Neither the number nor the message text is ever journalled or logged.
+    source: "#by-sms-reply-or-a-keypress"
+    tests:
+      - go ./server TestInboundSecretsStayOut
+
+  - id: AMG-032
+    claim: >-
+      A push page carries its link inside the payload, and a tap never
+      acknowledges: it opens the confirm page.
+    source: "#by-push"
+    tests:
+      - go ./cmd/naut TestPushPageCarriesItsLinkAndFits
+      - go ./server TestAckLinkFromAPush
+      - go ./internal/hmibuild TestPWAWorkerTapOpensTheAckPage
+      - go ./internal/hmibuild TestPWAWorkerClickOpensTheAlarmsAndActsOnNothing
+    partial: true
+    note: >-
+      The worker is tested in a JavaScript harness and the payload as
+      plaintext (encryption is ALM-053's); no push has reached a phone.
+
+  - id: AMG-033
+    claim: >-
+      A push subscription ends when its person does (a changed password, a
+      removed or disabled user), not when they sign out.
+    source: "#by-push"
+    tests:
+      - go ./server TestPushEndsWithThePersonNotTheSession
+
+  - id: AMG-034
+    claim: >-
+      suppress-when hides an alarm only while a readable BOOL reads true,
+      with its reason; a number, a missing tag or a substituted signal never
+      hides it, and naut check refuses one that is not a BOOL.
+    source: "#hiding-alarms-that-mean-nothing-now"
+    tests:
+      - go ./alarm TestSuppressWhenSuppressesOnlyOnAReadableTrue
+      - go ./alarm TestSuppressWhenNeedsABoolThatIsNotSubstituted
+      - go ./internal/project TestCheckAlarmsChecksSuppressWhen
+
+  - id: AMG-035
+    claim: >-
+      A suppression ends the alarm's occurrence: an acknowledgement from
+      before does not carry past it.
+    source: "#hiding-alarms-that-mean-nothing-now"
+    tests:
+      - go ./alarm TestSuppressWhenEndsTheOccurrence
+      - go ./alarm TestARetainedAckDoesNotSurviveASuppression
+
+  - id: AMG-036
+    claim: >-
+      An alarm's equipment defaults to the tag its condition is in; out of
+      service hides every alarm of that equipment and no other, and naut
+      alarms out-of-service, oos-list and in-service drive it on a running
+      controller.
+    source: "#hiding-alarms-that-mean-nothing-now"
+    tests:
+      - go ./alarm TestEquipmentDefaultsToTheConditionsTag
+      - go ./alarm TestOutOfServiceHidesEveryAlarmOfTheEquipmentAndNoOther
+      - go ./server TestOutOfServiceRoutes
+      - go ./cmd/naut TestAlarmsOutOfServiceCLI
+
+  - id: AMG-037
+    claim: >-
+      Out of service always ends: a week at most, a reason and a duration
+      required (the CLI refuses before sending); when it ends a condition
+      still present annunciates at once, unacknowledged.
+    source: "#hiding-alarms-that-mean-nothing-now"
+    tests:
+      - go ./alarm TestOutOfServiceRefusals
+      - go ./server TestOutOfServiceRoutes
+      - go ./cmd/naut TestAlarmsOutOfServiceCLIRefusesBeforeSending
+      - go ./alarm TestOutOfServiceExpiresAndReannunciates
+
+  - id: AMG-038
+    claim: >-
+      Taking equipment out of service needs the out-of-service permission
+      over every alarm it hides and a fresh password; back in service needs
+      only ack. Both are recorded in the audit trail.
+    source: "#hiding-alarms-that-mean-nothing-now"
+    tests:
+      - go ./server TestOutOfServiceNeedsAFreshPasswordAndInServiceDoesNot
+      - go ./server TestOutOfServicePermission
+      - go ./server TestOutOfServiceChecksEveryCoveredAlarmsArea
+      - go ./server TestEveryWriteRouteIsAudited
+
+  - id: AMG-039
+    claim: >-
+      A clock set back does not lengthen an out-of-service window, and a
+      restart restores no more than was left.
+    source: "#hiding-alarms-that-mean-nothing-now"
+    tests:
+      - go ./alarm TestAClockSetBackNeverLengthensAWindow
+      - go ./alarm TestARestartRestoresWhatWasLeft
+      - go ./alarm TestOutOfServiceSurvivesARestartAndNeverGrows
+
+  - id: AMG-040
+    claim: >-
+      The controller's own alarms are never taken out of service, and a
+      substituted signal suppresses its alarm.
+    source: "#hiding-alarms-that-mean-nothing-now"
+    tests:
+      - go ./alarm TestOutOfServiceRefusals
+      - go ./alarm TestASubstitutedSignalSuppressesItsAlarm
+
+  - id: AMG-048
+    claim: >-
+      naut alarms out-of-service, in-service, oos-list, push
+      confirm-revocations and report -host send NAUTILUS_TOKEN as a bearer
+      token, and a controller's 401 or 403 is reported with whether a token
+      was sent and how to set one.
+    source: "#hiding-alarms-that-mean-nothing-now"
+    tests:
+      - go ./cmd/naut TestAlarmsOutOfServiceCLI
+      - go ./cmd/naut TestAlarmsPushConfirmRevocationsCLI
+      - go ./cmd/naut TestAlarmsControllerCommandsNameTheTokenOnARefusal
+      - go ./internal/apiclient TestRefusalHint
+    partial: true
+    note: >-
+      The bearer header is asserted for out-of-service, in-service, oos-list
+      and push confirm-revocations; for report -host only the refusal hint
+      is.
+
+  - id: AMG-041
+    claim: >-
+      flood counts alarms per 10-minute window (more than 10 is a flood),
+      chatter finds 3 or more activations within 60 seconds, bad-actors the
+      10 most frequent and their share, stale alarms active for more than 24
+      hours; each reads a journal file or a running controller and first
+      says how many events it read. A journal whose first event comes more
+      than an hour, and more than a tenth of the range, after the range
+      begins gets a note saying the rates are over the whole range and the
+      -from that reads its span alone.
+    source: "#measuring-the-alarm-system"
+    tests:
+      - go ./alarm/rationalize TestFloods
+      - go ./alarm/rationalize TestChattering
+      - go ./alarm/rationalize TestBadActors
+      - go ./alarm/rationalize TestStaleAlarms
+      - go ./cmd/naut TestAlarmsReportFromAJournalFile
+      - go ./cmd/naut TestAlarmsReportFromAControllerSplitsATruncatedRange
+      - go ./cmd/naut TestAlarmsReportSaysWhenTheJournalIsYoungerThanTheRange
+
+  - id: AMG-042
+    claim: >-
+      A restart that continues an alarm counts no new activation and does not
+      reset a stale alarm's age.
+    source: "#measuring-the-alarm-system"
+    tests:
+      - go ./alarm/rationalize TestActivationsWithOccurrences
+      - go ./alarm/rationalize TestStaleAlarmsWithOccurrences
+      - go ./alarm/rationalize TestActivationsSkipARestartsReannunciation
+
+  - id: AMG-043
+    claim: >-
+      Only the controller holding the write gate pages, asked before every
+      send: a standby, or a leader that lost its lease, sends nothing.
+    source: "#on-a-redundant-pair"
+    tests:
+      - go ./alarm/escalate TestGateClosedSendsNothing
+      - go ./alarm/escalate TestStaleRoleSendsNothing
+      - go ./internal/project TestEscalationStaleRoleSendsNothing
+      - go ./alarm/escalate TestTermChangeNoDuplicate
+
+  - id: AMG-044
+    claim: >-
+      After a restart or a takeover, an alarm still active is not started
+      again at level 1: the current level goes once more, journalled resend
+      after restart or resend after takeover, and the next level falls due on
+      the original clock.
+    source: "#on-a-redundant-pair"
+    tests:
+      - go ./alarm/escalate TestRestartResendsTheCurrentLevelOnce
+      - go ./alarm/escalate TestTakeoverResendLabel
+      - go ./alarm/escalate TestRestartWithTheClockBackStillPages
+    partial: true
+    note: >-
+      On the escalation engine; not across two running controllers (the
+      pair tests carry the occurrence and its ack, not the resend).
+
+  - id: AMG-045
+    claim: >-
+      A pair whose members' alarm contacts differ shows "alarm contacts
+      differ from the peer" on the cluster status, and keeps running.
+    source: "#on-a-redundant-pair"
+    tests:
+      - go ./cmd/naut TestPairReportsDifferentAlarmContacts
+      - go ./cmd/naut TestPairCredentialsDigestAlarmContacts
+
+  - id: AMG-046
+    claim: >-
+      An ack link sent before a takeover works after it, a link used on one
+      controller is refused on the other, and a link that lands on the
+      standby is passed to the leader.
+    source: "#on-a-redundant-pair"
+    tests:
+      - go ./server TestAckLinkSurvivesATakeover
+      - go ./server TestAckLinkIsSpentThroughTheLog
+      - go ./server TestAckLinkIsForwardedByAStandby
+
+  - id: AMG-047
+    claim: >-
+      An unacknowledged alarm escalates through two levels on two channels
+      (email over STARTTLS with a password, then SMS through the provider),
+      and an acknowledgement stops the third; the same holds with the
+      acknowledgement by link and by SMS reply.
+    source: "#what-is-tested-and-what-is-not"
+    tests:
+      - go ./internal/project TestEscalationTwoChannelsAckStopsLevelThree
+      - go ./internal/project TestEscalationAckByLinkStopsLevelThree
+      - go ./internal/project TestEscalationAckBySMSReplyStopsLevelThree
+    partial: true
+    note: >-
+      In one process, against a test SMTP server and a fake provider; no
+      real mail or SMS service.

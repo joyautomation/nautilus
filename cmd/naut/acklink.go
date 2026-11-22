@@ -249,7 +249,7 @@ func ackLinkChecks(proj *project.Project) (errs, warns []string) {
 	o := proj.Alarms.Oncall
 	if in := o.Inbound; in != nil {
 		if u, err := url.Parse(in.URL); err == nil && !hostAllowed(proj, u.Hostname()) {
-			warns = append(warns, fmt.Sprintf("alarms.oncall.inbound.url: the controller answers %s only if it is an allowed host: add it to server.allowed-hosts (or NAUTILUS_ALLOWED_HOSTS on the box), or the provider's replies are refused", u.Hostname()))
+			warns = append(warns, fmt.Sprintf("alarms.oncall.inbound.url: the controller answers %s only if it is an allowed host: add it to NAUTILUS_ALLOWED_HOSTS in the controller's environment (/etc/nautilus/env on a box naut deploy set up), or the provider's replies are refused", u.Hostname()))
 		}
 	}
 	if o.AckURL == "" {
@@ -262,7 +262,7 @@ func ackLinkChecks(proj *project.Project) (errs, warns []string) {
 		errs = append(errs, "alarms.oncall.ack-from-notification: sign-in, but nobody can sign in here (no auth: users or auth.oidc), so no link could ever acknowledge: add users (naut users add) or use the default (link)")
 	}
 	if u, err := url.Parse(o.AckURL); err == nil && !hostAllowed(proj, u.Hostname()) {
-		warns = append(warns, fmt.Sprintf("alarms.oncall.ack-url: the controller answers %s only if it is an allowed host: add it to server.allowed-hosts (or NAUTILUS_ALLOWED_HOSTS on the box), or a link opens a refusal", u.Hostname()))
+		warns = append(warns, fmt.Sprintf("alarms.oncall.ack-url: the controller answers %s only if it is an allowed host: add it to NAUTILUS_ALLOWED_HOSTS in the controller's environment (/etc/nautilus/env on a box naut deploy set up), or a link opens a refusal", u.Hostname()))
 	}
 	if !slices.ContainsFunc(proj.Alarms.Channels.Kinds(), func(k string) bool { return linkKinds[k] }) {
 		warns = append(warns, "alarms.oncall.ack-url is set, but no channel here carries a link (email, sms or push): no page will have one")
@@ -270,11 +270,15 @@ func ackLinkChecks(proj *project.Project) (errs, warns []string) {
 	return errs, warns
 }
 
-// hostAllowed reports whether the controller answers requests for host
-// by default or by server.allowed-hosts.
+// hostAllowed reports whether the controller answers requests for host:
+// localhost and an IP address always, a name only when
+// NAUTILUS_ALLOWED_HOSTS names it. naut check reads the variable where it
+// runs, so on the box (with the controller's environment) the warning
+// clears; on a laptop it says what the box needs.
 func hostAllowed(proj *project.Project, host string) bool {
+	eq := func(h string) bool { return strings.EqualFold(h, host) }
 	return host == "" || net.ParseIP(host) != nil || host == "localhost" ||
-		slices.ContainsFunc(proj.Server.AllowedHosts, func(h string) bool { return strings.EqualFold(h, host) })
+		slices.ContainsFunc(server.EnvAllowedHosts(), eq)
 }
 
 // signInPossible reports whether anyone can sign in to the project's

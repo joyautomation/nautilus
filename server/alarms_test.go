@@ -67,6 +67,9 @@ func TestAlarmRoutes404WithoutAnEngine(t *testing.T) {
 		{"POST", "/api/alarms/ack", `{"all":true}`},
 		{"POST", "/api/alarms/shelve", `{"id":"HiTemp","seconds":60}`},
 		{"POST", "/api/alarms/unshelve", `{"id":"HiTemp"}`},
+		{"GET", "/api/alarms/out-of-service", ""},
+		{"POST", "/api/alarms/out-of-service", `{"equipment":"HiTempAlm","seconds":60,"reason":"x"}`},
+		{"POST", "/api/alarms/in-service", `{"equipment":"HiTempAlm"}`},
 	} {
 		rec := do(t, srv, tc.method, tc.path, tc.body)
 		if rec.Code != http.StatusNotFound {
@@ -589,7 +592,11 @@ func TestAckAndShelveRecordTheSignedInUser(t *testing.T) {
 		}
 	}
 	// The audit journal keeps the typed name as said, beside the principal.
-	if es := srv.audit.ring.Recent(); len(es) == 0 || es[0].User != "user:akhan" || es[0].Detail["by"] != "someone-else" {
+	es := srv.audit.ring.Recent()
+	if len(es) == 0 {
+		t.Fatal("no audit entry")
+	}
+	if es[0].User != "user:akhan" || es[0].Detail["by"] != "someone-else" {
 		t.Errorf("audit entry: %+v", es[0])
 	}
 }

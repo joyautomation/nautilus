@@ -41,6 +41,11 @@ Back in service needs only ack. Both are journalled.
 Flags:
   --host HOST    the controller (required)
   --port N       its tag API port (default 8080)
+
+The credential is NAUTILUS_TOKEN, sent as a bearer token when set: the
+controller's own token, a service token, or a personal access token
+(naut users token <you>). There is no --token flag, so a token never sits
+in the shell history.
 `
 
 // runAlarmsOOS is naut alarms out-of-service|in-service|oos-list.
@@ -117,7 +122,7 @@ func oosDo(which string, req *http.Request) ([]byte, bool) {
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "naut alarms %s: %s returned %s: %s\n", which, req.URL, resp.Status, strings.TrimSpace(string(out)))
+		fmt.Fprintf(os.Stderr, "naut alarms %s: %s returned %s: %s%s\n", which, req.URL, resp.Status, strings.TrimSpace(string(out)), apiclient.RefusalHint(resp.StatusCode))
 		return nil, false
 	}
 	return out, true

@@ -34,6 +34,7 @@ import (
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/dialect"
 	"github.com/joyautomation/nautilus/internal/floatip"
+	"github.com/joyautomation/nautilus/internal/plant"
 
 	"gopkg.in/yaml.v3"
 
@@ -94,9 +95,14 @@ type Manifest struct {
 	// Devices declares field devices by profile (docs/design/device-library.md):
 	// each row derives a struct tag typed by its vendored profile, a command
 	// tag per writable point and its driver bindings, at load.
-	Devices []devbind.Device `yaml:"devices"`
+	// Plant names the plant model file (plant.yaml, docs/design/plant-model.md):
+	// what is in the plant, what feeds what. Mimics and scenes reference its
+	// ids with `plant:`. Absent, nothing changes.
+	PlantFile string           `yaml:"plant"`
+	Devices   []devbind.Device `yaml:"devices"`
 	// devices is Devices resolved against profiles/ (ReadManifest).
 	devices   *devbind.Set     `yaml:"-"`
+	plant     *plant.Plant     `yaml:"-"`
 	Sparkplug *SparkplugConfig `yaml:"sparkplug"`
 	OPCUA     *OPCUAConfig     `yaml:"opcua"`
 	// Channels are the communication channels the programs' READ and
@@ -1154,6 +1160,8 @@ type Project struct {
 	sparkplug *SparkplugConfig
 	drivers   []nio.NamedDriver // the configured drivers, named; nil for the implicit memory loopback
 	devices   *devbind.Set      // devices: resolved; nil when none
+	// Plant is the plant model (plant:), nil when the manifest has none.
+	Plant *plant.Plant
 
 	// ioDiffers, set by NewIOConfig, says whether a driver runs a live I/O
 	// configuration other than the manifest's (the status row's differs).
@@ -1392,6 +1400,17 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 			return nil, fmt.Errorf("%s: devices: %w", name, err)
 		}
 		m.devices = set
+	}
+	if m.PlantFile != "" {
+		pf, err := projectPath(m.PlantFile)
+		if err != nil {
+			return nil, fmt.Errorf("%s: plant: %w", name, err)
+		}
+		pl, err := plant.Read(fsys, pf)
+		if err != nil {
+			return nil, fmt.Errorf("%s: plant: %w", name, err)
+		}
+		m.plant = pl
 	}
 	if err := m.readPWA(fsys); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
@@ -1897,6 +1916,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		substitutes: substitutes,
 		drivers:     drivers,
 		devices:     m.devices,
+		Plant:       m.plant,
 		OPCUA:       m.OPCUA,
 		Retain:      m.Retain,
 		WriteBack:   m.WriteBackMode(),

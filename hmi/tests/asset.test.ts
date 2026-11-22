@@ -1,7 +1,7 @@
 // The asset page's choices (#714 slice 1): what it trends, which alarms are
 // its own, what it offers to audit, and its slug.
 import { describe, it, expect } from './harness.js';
-import { hasTag, tagValue, assetAlarms, assetFromEquipment, assetSlug, assetTags, assetTitle, indexAssets, trendTags, writableTags, type AssetDescriptor } from '../src/lib/asset.js';
+import { assetGroups, hasTag, tagValue, assetAlarms, assetFromEquipment, assetSlug, assetTags, assetTitle, indexAssets, trendTags, writableTags, type AssetDescriptor } from '../src/lib/asset.js';
 import type { AlarmInstance } from '../src/lib/alarms.svelte.js';
 
 const pump: AssetDescriptor = {
@@ -52,9 +52,9 @@ describe('its alarms', () => {
 		const list = [alarm('b', 'p101', 'low'), alarm('c', 'P102'), alarm('a', 'P101', 'critical'), alarm('d', undefined)];
 		expect(assetAlarms(list, pump).map((a) => a.id).join()).toBe('a,b');
 	});
-	it('use the equipment key when the descriptor names one, else the id', () => {
+	it('use the equipment key when the descriptor names one, and the id too', () => {
 		const list = [alarm('x', 'Skid'), alarm('y', 'P101')];
-		expect(assetAlarms(list, { ...pump, equipment: 'Skid' }).map((a) => a.id).join()).toBe('x');
+		expect(assetAlarms(list, { ...pump, equipment: 'Skid' }).map((a) => a.id).join()).toBe('x,y');
 		expect(assetAlarms(list, pump).map((a) => a.id).join()).toBe('y');
 	});
 });
@@ -96,5 +96,14 @@ describe('a value by path', () => {
 		expect(tagValue(tags, 'Running.X')).toBe(undefined);
 		expect(hasTag(tags, 'Running')).toBe(true);
 		expect(hasTag(tags, 'CONV.Nope')).toBe(false);
+	});
+});
+
+describe('the index by area', () => {
+	it('groups by area in the order first seen, the unplaced last, each in the order given', () => {
+		const a = (id: string, area?: string): AssetDescriptor => ({ id, area, panel: {} });
+		const g = assetGroups([a('A'), a('B', 'Roast'), a('C', 'Receiving'), a('D', 'Roast')]);
+		expect(g.map((x) => x.area + ':' + x.assets.map((y) => y.id).join('')).join('|')).toBe('Roast:BD|Receiving:C|:A');
+		expect(assetGroups([]).length).toBe(0);
 	});
 });

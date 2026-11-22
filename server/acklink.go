@@ -412,6 +412,13 @@ func (s *Server) handleAckLinkPage(w http.ResponseWriter, r *http.Request) {
 		if a := s.resolveActor(r); a.session == nil || a.pr.Kind != pr.Kind || !strings.EqualFold(a.pr.Name, pr.Name) {
 			d.SignIn = "/signin?next=" + url.QueryEscape(r.URL.Path)
 		}
+	} else if a := s.resolveActor(r); a.session != nil {
+		if pr := linkPrincipal(c.Principal); a.pr.Kind != pr.Kind || !strings.EqualFold(a.pr.Name, pr.Name) {
+			d.Other = a.pr.Name
+			if a.pr.Kind != auth.KindUser {
+				d.Other = a.pr.String()
+			}
+		}
 	}
 	// The form posts back to the page's own URL (no action): the same
 	// link, wherever a proxy put the controller.
@@ -427,6 +434,10 @@ type linkPageData struct {
 	// Home is the HMI (alarms.oncall.ack-url): a page opened from a phone's
 	// notification may sit in a window with no way back (#715 PR 6).
 	Home string
+	// Other is someone else signed in on this browser: the press still
+	// acknowledges as For (the person paged), so the page says so before
+	// it, rather than after (#715 PR 7b).
+	Other string
 }
 
 func (s *Server) linkPageFor(c acklink.Claim) linkPageData {
@@ -486,13 +497,15 @@ var linkTemplate = template.Must(template.New("acklink").Parse(`<!doctype html>
 <style>
 :root{color-scheme:light dark;font-family:system-ui,sans-serif}
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:Canvas;color:CanvasText}
-main{width:min(24rem,100% - 2rem)}
-h1{font-size:1.25rem;margin:0 0 1rem}
-dl{display:grid;grid-template-columns:auto 1fr;gap:.25rem .75rem;margin:0 0 1rem;font-size:.95rem}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{font-size:1.125rem;line-height:1.45}
+main{width:min(34rem,100% - 2rem);padding:1.5rem 0}
+h1{font-size:1.5rem;margin:0 0 1rem}
+dl{display:grid;grid-template-columns:auto 1fr;gap:.4rem 1rem;margin:0 0 1rem}
 dt{opacity:.7}
 dd{margin:0;overflow-wrap:anywhere}
-button,.btn{display:block;box-sizing:border-box;margin-top:1rem;width:100%;padding:.75rem;font:inherit;font-size:1.05rem;cursor:pointer;text-align:center;border:1px solid currentColor;border-radius:2px;color:inherit;text-decoration:none}
-p{margin:.75rem 0;font-size:.9rem}
+button,.btn{display:block;box-sizing:border-box;margin-top:1rem;width:100%;min-height:3rem;padding:1rem;font:inherit;font-size:1.25rem;cursor:pointer;text-align:center;border:1px solid currentColor;border-radius:2px;color:inherit;text-decoration:none}
+p{margin:.75rem 0}
 .err{color:#c62828}
 .ok{font-weight:600}
 </style></head>
@@ -507,7 +520,7 @@ p{margin:.75rem 0;font-size:.9rem}
 </dl>{{end}}
 {{if .Error}}<p class="err" role="alert">{{.Error}}</p>{{end}}
 {{if .Done}}<p class="ok" role="status">{{.Done}}</p>{{end}}
-{{if and .Action (not .Error) (not .Done)}}{{if .SignIn}}<p>Sign in as {{.For}} to acknowledge.</p><a class="btn" href="{{.SignIn}}">Sign in</a>{{else}}<form method="post">
+{{if and .Action (not .Error) (not .Done)}}{{if .SignIn}}<p>Sign in as {{.For}} to acknowledge.</p><a class="btn" href="{{.SignIn}}">Sign in</a>{{else}}<p class="who">Pressing Acknowledge acts as <strong>{{.For}}</strong>, the person this page was sent to{{if .Other}}, not as {{.Other}}, who is signed in on this browser{{end}}.</p><form method="post">
 <button type="submit">Acknowledge</button>
 </form>
 <p>The link works once, until {{.Expires}}.</p>{{end}}{{end}}

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http/httptest"
 	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -646,5 +648,61 @@ func TestAckLinkIgnoresASessionFromAnotherOrigin(t *testing.T) {
 	// The same browser from the controller's own page acks with its session.
 	if rec := call(t, s2, "POST", path2, "", withCookie(c2.Value), ownOrigin); rec.Code != http.StatusOK {
 		t.Fatalf("sign-in mode, own page: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The confirm page says, before the press, as whom it acknowledges: the
+// person paged, also when someone else is signed in on the browser (a
+// shared screen), which does not change who acknowledges (#715 PR 7b).
+func TestAckLinkPageSaysWhoItAcknowledgesAs(t *testing.T) {
+	s, _, _ := patServer(t)
+	withLinks(t, s)
+	path, _ := linkPath(t, s, "HiTemp", "akhan")
+	const as = "acts as <strong>akhan</strong>, the person this page was sent to"
+
+	body := do(t, s, "GET", path, "").Body.String()
+	if !strings.Contains(body, as+".") || strings.Contains(body, "signed in on this browser") {
+		t.Fatalf("anonymous: %s", body)
+	}
+	if i, j := strings.Index(body, as), strings.Index(body, "<form"); i < 0 || j < 0 || i > j {
+		t.Fatalf("the page does not say it before the button: %s", body)
+	}
+	c := signIn(t, s, "jsmith")
+	body = call(t, s, "GET", path, "", withCookie(c.Value)).Body.String()
+	if !strings.Contains(body, as+", not as jsmith, who is signed in on this browser.") {
+		t.Fatalf("jsmith signed in: %s", body)
+	}
+	c = signIn(t, s, "akhan")
+	body = call(t, s, "GET", path, "", withCookie(c.Value)).Body.String()
+	if !strings.Contains(body, as+".") || strings.Contains(body, "signed in on this browser") {
+		t.Fatalf("akhan signed in: %s", body)
+	}
+}
+
+// The confirm page is read on a phone: a device-width viewport, a column
+// that fills a phone and is wide enough on a desktop, no text smaller than
+// the browser's own size, and a button a thumb can hit (#715 PR 7b).
+func TestAckLinkPageIsReadableOnAPhone(t *testing.T) {
+	s, _, _ := patServer(t)
+	withLinks(t, s)
+	path, _ := linkPath(t, s, "HiTemp", "akhan")
+	body := do(t, s, "GET", path, "").Body.String()
+	if !strings.Contains(body, `<meta name="viewport" content="width=device-width, initial-scale=1">`) {
+		t.Fatal("no device-width viewport")
+	}
+	for _, m := range regexp.MustCompile(`font-size:\s*([0-9.]+)rem`).FindAllStringSubmatch(body, -1) {
+		if v, _ := strconv.ParseFloat(m[1], 64); v < 1 {
+			t.Errorf("text at %srem, smaller than the browser's own size", m[1])
+		}
+	}
+	m := regexp.MustCompile(`main\{width:min\(([0-9.]+)rem,100% - 2rem\)`).FindStringSubmatch(body)
+	if m == nil {
+		t.Fatal("main's width is not min(<n>rem, 100% - 2rem)")
+	}
+	if v, _ := strconv.ParseFloat(m[1], 64); v < 30 {
+		t.Errorf("column %srem: narrow on a desktop", m[1])
+	}
+	if !strings.Contains(body, "min-height:3rem") {
+		t.Error("the button has no thumb-sized minimum height")
 	}
 }

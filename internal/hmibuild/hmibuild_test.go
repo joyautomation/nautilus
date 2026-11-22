@@ -64,8 +64,8 @@ func TestBuildsTheDefaultAppFromMimics(t *testing.T) {
 	}
 	// naut's diagnostics and alarms pages, and the project's own
 	// FilterCell on the components page
-	if got := strings.Join(res.Pages, " "); got != "/ /pumps /diagnostics /parameters /log /configuration /alarms /components" {
-		t.Errorf("pages = %q, want / /pumps /diagnostics /parameters /log /configuration /alarms /components", got)
+	if got := strings.Join(res.Pages, " "); got != "/ /pumps /diagnostics /parameters /log /configuration /audit /alarms /components" {
+		t.Errorf("pages = %q, want / /pumps /diagnostics /parameters /log /configuration /audit /alarms /components", got)
 	}
 	if !strings.Contains(string(res.Files["index.html"]), "<title>Filter gallery</title>") {
 		t.Errorf("index.html: %s", res.Files["index.html"])
@@ -230,8 +230,8 @@ func TestComponentsPageDrawsEachExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(res.Pages, " "); got != "/ /diagnostics /parameters /log /configuration /alarms /components" {
-		t.Errorf("pages = %q, want / /diagnostics /parameters /log /configuration /alarms /components", got)
+	if got := strings.Join(res.Pages, " "); got != "/ /diagnostics /parameters /log /configuration /audit /alarms /components" {
+		t.Errorf("pages = %q, want / /diagnostics /parameters /log /configuration /audit /alarms /components", got)
 	}
 	var all strings.Builder
 	for name, b := range res.Files {
@@ -327,8 +327,9 @@ func TestAssetsOfMimicEquipment(t *testing.T) {
 		{"id":"FS","label":"Float switch","panel":"P1"},
 		{"id":"V1","label":"Valve"},
 		{"id":"X","panel":"Nowhere"},
-		{"id":"N","panel":5}]}`)
-	got := assetsOf(raw)
+		{"id":"N","panel":5},
+		{"id":"PL","plant":"P101","panel":{"title":"drawn plant piece"}}]}`)
+	got := assetsOf(raw, map[string]bool{"p101": true})
 	var ids []string
 	for _, d := range got {
 		var a struct {
@@ -344,7 +345,7 @@ func TestAssetsOfMimicEquipment(t *testing.T) {
 		ids = append(ids, a.ID+"="+a.Title+"/"+a.Panel.Title)
 	}
 	if strings.Join(ids, ",") != "P1=P-1 pump/P-1 pump,FS=P-1 pump/P-1 pump" {
-		t.Errorf("assets %v: want the pump and the float switch that shares its panel, titled as the panel is, not the valve or the dangling one", ids)
+		t.Errorf("assets %v: want the pump and the float switch that shares its panel, titled as the panel is, not the valve, the dangling one or a piece that names the plant (its page comes from the plant)", ids)
 	}
 }
 
@@ -391,5 +392,42 @@ func TestBuildsAssetPages(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(res.Pages, " "), "/assets") {
 		t.Errorf("pages = %v: a project with no panels has no asset pages", res.Pages)
+	}
+}
+
+// A mimic piece that names a plant: leaves its page to the plant only when
+// the plant makes it; otherwise its own panel keeps its page.
+func TestAssetsOfKeepsAPlantPieceTheCallerDoesNotMake(t *testing.T) {
+	raw := []byte(`{"equipment":[{"id":"PL","plant":"P101","panel":{"title":"mine"}}]}`)
+	if got := assetsOf(raw, map[string]bool{"p101": true}); len(got) != 0 {
+		t.Errorf("the plant makes P101's page: %d from the drawing", len(got))
+	}
+	if got := assetsOf(raw, nil); len(got) != 1 {
+		t.Errorf("no plant makes it: the drawing's panel keeps its page, got %d", len(got))
+	}
+}
+
+// The audit page is for whoever holds the audit permission: its link is
+// listed only to them, and the page says so to anyone who gets there.
+func TestAuditPageNeedsTheAuditPermission(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.mimic.json", `{"name":"A","equipment":[]}`)
+	res, err := Build(Options{Project: dir, Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(res.Pages, " "), "/audit") {
+		t.Fatalf("pages %v: an audit page", res.Pages)
+	}
+	var js strings.Builder
+	for n, b := range res.Files {
+		if strings.HasSuffix(n, ".js") {
+			js.Write(b)
+		}
+	}
+	for _, want := range []string{`label: "Audit", needs: "audit"`, "This page needs the audit permission"} {
+		if !strings.Contains(js.String(), want) {
+			t.Errorf("the built app lacks %q", want)
+		}
 	}
 }

@@ -307,10 +307,12 @@ authorization as a tag write — `Authorization: Bearer` or
 `X-Nautilus-Token`, same-origin by default — and a standby forwards them
 to the leader exactly the way it forwards a tag write.
 
-`by` is an **audit string the server does not authenticate**. Nautilus has
-one token, not user accounts: the HMI supplies the operator's name and the
-journal records what it was told. That is worth saying plainly rather than
-implying an identity the system does not have.
+**Who acknowledged** depends on how the request is authorized. Under an
+[`auth:`](/guides/auth/) block, a person signed in (or using their
+personal access token) is recorded as themselves, whatever `by` the
+client sends. With a shared token, or no `auth:` block, `by` is an
+**audit string the server does not authenticate**: the HMI supplies the
+operator's name and the journal records what it was told.
 
 Every stream frame gains one optional field:
 
@@ -327,7 +329,7 @@ moved and never otherwise. `GET /api/meta` reports `alarms: true|false`
 and the offered `shelveTimes` (in seconds), so a screen knows whether to
 render a banner at all instead of finding out by taking a 404.
 
-With no `alarms:` section, all five routes answer **404** and the frame
+With no `alarms:` section, every `/api/alarms` route answers **404** and the frame
 carries no `alarms` field. That is deliberate: an empty 200 would look
 like a quiet plant.
 
@@ -367,7 +369,9 @@ waits on an HTTP call is a controller that stops controlling.
 
 `notify:` ships every event. Escalation is different: it pages *people*
 about an alarm nobody has acknowledged, level by level, until someone
-does.
+does. This section is the reference; [Alarm
+management](/guides/alarm-management/) walks a site through setting it up,
+step by step, and says what is tested.
 
 ```yaml
 alarms:
@@ -600,7 +604,10 @@ alarms:
 
 - **Opening the link changes nothing.** It shows a page with the alarm
   and an **Acknowledge** button; the button acknowledges. A mail scanner
-  that opens every link in a message acknowledges nothing.
+  that opens every link in a message acknowledges nothing. The page says,
+  above the button, as whom it acknowledges: the person it was sent to,
+  also when someone else is signed in on that browser (it names them, so
+  a shared screen is not a surprise). It is laid out for a phone.
 - **The link acts as the person it was sent to,** for that one
   occurrence of that one alarm, once, for at most 24 hours. The alarm
   journal records them as the one who acknowledged it, and the audit
@@ -628,10 +635,11 @@ alarms:
   `ack-url` is `https://`, unless `ack-url-insecure: true` accepts that
   (warned by `naut check`, journalled as `alarm.ack-url-insecure` at
   every start). With no `ack-url`, pages say to acknowledge in the HMI.
-  A host name in `ack-url` must be one the controller answers by
-  (`server.allowed-hosts`, or `NAUTILUS_ALLOWED_HOSTS` on the box; an IP
-  address always is): `naut check` warns when the manifest does not list
-  it.
+  A host name in `ack-url` must be one the controller answers by:
+  `NAUTILUS_ALLOWED_HOSTS` in the controller's environment
+  (`/etc/nautilus/env` on a box `naut deploy` set up; an IP address and
+  `localhost` always are). `naut check` warns unless the variable, where
+  it runs, names it.
 - **A push carries its link inside the encrypted page:** the push service
   never sees it. Tapping the notification asks the browser for a new
   window on the link's page (the worker does not send the HMI you had
@@ -699,8 +707,8 @@ alarms:
   token (`sms.token`, `voice.token`), over the configured `url` plus the
   path: never over the address the request arrived at. So `url` must be
   exactly what the provider calls (scheme, host, port), https only, and
-  its host must be one the controller answers by (`server.allowed-hosts`;
-  `naut check` warns). A request that does not check is refused with
+  its host must be one the controller answers by (`NAUTILUS_ALLOWED_HOSTS`,
+  as for `ack-url`; `naut check` warns). A request that does not check is refused with
   403 and journalled.
 - **Who replied.** The sender's number must be the SMS contact of exactly
   one person in the contacts file. A number nobody has gets no answer at
@@ -820,9 +828,11 @@ sink. The range is `-from` up to (not including) `-to`, or the last
 `-since` (7 days by default, 90 for `stale`); `-site`
 and `-priority` narrow it, and `-o json` prints the numbers for a
 dashboard. Each report first says how many events it read and the
-earliest and latest of them: a journal that holds only the last few
-hours (the in-memory ring, or a file that rotated) says so instead of
-reading as a quiet week.
+earliest and latest of them. A journal whose first event comes more than
+an hour, and more than a tenth of the range, after the range begins (the
+in-memory ring, a new journal, a file that rotated) gets a note: the
+rates are over the whole range, so they read low, and it prints the
+`-from` that reads the journal's span alone.
 
 Every journal row names its occurrence, and a restart that continues an
 occurrence journals no new `active`, so the reports count each `active`
