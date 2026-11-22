@@ -52,6 +52,9 @@ type Script struct {
 	// OnlineGoesOn makes the download's TIA go on after the agent refused
 	// its credentials question going online, as the agent assumes TIA may.
 	OnlineGoesOn bool `json:"onlineGoesOn,omitempty"`
+	// KeepsLogon and CredentialsAfterChecks are LogonScript (SetLogon).
+	KeepsLogon             bool `json:"keepsLogon,omitempty"`
+	CredentialsAfterChecks bool `json:"credentialsAfterChecks,omitempty"`
 	// AskFirst is how many times the fake's TIA asks its first check
 	// (nil: once, as TIA does; 0 asks nothing at all and loads; 2 asks
 	// the same configuration twice).
@@ -308,6 +311,16 @@ func (p *Process) SetCompileResult(t testing.TB, r tiad.CompileResult) {
 	t.Helper()
 	p.mu.Lock()
 	p.script.CompileResult = &r
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetLogon scripts how tiad-fake's TIA asks credentials (LogonScript).
+func (p *Process) SetLogon(t testing.TB, l LogonScript) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.KeepsLogon, p.script.CredentialsAfterChecks = l.KeepsLogon, l.CredentialsAfterChecks
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)

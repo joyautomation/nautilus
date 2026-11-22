@@ -1516,7 +1516,7 @@ namespace Tiad.Openness
         // online to the CPU at address, compares the PLC software with it
         // and returns TIA's compare tree as is, with those blocks; the
         // agent decides what they prove (TiaNames.CompareEqual).
-        public OnlineCompare Compare(object project, string address, OnlineLogin login)
+        public OnlineCompare Compare(object project, string address, LoginUse use)
         {
             return Tia(delegate
             {
@@ -1532,7 +1532,7 @@ namespace Tiad.Openness
                 ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
                 // The handler stays attached until offline: TIA may ask while
                 // it compares, too.
-                var online = new OnlineAsks(op.Configuration, Detached, new LoginUse(login, "compare", address), address);
+                var online = new OnlineAsks(op.Configuration, Detached, use, address);
                 CompareNode tree = null;
                 try
                 {

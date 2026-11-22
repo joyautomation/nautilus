@@ -50,9 +50,22 @@ func onlinePassword(s *tiad.OnlineSecrets) string {
 // first; tiad-fake's upload models that). A wrong password is asked again,
 // as TIA does when a CPU refuses one, and refused.
 func (f *Fake) askLogin(address, password string, bt *tiad.BlindTrust) string {
+	why, _ := f.login(address, password, bt)
+	return why
+}
+
+// login is askLogin that also says whether the operation logged on. With
+// keepsLogon the fake's TIA asks no credentials for a CPU this instance
+// logged on to. A credentials question answered no with a password drops
+// the agent's instance-logon evidence for the CPU (OnlineLogin.Lost); a
+// compare that fails drops it whatever it sent (forgetFailedCompare).
+func (f *Fake) login(address, password string, bt *tiad.BlindTrust) (string, bool) {
 	want, ok := f.logins[address]
 	if !ok {
-		return ""
+		return "", false
+	}
+	if f.keepsLogon && f.keptLogons[address] {
+		return "", false
 	}
 	why := ""
 	switch {
@@ -63,9 +76,48 @@ func (f *Fake) askLogin(address, password string, bt *tiad.BlindTrust) string {
 	case password != want:
 		why = LoginAskedAgain
 	default:
-		return ""
+		if f.keepsLogon {
+			f.keptLogons[address] = true
+		}
+		return "", true
 	}
-	return onlineRefused(address, LoginQuestion+": "+why)
+	if password != "" {
+		delete(f.instanceLogons, address)
+	}
+	return onlineRefused(address, LoginQuestion+": "+why), false
+}
+
+// forgetFailedCompare is the agent's CompareOnline on a compare that
+// failed after TIA asked credentials: the evidence for address goes.
+func (f *Fake) forgetFailedCompare(address string) {
+	delete(f.instanceLogons, address)
+}
+
+// noteCompare is the agent's CompareOnline keeping its instance-logon
+// evidence: a compare that logged on with password, with no blind trust,
+// and came back equal records it.
+func (f *Fake) noteCompare(address, password string, loggedOn, equal bool) {
+	if loggedOn && equal && f.blindTrust == nil && password != "" {
+		f.instanceLogons[address] = password
+	}
+}
+
+// SetLogon scripts how the fake's TIA asks credentials (the agent's
+// keepsLogon and credentialsAfterChecks knobs). A logon kept before stays
+// kept until the instance retires.
+func (f *Fake) SetLogon(l LogonScript) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keepsLogon, f.credentialsAfterChecks = l.KeepsLogon, l.CredentialsAfterChecks
+}
+
+// LogonScript is how the fake's TIA asks credentials. KeepsLogon: once
+// tiad logged on to a CPU, no later operation of the TIA instance asks it
+// credentials again until the instance retires (the bench's open
+// question, #789 P1 fallback). CredentialsAfterChecks: a download asks its
+// checks (user-management among them) before credentials.
+type LogonScript struct {
+	KeepsLogon, CredentialsAfterChecks bool
 }
 
 // fullAccessPassword is the password of the user "nautilus" when the

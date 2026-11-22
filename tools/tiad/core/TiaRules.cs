@@ -940,11 +940,17 @@ namespace Tiad
         public const string User = AccessSteps.UserName;
         public readonly string Password;
         public readonly string Blocked;
+        // Lost, when set, runs once tiad answered a credentials question
+        // with this login no (LoginUse.Decide): the CPU may have refused
+        // the password, or its access control changed, so the agent's
+        // instance-logon evidence for the address goes (InstanceLogons).
+        public readonly Action Lost;
 
-        OnlineLogin(string password, string blocked)
+        OnlineLogin(string password, string blocked, Action lost)
         {
             Password = password;
             Blocked = blocked;
+            Lost = lost;
         }
 
         // For is the login a call answers with: null without a password;
@@ -952,8 +958,14 @@ namespace Tiad
         // TIA thread just before the call).
         public static OnlineLogin For(string password, BlindTrust bt)
         {
+            return For(password, bt, null);
+        }
+
+        // For with lost, run when a credentials question is answered no.
+        public static OnlineLogin For(string password, BlindTrust bt, Action lost)
+        {
             if (string.IsNullOrEmpty(password)) return null;
-            return new OnlineLogin(password, bt == null ? null : BlockedBy(bt));
+            return new OnlineLogin(password, bt == null ? null : BlockedBy(bt), lost);
         }
 
         // BlockedBy is the refusal while the instance trusts blindly.
@@ -1068,6 +1080,7 @@ namespace Tiad
             else
             {
                 Log.Line("audit online-login call={0} address={1} user={2} refused: {3}", call, Json.Quote(address), Json.Quote(OnlineLogin.User), Json.Quote(why));
+                if (login != null && login.Lost != null) login.Lost();
             }
             return why;
         }

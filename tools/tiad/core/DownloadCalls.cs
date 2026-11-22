@@ -419,6 +419,13 @@ namespace Tiad
             // asked (UserManagementRule.Gate.At): a download that then ends
             // in doubt says so.
             string atWhy = "";
+            // held is whether this TIA instance held the instance-logon
+            // evidence for the download's address and password, read on the
+            // TIA thread just before TIA's download (InstanceLogons): the
+            // logon route's stand-in when the download asks no credentials
+            // before TIA's user-management check (UserManagementRule.Gate.At).
+            bool held = false;
+            string heldWhat = "none";
             bool haveProtection = req.Secrets.Protection != "";
             bool haveConfigurationPassword = req.Secrets.ConfigurationPassword != "";
             string given = "";
@@ -449,9 +456,13 @@ namespace Tiad
                 UserManagementRule.Gate now = reset;
                 if (q.Id == QuestionIds.UserManagement && reset.Allowed)
                 {
-                    now = reset.At(use != null && use.LoggedOn, use != null && use.MayHaveAskedCredentials);
+                    now = reset.At(use != null && use.LoggedOn, use != null && use.MayHaveAskedCredentials, use != null && held);
                     if (!now.Allowed) atWhy = now.Why;
                     if (!now.Allowed) Log.Line("audit user-management-reset address={0} route={1} refused when TIA asked: {2}", Json.Quote(req.Address), reset.Route, Json.Quote(now.Why));
+                    if (now.Allowed && now.Route == UserManagementRule.RouteInstanceLogon)
+                    {
+                        Log.Line("audit user-management-reset address={0} route={1}: the download asked no credentials before TIA's check, and this TIA instance holds an equal compare that logged on with the request's password ({2})", Json.Quote(req.Address), now.Route, heldWhat);
+                    }
                 }
                 DownloadRule.Resolve(one, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, now, unanswered, declined);
                 if (unanswered.Count > u || declined.Count > d)
@@ -465,7 +476,7 @@ namespace Tiad
                 // Acting by what the answer writes (start-after no and
                 // user-management keep change nothing).
                 if (DownloadChecks.ActingAnswer(q.Id, a.Yes, a.Choice)) acting.Add(q.Id);
-                if (q.Id == QuestionIds.UserManagement && a.Choice == Answer.ChoiceReset) given = reset.Route;
+                if (q.Id == QuestionIds.UserManagement && a.Choice == Answer.ChoiceReset) given = now.Route;
                 return a;
             };
 
@@ -513,8 +524,28 @@ namespace Tiad
                         // start-after is NoAction.
                         // Its logon answers by the blind trust read here,
                         // on the TIA thread.
-                        use = new LoginUse(OnlineLogin.For(req.Secrets.FullAccessPassword, ranWith), "download", req.Address);
-                        return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer, use);
+                        use = new LoginUse(LoginFor(req.Secrets.FullAccessPassword, ranWith, req.Address, "download"), "download", req.Address);
+                        // The evidence as it stands now, in this instance,
+                        // before anything of this download reaches TIA.
+                        held = ranWith == null && blindTrust == null && instanceLogons.Holds(t, req.Address, req.Secrets.FullAccessPassword);
+                        if (held) heldWhat = instanceLogons.Describe(req.Address);
+                        DownloadOutcome got = null;
+                        try
+                        {
+                            got = t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer, use);
+                            return got;
+                        }
+                        finally
+                        {
+                            // Only a download TIA ended cleanly, loading
+                            // nothing, with no acting answer and no
+                            // credentials refused, leaves the evidence: any
+                            // other may have changed the CPU's users or
+                            // access control. The compare after a load may
+                            // record it again.
+                            bool clean = got != null && !got.Loaded && acting.Count == 0 && !(use.MayHaveAskedCredentials && !use.LoggedOn);
+                            if (!clean) instanceLogons.Forget(req.Address, "a download to it ran in TIA and may have changed the CPU's users or access control");
+                        }
                     }
                     catch (Exception e)
                     {
@@ -641,12 +672,11 @@ namespace Tiad
             // hardware compare, so a hardware download is never verified
             // here (hardwareVerified: false).
             var diffs = new List<Difference>();
-            bool equal;
+            bool equal = false;
             OnlineCompare cmp;
             try
             {
-                cmp = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address, OnlineLogin.For(req.Secrets.FullAccessPassword, blindTrust)); });
-                equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
+                cmp = OnSession(s, delegate(ITia t) { return CompareOnline(t, s, req.Address, req.Secrets.FullAccessPassword, blindTrust, "download compare", diffs, out equal); });
             }
             catch (TiadException e)
             {
@@ -734,6 +764,7 @@ namespace Tiad
                 // Read on the TIA thread, where trust is recorded: what the
                 // compare rode on, also once a later close retired it.
                 BlindTrust rode = null;
+                bool equal = false;
                 // Journalled before it goes online, so a compare that fails
                 // is journalled as riding on the trust too.
                 OnlineCompare cmp = OnSession(s, delegate(ITia t)
@@ -744,9 +775,8 @@ namespace Tiad
                     {
                         Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
                     }
-                    return t.Compare(s.Handle, address, OnlineLogin.For(password, bt));
+                    return CompareOnline(t, s, address, password, bt, "compare", diffs, out equal);
                 });
-                bool equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
                 var list = new List<object>();
                 foreach (var d in diffs)
                 {
@@ -846,7 +876,7 @@ namespace Tiad
                         removed = t.RemoveAccess(s.Handle, s.Made);
                         s.Made = new AccessMade();
                     }
-                    List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust, OnlineLogin.For(password, blindTrust)); });
+                    List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust, LoginFor(password, blindTrust, address, "upload")); });
                     RecordBlindTrust("upload", s, address, tr);
                     upTrust = blindTrust;
                     // The project is replaced now: a failed identity read
