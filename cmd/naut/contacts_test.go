@@ -162,12 +162,12 @@ func TestRunNeedsAStateDirForChannels(t *testing.T) {
 		t.Fatal(err)
 	}
 	var errb bytes.Buffer
-	err = openAlarmContacts(proj, "", func(k string) string {
+	_, err = openAlarmContacts(proj, "", func(k string) string {
 		if k == "INVOCATION_ID" {
 			return "x" // under systemd, with no StateDirectory=
 		}
 		return ""
-	}, &errb)
+	}, &errb, false)
 	if err == nil || !strings.Contains(err.Error(), "auth.state-dir") {
 		t.Fatalf("err = %v", err)
 	}
@@ -250,7 +250,7 @@ func TestContactsCheckOnTheBox(t *testing.T) {
 	}
 	proj.AuthStateDir = sd
 	var errb bytes.Buffer
-	if err := openAlarmContacts(proj, "", func(string) string { return "" }, &errb); err != nil {
+	if _, err := openAlarmContacts(proj, "", func(string) string { return "" }, &errb, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(errb.String(), "naut run: warning:") || !strings.Contains(errb.String(), "erin has no sms address") {

@@ -24,6 +24,7 @@
 package channel
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -39,6 +40,9 @@ const (
 	KindSMS     = "sms"
 	KindVoice   = "voice"
 	KindWebhook = "webhook"
+	// KindPush pages a person's phones by Web Push (#722). There is no
+	// address to look up: the person's own subscriptions are the address.
+	KindPush = "push"
 )
 
 // Secret keys in the secrets file (alarm/oncall), one per credential.
@@ -47,10 +51,12 @@ const (
 	SecretSMSToken      = "sms.token"
 	SecretVoiceToken    = "voice.token"
 	SecretWebhookHeader = "webhook.header"
+	// SecretPushKey is the VAPID private key (generated at first start).
+	SecretPushKey = "push.vapid-key"
 )
 
 // SecretKeys lists every key the secrets file may hold.
-var SecretKeys = []string{SecretEmailPassword, SecretSMSToken, SecretVoiceToken, SecretWebhookHeader}
+var SecretKeys = []string{SecretEmailPassword, SecretSMSToken, SecretVoiceToken, SecretWebhookHeader, SecretPushKey}
 
 // Config is the manifest's `alarms.channels:`. Nothing here is secret:
 // the credentials are in the secrets file on the box, the addresses in
@@ -60,6 +66,23 @@ type Config struct {
 	SMS     *Provider `yaml:"sms" json:"sms,omitempty"`
 	Voice   *Provider `yaml:"voice" json:"voice,omitempty"`
 	Webhook *Webhook  `yaml:"webhook" json:"webhook,omitempty"`
+	Push    *Push     `yaml:"push" json:"push,omitempty"`
+}
+
+// Push is `alarms.channels.push:`: Web Push to the phones people
+// subscribed through the HMI (#722). Nothing here is secret: the VAPID key
+// is in the secrets file on the box (push.vapid-key), generated at the
+// first start, and must be the same file content on both members of a pair.
+type Push struct {
+	// Subject is the mailto: or https: URL a push service may reach the
+	// site by (RFC 8292). Required, and never defaulted: it is sent to
+	// Google's, Apple's and Mozilla's push services with every page.
+	Subject string `yaml:"subject" json:"subject"`
+	// AllowHosts limits the push services the controller sends to: host
+	// names ("fcm.googleapis.com", "*.push.apple.com"). Empty: any public
+	// host. A name here may also be a private address, for a site's own
+	// push relay; without it a private address is refused.
+	AllowHosts []string `yaml:"allow-hosts" json:"allowHosts,omitempty"`
 }
 
 // TLS is what every channel says about its transport.
@@ -131,6 +154,9 @@ func (c *Config) Kinds() []string {
 	}
 	if c.Webhook != nil {
 		out = append(out, KindWebhook)
+	}
+	if c.Push != nil {
+		out = append(out, KindPush)
 	}
 	return out
 }
@@ -227,6 +253,9 @@ func (c *Config) Secrets() []string {
 	if c.Webhook != nil && c.Webhook.Header != "" {
 		out = append(out, SecretWebhookHeader)
 	}
+	if c.Push != nil {
+		out = append(out, SecretPushKey)
+	}
 	return out
 }
 
@@ -286,6 +315,16 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("%s.%s.from: %w", at, p.kind, err)
 		}
 	}
+	if pu := c.Push; pu != nil {
+		if err := validPushSubject(pu.Subject); err != nil {
+			return fmt.Errorf("%s.push.subject: %w", at, err)
+		}
+		for i, h := range pu.AllowHosts {
+			if h == "" || strings.ContainsAny(h, "/?#@: \r\n\t") || strings.Count(h, "*") > 1 || (strings.Contains(h, "*") && !strings.HasPrefix(h, "*.")) {
+				return fmt.Errorf("%s.push.allow-hosts[%d]: %q is not a host name (push.example.net) or a wildcard under one (*.example.net)", at, i, h)
+			}
+		}
+	}
 	if w := c.Webhook; w != nil {
 		u, err := url.Parse(w.URL)
 		// A webhook URL may carry its own token (in the path or query), so
@@ -304,6 +343,26 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validPushSubject accepts what RFC 8292 §2.1 allows the subject to be: a
+// mailto: address or an https: URL, which a push service may use to reach
+// the site.
+func validPushSubject(s string) error {
+	switch {
+	case strings.HasPrefix(s, "mailto:"):
+		if err := ValidEmail(strings.TrimPrefix(s, "mailto:")); err != nil {
+			return fmt.Errorf("not a mailto: address: %w", err)
+		}
+		return nil
+	case strings.HasPrefix(s, "https://"):
+		u, err := url.Parse(s)
+		if err != nil || u.Host == "" || u.User != nil {
+			return errors.New("not an https URL with a host and no credentials")
+		}
+		return nil
+	}
+	return errors.New("is required: a mailto: address or an https: URL the site owns (a push service uses it to reach you); it is not defaulted, because it is sent with every page")
 }
 
 func validHeaderName(s string) bool {

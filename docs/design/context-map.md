@@ -50,7 +50,7 @@ into another's.
 | **IT drivers** | `hw` `snmp/…` `redfish/…` `prom/…` | source, scan class, the shared UDT set (SwitchPort, PSU, …), counter→rate. `hw` is to these what `runtime` is to the languages. | nothing above the seam | Same ACL rule as field drivers; `hw` owns the shared UDTs so a port is one struct whether it came from IF-MIB or REST |
 | **Sparkplug edge** | `sparkplug` `sparkplug/spb` | node, device, metric, birth, rebirth, NCMD, RBE. | Sparkplug host (payload codec) | The one adapter that imports `runtime` directly: it publishes a runtime's store, so it is downstream of Runtime, not a driver |
 | **Alarms** | `alarm` `alarm/escalate` `alarm/oncall` `alarm/channel` `alarm/rationalize` | ISA-18.2: definition, rule, active, unacked, shelved, journal, notifier; escalation policy, level, step, roster, on call, channel, contact; consequence, response, rationalization, master, flood, chattering, bad actor, stale (#715). | Operator surface | Imports only `lang/ir` and `retain`; the manifest hands it a tag store. It does not import `runtime`, and that is the point. `alarm/escalate` reads the engine's records and is gated by the write gate the manifest hands it. `alarm/oncall` keeps the contacts and channel secrets on the box; `alarm/channel` turns a principal into an address there and sends (email, SMS, voice, webhook) |
-| **Operator surface** | `server` `oplog` `hist`, `audit` and `auth` ([identity-audit.md](identity-audit.md)) | tag API, snapshot, SSE stream, write, program history, operator intent, sink; principal, role, area, permission, elevation, session, audit entry, chain. | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
+| **Operator surface** | `server` `oplog` `hist` `internal/webpush`, `audit` and `auth` ([identity-audit.md](identity-audit.md)) | tag API, snapshot, SSE stream, write, program history, operator intent, sink; principal, role, area, permission, elevation, session, audit entry, chain; push subscription, VAPID key, push service (#722). | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
 | **Manifest** | `internal/project` `internal/dialect` `cmd/naut` | `nautilus.yaml` nouns: tags, tasks, drivers, alarms, scene, dialect. | nothing; it is the composition root | Every context's manifest form lives here (`project.TagConfig` ↔ `runtime.TagDef`). It is the only package allowed to import everything |
 | **Verification** | `acceptance` `lang/conformance` `internal/vcs` | suite, case, expect, virtual time, corpus. | CLI, Authoring | Composes whatever it tests; held to no import rule |
 | **Authoring** | `internal/lsp` `tools/vscode-iec` | diagnostics, hover, completion, diagram editor, live values, component preview, kind editor. | the person | Reads the Manifest and Languages; the only non-CLI importer of `internal/project` |
@@ -128,6 +128,12 @@ break one changes this section first and says why.
   knows no server, runtime or auth. `alarm/rationalize` (the master alarm
   database and the ISA-18.2 performance reports, #715) imports only `alarm`:
   it reads definitions and journal events it is handed, offline.
+- `internal/webpush` (Web Push: RFC 8291 payload encryption, VAPID, the
+  sealed subscription registry and the sender that dials only what its
+  endpoint policy allows, #722) imports only the standard library. It
+  knows no principal, session, alarm or store: `server` hands it a
+  principal as a string and keeps its rows in `retain`, and the manifest
+  composes it with the alarm channels through a function.
 - Field and IT drivers and `sparkplug/host` never import `runtime`,
   `server`, `alarm`, `acceptance`, `internal/project`, `internal/lsp` or
   the CLI.

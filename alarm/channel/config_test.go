@@ -101,3 +101,42 @@ func TestValidateProviderURLNotEchoed(t *testing.T) {
 		}
 	}
 }
+
+// alarms.channels.push (#722): a subject the site owns is required and
+// never defaulted; allow-hosts entries are names, not URLs.
+func TestValidatePush(t *testing.T) {
+	good := func() Config {
+		return Config{Push: &Push{Subject: "mailto:ops@example.com", AllowHosts: []string{"fcm.googleapis.com", "*.push.example"}}}
+	}
+	c := good()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a good push config: %v", err)
+	}
+	if got := strings.Join(c.Kinds(), ","); got != "push" {
+		t.Errorf("Kinds() = %q", got)
+	}
+	if got := strings.Join(c.Secrets(), ","); got != "push.vapid-key" {
+		t.Errorf("Secrets() = %q", got)
+	}
+	if NeedsContact(KindPush) {
+		t.Error("push has no address to look up: the subscription is the address")
+	}
+	for name, mod := range map[string]func(*Config){
+		"no subject":     func(c *Config) { c.Push.Subject = "" },
+		"bare address":   func(c *Config) { c.Push.Subject = "ops@example.com" },
+		"http subject":   func(c *Config) { c.Push.Subject = "http://example.com" },
+		"https no host":  func(c *Config) { c.Push.Subject = "https://" },
+		"bad mailto":     func(c *Config) { c.Push.Subject = "mailto:Ops <ops@example.com>" },
+		"host is a URL":  func(c *Config) { c.Push.AllowHosts = []string{"https://fcm.googleapis.com"} },
+		"host with port": func(c *Config) { c.Push.AllowHosts = []string{"push.example:443"} },
+		"mid wildcard":   func(c *Config) { c.Push.AllowHosts = []string{"push.*.example"} },
+		"empty host":     func(c *Config) { c.Push.AllowHosts = []string{""} },
+	} {
+		c := good()
+		mod(&c)
+		err := c.Validate()
+		if err == nil || !strings.Contains(err.Error(), "alarms.channels.push.") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}

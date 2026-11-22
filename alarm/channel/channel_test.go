@@ -566,3 +566,36 @@ func TestProviderSchemeCase(t *testing.T) {
 		t.Fatalf("hits = %d", p.Hits())
 	}
 }
+
+// The push kind sends through the hook the manifest hands in, and a build
+// without one is refused at start, not at the first page.
+func TestPushKindUsesTheHook(t *testing.T) {
+	cfg := &channel.Config{Push: &channel.Push{Subject: "mailto:ops@example.com"}}
+	if _, err := channel.Build(cfg, dir(), opts()); err == nil || !strings.Contains(err.Error(), "alarms.channels.push") {
+		t.Fatalf("no hook: %v", err)
+	}
+	var got escalate.Message
+	o := opts()
+	o.Push = func(_ context.Context, m escalate.Message) error {
+		got = m
+		return escalate.Failed(escalate.FailNoContact)
+	}
+	chans, err := channel.Build(cfg, dir(), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = chans["push"].Send(context.Background(), message("Wet well high"))
+	class(t, err, escalate.FailNoContact)
+	if got.To != "alice" || got.Alarm.ID != "a1" {
+		t.Errorf("the hook saw %+v", got)
+	}
+	// A hook error that is not a SendError is reduced to a class, never its text.
+	o.Push = func(context.Context, escalate.Message) error {
+		return errors.New("https://fcm.example/send/SECRET failed")
+	}
+	chans, _ = channel.Build(cfg, dir(), o)
+	err = chans["push"].Send(context.Background(), message("x"))
+	if strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("the endpoint is in the error: %v", err)
+	}
+}

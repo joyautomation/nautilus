@@ -111,8 +111,11 @@ func checkContacts(alarms *project.AlarmsConfig, stateDir string, onBox bool) (e
 		}
 		for _, k := range secrets {
 			if s.Secrets[k] == "" {
-				errs = append(errs, fmt.Sprintf("alarms.channels.%s needs the secret %s, which %s does not hold: "+
-					"naut alarms secrets set %s (reads it from stdin)", strings.Split(k, ".")[0], k, spath, k))
+				fix := "naut alarms secrets set " + k + " (reads it from stdin)"
+				if k == channel.SecretPushKey {
+					fix = "naut alarms secrets generate " + k + " (naut run makes it on a controller that is not half of a pair); a pair needs the same file on both boxes"
+				}
+				errs = append(errs, fmt.Sprintf("alarms.channels.%s needs the secret %s, which %s does not hold: %s", strings.Split(k, ".")[0], k, spath, fix))
 			}
 		}
 	}

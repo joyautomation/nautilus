@@ -12,6 +12,7 @@ import (
 
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/auth/users"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // patServer is an auth: block with two users in the manifest (akhan an
@@ -26,6 +27,12 @@ func patServer(t *testing.T) (*Server, map[string]string, string) {
 // patServerWith is patServer with more options (its Auth and Users are
 // patServer's).
 func patServerWith(t *testing.T, o Options) (*Server, map[string]string, string) {
+	t.Helper()
+	return patServerRT(t, newTestRuntime(t), o)
+}
+
+// patServerRT is patServerWith over a runtime the test made (a retain store).
+func patServerRT(t *testing.T, rt *runtime.Runtime, o Options) (*Server, map[string]string, string) {
 	t.Helper()
 	old := users.Default
 	users.Default = users.Params{Memory: 64, Time: 1, Threads: 1}
@@ -59,7 +66,7 @@ func patServerWith(t *testing.T, o Options) (*Server, map[string]string, string)
 		t.Fatal(err)
 	}
 	o.Auth, o.Users = p, store
-	return auditServer(t, o), toks, path
+	return auditServerRT(t, rt, o), toks, path
 }
 
 func bearer(tok string) func(*http.Request) {

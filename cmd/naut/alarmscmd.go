@@ -41,6 +41,9 @@ Usage:
                                on the box (naut alarms contacts help).
   naut alarms secrets ...        The channels' credentials, on the box,
                                read from stdin.
+  naut alarms push confirm-revocations
+                               End the Web Push subscriptions a mass
+                               revocation held (naut alarms push help).
   naut alarms master export|check [dir]
                                The master alarm database: one row per
                                alarm (priority, consequence, response,
@@ -65,6 +68,8 @@ func runAlarms(args []string) int {
 		return runAlarmsEscalation(args[1:])
 	case "contacts", "secrets":
 		return runAlarmsContacts(args[0], args[1:])
+	case "push":
+		return runAlarmsPush(args[1:])
 	case "master":
 		return runAlarmsMaster(args[1:])
 	case "report":

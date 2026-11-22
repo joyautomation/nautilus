@@ -88,12 +88,16 @@ const (
 // differ (a substitute's start is strict and not elevated; clearing a
 // force is elevated and not strict).
 var actionClass = map[string]string{
-	"tag.write":      operator,
-	"alarm.ack":      operator,
-	"alarm.shelve":   operator,
-	"alarm.unshelve": operator,
-	"sfc.step":       operator,
-	"sfc.transition": operator,
+	"tag.write": operator,
+	// A person's own phone on the pager (#722): journalled, and allowed
+	// while the journal is down like the other operator actions.
+	"push.subscribe":   operator,
+	"push.unsubscribe": operator,
+	"alarm.ack":        operator,
+	"alarm.shelve":     operator,
+	"alarm.unshelve":   operator,
+	"sfc.step":         operator,
+	"sfc.transition":   operator,
 
 	"force.clear":      recovery,
 	"substitute.stop":  recovery, // a way back to the real reading
@@ -105,9 +109,12 @@ var actionClass = map[string]string{
 	"substitute.ack":   strict,
 	"program.edit":     strict,
 	"program.activate": strict,
-	"config.stage":     strict,
-	"config.validate":  strict,
-	"config.apply":     strict,
+	// Ending the subscriptions a mass revocation held (#722): phones stop
+	// being paged on a person's word.
+	"push.confirm-revocations": strict,
+	"config.stage":             strict,
+	"config.validate":          strict,
+	"config.apply":             strict,
 	// Saving an applied configuration as a commit (#711) writes to the
 	// repo the controller runs from, in the principal's name.
 	"config.commit": strict,

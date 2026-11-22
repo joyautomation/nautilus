@@ -79,7 +79,7 @@ func elevateMarked(body string) bool {
 func TestElevatedActionsNeedAFreshPassword(t *testing.T) {
 	asked := map[string]bool{}
 	for _, row := range auditRows() {
-		if row.result != "ok" {
+		if row.result != "ok" || row.person {
 			continue
 		}
 		elevated := auth.Elevated(actionPerm[row.action])
