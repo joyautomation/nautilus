@@ -312,6 +312,7 @@ the acknowledge and shelve dialogs record the user instead of asking for a name.
 <ReferralBanner />          <!-- a standby's referral the kit did not follow, with the leader's link -->
 <AccountChip />             <!-- who, the password window, Sign out / Sign in -->
 <AuditTable />              <!-- GET /api/audit, for a role that holds audit -->
+<ParameterList />           <!-- GET /api/parameters: plant vs manifest init:, drift badge -->
 ```
 
 Without `auth:`, or against a controller without `/api/me`, nothing changes. **Nothing in the kit
