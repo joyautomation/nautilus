@@ -410,3 +410,21 @@ func mapLine(lines []int, l int) int {
 	}
 	return lines[l-1]
 }
+
+// ProgramName is the name of the PROGRAM a source declares, through the
+// same lowering Write uses, so a caller can name a Task's Program from
+// the file a manifest's task points at.
+func ProgramName(p Program) (string, error) {
+	src, _, err := toST(p)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", p.Path, err)
+	}
+	prog, err := st.Parse(src)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", p.Path, err)
+	}
+	if !strings.EqualFold(prog.TopKeyword, "PROGRAM") || prog.Name == "" {
+		return "", fmt.Errorf("%s: the source declares no PROGRAM", p.Path)
+	}
+	return prog.Name, nil
+}

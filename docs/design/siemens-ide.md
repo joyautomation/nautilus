@@ -123,6 +123,18 @@ The rules:
   the rule IDs are `siemens/<rule>`.
 - The writer consumes the parsed project. It does not change `lang/st`.
 
+**Built (check):** `naut check --target siemens` runs the writer itself
+on the project, so check and the deploy share one rule table by
+construction. A project with a `target: siemens` section gets it without
+the flag. The CLI reads the manifest into the writer's input in one
+place (`cmd/naut/siemens_input.go`), which the deploy will reuse: task
+names and the default scan as the runtime gives them, tag types by the
+runtime's rule (`type:`, else what `init:` implies), and retain where the
+runtime keeps a tag (with a `retain:` section, every setpoint and every
+`retain: true` tag; without one, none). A diagnostic with no source line
+(a task, a block name) is reported against the manifest. Not yet: the
+refusal of field drivers (§1's table).
+
 **A hardware config is part of every download.** It holds the web server
 and its user, the CPU's address and the modules. It comes from a
 declarative *station spec* (§3.3) under `target: siemens` in `nautilus.yaml`.
