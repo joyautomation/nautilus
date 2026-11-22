@@ -311,8 +311,7 @@ never computes.
   Only the unit's `ExecStopPost` (below, required) or the restarted process, which
   clears it at start, removes it, so for that time two boxes may answer ARP for it
   and a client may learn the old box's address. That is client routing only: field
-  writes are fenced by the gate, and the fenced box's API refuses writes. IPv4 only,
-  a host address of the interface's network (not the network or broadcast address,
+  writes are fenced by the gate, and the fenced box's API refuses writes. IPv4 and Linux only (elsewhere `naut run` says so and holds nothing), a host address of the interface's network (not the network or broadcast address,
   and not an address the box itself uses). After you change the address or its
   prefix length, or remove `floating-ip`, remove the old address from the box by
   hand. The browser's certificate must cover the floating address if you use

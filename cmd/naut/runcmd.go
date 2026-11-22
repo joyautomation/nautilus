@@ -27,6 +27,7 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -2058,6 +2059,10 @@ const floatingIPTick = 5 * time.Millisecond
 // an orderly stop to call before it releases the lease. Nil without the key.
 func startFloatingIP(proj *project.Project, g interface{ IsLeader() bool }, ops floatip.Ops) (stop func()) {
 	if proj.Redundancy == nil || proj.Redundancy.FloatingIP == nil || !proj.Redundancy.Pair() {
+		return nil
+	}
+	if _, off := ops.(floatip.System); off && goruntime.GOOS != "linux" {
+		fmt.Fprintln(os.Stderr, "naut run: redundancy.floating-ip needs Linux; the address is not held on this system")
 		return nil
 	}
 	fc, err := floatip.Parse(proj.Redundancy.FloatingIP.Address, proj.Redundancy.FloatingIP.Interface)

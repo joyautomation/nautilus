@@ -94,7 +94,8 @@ type Holder struct {
 	Log func(msg string, args ...any)
 
 	// Backoff is the wait after a failed add or drop (default 1 s for an
-	// add, a tenth of it for a drop); Refresh is how often an open gate adds
+	// add; a drop of an address not believed held waits a tenth of it, one that
+	// is held is retried every tick); Refresh is how often an open gate adds
 	// again and announces (default 5 s); Reconcile is how often a shut gate
 	// removes the address again (default 1 s). Tests shorten them.
 	Backoff, Refresh, Reconcile time.Duration
