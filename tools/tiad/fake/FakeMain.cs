@@ -810,6 +810,20 @@ namespace Tiad.Fake
             return false;
         }
 
+        // FullAccessPassword is the password of user when access control is
+        // on and the user holds Full access, else null.
+        public string FullAccessPassword(string user)
+        {
+            FakeUser u;
+            if (AccessControl != AccessRule.Enabled || !Users.TryGetValue(user, out u)) return null;
+            foreach (string r in u.Roles)
+            {
+                bool on;
+                if (Roles.TryGetValue(r, out on) && on) return u.Password;
+            }
+            return null;
+        }
+
         // DropGrants clears every role's Full access: its CPU is gone.
         public void DropGrants()
         {
@@ -989,6 +1003,10 @@ namespace Tiad.Fake
         public readonly Dictionary<string, FakeProject> Saved = new Dictionary<string, FakeProject>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, int> Loads = new Dictionary<string, int>(StringComparer.Ordinal);
         public readonly Dictionary<string, int> HardwareLoads = new Dictionary<string, int>(StringComparer.Ordinal);
+        // Logins is the password of the user "nautilus" on each CPU whose
+        // access control a hardware load turned on, as that load left it:
+        // going online to such a CPU asks credentials (FakeTia.AskLogin).
+        public readonly Dictionary<string, string> Logins = new Dictionary<string, string>(StringComparer.Ordinal);
     }
 
     sealed class FakeTia : ITia
@@ -1014,6 +1032,7 @@ namespace Tiad.Fake
         bool tlsTrusted;
         readonly Dictionary<string, int> loads;
         readonly Dictionary<string, int> hardwareLoads;
+        readonly Dictionary<string, string> logins;
 
         public bool Gone
         {
@@ -1029,6 +1048,7 @@ namespace Tiad.Fake
             saved = world.Saved;
             loads = world.Loads;
             hardwareLoads = world.HardwareLoads;
+            logins = world.Logins;
             script.Enter("start");
         }
 
@@ -1254,7 +1274,7 @@ namespace Tiad.Fake
         }
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer)
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login)
         {
             script.Enter("Download");
             var p = (FakeProject)project;
@@ -1319,10 +1339,14 @@ namespace Tiad.Fake
             // As tiad.Openness runs it: through DownloadSteps, the decider
             // answering TIA's pre-download callback once per check, in
             // order, as TIA calls it (#789 S2b: one at a time, no list).
+            var use = new LoginUse(login, "download", address);
+            var refusedOnline = new List<string>();
             DownloadOutcome outcome = DownloadSteps.Run(decider, address,
                 delegate { },
                 delegate
                 {
+                    // Going online for the download asks credentials first.
+                    AskLogin(address, use, refusedOnline);
                     bool stopped = false;
                     try
                     {
@@ -1382,7 +1406,15 @@ namespace Tiad.Fake
                     rec["state"] = state;
                     script.Loaded(rec);
                     loads[address] = Count(loads, address) + 1;
-                    if (hardware) hardwareLoads[address] = Count(hardwareLoads, address) + 1;
+                    if (hardware)
+                    {
+                        hardwareLoads[address] = Count(hardwareLoads, address) + 1;
+                        // A hardware load sets the CPU's access control and
+                        // users as the project holds them.
+                        string pw = p.FullAccessPassword(AccessSteps.UserName);
+                        if (pw != null) logins[address] = pw;
+                        else logins.Remove(address);
+                    }
                     loaded[address] = p;
                     // The archive this load was archived as, once: a later
                     // load without one (a dry run TIA ran) holds none.
@@ -1392,7 +1424,8 @@ namespace Tiad.Fake
                     return new DownloadCall { State = resultState, MessageList = said, Messages = string.Join("; ", said.ToArray()), Cpu = cpu };
                 },
                 delegate { },
-                delegate { return new List<string>(); });
+                delegate { return refusedOnline; },
+                delegate { return use.Answered; });
             return outcome;
         }
 
@@ -1442,9 +1475,10 @@ namespace Tiad.Fake
         // not hold the project reports the CPU's own element as different.
         // The fake labels blocks with the agent's own TiaNames.BlockLabel,
         // so it cannot prove TIA's labels: only the bench can.
-        public OnlineCompare Compare(object project, string address)
+        public OnlineCompare Compare(object project, string address, OnlineLogin login)
         {
             script.Enter("Compare");
+            AskLogin(address, new LoginUse(login, "compare", address), new List<string>());
             var p = (FakeProject)project;
             string cpu = p.Station == null ? "" : p.Station.Cpu.Name;
             List<ProjectBlock> blocks = ProjectBlocks(p);
@@ -1557,12 +1591,14 @@ namespace Tiad.Fake
             return outp;
         }
 
-        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate)
+        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
         {
             script.Enter("Upload");
             var trusted = new List<string>();
+            var use = new LoginUse(login, "upload", address);
             // As tiad.Openness answers TIA's TLS question going online.
-            if (script.UploadAsksTls) AskTls(address, trustUnverifiedCertificate, trusted);
+            if (script.UploadAsksTls) AskTls(address, trustUnverifiedCertificate, trusted, use);
+            AskLogin(address, use, new List<string>());
             var up = (FakeProject)project;
             up.Changed = true;
             // The bench CPU's setting, as the S2a upload found it, and its
@@ -1616,7 +1652,7 @@ namespace Tiad.Fake
         // AskTls asks TLS trust as TIA does going online to a CPU whose
         // certificate it does not know, unless this instance trusted one
         // already, and answers as tiad.Openness does.
-        void AskTls(string address, bool trustUnverifiedCertificate, List<string> trusted)
+        void AskTls(string address, bool trustUnverifiedCertificate, List<string> trusted, LoginUse use)
         {
             if (tlsTrusted) return;
             const string type = "TlsVerificationConfiguration";
@@ -1627,6 +1663,46 @@ namespace Tiad.Fake
             }
             tlsTrusted = true;
             trusted.Add(ask);
+            use.Trusted();
+        }
+
+        // AskLogin asks credentials as TIA does going online to a CPU whose
+        // access control a hardware load turned on (logins), and answers
+        // as tiad.Openness does:
+        // through OnlineRecord and the operation's LoginUse (core), over a
+        // secure connection that offers project users. A wrong password is
+        // asked again, as TIA does when a CPU refuses it; tiad refuses the
+        // second ask. Refusals are added to refused, and fail the call.
+        void AskLogin(string address, LoginUse use, List<string> refused)
+        {
+            string want;
+            if (!logins.TryGetValue(address, out want)) return;
+            var rec = new OnlineRecord { Use = use };
+            var offered = new List<string> { "AnonymousUser", LoginUse.ProjectUser };
+            for (int i = 0; i < 2; i++)
+            {
+                string wrote = null;
+                try
+                {
+                    rec.Handle(delegate { return OnlineChecks.Authentication; }, delegate(string type, OnlineRecord.Call call)
+                    {
+                        if (OnlineChecks.Answer(type) != OnlineChecks.Login) throw new TiaException("the fake asks only a project user's legitimation");
+                        use.Answer(call, type, true, offered, delegate(string pw) { wrote = pw; });
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    // Boundary.Fail's cancel, which TIA gets: it fails the
+                    // connection.
+                }
+                if (rec.Asked.Count > 0)
+                {
+                    refused.AddRange(rec.Asked);
+                    throw new TiaException(TiaNames.OnlineRefused(address, rec.Asked, "Online connection failed."));
+                }
+                if (wrote == want) return;
+            }
+            throw new TiaException("the fake asked credentials twice and tiad answered both");
         }
 
         static int Count(Dictionary<string, int> d, string address)
@@ -1639,7 +1715,7 @@ namespace Tiad.Fake
         // eight identifiers, with synthetic values that change as TIA's do
         // (#789 stage (C)): DownloadId and the change counters on every
         // load, Hardware on a hardware load.
-        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate)
+        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
         {
             script.Enter("ReadFingerprint");
             var p = (FakeProject)project;
@@ -1651,7 +1727,13 @@ namespace Tiad.Fake
                 throw new TiaException("fingerprint read: the project's CPU is at " + at + ", not " + address);
             }
             var r = new FingerprintRead();
-            if (script.FingerprintAsksTls) AskTls(address, trustUnverifiedCertificate, r.TrustedBlindly);
+            var use = new LoginUse(login, "fingerprint read", address);
+            // Going online first (the project's connection, which asks
+            // credentials), then TIA's fingerprint service, which asks TLS
+            // trust. Whether the service asks credentials of its own is for
+            // the bench to show; the fake's does not.
+            AskLogin(address, use, new List<string>());
+            if (script.FingerprintAsksTls) AskTls(address, trustUnverifiedCertificate, r.TrustedBlindly, use);
             if (script.FingerprintNoItems) return r;
             List<KeyValuePair<string, string>> scripted = script.FingerprintItems;
             if (scripted.Count > 0)

@@ -669,6 +669,7 @@ namespace Tiad
                 {
                     r.Trust = req.FingerprintTrust;
                     r.Address = req.Address;
+                    r.Password = req.Secrets.FullAccessPassword;
                 });
             }
             catch (Exception e)

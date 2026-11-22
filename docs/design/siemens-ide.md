@@ -582,19 +582,21 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune}` → `{results: [{path, ok, messages}], blocks: [{name, kind}]}`. Generates blocks into the group named `group`. With `prune`, blocks in that group that no source produced are deleted |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text}]}` |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
-| `POST /v1/sessions/{id}/compare` | → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null` |
-| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
+| `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}}` (§3.9) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null` |
+| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
-| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
+| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 | `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
-| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
+| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
 
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>", "fullAccessPassword": "<password>"}`.
 Each password answers only its own question: the protection password
 never answers `configuration-password`, and the other way round. The Full
-access user's password answers no download question.
+access user's password answers no download question: it answers only TIA's
+credentials question going online (§3.9), and it is the only secret
+compare, fingerprint, upload and verify take.
 tiad never logs it and never writes it to the work dir. Run tiad on
 loopback or across the tailnet, because the requests are plain HTTP.
 
@@ -727,7 +729,8 @@ behaviour. So, until then:
   failing, or the compare differing (with the differing objects). This
   holds whether TIA asked no check or many. It fails closed, by design,
   where the compare cannot be equal: a CPU whose online access asks for
-  credentials (tiad answers no, so the compare fails), a hardware-only
+  credentials the request does not carry, or refuses them (§3.9: the
+  compare fails), a hardware-only
   download onto software that already differs, a kept device or system
   block that compares different. Equal is the agent's call on TIA's
   compare tree, never TIA's tree alone: its root says identical, at
@@ -1364,6 +1367,100 @@ closed, and online calls to that address are refused.
 
 Editing or deleting a pin file by hand is unaudited and not a supported
 path.
+
+### 3.9 Credentials going online (#789 stage 5 (A))
+
+A station naut makes has access control on, with the project user
+`nautilus` holding the runtime right Full access (`cpu.accessControl:
+fullAccessUser`, its password `secrets.fullAccessPassword`). Once a
+hardware load puts that on a CPU, TIA asks credentials every time it goes
+online to it. Before this, tiad answered no, so a CPU it made locked it out
+of its own compare, upload, download and verify: the lockout James's stage
+5 go was conditional on.
+
+**What tiad answers.** Each online call takes the password of the CPU's
+user `nautilus`:
+
+| Call | Where the password goes |
+|---|---|
+| `POST …/compare`, `…/upload`, `…/fingerprint`, `POST /v1/deploys/verify` | `secrets.fullAccessPassword` (the only secret they take) |
+| `POST …/download` | its `secrets.fullAccessPassword`, also for the compare and fingerprint read after the load |
+
+When TIA asks a project user's legitimation
+(`OnlineAuthenticationConfiguration`), tiad logs on as the project user
+`nautilus` with that password (`LoginUse` in core, the one rule both the
+glue and tiad-fake run). It answers no, naming why, when:
+
+- the request carries no password;
+- the agent's TIA instance trusts a certificate blindly (§3.8), or this
+  call trusted one: no password goes to a CPU tiad cannot verify. The
+  refusal says "password not sent" and names the fix: closing every
+  session retires the instance (#789 D1), and the next one logs on;
+- this call answered any question no before (a certificate it does not
+  trust, credentials, a question it does not know): TIA may go on after a
+  no, and no password follows one;
+- the connection is not secure communication, or tiad cannot read whether
+  it is;
+- the CPU offers no project-user legitimation, or tiad cannot read what it
+  offers;
+- this call answered credentials already, on any of its connections: TIA
+  asking again may mean the CPU refused the password, and tiad never sends
+  one twice, since a CPU may lock a user out after failed logons.
+
+Legacy access-level passwords (`OnlinePasswordConfiguration`,
+`OnlineReadAccessPassword`) and anything tiad does not know still cancel.
+Every answer and refusal is an audit line (`audit online-login`) naming the
+call, address and user, never the password; the glue logs whether the
+connection is secure and which user types the CPU offers, never the
+configuration itself. A refusal fails the call as any question answered no
+does: `operation_failed` for a compare, upload, read or verify, and
+`outcome_unknown` inside a download, where TIA's call had begun. A download
+of a station whose spec is `fullAccessUser` without the password is refused
+up front (`bad_request`, nothing sent), a dry run too: the compare after it
+would ask. So is a hardware load of such a station while the instance trusts
+blindly, checked again on the TIA thread before the deploy record: the load
+turns access control on, and the compare after it could not log on. A
+software load then is not refused, since whether its CPU asks is not known
+before it goes online: if it asks, the logon is refused inside TIA's call
+(`outcome_unknown`). A download TIA fails after tiad logged on says the CPU
+may have refused the password.
+
+**What a blind trust costs.** The refusal after a blind trust is the safe
+side, and it has a price on a CPU that asks credentials. TIA's fingerprint
+service asks TLS trust on the bench ("certificate not matching"), and an
+upload may. A read logs on through the project's connection first, then
+trusts the service: it goes through, if the service asks no credentials of
+its own, but from then on the instance sends no password until it is
+retired. An upload asked TLS before credentials cannot do both and is
+refused. There is no opt-in to send a password after a blind trust, by
+decision (naut-lead, 2026-11-22): a customer who needs one is a security
+call for James.
+
+**What the fakes prove, and what they do not.** Both fakes model a CPU
+that asks credentials once a hardware load of a fullAccessUser station
+turned its access control on, as that load left its password, and asks
+again when the password is wrong. The contract suite (`Credentials`)
+drives every online call through it with, without, and with a wrong
+password, and with a blind trust. tiad-fake answers through the core rule,
+so a mutant of it fails the suite. What only the bench can show: which
+configuration type the real CPU asks, whether an upload asks through the
+connection or through its own callback (`UploadPasswordConfiguration`,
+which tiad still refuses), whether TIA's fingerprint service asks
+credentials of its own after the project's connection logged on (tiad
+answers once per call, so it would refuse that read), whether TIA keeps a
+logon for later calls in the same instance, and how a refused password
+shows (the fakes ask again;
+TIA may fail going online instead, which tiad reports as a logon TIA
+failed after). The glue's log lines answer these in the first window on a
+CPU with access control on.
+
+**Not covered yet.** Changing the user's password (rotation): the
+download that loads a new password needs the old one to go online and the
+new one for the compare after it, and a request carries one. With the new
+password, as the apply that set it was given, the download is refused going
+online (`outcome_unknown`, nothing loaded by TIA's account); with the old
+one it loads and then ends `outcome_unknown` at the compare, the CPU holding
+the new password. A rotation needs a request that carries both.
 
 ## 4. Online plane
 

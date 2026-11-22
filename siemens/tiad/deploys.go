@@ -244,6 +244,9 @@ type VerifyRequest struct {
 	// blindly; the agent retires that trust when the verify's session
 	// closes.
 	Fingerprint *FingerprintRequest `json:"fingerprint,omitempty"`
+	// Secrets answer TIA's credentials question for the compare and the
+	// fingerprint read (OnlineSecrets).
+	Secrets *OnlineSecrets `json:"secrets,omitempty"`
 }
 
 // VerifyFingerprint is a verify's fingerprint read, with whether its
@@ -321,6 +324,9 @@ func (c *Client) VerifyDeploy(ctx context.Context, req VerifyRequest) (VerifyRes
 	var r VerifyResult
 	if req.Deploy == "" {
 		return r, &Error{Kind: KindBadRequest, Message: "verify: deploy is required"}
+	}
+	if req.Fingerprint != nil && req.Fingerprint.Secrets != nil {
+		return r, &Error{Kind: KindBadRequest, Message: "verify: the secrets go in the request's secrets, not its fingerprint's"}
 	}
 	_, err := c.doJSON(ctx, http.MethodPost, "/v1/deploys/verify", req, &r)
 	return r, err

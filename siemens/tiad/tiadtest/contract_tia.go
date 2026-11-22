@@ -61,6 +61,24 @@ func AcceptHardware(r tiad.DownloadRequest) tiad.DownloadRequest {
 // never a real CPU's.
 const BenchFullAccessPassword = "Bench-access-2026"
 
+// BenchLogin answers TIA's credentials question going online to a CPU a
+// bench station's hardware load turned access control on for: its user
+// "nautilus" holds BenchFullAccessPassword (#789 stage 5 (A)).
+var BenchLogin = &tiad.OnlineSecrets{FullAccessPassword: BenchFullAccessPassword}
+
+// benchLoginJSON is BenchLogin as a raw request's secrets.
+var benchLoginJSON = map[string]string{"fullAccessPassword": BenchFullAccessPassword}
+
+// BenchCompare is a compare with BenchLogin.
+var BenchCompare = tiad.CompareRequest{Secrets: BenchLogin}
+
+// BenchDownloadSecrets are the secrets a download to a bench CPU carries
+// when it names none of its own: the Full access password, so the
+// download and the compare after it can log on.
+func BenchDownloadSecrets() *tiad.Secrets {
+	return &tiad.Secrets{FullAccessPassword: BenchFullAccessPassword}
+}
+
 // BenchConfigurationPassword meets TIA's password rules. It is a test
 // value, never a real CPU's.
 const BenchConfigurationPassword = "Bench-config-2026"

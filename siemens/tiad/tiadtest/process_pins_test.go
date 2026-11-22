@@ -21,7 +21,7 @@ func TestAgentKeepsPinsAcrossRestarts(t *testing.T) {
 	dir := t.TempDir()
 	env := "TIAD_PINS_DIR=" + dir
 	p1, s1 := downloadReady(t, env)
-	if r, err := s1.UploadWith(ctx, tiad.UploadRequest{}); err != nil || r.Pin != tiad.PinFirstTrust {
+	if r, err := s1.UploadWith(ctx, tiad.UploadRequest{Secrets: tiadtest.BenchLogin}); err != nil || r.Pin != tiad.PinFirstTrust {
 		t.Fatalf("first upload: %+v %v", r, err)
 	}
 	for _, want := range []string{`audit pin first-trust`, `address="192.0.2.10"`, `holds=[order,firmware]`, `"serial":null`} {
@@ -49,10 +49,10 @@ func TestAgentKeepsPinsAcrossRestarts(t *testing.T) {
 	}
 	updated := tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.2"}
 	p2.SetDevice(t, updated, false)
-	if _, err := s2.Compare(ctx); tiad.Kind(err) != tiad.KindDeviceChanged {
+	if _, err := s2.CompareWith(ctx, tiadtest.BenchCompare); tiad.Kind(err) != tiad.KindDeviceChanged {
 		t.Fatalf("compare to a changed CPU after a restart: %v", err)
 	}
-	dl := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 	if _, err := s2.Download(ctx, dl); tiad.Kind(err) != tiad.KindDeviceChanged {
 		t.Fatalf("download to a changed CPU after a restart: %v", err)
 	}
@@ -98,11 +98,11 @@ func TestAgentFailsClosedOnABadPinFile(t *testing.T) {
 					t.Errorf("%s with a bad pin file: %v", what, err)
 				}
 			}
-			_, err := s.Compare(ctx)
+			_, err := s.CompareWith(ctx, tiadtest.BenchCompare)
 			unreadable("compare", err)
-			_, err = s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+			_, err = s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
 			unreadable("download", err)
-			_, err = s.UploadWith(ctx, tiad.UploadRequest{})
+			_, err = s.UploadWith(ctx, tiad.UploadRequest{Secrets: tiadtest.BenchLogin})
 			unreadable("upload", err)
 			_, err = p.Client().Pins(ctx)
 			unreadable("listing", err)
@@ -124,7 +124,7 @@ func TestAgentFailsClosedOnABadPinFile(t *testing.T) {
 			if !strings.Contains(p.Log(), `audit pin replace address="192.0.2.10" previous=corrupt why=`) || !strings.Contains(p.Log(), "raw=") {
 				t.Fatalf("the re-pin's audit line does not keep why the old pin was corrupt and what it held:\n%s", p.Log())
 			}
-			if _, err := s.Compare(ctx); err != nil {
+			if _, err := s.CompareWith(ctx, tiadtest.BenchCompare); err != nil {
 				t.Fatalf("compare after the re-pin: %v", err)
 			}
 		})
@@ -163,9 +163,9 @@ func TestAgentFailsClosedOnAnUnreadablePin(t *testing.T) {
 					t.Errorf("%s with the pin %s locked: %v", what, which, err)
 				}
 			}
-			_, err := s.Compare(ctx)
+			_, err := s.CompareWith(ctx, tiadtest.BenchCompare)
 			refused("compare", err)
-			_, err = s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+			_, err = s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
 			refused("download", err)
 			if which == "file" {
 				_, err = c.SetPin(ctx, "192.0.2.10", tiad.PinRequest{Device: &dev, Replace: true, Announced: true})
@@ -231,7 +231,7 @@ func TestAgentRefusesAnUnusablePinsDir(t *testing.T) {
 func TestAgentAuditsAnUploadWhoseIdentityCannotBeRead(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "ProjectCpu", Message: "no CPU attributes"}}})
-	if _, err := s.UploadWith(ctx, tiad.UploadRequest{}); tiad.Kind(err) != tiad.KindDeviceUnverified {
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: tiadtest.BenchLogin}); tiad.Kind(err) != tiad.KindDeviceUnverified {
 		t.Fatalf("upload whose identity read fails: %v", err)
 	}
 	if !strings.Contains(p.Log(), "audit pin unverified call=upload") {

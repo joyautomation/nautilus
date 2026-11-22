@@ -30,14 +30,14 @@ func fpValue(t *testing.T, r tiad.FingerprintResult, id string) string {
 	return v
 }
 
-var benchSoftwareLoad = tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+var benchSoftwareLoad = tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 
 // contractFingerprintRead: TIA's items in TIA's order; DownloadId and the
 // counters change with every load, Hardware with a hardware load (#789
 // stage (C)); no trust asked, none recorded.
 func contractFingerprintRead(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
-	r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{})
+	r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func contractFingerprintRead(t *testing.T, start Starter) {
 	if _, err := s.Download(ctx, benchSoftwareLoad); err != nil {
 		t.Fatal(err)
 	}
-	r2, err := s.Fingerprint(ctx, tiad.FingerprintRequest{})
+	r2, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,10 +64,10 @@ func contractFingerprintRead(t *testing.T, start Starter) {
 	if fpValue(t, r2, "Hardware") != fpValue(t, r, "Hardware") {
 		t.Errorf("a software load changed Hardware: %+v -> %+v", r.Items, r2.Items)
 	}
-	if _, err := s.Download(ctx, AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})); err != nil {
+	if _, err := s.Download(ctx, AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})); err != nil {
 		t.Fatal(err)
 	}
-	r3, err := s.Fingerprint(ctx, tiad.FingerprintRequest{})
+	r3, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func contractFingerprintRead(t *testing.T, start Starter) {
 func contractFingerprintBlindTrust(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
-	_, err := s.Fingerprint(ctx, tiad.FingerprintRequest{})
+	_, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
 	if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "trust the TLS certificate of PLC_1") || !strings.Contains(err.Error(), "trustUnverifiedCertificate: true") {
 		t.Fatalf("a read the CPU asks TLS trust for, no opt-in: %v, want operation_failed naming the question and the opt-in", err)
 	}
@@ -96,7 +96,7 @@ func contractFingerprintBlindTrust(t *testing.T, start Starter) {
 	if r, err := s.Download(ctx, benchSoftwareLoad); err != nil || r.BlindTrust != nil {
 		t.Fatalf("a download after a refused read: %+v %v", r, err)
 	}
-	r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true})
+	r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true})
 	if err != nil || len(r.TrustedBlindly) != 1 || !strings.Contains(r.TrustedBlindly[0], "trust the TLS certificate of PLC_1") {
 		t.Fatalf("a read with the opt-in: %+v %v, want the question trusted blindly", r, err)
 	}
@@ -105,11 +105,11 @@ func contractFingerprintBlindTrust(t *testing.T, start Starter) {
 		t.Fatalf("the instance's blind trust after the read: %+v", bt)
 	}
 	// TIA asks nothing again, and the read says what it rides on.
-	r2, err := s.Fingerprint(ctx, tiad.FingerprintRequest{})
+	r2, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
 	if err != nil || len(r2.TrustedBlindly) != 0 || r2.BlindTrust == nil || r2.BlindTrust.Since != bt.Since {
 		t.Fatalf("a later read without the opt-in: %+v %v, want it to succeed riding on the earlier trust, and say so", r2, err)
 	}
-	if cmp, err := s.Compare(ctx); err != nil || cmp.BlindTrust == nil || cmp.BlindTrust.Since != bt.Since {
+	if cmp, err := s.CompareWith(ctx, BenchCompare); err != nil || cmp.BlindTrust == nil || cmp.BlindTrust.Since != bt.Since {
 		t.Fatalf("a compare in the trusting instance: %+v %v, want the trust reported", cmp, err)
 	}
 	loaded := len(a.Loaded(t))
@@ -165,7 +165,7 @@ func contractFingerprintRetired(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	c := a.Client()
 	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
-	if r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil || r.BlindTrust == nil {
+	if r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || r.BlindTrust == nil {
 		t.Fatalf("a read with the opt-in: %+v %v", r, err)
 	}
 	// The gate holds while the reading session is open.
@@ -190,7 +190,7 @@ func contractFingerprintRetired(t *testing.T, start Starter) {
 	if _, err := s2.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if cmp, err := s2.Compare(ctx); err != nil || cmp.BlindTrust != nil {
+	if cmp, err := s2.CompareWith(ctx, BenchCompare); err != nil || cmp.BlindTrust != nil {
 		t.Fatalf("a compare in the next instance: %+v %v, want no trust", cmp, err)
 	}
 	dr, err := s2.Download(ctx, benchSoftwareLoad)
@@ -202,10 +202,10 @@ func contractFingerprintRetired(t *testing.T, start Starter) {
 	}
 	// The new instance asks the TLS question again: TIA's trust went with
 	// the old one, not only tiad's record of it.
-	if _, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{}); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "trust the TLS certificate of PLC_1") {
+	if _, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin}); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "trust the TLS certificate of PLC_1") {
 		t.Fatalf("a read without the opt-in in the next instance: %v, want TIA to ask the TLS question again", err)
 	}
-	if r, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil || r.BlindTrust == nil || r.BlindTrust.Session != s2.ID {
+	if r, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || r.BlindTrust == nil || r.BlindTrust.Session != s2.ID {
 		t.Fatalf("a read with the opt-in in the next instance: %+v %v, want a new record of this session's trust", r, err)
 	}
 }
@@ -227,7 +227,7 @@ func contractFingerprintFailsClosed(t *testing.T, start Starter) {
 		{"TIA fails", FingerprintScript{Fails: "the fingerprint service failed"}, "the fingerprint service failed"},
 	} {
 		a.SetFingerprint(t, c.fs)
-		r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{})
+		r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
 		if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), c.says) || len(r.Items) != 0 {
 			t.Errorf("%s: %+v %v, want operation_failed saying %q", c.name, r, err, c.says)
 		}
@@ -237,7 +237,7 @@ func contractFingerprintFailsClosed(t *testing.T, start Starter) {
 		t.Fatalf("a download after failed reads without the opt-in: %v", err)
 	}
 	a.SetFingerprint(t, FingerprintScript{Fails: "the fingerprint service failed"})
-	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); tiad.Kind(err) != tiad.KindOperationFailed {
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); tiad.Kind(err) != tiad.KindOperationFailed {
 		t.Fatalf("a failing read with the opt-in: %v", err)
 	}
 	_, err := s.Download(ctx, benchSoftwareLoad)
@@ -258,7 +258,7 @@ func contractFingerprintGates(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); tiad.Kind(err) != tiad.KindTargetRefused {
+	if _, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); tiad.Kind(err) != tiad.KindTargetRefused {
 		t.Fatalf("a read from an unlisted CPU: %v", err)
 	}
 	a, s := compiledBench(t, start)
@@ -272,7 +272,7 @@ func contractFingerprintGates(t *testing.T, start Starter) {
 		t.Fatal(err)
 	}
 	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
-	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); tiad.Kind(err) != tiad.KindDeviceUnverified {
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); tiad.Kind(err) != tiad.KindDeviceUnverified {
 		t.Fatalf("a read from a pinned CPU it cannot identify: %v", err)
 	}
 	// Refused before TIA: nothing was trusted.

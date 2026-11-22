@@ -30,7 +30,7 @@ func contractPinUnreadableUpload(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	c := a.Client()
 	a.SetDevice(t, tiad.DeviceIdentity{Firmware: "V3.1"}, false)
-	if _, err := s.UploadWith(ctx, tiad.UploadRequest{}); tiad.Kind(err) != tiad.KindDeviceUnverified ||
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); tiad.Kind(err) != tiad.KindDeviceUnverified ||
 		!strings.Contains(err.Error(), "device.order is empty") || !strings.Contains(err.Error(), "nothing was pinned") {
 		t.Fatalf("upload reading no order number: %v", err)
 	}
@@ -66,7 +66,7 @@ func contractPinFirstTrust(t *testing.T, start Starter) {
 	if status != http.StatusOK || !strings.Contains(string(b), `"pins":[]`) {
 		t.Fatalf("empty listing: HTTP %d %s", status, b)
 	}
-	r, err := s.UploadWith(ctx, tiad.UploadRequest{})
+	r, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin})
 	if err != nil {
 		t.Fatalf("first upload: %v", err)
 	}
@@ -82,7 +82,7 @@ func contractPinFirstTrust(t *testing.T, start Starter) {
 	if status != http.StatusOK || !strings.Contains(string(b), `"serial":null`) || !strings.Contains(string(b), `"mac":null`) {
 		t.Fatalf("a pin's unread fields must be null: HTTP %d %s", status, b)
 	}
-	if r, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil || r.Pin != tiad.PinMatched {
+	if r, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil || r.Pin != tiad.PinMatched {
 		t.Fatalf("second upload of the same CPU: %+v %v", r, err)
 	}
 	if !reflect.DeepEqual(pinsOf(t, c), want) {
@@ -101,7 +101,7 @@ func contractPinDeviceChanged(t *testing.T, start Starter) {
 	}
 	updated := tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.2"}
 	a.SetDevice(t, updated, false)
-	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 	dry := dl
 	dry.DryRun = true
 	for _, call := range []struct {
@@ -110,7 +110,7 @@ func contractPinDeviceChanged(t *testing.T, start Starter) {
 	}{
 		{"dry run", func() error { _, err := s.Download(ctx, dry); return err }},
 		{"download", func() error { _, err := s.Download(ctx, dl); return err }},
-		{"compare", func() error { _, err := s.Compare(ctx); return err }},
+		{"compare", func() error { _, err := s.CompareWith(ctx, BenchCompare); return err }},
 	} {
 		err := call.do()
 		if tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), `firmware "V3.1" is now "V3.2"`) ||
@@ -121,7 +121,7 @@ func contractPinDeviceChanged(t *testing.T, start Starter) {
 	if l := a.Loaded(t); len(l) != 0 {
 		t.Fatalf("a changed CPU was loaded: %+v", l)
 	}
-	if _, err := s.UploadWith(ctx, tiad.UploadRequest{}); tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), "The pin stands") {
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), "The pin stands") {
 		t.Fatalf("upload from a changed CPU: %v", err)
 	}
 	if ps := pinsOf(t, c); len(ps) != 1 || ps[0].Device.Firmware != "V3.1" {
@@ -132,7 +132,7 @@ func contractPinDeviceChanged(t *testing.T, start Starter) {
 	if err != nil || p.Previous == nil || p.Previous.Firmware != "V3.1" || p.Device.Firmware != "V3.2" {
 		t.Fatalf("re-pin: %+v %v", p, err)
 	}
-	if r, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil || r.Pin != tiad.PinMatched {
+	if r, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil || r.Pin != tiad.PinMatched {
 		t.Fatalf("upload after the re-pin: %+v %v", r, err)
 	}
 }
@@ -144,14 +144,14 @@ func contractPinUnverified(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	c := a.Client()
 	a.SetDevice(t, BenchDevice(), true)
-	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
-	if _, err := s.Compare(ctx); err != nil {
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	if _, err := s.CompareWith(ctx, BenchCompare); err != nil {
 		t.Fatalf("compare to an unpinned CPU: %v", err)
 	}
 	if _, err := c.SetPin(ctx, benchCPU, benchPinRequest); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Compare(ctx); tiad.Kind(err) != tiad.KindDeviceUnverified {
+	if _, err := s.CompareWith(ctx, BenchCompare); tiad.Kind(err) != tiad.KindDeviceUnverified {
 		t.Fatalf("compare to a pinned CPU it cannot identify: %v", err)
 	}
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindDeviceUnverified || !strings.Contains(err.Error(), "cannot be checked") ||
@@ -163,7 +163,7 @@ func contractPinUnverified(t *testing.T, start Starter) {
 	}
 	// The upload reads the identity from the project it brought in, so
 	// it still checks the pin.
-	if r, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil || r.Pin != tiad.PinMatched {
+	if r, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil || r.Pin != tiad.PinMatched {
 		t.Fatalf("upload: %+v %v", r, err)
 	}
 }
@@ -179,16 +179,16 @@ func contractPinNotRead(t *testing.T, start Starter) {
 	if err != nil || !reflect.DeepEqual(p.Holds, []string{"order", "firmware", "serial"}) {
 		t.Fatalf("pin with a serial: %+v %v", p, err)
 	}
-	if _, err := s.UploadWith(ctx, tiad.UploadRequest{}); tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), "serial is pinned but was not read now") {
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), "serial is pinned but was not read now") {
 		t.Fatalf("upload that reads no serial, against a pin holding one: %v", err)
 	}
 	// A read serial that matches is a match; a pin without one ignores it.
 	a.SetDevice(t, withSerial, false)
-	if r, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil || r.Pin != tiad.PinMatched {
+	if r, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil || r.Pin != tiad.PinMatched {
 		t.Fatalf("upload reading the pinned serial: %+v %v", r, err)
 	}
 	a.SetDevice(t, tiad.DeviceIdentity{Order: withSerial.Order, Firmware: withSerial.Firmware, Serial: str("S-TEST-0002")}, false)
-	if _, err := s.UploadWith(ctx, tiad.UploadRequest{}); tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), `serial "S-TEST-0001" is now "S-TEST-0002"`) {
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), `serial "S-TEST-0001" is now "S-TEST-0002"`) {
 		t.Fatalf("upload reading another serial: %v", err)
 	}
 }

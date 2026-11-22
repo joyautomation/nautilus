@@ -88,6 +88,10 @@ type Fake struct {
 	blindTrust    *tiad.BlindTrust
 	loads         map[string]int
 	hardwareLoads map[string]int
+	// logins is the password of the user "nautilus" on each CPU whose
+	// access control a hardware load turned on, as that load left it:
+	// going online to such a CPU asks credentials (askLogin).
+	logins map[string]string
 
 	// deployRecs is the deploy record, oldest first, each intent with its
 	// outcome once written; archives the archived projects by sha256;
@@ -484,6 +488,7 @@ func (f *Fake) init() {
 		f.pins = map[string]tiad.DeviceIdentity{}
 		f.loads = map[string]int{}
 		f.hardwareLoads = map[string]int{}
+		f.logins = map[string]string{}
 		f.archives = map[string][]byte{}
 		f.archived = map[string]archivedProject{}
 		f.loadedArchive = map[string]string{}
@@ -1281,6 +1286,12 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if !s.compiled {
 		return nil, fail(http.StatusConflict, tiad.KindNotCompiled, "the project changed since the last full compile; compile hardware and software first")
 	}
+	if s.station.CPU.AccessControl == tiad.AccessFullAccessUser && (req.Secrets == nil || req.Secrets.FullAccessPassword == "") {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", LoginDownloadNeedsPassword)
+	}
+	if req.Hardware && s.station.CPU.AccessControl == tiad.AccessFullAccessUser && f.blindTrust != nil {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s; a hardware load of a fullAccessUser station has to log on for the compare after it, so nothing was sent to the CPU", loginBlocked(f.blindTrust))
+	}
 	call := "download"
 	if req.DryRun {
 		call = "dry run"
@@ -1393,6 +1404,15 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	// first. A check tiad does not know is other.
 	haveProtection := req.Secrets != nil && req.Secrets.Protection != ""
 	haveConfigurationPassword := req.Secrets != nil && req.Secrets.ConfigurationPassword != ""
+	// Going online for the download asks credentials first, inside TIA's
+	// download call: a refusal there is in doubt.
+	pw := ""
+	if req.Secrets != nil {
+		pw = req.Secrets.FullAccessPassword
+	}
+	if why := f.askLogin(req.Address, pw, f.blindTrust); why != "" {
+		return nil, outcomeUnknown("TIA: "+why, nil)
+	}
 	var asked []tiad.Question
 	var acting []string
 	// The acting answers given, for the deploy record, on every end.
@@ -1465,6 +1485,13 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	f.loads[req.Address]++
 	if req.Hardware {
 		f.hardwareLoads[req.Address]++
+		// A hardware load sets the CPU's access control and users as the
+		// project holds them.
+		if pw, ok := s.fullAccessPassword(); ok {
+			f.logins[req.Address] = pw
+		} else {
+			delete(f.logins, req.Address)
+		}
 	}
 	// tiad reports the mode only as TIA's messages say it: TIA says
 	// nothing of a CPU it never stopped.
@@ -1487,6 +1514,11 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	// compare failing, TIA's result state, and start-after named after a
 	// load that ends in doubt are modelled by the C# fake only (process
 	// tests, knobs downloadState, compareDiffers and compareTree).
+	// The compare goes online again, after the load: a CPU the load
+	// turned access control on for asks credentials now.
+	if why := f.askLogin(req.Address, pw, f.blindTrust); why != "" {
+		return nil, outcomeUnknown("TIA reported the download loaded, but the compare right after it failed (TIA: "+why+")", acting)
+	}
 	if f.CompareResult != nil && !f.CompareResult.Equal {
 		var names []string
 		for _, d := range f.CompareResult.Differences {
@@ -1576,7 +1608,8 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
-	if fl := decode(r, &struct{}{}); fl != nil {
+	var req tiad.CompareRequest
+	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
 	if f.CompareResult != nil {
@@ -1590,6 +1623,9 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	}
 	if fl := f.checkDevicePin(s.station.CPU.Address, "compare"); fl != nil {
 		return nil, fl
+	}
+	if why := f.askLogin(s.station.CPU.Address, onlinePassword(req.Secrets), f.blindTrust); why != "" {
+		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
 	if f.loaded[s.station.CPU.Address] == s.id && !s.changed {
 		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, BlindTrust: f.blindTrust}, nil
@@ -1661,6 +1697,11 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	}
 	if s.station == nil || !contains(f.Targets, s.station.CPU.Address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "the project's CPU is not in TIAD_TARGETS")
+	}
+	// The fake's CPU asks no TLS question for an upload, so nothing in
+	// this call trusted blindly.
+	if why := f.askLogin(s.station.CPU.Address, onlinePassword(req.Secrets), f.blindTrust); why != "" {
+		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
 	s.compiled = false
 	s.changed = true
@@ -1792,13 +1833,13 @@ func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
 	if fl := f.checkDevicePin(address, "fingerprint read"); fl != nil {
 		return nil, fl
 	}
-	return f.fingerprintOf(s, address, req.TrustUnverifiedCertificate, fingerprintTrustFix)
+	return f.fingerprintOf(s, address, req.TrustUnverifiedCertificate, onlinePassword(req.Secrets), fingerprintTrustFix)
 }
 
 // fingerprintOf is the agent's audited read, once its gates passed: the
 // trust path, then a check that the read is whole. fix is what a refusal
 // of TIA's TLS question names.
-func (f *Fake) fingerprintOf(s *session, address string, trust bool, fix string) (tiad.FingerprintResult, *failure) {
+func (f *Fake) fingerprintOf(s *session, address string, trust bool, password, fix string) (tiad.FingerprintResult, *failure) {
 	const call = "fingerprint read"
 	if f.fingerprint.Fails != "" {
 		if trust {
@@ -1806,13 +1847,20 @@ func (f *Fake) fingerprintOf(s *session, address string, trust bool, fix string)
 		}
 		return tiad.FingerprintResult{}, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", f.fingerprint.Fails)
 	}
+	// Going online first (the project's connection, which asks
+	// credentials), then TIA's fingerprint service, which asks TLS trust.
+	// Whether the service asks credentials of its own is for the bench to
+	// show; the fake's does not. The instance's trust is read before the
+	// call.
+	if why := f.askLogin(address, password, f.blindTrust); why != "" {
+		return tiad.FingerprintResult{}, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
+	}
 	trusted := []string{}
 	if f.fingerprint.AsksTLS && !f.tlsTrusted {
 		ask := "trust the TLS certificate of PLC_1 [" + address + "]: certificate not matching"
 		if !trust {
 			return tiad.FingerprintResult{}, fail(http.StatusInternalServerError, tiad.KindOperationFailed,
-				"TIA: going online to %s, TIA asked: %s. tiad trusts no CPU certificate and holds no CPU credentials yet, so it answered no (TIA: Online connection failed.); %s",
-				address, ask, fix)
+				"TIA: %s; %s", onlineRefused(address, ask), fix)
 		}
 		f.tlsTrusted = true
 		trusted = append(trusted, ask)

@@ -33,12 +33,12 @@ func contractVerifyFingerprintTrust(t *testing.T, start Starter) {
 	a, d := deployed(t, start)
 	c := a.Client()
 	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
-	r := verify(t, c, tiad.VerifyRequest{Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
+	r := verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
 	if r.Verdict != tiad.VerifyEqual || r.Fingerprint != nil || !strings.Contains(r.FingerprintError, "fingerprint.trustUnverifiedCertificate: true") ||
 		!strings.Contains(r.FingerprintError, "until the verify's session closes") {
 		t.Fatalf("a refused read: %+v", r)
 	}
-	r = verify(t, c, tiad.VerifyRequest{Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{TrustUnverifiedCertificate: true}})
+	r = verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{TrustUnverifiedCertificate: true}})
 	if r.Verdict != tiad.VerifyEqual || r.Fingerprint == nil || len(r.Fingerprint.TrustedBlindly) != 1 || r.Fingerprint.BlindTrust == nil {
 		t.Fatalf("a trusted read: %+v %+v", r, r.Fingerprint)
 	}
@@ -56,7 +56,7 @@ func contractVerifyFingerprintTrust(t *testing.T, start Starter) {
 	}
 	closeFirst(t, s)
 	a.SetFingerprint(t, FingerprintScript{Fails: "the CPU went away"})
-	r = verify(t, c, tiad.VerifyRequest{Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
+	r = verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
 	if r.Fingerprint != nil || !strings.Contains(r.FingerprintError, "the CPU went away") || r.Verdict != tiad.VerifyDifferent {
 		t.Fatalf("a failed read: %+v", r)
 	}
@@ -72,7 +72,7 @@ func contractVerifyDevicePin(t *testing.T, start Starter) {
 		t.Fatalf("pin: %v", err)
 	}
 	a.SetDevice(t, tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.2"}, false)
-	_, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	_, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID})
 	if tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), "verify") {
 		t.Fatalf("verify of a changed CPU: %v", err)
 	}
@@ -121,13 +121,13 @@ func isFalse(b *bool) bool { return b != nil && !*b }
 func contractVerifyEqual(t *testing.T, start Starter) {
 	a, d := deployed(t, start)
 	c := a.Client()
-	r := verify(t, c, tiad.VerifyRequest{Deploy: d.ID})
+	r := verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID})
 	if r.Verdict != tiad.VerifyEqual || r.Deploy != d.ID || r.Address != benchCPU || r.Status != tiad.DeployLoaded || r.Latest != d.ID ||
 		!isFalse(r.ChangedOutside) || len(r.Differences) != 0 || r.Broken != "" || r.Session == "" || r.Fingerprint != nil || r.CloseError != "" {
 		t.Fatalf("verify right after the deploy: %+v", r)
 	}
 	noSession(t, c)
-	r = verify(t, c, tiad.VerifyRequest{Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
+	r = verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
 	f := r.Fingerprint
 	if r.Verdict != tiad.VerifyEqual || f == nil || r.FingerprintError != "" || !isTrue(f.DownloadIDSame) || !isTrue(f.HardwareSame) {
 		t.Fatalf("verify with a fingerprint read: %+v %+v", r, f)
@@ -142,7 +142,7 @@ func contractVerifyEqual(t *testing.T, start Starter) {
 		t.Fatalf("a project after the verify: %v", err)
 	}
 	// While a project is open, a verify is busy, naming it.
-	_, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	_, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID})
 	if tiad.Kind(err) != tiad.KindBusy || !strings.Contains(err.Error(), s.ID) {
 		t.Fatalf("verify while %s is open: %v", s.ID, err)
 	}
@@ -166,14 +166,14 @@ func contractVerifyBroken(t *testing.T, start Starter) {
 	d1, d2 := r1.Deploy, r2.Deploy
 	// Before the swap: the older deploy is superseded, so its CPU differs
 	// as expected (not changed outside); the newer one is equal.
-	if r := verify(t, c, tiad.VerifyRequest{Deploy: d1.ID}); r.Verdict != tiad.VerifyDifferent || r.Latest != d2.ID || !isFalse(r.ChangedOutside) {
+	if r := verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d1.ID}); r.Verdict != tiad.VerifyDifferent || r.Latest != d2.ID || !isFalse(r.ChangedOutside) {
 		t.Fatalf("the superseded deploy: %+v", r)
 	}
-	if r := verify(t, c, tiad.VerifyRequest{Deploy: d2.ID}); r.Verdict != tiad.VerifyEqual {
+	if r := verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d2.ID}); r.Verdict != tiad.VerifyEqual {
 		t.Fatalf("the latest deploy: %+v", r)
 	}
 	a.SwapArchive(t, d1.Archive.File, d2.Archive.File)
-	r := verify(t, c, tiad.VerifyRequest{Deploy: d1.ID})
+	r := verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d1.ID})
 	if r.Verdict != tiad.VerifyBroken || r.ChangedOutside != nil || r.Session != "" || r.Differences != nil ||
 		!strings.Contains(r.Broken, d1.Archive.File) || !strings.Contains(r.Broken, "not the record's") {
 		t.Fatalf("a swapped archive: %+v, want broken, never compared", r)
@@ -189,7 +189,7 @@ func contractVerifyMismatch(t *testing.T, start Starter) {
 	c := a.Client()
 	a.LoadOutside(t, otherCPU, d.Archive.File)
 	a.SetDeployAddress(t, d.ID, otherCPU)
-	_, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	_, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID})
 	rec, proj, ok := tiad.VerifyMismatchOf(err)
 	if tiad.Kind(err) != tiad.KindCPUMismatch || statusOf(err) != http.StatusConflict || !ok || rec != otherCPU || proj != benchCPU ||
 		!strings.Contains(err.Error(), otherCPU) || !strings.Contains(err.Error(), benchCPU) || !strings.Contains(err.Error(), "before anything went online") {
@@ -205,7 +205,7 @@ func contractVerifyChangedOutside(t *testing.T, start Starter) {
 	a, d := deployed(t, start)
 	c := a.Client()
 	a.LoadOutside(t, benchCPU, "")
-	r := verify(t, c, tiad.VerifyRequest{Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
+	r := verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
 	if r.Verdict != tiad.VerifyDifferent || !isTrue(r.ChangedOutside) || len(r.Differences) == 0 || r.Fingerprint == nil ||
 		!isFalse(r.Fingerprint.DownloadIDSame) || !isTrue(r.Fingerprint.HardwareSame) {
 		t.Fatalf("a CPU loaded outside the agent: %+v %+v", r, r.Fingerprint)
@@ -229,10 +229,10 @@ func contractVerifyChangedOutside(t *testing.T, start Starter) {
 		t.Fatal(err)
 	}
 	closeFirst(t, s)
-	if r := verify(t, c, tiad.VerifyRequest{Deploy: r2.Deploy.ID}); r.Verdict != tiad.VerifyEqual || !isFalse(r.ChangedOutside) {
+	if r := verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: r2.Deploy.ID}); r.Verdict != tiad.VerifyEqual || !isFalse(r.ChangedOutside) {
 		t.Fatalf("the redeploy: %+v", r)
 	}
-	if r := verify(t, c, tiad.VerifyRequest{Deploy: d.ID}); r.Verdict != tiad.VerifyDifferent || !isFalse(r.ChangedOutside) || r.Latest != r2.Deploy.ID {
+	if r := verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID}); r.Verdict != tiad.VerifyDifferent || !isFalse(r.ChangedOutside) || r.Latest != r2.Deploy.ID {
 		t.Fatalf("the first deploy after the redeploy: %+v", r)
 	}
 }
@@ -242,10 +242,10 @@ func contractVerifyChangedOutside(t *testing.T, start Starter) {
 func contractVerifyRefusals(t *testing.T, start Starter) {
 	a, d := deployed(t, start)
 	c := a.Client()
-	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: "d-20260101T000000000Z-00000000"}); tiad.Kind(err) != tiad.KindNotFound {
+	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: "d-20260101T000000000Z-00000000"}); tiad.Kind(err) != tiad.KindNotFound {
 		t.Fatalf("an unknown deploy: %v", err)
 	}
-	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{}); tiad.Kind(err) != tiad.KindBadRequest {
+	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: BenchLogin}); tiad.Kind(err) != tiad.KindBadRequest {
 		t.Fatalf("no deploy: %v", err)
 	}
 	for body, want := range map[string]string{`{"deploy":"` + d.ID + `","deplyo":"x"}`: "unknown field", `{}`: "deploy is required"} {
@@ -255,16 +255,16 @@ func contractVerifyRefusals(t *testing.T, start Starter) {
 		}
 	}
 	a.SetDeployAddress(t, d.ID, "192.0.2.77")
-	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID}); tiad.Kind(err) != tiad.KindTargetRefused {
+	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID}); tiad.Kind(err) != tiad.KindTargetRefused {
 		t.Fatalf("a record whose CPU is not a target: %v", err)
 	}
 	a.SetDeployAddress(t, d.ID, benchCPU)
 	a.SetGates(t, []tiad.Gate{{Name: "tia", State: tiad.GateFailed, Detail: "no TIA"}})
-	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID}); tiad.Kind(err) != tiad.KindGate {
+	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID}); tiad.Kind(err) != tiad.KindGate {
 		t.Fatalf("a verify while a gate fails: %v", err)
 	}
 	a.SetGates(t, nil)
-	if r := verify(t, c, tiad.VerifyRequest{Deploy: d.ID}); r.Verdict != tiad.VerifyEqual {
+	if r := verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID}); r.Verdict != tiad.VerifyEqual {
 		t.Fatalf("once the gate passes: %+v", r)
 	}
 	noSession(t, c)
