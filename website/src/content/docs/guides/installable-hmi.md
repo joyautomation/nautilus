@@ -108,17 +108,25 @@ It says plainly when it cannot:
 | Notifications are blocked | allow them in the browser's site settings |
 
 Each alarm that pages you shows as `HIGH: <alarm name>` with its state, area
-and time. A second page for the same alarm replaces the first. **Tapping it
-opens the alarms page** (`/alarms`) and does nothing else: it never
-acknowledges. Turn it off from the same card; the list below it removes your
-other devices.
+and time. A second page for the same alarm replaces the first. When the
+controller sends ack links (`alarms.oncall.ack-url`), the page says **Tap to
+acknowledge**: tapping it opens that alarm's acknowledge page in a window of
+its own, and you press **Acknowledge** there (the tap alone never
+acknowledges, and the worker never acts on an alarm itself). **Open alarms**,
+where the phone shows actions, goes to the alarms page. Without ack links, or
+for an alarm that needs no acknowledgement, tapping opens the alarms page
+(`/alarms`). [Alarms](/guides/alarms/#acknowledging-from-the-page) has what
+the link may do. Turn notifications off from the same card; the list below it
+removes your other devices.
 
 What it will not do: it ends with a password change, a removed or disabled
 user or a revoked role (sign in and turn it on again), not when you sign out,
 and it needs the push service to be reachable from the controller.
 
 **What has been verified:** the controller's half against a fake push service
-that decrypts, and the worker and the card in Chromium. Not yet on a real
+that decrypts, and the worker and the card in Chromium. The ack-link tap
+(which link the worker takes, which window it opens) is tested in a
+JavaScript harness of the worker, not yet in a browser. Not yet on a real
 phone, a real push service, or iOS, Android and Windows. The controller
 sends directly (not through `HTTPS_PROXY`) and refuses a push service that
 resolves to a private address unless `allow-hosts:` names it.

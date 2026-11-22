@@ -38,10 +38,11 @@ const AckLinkKeyName = "alarm-link.key"
 const minPeerToken = 32
 
 // linkKinds are the channel kinds whose pages carry an ack link: what a
-// person reads and can tap. A voice call cannot (3b-2 answers by
-// keypress); a webhook goes to a system, not a person, and the link would
-// let that system act as them. Push mints its own (server.AckLinkURL).
-var linkKinds = map[string]bool{channel.KindEmail: true, channel.KindSMS: true}
+// person reads and can tap. A push carries it inside the encrypted
+// payload, where the phone's worker opens it on a tap (PR 6). A voice call
+// cannot (3b-2 answers by keypress); a webhook goes to a system, not a
+// person, and the link would let that system act as them.
+var linkKinds = map[string]bool{channel.KindEmail: true, channel.KindSMS: true, channel.KindPush: true}
 
 // ackLinkKeyring is the keyring for the project's ack links, or nil when
 // it sends none (no alarms.oncall.ack-url). peerToken, when set, is the
@@ -263,7 +264,7 @@ func ackLinkChecks(proj *project.Project) (errs, warns []string) {
 	if u, err := url.Parse(o.AckURL); err == nil && !hostAllowed(proj, u.Hostname()) {
 		warns = append(warns, fmt.Sprintf("alarms.oncall.ack-url: the controller answers %s only if it is an allowed host: add it to server.allowed-hosts (or NAUTILUS_ALLOWED_HOSTS on the box), or a link opens a refusal", u.Hostname()))
 	}
-	if !slices.ContainsFunc(proj.Alarms.Channels.Kinds(), func(k string) bool { return linkKinds[k] || k == channel.KindPush }) {
+	if !slices.ContainsFunc(proj.Alarms.Channels.Kinds(), func(k string) bool { return linkKinds[k] }) {
 		warns = append(warns, "alarms.oncall.ack-url is set, but no channel here carries a link (email, sms or push): no page will have one")
 	}
 	return errs, warns

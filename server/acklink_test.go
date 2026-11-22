@@ -110,6 +110,27 @@ func TestAckLinkConfirmsThenAcks(t *testing.T) {
 	}
 }
 
+// A push page's link (#715 PR 6) acts as an email's does, journalled
+// with channel: push; its page, opened in a phone's own window, leads
+// back to the HMI.
+func TestAckLinkFromAPush(t *testing.T) {
+	s := auditServer(t, Options{})
+	withLinks(t, s)
+	u := s.AckLinkURL("HiTemp", occOf(t, s.alarms, "HiTemp").Occurrence, "alice", "push", 1)
+	path := strings.TrimPrefix(u, "https://hmi.example")
+	rec := call(t, s, "GET", path, "", func(r *http.Request) { r.Header.Set("Sec-Fetch-Mode", "navigate") })
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `<form method="post">`) || !strings.Contains(rec.Body.String(), `<a href="https://hmi.example">Open the HMI</a>`) {
+		t.Fatalf("confirm page: %d\n%s", rec.Code, rec.Body)
+	}
+	rec = call(t, s, "POST", path, "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Acknowledged as alice") || !strings.Contains(rec.Body.String(), "Open the HMI") {
+		t.Fatalf("POST: %d\n%s", rec.Code, rec.Body)
+	}
+	if e := lastAudit(t, s); e.Action != "alarm.ack" || e.Detail["channel"] != "push" || e.Detail["via"] != "link" {
+		t.Fatalf("audit %+v", e)
+	}
+}
+
 // A link is spent once: pressed again, or opened again, it says so and
 // acknowledges nothing (on a controller with no pair, the record is this
 // controller's).

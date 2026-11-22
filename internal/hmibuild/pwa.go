@@ -285,29 +285,43 @@ self.addEventListener('activate', (e) => {
 // notification: a browser that is told of a push and shows nothing may take
 // the subscription away, and an alarm that could not be read must still
 // reach the person. The payload is the controller's own page for one alarm
-// ({alarm, name, state, priority, area, atMs, level}); anything missing or
-// malformed falls back to a plain one. The tag is the alarm, so a repeat
+// ({alarm, name, state, priority, area, atMs, level, ack}); anything missing
+// or malformed falls back to a plain one. The tag is the alarm, so a repeat
 // replaces rather than piles up.
+//
+// ack is the page's acknowledgement link (#715): the controller's
+// /alarm-ack/<token> under its ack-url, which may carry a path. Anything
+// else in it is ignored, so a tap only ever opens an ack link or the
+// alarms.
+const ACK = /^https?:\/\/[^\/?#@\s]+(\/[^?#@\s]*)?\/alarm-ack\/[A-Za-z0-9_-]+$/;
+
+function ackLink(v) {
+	return typeof v === 'string' && v.length <= 4096 && ACK.test(v) ? v : '';
+}
+
 function describe(d) {
 	const str = (v) => (typeof v === 'string' ? Array.from(v).slice(0, 120).join('') : '');
 	const name = str(d.name) || str(d.alarm) || 'Alarm';
 	const pri = str(d.priority);
 	const state = str(d.state).replace(/-/g, ' ');
+	const ack = ackLink(d.ack);
 	const parts = [];
 	if (state) parts.push(state);
 	if (str(d.area)) parts.push(str(d.area));
 	if (typeof d.atMs === 'number' && d.atMs > 0) {
 		parts.push(new Date(d.atMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 	}
-	return {
-		title: (pri ? pri.toUpperCase() + ': ' : '') + name,
-		options: {
-			body: parts.join(' · '),
-			tag: 'alarm-' + (str(d.alarm) || 'page'),
-			renotify: true,
-			data: { url: '/alarms' },
-		},
+	let body = parts.join(' · ');
+	if (ack) body += (body ? '\n' : '') + 'Tap to acknowledge';
+	const options = {
+		body: body,
+		tag: 'alarm-' + (str(d.alarm) || 'page'),
+		renotify: true,
+		data: { url: '/alarms', ack: ack },
 	};
+	// Where a browser shows actions, the alarms stay one press away.
+	if (ack) options.actions = [{ action: 'alarms', title: 'Open alarms' }];
+	return { title: (pri ? pri.toUpperCase() + ': ' : '') + name, options: options };
 }
 
 self.addEventListener('push', (e) => {
@@ -321,11 +335,22 @@ self.addEventListener('push', (e) => {
 	e.waitUntil(self.registration.showNotification(n.title, n.options));
 });
 
-// A tap opens the alarms: an open window of this HMI is brought forward
-// and sent there, otherwise one is opened. It never acts on an alarm.
+// A tap on a page with an ack link opens the link's confirm page in a
+// window of its own: it shows the alarm and its state, and the person
+// presses Acknowledge there (a tap on a lock screen by mistake acks
+// nothing), with the HMI they had open left where it was. The worker never
+// calls the controller itself. Otherwise (no link, or the Open alarms
+// action) a tap opens the alarms: an open window of this HMI is brought
+// forward and sent there, otherwise one is opened.
 self.addEventListener('notificationclick', (e) => {
 	e.notification.close();
-	const url = (e.notification.data && e.notification.data.url) || '/alarms';
+	const data = e.notification.data || {};
+	const ack = e.action === 'alarms' ? '' : ackLink(data.ack);
+	if (ack) {
+		e.waitUntil(self.clients.openWindow(ack));
+		return;
+	}
+	const url = data.url || '/alarms';
 	e.waitUntil(
 		self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((ws) => {
 			const mine = ws.filter((w) => new URL(w.url).origin === self.location.origin && 'focus' in w);
@@ -339,7 +364,9 @@ self.addEventListener('notificationclick', (e) => {
 });
 
 function isData(url) {
-	return url.pathname.startsWith('/api/') || url.pathname.startsWith('/_nautilus/') || url.pathname === '/sw.js';
+	// an ack link's page is the controller's, never the app's shell
+	return url.pathname.startsWith('/api/') || url.pathname.startsWith('/_nautilus/') || url.pathname === '/sw.js' ||
+		url.pathname.includes('/alarm-ack/');
 }
 
 self.addEventListener('fetch', (e) => {
