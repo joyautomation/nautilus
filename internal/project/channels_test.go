@@ -274,10 +274,6 @@ func TestEscalationAckByLinkStopsLevelThree(t *testing.T) {
 	}
 }
 
-// A person a level pages with no address for the channel is a failed
-// send, journalled no-contact; a mail server's refusal is journalled by
-// class and code. Neither row, nor the journal API, carries an address or
-// the server's text.
 // The done-when with inbound SMS (#715 PR 3b-2): bob's SMS page says
 // "Reply ACK <code>"; his reply, relayed and signed by the provider,
 // acknowledges the occurrence as bob, and level 3 never goes. A forged
@@ -330,6 +326,10 @@ func TestEscalationAckBySMSReplyStopsLevelThree(t *testing.T) {
 	}
 }
 
+// A person a level pages with no address for the channel is a failed
+// send, journalled no-contact; a mail server's refusal is journalled by
+// class and code. Neither row, nor the journal API, carries an address or
+// the server's text.
 func TestEscalationFailuresNeverCarryAnAddress(t *testing.T) {
 	r := newChannelsRig(t, channeltest.SMTPOptions{RcptCode: 550}, map[string]oncall.Contact{
 		"alice": {Email: "alice@example.com"},
