@@ -236,4 +236,3 @@ func TestAlarmsControllerCommandsNameTheTokenOnARefusal(t *testing.T) {
 		}
 	}
 }
-
