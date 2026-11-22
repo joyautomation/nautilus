@@ -46,6 +46,7 @@ type boxBase struct {
 	release string
 	rsize   int64
 	rsha    string
+	csha    string // the whole current controller's SHA-256, when the box says
 }
 
 func parseBase(out string) (boxBase, bool) {
@@ -62,6 +63,8 @@ func parseBase(out string) (boxBase, bool) {
 			b.rsize, _ = strconv.ParseInt(v, 10, 64)
 		case "runtime-sha256":
 			b.rsha = v
+		case "controller-sha256":
+			b.csha = v
 		}
 	}
 	return b, b.release != "" && b.rsize > 0 && len(b.rsha) == 64
@@ -280,8 +283,13 @@ func (t *throttle) Read(p []byte) (int, error) {
 	n, err := t.r.Read(p)
 	t.n += int64(n)
 	due := time.Duration(float64(t.n) / t.bps * float64(time.Second))
-	if wait := due - t.now().Sub(t.start); wait > 0 {
+	switch wait := due - t.now().Sub(t.start); {
+	case wait > 0:
 		t.sleep(wait)
+	case wait < -time.Second:
+		// a stall (a link that went quiet) is not credit: the rate holds from
+		// here, so catching up never bursts a stall's worth of bytes
+		t.start = t.now().Add(-due)
 	}
 	return n, err
 }
@@ -369,7 +377,7 @@ func (b *sshBox) uploadResumable(name, path string, size, limit int64) error {
 			return err
 		}
 		r := newThrottle(newProgress(f, os.Stderr, have, size), limit)
-		code := b.appendPart(r, name)
+		code := b.appendPart(r, name, have)
 		f.Close()
 		if code == 0 {
 			// the box says what it holds: sent and received are not the same
@@ -398,14 +406,16 @@ func (b *sshBox) partSize(name string) (int64, error) {
 	return n, nil
 }
 
-// appendPart adds r to the end of incoming/<name>.part.
-func (b *sshBox) appendPart(r io.Reader, name string) int {
+// appendPart adds r to the end of incoming/<name>.part, if the box holds
+// exactly offset bytes of it (a cut-off earlier send may still be writing; the
+// box refuses with exit 6 and the caller asks how much is there).
+func (b *sshBox) appendPart(r io.Reader, name string, offset int64) int {
 	if b.helper {
-		return b.run(r, os.Stdout, "sudo -n "+helperPath+" append "+name)
+		return b.run(r, os.Stdout, fmt.Sprintf("sudo -n %s append %s %d", helperPath, name, offset))
 	}
-	in := b.boxRoot() + "/incoming/" + name
-	return b.run(r, os.Stdout, b.priv("mkdir -p "+b.boxRoot()+"/incoming")+" && "+
-		b.priv(fmt.Sprintf("sh -c 'cat >> %s.part'", in)))
+	in := b.boxRoot() + "/incoming/" + name + ".part"
+	check := fmt.Sprintf(`[ "$(if [ -f %s ]; then wc -c <%s; else echo 0; fi)" -eq %d ] || exit 6; cat >> %s`, in, in, offset, in)
+	return b.run(r, os.Stdout, b.priv("mkdir -p "+b.boxRoot()+"/incoming")+" && "+b.priv("sh -c '"+check+"'"))
 }
 
 // base asks the box what its current controller offers (box.sh base).
@@ -423,5 +433,7 @@ func (b *sshBox) base() (boxBase, bool, error) {
 // cannot rebuild a controller, so a deploy to it sends the whole file as it
 // always did, and says how to get the faster path.
 var legacyHelperVersions = map[string]bool{
+	"40e9c9fef68243e2": true, // the helper's first versions
+	"5b0ccbee0a2913d3": true, // v0.22.0
 	"177ab940e0359f6e": true, // main before the slow-link upload
 }

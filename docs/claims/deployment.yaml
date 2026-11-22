@@ -242,6 +242,7 @@ claims:
       - go ./cmd/naut TestDeployHelperRefusesWhatItIsNotFor
       - go ./cmd/naut TestDeployHelperInstallsWithItsOwnUnitAndNeverRunsTheController
       - go ./cmd/naut TestDeployUsesTheHelper
+      - go ./cmd/naut TestLegacyHelperVersionsAreTheReleasedOnes
       - go ./cmd/naut TestDeployBoxNeverFollowsLinksInState
       - go ./cmd/naut TestDeployBoxFailedUpdateRestoresThroughNoLink
       - go ./cmd/naut TestDeployBoxRestoreTakesTheArchiveAsData
@@ -335,13 +336,19 @@ claims:
       - go ./cmd/naut TestADroppedLinkResumes
       - go ./cmd/naut TestLimitHoldsTheSendRate
       - go ./cmd/naut TestThrottlePacesTheReader
+      - go ./cmd/naut TestThrottleDoesNotBurstAfterAStall
+      - go ./cmd/naut TestAppendRefusesAWrongOffset
+      - go ./cmd/naut TestAReusedReleaseIDWithOtherContentsIsRefused
       - go ./cmd/naut TestSummaryEstimates
       - go ./cmd/naut TestDryRunSendsNothing
       - go ./cmd/naut TestParseRate
     partial: true
     note: >-
       "None twice" is by the box's size after the cut (the test does not count
-      bytes on the wire); the rate test is a wall-clock bound at one rate.
+      bytes on the wire), and an append goes only at the offset the box holds
+      (a cut-off earlier send that is still writing makes the box refuse, exit
+      6); the rate test is a wall-clock lower bound at one rate, and the fake
+      clock test holds the pacing and the no-burst-after-a-stall rule.
 
   - id: DEP-042
     claim: >-

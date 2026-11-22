@@ -423,3 +423,101 @@ func TestDeployRateFlagsAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// A stall is not credit: after a long quiet the rate holds from there, and
+// nothing bursts.
+func TestThrottleDoesNotBurstAfterAStall(t *testing.T) {
+	clock := time.Unix(0, 0)
+	var slept time.Duration
+	th := &throttle{r: bytes.NewReader(make([]byte, 100000)), bps: 10000,
+		sleep: func(d time.Duration) { slept += d; clock = clock.Add(d) }, now: func() time.Time { return clock }}
+	buf := make([]byte, 1000)
+	th.Read(buf)
+	clock = clock.Add(60 * time.Second) // the link went quiet for a minute
+	slept = 0
+	for i := 0; i < 20; i++ {
+		th.Read(buf)
+	}
+	// 20 reads of 1000 bytes at 10000 B/s: about two seconds, not an
+	// unthrottled burst of the minute's worth
+	if slept < 1800*time.Millisecond {
+		t.Errorf("only %v of waiting for 20 KB after a stall at 10 KB/s: it burst", slept)
+	}
+}
+
+// An append goes only where the box holds exactly the offset the sender
+// thinks: a cut-off earlier send that is still writing makes it ask again.
+func TestAppendRefusesAWrongOffset(t *testing.T) {
+	lb, b := newLocalBox(t)
+	in := filepath.Join(lb.root, "incoming")
+	os.MkdirAll(in, 0o755)
+	part := filepath.Join(in, "x.wire.part")
+	os.WriteFile(part, []byte("12345"), 0o644)
+	if code := b.appendPart(strings.NewReader("ZZ"), "x.wire", 3); code != 6 {
+		t.Errorf("an append at the wrong offset: exit %d, want 6", code)
+	}
+	if got, _ := os.ReadFile(part); string(got) != "12345" {
+		t.Errorf("the part changed to %q", got)
+	}
+	if code := b.appendPart(strings.NewReader("67"), "x.wire", 5); code != 0 {
+		t.Errorf("an append at the right offset: exit %d", code)
+	}
+	if got, _ := os.ReadFile(part); string(got) != "1234567" {
+		t.Errorf("the part is %q, want 1234567", got)
+	}
+}
+
+// A release id names one controller: the same id with other contents is
+// refused, never silently skipped as "already current"; the same contents
+// send nothing.
+func TestAReusedReleaseIDWithOtherContentsIsRefused(t *testing.T) {
+	log := fakeSSH(t, goMachine(), 0)
+	dir := t.TempDir()
+	ctl := makeController(t, randomBytes(1<<16), projectFiles(2, "A"))
+	path, sum := writeCtl(t, dir, ctl)
+	rt, rsha, _, _ := runtimePart(path)
+	base := func(csha string) string {
+		return fmt.Sprintf(`release=plant-v1\nruntime-size=%d\nruntime-sha256=%s\ncontroller-sha256=%s\n`, rt, rsha, csha)
+	}
+	t.Setenv("FAKE_BASE", base(strings.Repeat("0", 64)))
+	if code := runDeploy([]string{"update", "-controller", path, "-id", "plant-v1", "root@ipc"}); code != 2 {
+		t.Errorf("a reused id with other contents: exit %d, want 2", code)
+	}
+	for _, c := range sshCalls(t, log) {
+		if strings.Contains(c.cmd, "append") || strings.Contains(c.cmd, " update ") {
+			t.Errorf("the box was sent %q", c.cmd)
+		}
+	}
+	log = fakeSSH(t, goMachine(), 0)
+	t.Setenv("FAKE_BASE", base(sum))
+	if code := runDeploy([]string{"update", "-controller", path, "-id", "plant-v1", "root@ipc"}); code != 0 {
+		t.Errorf("the same contents: exit %d", code)
+	}
+	for _, c := range sshCalls(t, log) {
+		if strings.Contains(c.cmd, "append") || strings.Contains(c.cmd, "assemble") {
+			t.Errorf("an already-current release was sent again: %q", c.cmd)
+		}
+	}
+}
+
+func TestReleaseIDsThatCollideWithTheUploadFilesAreRefused(t *testing.T) {
+	for _, id := range []string{"x.build", "x.part", "nautilus.service", "restore.tgz"} {
+		if checkReleaseID(id) == nil {
+			t.Errorf("-id %s accepted", id)
+		}
+	}
+}
+
+// Every helper from before the slow-link upload is accepted for the old
+// upload (released helpers included); a helper's version is a hash of its
+// box.sh and unit.
+func TestLegacyHelperVersionsAreTheReleasedOnes(t *testing.T) {
+	for _, v := range []string{"40e9c9fef68243e2", "5b0ccbee0a2913d3", "177ab940e0359f6e"} {
+		if !legacyHelperVersions[v] {
+			t.Errorf("helper %s (released before the slow-link upload) is not accepted", v)
+		}
+	}
+	if legacyHelperVersions[helperVersion()] {
+		t.Error("this naut's own helper is listed as legacy: it would never get the new upload")
+	}
+}

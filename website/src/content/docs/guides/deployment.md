@@ -197,7 +197,7 @@ a box that does not answer gives up after 10 seconds.
 
 ### Over a slow link
 
-A built controller is 55-70 MB, most of it the runtime. An update over a
+A built controller is 55-75 MB, most of it the runtime. An update over a
 radio link does not send that again. `naut deploy update` first asks the box
 what its current controller is built on, and sends only what the box cannot
 rebuild:
@@ -209,10 +209,13 @@ rebuild:
 
 The box joins the runtime it has with the project, checks the SHA-256 of the
 whole file against the one computed here, and only then names it a release,
-so a damaged or cut transfer never becomes one. A transfer that is cut off
-resumes where the box left off: naut retries a few times by itself, and
-running the same command again picks up what the box already holds. Rollback
-is as it was.
+so a damaged or cut transfer never becomes a release candidate (`update`
+only ever acts on a file that matched). A transfer that is cut off resumes
+where the box left off: naut retries a few times by itself, and running the
+same command again picks up what the box already holds, as long as it builds
+the same controller (the same `-controller` file, a pinned `-id`, or a build
+that comes out byte for byte the same). A release id names one controller:
+the same `-id` with different contents is refused. Rollback is as it was.
 
 Before it sends, `naut deploy` says how much and how long, at 256 kbit/s unless
 `-bandwidth 128k` says otherwise. `-limit 128k` holds the send to that rate

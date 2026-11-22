@@ -347,6 +347,10 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string, xo xfe
 		}
 		base, haveBase = bb, ok
 	}
+	if haveBase && base.release == id && base.csha != "" && base.csha != sum {
+		fmt.Fprintf(os.Stderr, "naut deploy: %s is the current release on %s but with different contents: the release id names one controller, so give this one a new -id (or leave -id off: the default changes with the contents)\n", id, b.target)
+		return 2
+	}
 	if haveBase && base.release == id {
 		fmt.Fprintf(os.Stderr, "naut deploy: %s is already the current release on %s: nothing to send\n", id, b.target)
 		if xo.dryRun {
@@ -460,7 +464,7 @@ func checkReleaseID(id string) error {
 	switch {
 	case id == "":
 		return errors.New("-id: empty once cleaned to letters, digits and . _ + -")
-	case id == "nautilus.service", id == "restore.tgz", strings.HasSuffix(id, ".part"):
+	case id == "nautilus.service", id == "restore.tgz", strings.HasSuffix(id, ".part"), strings.HasSuffix(id, ".build"):
 		return fmt.Errorf("-id %s: that name is reserved", id)
 	}
 	return nil
