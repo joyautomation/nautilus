@@ -517,6 +517,41 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		}
 	})
 
+	t.Run("InstanceLogonForgottenOnRefusals", func(t *testing.T) {
+		// Any credentials question tiad answers no on the CPU takes the
+		// evidence away: a fingerprint read with a wrong password (the
+		// login's Lost), and a compare without one (a compare that failed
+		// after TIA asked). An equal compare that logs on earns it back.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{CredentialsAfterChecks: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		wrong := &tiad.OnlineSecrets{FullAccessPassword: "Wrong-access-2026"}
+		if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: wrong}); err == nil || !strings.Contains(err.Error(), LoginAskedAgain) {
+			t.Fatalf("a fingerprint read with a wrong password: %v", err)
+		}
+		reload := func(name string) {
+			t.Helper()
+			_, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessEnabled, BenchDownloadSecrets()))
+			if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetNoLogon) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+				t.Fatalf("a reload after %s: %v (acting %v)", name, err, tiad.ActingAnswers(err))
+			}
+		}
+		reload("a refused fingerprint read")
+		if cmp, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: BenchLogin}); err != nil || !cmp.Equal {
+			t.Fatalf("an equal compare that logs on: %+v %v", cmp, err)
+		}
+		if _, err := s.Compare(ctx); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), LoginNoPassword) {
+			t.Fatalf("a compare without a password: %v", err)
+		}
+		reload("a compare without a password")
+		if l := a.Loaded(t); len(l) != 1 {
+			t.Fatalf("loaded %d, want A only", len(l))
+		}
+	})
+
 	t.Run("ProjectNotDisabled", func(t *testing.T) {
 		// An upload of a CPU whose access control is not Disabled (one
 		// that compiles without a Full access user): neither route lets a
