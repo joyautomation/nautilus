@@ -585,6 +585,25 @@ func TestLateHandOffKeepsALaterAck(t *testing.T) {
 	if !slices.Equal(queued, []string{"HiTemp"}) {
 		t.Fatalf("an end of the acked occurrence queued %v; want HiTemp", queued)
 	}
+
+	// While a late ack waits to adopt, the view's ack is for another
+	// occurrence than the engine's: the alarm did not stand, so its ack is
+	// cleared, and the clear names the view's occurrence (naming the
+	// engine's would clear the occurrence the leader records next).
+	al.clrMu.Lock()
+	al.clr, al.clrOcc = nil, nil
+	al.clrMu.Unlock()
+	al.mu.Lock()
+	al.view["LoFlow"] = alarmIntent{acked: true, ackBy: "op", occ: "cccccccccccccccc", activeMs: 2}
+	al.adopt = map[string]adoption{"LoFlow": {occ: "cccccccccccccccc", activeMs: 2, by: "op"}}
+	al.mu.Unlock()
+	al.clearIfAcked(endedOcc{id: "LoFlow", occ: "dddddddddddddddd"})
+	al.clrMu.Lock()
+	named := al.clrOcc["LoFlow"]
+	al.clrMu.Unlock()
+	if named != "cccccccccccccccc" {
+		t.Fatalf("the clear names %q; want the view's acked occurrence", named)
+	}
 }
 
 // A superseded log's view goes, and its pending adoptions with it.
