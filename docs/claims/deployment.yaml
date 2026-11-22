@@ -242,6 +242,7 @@ claims:
       - go ./cmd/naut TestDeployHelperRefusesWhatItIsNotFor
       - go ./cmd/naut TestDeployHelperInstallsWithItsOwnUnitAndNeverRunsTheController
       - go ./cmd/naut TestDeployUsesTheHelper
+      - go ./cmd/naut TestLegacyHelperVersionsAreTheReleasedOnes
       - go ./cmd/naut TestDeployBoxNeverFollowsLinksInState
       - go ./cmd/naut TestDeployBoxFailedUpdateRestoresThroughNoLink
       - go ./cmd/naut TestDeployBoxRestoreTakesTheArchiveAsData
@@ -301,3 +302,59 @@ claims:
       untouched by update) were observed by the independent tester (run
       2026-11-19-020, check 020-F02-docs-deploy-env-and-reach, manual) and
       are not yet a gate.
+
+  - id: DEP-040
+    claim: >-
+      An update built on the runtime the box already has sends the project
+      only (under 64 KB in the test, against a controller of over 3 MB), and
+      the box rebuilds a file byte for byte the controller built; a different
+      runtime sends the whole controller, gzipped; an upload the box finds
+      damaged is sent again from nothing; a controller that does not hash to
+      what was built never becomes a release.
+    source: "#over-a-slow-link"
+    tests:
+      - go ./cmd/naut TestProjectOnlySendForAOneRungChange
+      - go ./cmd/naut TestANewRuntimeSendsTheWholeControllerGzipped
+      - go ./cmd/naut TestADamagedPartialUploadIsRestarted
+      - go ./cmd/naut TestAWrongRuntimeOnTheBoxFallsBackToTheWholeController
+      - go ./cmd/naut TestTheBoxRefusesAControllerThatDoesNotHash
+    partial: true
+    note: >-
+      The box is box.sh in cron mode on this machine through an ssh stand-in,
+      with a synthetic runtime; a real radio link and a real box are not in
+      the test. The 1.2 MB figure for the lift-station example (a 72 MB
+      controller) was measured by hand with naut deploy update -dry-run.
+
+  - id: DEP-041
+    claim: >-
+      A send cut off by a dropped link resumes from the bytes the box already
+      holds and sends none twice; -limit holds the send to a rate; the summary
+      says how many bytes and how long (256 kbit/s unless -bandwidth says
+      otherwise, with a -limit hint for a long send); -dry-run sends nothing.
+    source: "#over-a-slow-link"
+    tests:
+      - go ./cmd/naut TestADroppedLinkResumes
+      - go ./cmd/naut TestLimitHoldsTheSendRate
+      - go ./cmd/naut TestThrottlePacesTheReader
+      - go ./cmd/naut TestThrottleDoesNotBurstAfterAStall
+      - go ./cmd/naut TestAppendRefusesAWrongOffset
+      - go ./cmd/naut TestAReusedReleaseIDWithOtherContentsIsRefused
+      - go ./cmd/naut TestSummaryEstimates
+      - go ./cmd/naut TestDryRunSendsNothing
+      - go ./cmd/naut TestParseRate
+    partial: true
+    note: >-
+      "None twice" is by the box's size after the cut (the test does not count
+      bytes on the wire), and an append goes only at the offset the box holds
+      (a cut-off earlier send that is still writing makes the box refuse, exit
+      6); the rate test is a wall-clock lower bound at one rate, and the fake
+      clock test holds the pacing and the no-burst-after-a-stall rule.
+
+  - id: DEP-042
+    claim: >-
+      A box on a release helper from before the slow-link upload still deploys
+      with the whole-file upload and is told how to get the faster path; a
+      helper of any other version is still refused.
+    source: "#over-a-slow-link"
+    tests:
+      - go ./cmd/naut TestDeployUsesTheHelper

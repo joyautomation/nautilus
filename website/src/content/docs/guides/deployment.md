@@ -195,6 +195,43 @@ a box that does not answer gives up after 10 seconds.
 - Everything is `sync`ed before a link moves. If power is lost
   mid-update, the box boots the old release or the whole new one.
 
+### Over a slow link
+
+A built controller is 55-75 MB, most of it the runtime. An update over a
+radio link does not send that again. `naut deploy update` first asks the box
+what its current controller is built on, and sends only what the box cannot
+rebuild:
+
+| The box's runtime is | Sent |
+|---|---|
+| the one this was built on | the project alone, gzipped (about 1 MB; 72 MB controller of the lift-station example, one rung changed: 1.2 MB, 40 s at 256 kbit/s) |
+| another, or there is none (a first install) | the whole controller, gzipped |
+
+The box joins the runtime it has with the project, checks the SHA-256 of the
+whole file against the one computed here, and only then names it a release,
+so a damaged or cut transfer never becomes a release candidate (`update`
+only ever acts on a file that matched). A transfer that is cut off resumes
+where the box left off: naut retries a few times by itself, and running the
+same command again picks up what the box already holds, as long as it builds
+the same controller (the same `-controller` file, a pinned `-id`, or a build
+that comes out byte for byte the same). A release id names one controller:
+the same `-id` with different contents is refused. Rollback is as it was.
+
+Before it sends, `naut deploy` says how much and how long, at 256 kbit/s unless
+`-bandwidth 128k` says otherwise. `-limit 128k` holds the send to that rate
+(the link carries the site's other traffic too), and it suggests one when a
+send would take more than a few minutes. `-dry-run` builds, asks the box and
+says all this without sending anything:
+
+```sh
+naut deploy update deploy@ipc -dry-run
+naut deploy update deploy@ipc -limit 128k
+```
+
+A box on the release helper keeps the old, whole-file upload until the helper
+is installed again once (`naut deploy helper -user <ssh-user> <dir>`, as root on
+the box): `naut deploy` says so, with the size it is about to send.
+
 ### Letting operators open the screen
 
 Right after `install`, the controller is reachable only from its own box:
@@ -263,7 +300,9 @@ shell. The helper is the boundary between that user and root, so:
 
 The helper is the on-box half of the `naut` that wrote it. When a
 newer `naut` changes that half or the unit, `naut deploy` refuses and
-says to install the helper again from `naut deploy helper`.
+says to install the helper again from `naut deploy helper`, except for
+the change that added the slow-link upload: a helper from before it still
+works, with the whole-file upload (see [over a slow link](#over-a-slow-link)).
 
 ### Without systemd or root: cron
 
