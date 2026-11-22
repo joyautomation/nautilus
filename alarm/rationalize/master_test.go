@@ -95,6 +95,11 @@ func TestMasterRefusesAnUnreadableHeader(t *testing.T) {
 			}
 		})
 	}
+	for _, empty := range []string{"", "null\n", "[]\n"} {
+		if _, err := ReadYAML(strings.NewReader(empty)); err == nil && empty != "[]\n" {
+			t.Errorf("YAML master %q read as no alarms", empty)
+		}
+	}
 	if _, err := ReadYAML(strings.NewReader("- id: A\n  priorty: low\n")); err == nil {
 		t.Error("YAML master took an unknown key")
 	}

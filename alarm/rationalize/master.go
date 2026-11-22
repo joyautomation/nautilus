@@ -190,8 +190,14 @@ func ReadYAML(r io.Reader) ([]Row, error) {
 	dec := yaml.NewDecoder(r)
 	dec.KnownFields(true)
 	var out []Row
-	if err := dec.Decode(&out); err != nil && err != io.EOF {
+	if err := dec.Decode(&out); err != nil {
+		if err == io.EOF {
+			return nil, errors.New("empty master: want a YAML list of alarms")
+		}
 		return nil, err
+	}
+	if out == nil {
+		return nil, errors.New("empty master: want a YAML list of alarms")
 	}
 	for i, row := range out {
 		if strings.TrimSpace(row.ID) == "" {

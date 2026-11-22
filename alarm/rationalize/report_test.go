@@ -85,6 +85,29 @@ func TestFloods(t *testing.T) {
 	}
 }
 
+// Windows start at from, not on the clock: a range from 10:05 has windows
+// 10:05, 10:15, …, the last one short when the range is not whole windows,
+// and a flood never reaches outside the range.
+func TestFloodsWindowsStartAtFrom(t *testing.T) {
+	from, to := t0.Add(5*time.Minute), t0.Add(30*time.Minute)
+	acts := many(11, "x", 5*time.Minute, time.Second) // all in 10:05–10:15
+	acts = append(acts, many(5, "y", 14*time.Minute+30*time.Second, time.Second)...)
+	rep := Floods(acts, from, to, FloodWindow, FloodThreshold)
+	if rep.Windows != 3 || len(rep.Floods) != 1 {
+		t.Fatalf("windows %d floods %+v, want 3 windows and one flood", rep.Windows, rep.Floods)
+	}
+	if f := rep.Floods[0]; !f.Start.Equal(from) || f.Count != 16 {
+		t.Errorf("flood %+v, want 16 from 10:05 (on the clock it would split across 10:00 and 10:10)", f)
+	}
+	if rep.PerWindow != rep.PerHour/6 {
+		t.Errorf("per window %v is not per hour %v / 6", rep.PerWindow, rep.PerHour)
+	}
+	end := Floods(many(11, "z", 25*time.Minute, time.Second), from, to, FloodWindow, FloodThreshold)
+	if f := end.Floods[0]; !f.End.Equal(to) {
+		t.Errorf("a flood in the short last window ends %v, want %v", f.End, to)
+	}
+}
+
 // Three activations exactly sixty seconds apart end to end chatter; three
 // in sixty-one seconds and two in sixty do not. Overlapping bursts are one
 // episode; bursts apart are two.

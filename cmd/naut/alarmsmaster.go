@@ -75,9 +75,11 @@ Flags:
   -top N         how many alarms bad-actors names (default 10)
   -o table|json
 
-An alarm's activation is counted once per occurrence: a controller
-restart journals a standing alarm as active again, and that is not
-counted as a new alarm.
+The range runs from -from up to, not including, -to. An alarm is counted
+once per occurrence: a controller restart journals a standing alarm as
+active again, and that is not a new alarm. To see where an alarm standing
+at -from began, a report also reads the 7 days before it. Reports exit 0
+whatever they find; read -o json to act on the numbers.
 `
 
 func runAlarmsMaster(args []string) int {
@@ -105,6 +107,9 @@ func alarmsMaster(args []string, stdout, stderr io.Writer) int {
 	file := fs.String("f", "", "the master file")
 	format := fs.String("o", "csv", "export format when -f has no .csv/.yaml extension: csv or yaml")
 	pos, err := parseInterspersed(fs, args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
 	if err != nil {
 		return 2
 	}
@@ -124,7 +129,7 @@ func alarmsMaster(args []string, stdout, stderr io.Writer) int {
 	rows := rationalize.Rows(defs)
 
 	yamlFormat := isYAMLPath(*file)
-	if *file == "" || filepath.Ext(*file) != ".csv" && !yamlFormat {
+	if *file == "" || strings.ToLower(filepath.Ext(*file)) != ".csv" && !yamlFormat {
 		switch *format {
 		case "csv":
 		case "yaml":
@@ -275,6 +280,9 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	topN := fs.Int("top", rationalize.BadActorTop, "how many alarms bad-actors names")
 	format := fs.String("o", "table", "table or json")
 	pos, err := parseInterspersed(fs, args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return 0
+	}
 	if err != nil {
 		return 2
 	}
@@ -290,6 +298,9 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	}
 	if *format != "table" && *format != "json" {
 		return fail(fmt.Errorf("-o %q: want table or json", *format))
+	}
+	if *topN < 1 {
+		return fail(fmt.Errorf("-top %d: want 1 or more", *topN))
 	}
 	to := now
 	if *toS != "" {
@@ -313,8 +324,15 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 		return fail(errors.New("-from must be before -to"))
 	}
 
-	filter := alarm.Filter{Sites: splitList(*site), Priorities: splitList(*priority)}
-	var events []alarm.Event
+	// Events are read from leadIn before the range as well: an alarm that
+	// was already standing at -from, and that a restart inside the range
+	// journalled as active again, must be recognised as the same
+	// occurrence and not counted as new; and a stale alarm's age runs
+	// from its first activation, not from the restart.
+	filter := alarm.Filter{Sites: splitList(*site), Priorities: splitList(*priority),
+		Kinds: reportKinds}
+	readFrom := from.Add(-leadIn)
+	var events []alarm.Event // readFrom .. to, oldest first
 	read := reportRead{From: from, To: to}
 	if *journal != "" {
 		read.Source = *journal
@@ -323,7 +341,7 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		for _, e := range all {
-			if e.TS >= from.UnixMilli() && e.TS < to.UnixMilli() && filter.Match(e) {
+			if e.TS >= readFrom.UnixMilli() && e.TS < to.UnixMilli() && filter.Match(e) {
 				events = append(events, e)
 			}
 		}
@@ -333,17 +351,28 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 			return fail(err)
 		}
 		read.Source = base
-		if events, err = fetchJournal(base, from, to, filter); err != nil {
+		if events, err = fetchJournal(base, readFrom, to, filter); err != nil {
 			return fail(err)
 		}
 	}
-	read.Events = len(events)
-	if len(events) > 0 {
-		first, last := events[0].Time(), events[len(events)-1].Time()
+	var inRange []alarm.Event
+	for _, e := range events {
+		if e.TS >= from.UnixMilli() {
+			inRange = append(inRange, e)
+		}
+	}
+	read.Events = len(inRange)
+	if len(inRange) > 0 {
+		first, last := inRange[0].Time(), inRange[len(inRange)-1].Time()
 		read.Earliest, read.Latest = &first, &last
 	}
 
-	acts := rationalize.Activations(events)
+	var acts []alarm.Event
+	for _, a := range rationalize.Activations(events) {
+		if a.TS >= from.UnixMilli() {
+			acts = append(acts, a)
+		}
+	}
 	var rep any
 	switch kind {
 	case "flood":
@@ -424,6 +453,14 @@ func parseSince(s string) (time.Duration, error) {
 	return d, nil
 }
 
+// reportKinds are the journal rows the reports read: what starts an
+// occurrence and what ends one.
+var reportKinds = []string{alarm.KindActive, alarm.KindRTN, alarm.KindSuppress}
+
+// leadIn is how far before -from a report reads, to see where an alarm
+// standing at -from began. A variable only so a test can set it.
+var leadIn = 7 * 24 * time.Hour
+
 // journalPage is the most events one journal request asks for. The API
 // says when more match (truncated), and fetchJournal then halves the range.
 var journalPage = 50_000
@@ -443,7 +480,7 @@ func fetchJournal(base string, from, to time.Time, f alarm.Filter) ([]alarm.Even
 		q := url.Values{}
 		q.Set("from", strconv.FormatInt(lo, 10))
 		q.Set("to", strconv.FormatInt(hi-1, 10))
-		q.Set("kind", strings.Join([]string{alarm.KindActive, alarm.KindRTN, alarm.KindSuppress}, ","))
+		q.Set("kind", strings.Join(f.Kinds, ","))
 		q.Set("limit", strconv.Itoa(journalPage))
 		if len(f.Sites) > 0 {
 			q.Set("site", strings.Join(f.Sites, ","))
@@ -508,7 +545,7 @@ func printRead(w io.Writer, r reportRead) {
 	}
 	fmt.Fprintln(w)
 	if r.Earliest != nil && r.Earliest.Sub(r.From) > 24*time.Hour {
-		fmt.Fprintf(w, "note: the journal holds nothing before %s; the range before that is not measured\n",
+		fmt.Fprintf(w, "note: nothing is journalled before %s: a quiet system, or a journal that starts there\n",
 			r.Earliest.Format(reportTime))
 	}
 	if r.Events == 0 {

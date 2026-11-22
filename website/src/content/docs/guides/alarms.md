@@ -467,7 +467,10 @@ every alarm only one side has and every column that differs, so a master
 the team signed off cannot drift from what the controller runs without
 someone seeing it. Both commands print how many alarms are pending,
 reviewed and approved, and name the high and critical ones still
-pending. A YAML master (`-f master.yaml`) holds the same columns.
+pending. A YAML master (`-f master.yaml`) holds the same columns. When a
+spreadsheet opens the CSV, keep the `at` column as text: a spreadsheet
+that turns `2026-11-20` into its own date format makes `check` report a
+difference.
 
 How the alarm system performs is measured from the [journal](#the-journal):
 
@@ -487,8 +490,8 @@ naut alarms report stale      -host plc1
 
 `-journal` reads a file journal (and its rotated `.1`) without writing
 anything; `-host` reads a running controller's journal API, whatever its
-sink. The range is `-from`/`-to`, or the last `-since` (7 days by
-default, 90 for `stale`, which has to see when an alarm began); `-site`
+sink. The range is `-from` up to (not including) `-to`, or the last
+`-since` (7 days by default, 90 for `stale`); `-site`
 and `-priority` narrow it, and `-o json` prints the numbers for a
 dashboard. Each report first says how many events it read and the
 earliest and latest of them: a journal that holds only the last few
@@ -498,7 +501,11 @@ reading as a quiet week.
 A controller keeps only an alarm's acknowledgement and shelf across a
 restart, so a standing alarm is journalled `active` again when it starts.
 The reports count that as the same occurrence, not a new alarm, so a
-restart neither looks like a flood nor resets a stale alarm's age.
+restart neither looks like a flood nor resets a stale alarm's age. To
+recognise an alarm that was already standing when the range began, a
+report also reads the 7 days before `-from`. Flood windows start at
+`-from`. A report exits 0 whatever it finds; use `-o json` to act on
+the numbers in a script.
 
 ## On the HMI
 

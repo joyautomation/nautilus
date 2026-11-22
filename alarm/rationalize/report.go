@@ -123,31 +123,32 @@ type FloodReport struct {
 	Floods       []Flood `json:"floods"`
 }
 
-// Floods buckets activations into fixed windows aligned to the epoch
-// (10:00, 10:10, … for ten minutes) covering [from, to), and reports the
-// rate and every flood. A window is in flood when it holds MORE than
-// threshold activations. Activations outside the range are ignored.
+// Floods buckets activations into consecutive windows starting at from
+// (from, from+10m, …) covering [from, to), and reports the rate and every
+// flood. A window is in flood when it holds MORE than threshold
+// activations. Activations outside the range are ignored. When the range
+// is not a whole number of windows, the last one is short; it still counts
+// as a window.
 func Floods(acts []alarm.Event, from, to time.Time, window time.Duration, threshold int) FloodReport {
 	rep := FloodReport{From: from, To: to, Window: window, Threshold: threshold, Floods: []Flood{}}
 	if window <= 0 || !to.After(from) {
 		return rep
 	}
 	w := window.Milliseconds()
-	first := floorDiv(from.UnixMilli(), w)
-	last := floorDiv(to.UnixMilli()-1, w) // to is exclusive
-	rep.Windows = int(last-first) + 1
+	lo := from.UnixMilli()
+	rep.Windows = int((to.UnixMilli() - lo + w - 1) / w) // to is exclusive
 
 	byWindow := make([][]alarm.Event, rep.Windows)
 	for _, e := range acts {
 		if e.TS < from.UnixMilli() || e.TS >= to.UnixMilli() {
 			continue
 		}
-		i := floorDiv(e.TS, w) - first
+		i := (e.TS - lo) / w
 		byWindow[i] = append(byWindow[i], e)
 		rep.Activations++
 	}
-	rep.PerWindow = float64(rep.Activations) / float64(rep.Windows)
 	rep.PerHour = float64(rep.Activations) / to.Sub(from).Hours()
+	rep.PerWindow = rep.PerHour * window.Hours()
 
 	var cur *Flood
 	var curEvents []alarm.Event
@@ -159,7 +160,7 @@ func Floods(acts []alarm.Event, from, to time.Time, window time.Duration, thresh
 		}
 	}
 	for i, evs := range byWindow {
-		start := time.UnixMilli((first + int64(i)) * w)
+		start := time.UnixMilli(lo + int64(i)*w)
 		if len(evs) > rep.Max {
 			rep.Max, rep.MaxAt = len(evs), start
 		}
@@ -172,6 +173,9 @@ func Floods(acts []alarm.Event, from, to time.Time, window time.Duration, thresh
 			cur = &Flood{Start: start}
 		}
 		cur.End = start.Add(window)
+		if cur.End.After(to) {
+			cur.End = to
+		}
 		cur.Count += len(evs)
 		cur.Peak = max(cur.Peak, len(evs))
 		curEvents = append(curEvents, evs...)
@@ -179,16 +183,6 @@ func Floods(acts []alarm.Event, from, to time.Time, window time.Duration, thresh
 	closeFlood()
 	rep.FloodPercent = 100 * float64(rep.FloodWindows) / float64(rep.Windows)
 	return rep
-}
-
-// floorDiv divides rounding toward minus infinity, so windows before 1970
-// (a test clock) align the same way as after.
-func floorDiv(a, b int64) int64 {
-	q := a / b
-	if (a%b != 0) && ((a < 0) != (b < 0)) {
-		q--
-	}
-	return q
 }
 
 // Chatter is one chattering alarm.

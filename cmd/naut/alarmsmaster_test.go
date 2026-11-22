@@ -115,7 +115,9 @@ func reportJSON(t *testing.T, args ...string) (map[string]any, string) {
 }
 
 func TestAlarmsReportFromAJournalFile(t *testing.T) {
-	path := writeJournal(t, journalFixture())
+	// An event after -to (the clock's now) is outside every range.
+	path := writeJournal(t, append(journalFixture(),
+		alarm.Event{TS: reportNow.Add(time.Minute).UnixMilli(), ID: "LATER", Kind: alarm.KindActive}))
 
 	doc, raw := reportJSON(t, "flood", "-journal", path)
 	rep := doc["report"].(map[string]any)
@@ -123,14 +125,31 @@ func TestAlarmsReportFromAJournalFile(t *testing.T) {
 	if rep["activations"].(float64) != 16 || len(rep["floods"].([]any)) != 1 {
 		t.Errorf("flood report:\n%s", raw)
 	}
-	if read := doc["read"].(map[string]any); read["events"].(float64) != 20 {
-		t.Errorf("read %v events in the last 7 days, want 20", read["events"])
+	if read := doc["read"].(map[string]any); read["events"].(float64) != 19 {
+		t.Errorf("read %v events in the last 7 days, want 19: every active, rtn and suppress, not the ack", read["events"])
 	}
 
 	// The range is applied: a day back leaves out STUCK's first activation.
 	doc, _ = reportJSON(t, "flood", "-journal", path, "-since", "1d")
-	if read := doc["read"].(map[string]any); read["events"].(float64) != 19 {
-		t.Errorf("read %v events in the last day, want 19", read["events"])
+	if read := doc["read"].(map[string]any); read["events"].(float64) != 18 {
+		t.Errorf("read %v events in the last day, want 18", read["events"])
+	}
+
+	// STUCK began two days ago and a restart re-journalled it inside the
+	// last day: read with a lead-in, that is the same occurrence, so a
+	// one-day report counts only the flood and CH, and STUCK's age runs
+	// from its first activation.
+	doc, raw = reportJSON(t, "flood", "-journal", path, "-since", "1d")
+	if rep := doc["report"].(map[string]any); rep["activations"].(float64) != 15 {
+		t.Errorf("one-day flood counted a restart as a new alarm:\n%s", raw)
+	}
+	doc, raw = reportJSON(t, "bad-actors", "-journal", path, "-since", "1d", "-top", "50")
+	if rep := doc["report"].(map[string]any); rep["activations"].(float64) != 15 {
+		t.Errorf("one-day bad actors counted an activation from the lead-in:\n%s", raw)
+	}
+	doc, raw = reportJSON(t, "stale", "-journal", path, "-since", "1d")
+	if ss := doc["report"].([]any); len(ss) != 1 || ss[0].(map[string]any)["forNs"].(float64) < float64(48*time.Hour) {
+		t.Errorf("one-day stale report lost STUCK's first activation:\n%s", raw)
 	}
 
 	doc, raw = reportJSON(t, "chatter", "-journal", path)
@@ -157,6 +176,15 @@ func TestAlarmsReportFromAJournalFile(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".typo"); !os.IsNotExist(err) {
 		t.Error("the report created the journal it was pointed at")
+	}
+	if code := alarmsReport([]string{"bad-actors", "-journal", path, "-top", "0"}, reportNow, &out, &errb); code != 2 {
+		t.Errorf("-top 0: exit %d, want 2", code)
+	}
+	if code := alarmsReport([]string{"flood", "-journal", path, "-from", "yesterday"}, reportNow, &out, &errb); code != 2 {
+		t.Errorf("a bad -from: exit %d, want 2", code)
+	}
+	if code := alarmsReport([]string{"flood", "-h"}, reportNow, &out, &errb); code != 0 {
+		t.Errorf("-h: exit %d, want 0", code)
 	}
 	if code := alarmsReport([]string{"flood"}, reportNow, &out, &errb); code != 2 {
 		t.Errorf("no journal named: exit %d, want 2", code)
@@ -205,9 +233,9 @@ func TestAlarmsReportFromAControllerSplitsATruncatedRange(t *testing.T) {
 	defer srv.Close()
 	host, port, _ := strings.Cut(strings.TrimPrefix(srv.URL, "http://"), ":")
 
-	old := journalPage
-	journalPage = 4
-	defer func() { journalPage = old }()
+	old, oldLead := journalPage, leadIn
+	journalPage, leadIn = 4, 0 // no lead-in, so the first split falls on MID
+	defer func() { journalPage, leadIn = old, oldLead }()
 
 	doc, raw := reportJSON(t, "bad-actors", "-host", host, "-port", port,
 		"-from", from.Format(time.RFC3339Nano), "-to", to.Format(time.RFC3339Nano), "-top", "50")
