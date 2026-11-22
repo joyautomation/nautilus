@@ -176,7 +176,10 @@ claims:
       real-io; whatever the client's flag says), a sheet that changed since the
       run began, a standing checkout force, a point whose latest result is not
       a pass (none, a fail or only a note), and (by default) a signer who took
-      part in the run (began it, recorded results or forced an output); a refused seal writes nothing; a
+      part in the run (began it, recorded results or forced an output), and
+      any force or substitute standing on a sheet tag; a pass is not recorded
+      while a force or substitute (other than the checkout's own force on the
+      point) stands on the point's tag, and a fail or note records what stood; a refused seal writes nothing; a
       sealed run takes no more results; single-person sign-off is said in the
       record.
     source: "#signing-off"
@@ -192,6 +195,10 @@ claims:
       - go ./server TestCheckoutSealSinglePersonSaysSo
       - go ./cmd/naut TestSealEvidenceFailsClosed
       - go ./checkout TestSealNeedsAPassOnEveryPoint
+      - go ./checkout TestPassIsRefusedWhileAnOverrideStands
+      - go ./checkout TestSealRefusedWhileAnOverrideStands
+      - go ./server TestCheckoutOverridesOnSheetTags
+      - go ./server TestCheckoutOwnForceIsNotAnOverride
       - go ./checkout TestTwoPersonCountsEveryoneWhoTookPart
       - go ./checkout TestSealIsBoundToTheDevicesTheRunBeganAgainst
       - go ./server TestCheckoutRunBegunAgainstVirtualDevicesCanNeverBeSealed

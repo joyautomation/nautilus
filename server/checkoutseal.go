@@ -39,8 +39,14 @@ func (a *checkoutAPI) checkoutSeal(w http.ResponseWriter, r *http.Request) {
 		if why != "" {
 			return nil, http.StatusConflict, fmt.Errorf("%w: %s", checkout.ErrSealRefused, why)
 		}
+		var overrides []string
+		for _, pt := range a.co.Sheet.Points {
+			if o := a.overridden(pt); o != "" {
+				overrides = append(overrides, pt.ID+" "+o)
+			}
+		}
 		sr, err := a.co.Store.Seal(checkout.SealInput{Run: run.ID, Sheet: a.co.Sheet, By: noteAuthor(pr.String()), Principal: pr.String(),
-			Note: req.Note, Mode: a.co.Signoff, Evidence: ev})
+			Note: req.Note, Mode: a.co.Signoff, Evidence: ev, Overrides: overrides})
 		if err != nil {
 			return nil, http.StatusInternalServerError, err
 		}

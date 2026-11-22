@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/checkout"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // ckSealServer is a checkout server where akhan (an engineer) records, jsmith
@@ -20,7 +22,8 @@ func ckSealServer(t *testing.T, mode string, evidence func(*checkout.Sheet) (che
 	t.Helper()
 	st := newCkStore(t)
 	co := &CheckoutOptions{Store: st, Sheet: ckSheet(), Signoff: mode, Evidence: evidence}
-	srv, _, _ := patServerSettings(t, newTestRuntime(t), ckOpts(Options{}, co), auth.Settings{
+	rt, _, _ := newSubRuntime(t) // Level can be substituted
+	srv, _, _ := patServerSettings(t, rt, ckOpts(Options{}, co), auth.Settings{
 		Users: map[string][]auth.Grant{
 			"akhan":  {{Role: auth.Engineer}},
 			"jsmith": {{Role: auth.Supervisor}},
@@ -226,4 +229,95 @@ func TestCheckoutSealRefusesDevicesThatChangedSinceTheRunBegan(t *testing.T) {
 	if rec := call(t, srv, "POST", "/api/checkout/runs/"+id+"/seal", `{}`, ckAs(t, srv, "jsmith")); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "changed since this run began") {
 		t.Errorf("seal after the devices changed: %d %s", rec.Code, rec.Body)
 	}
+}
+
+// A force or a substitute on a sheet tag (anything but this checkout's own
+// force on the point) makes the reading not the wiring's: a pass is refused
+// naming why, a fail is recorded with what stood, the checkout's own force on
+// its output is the test and does not count, and a seal is refused while any
+// override stands on a sheet tag.
+func TestCheckoutOverridesOnSheetTags(t *testing.T) {
+	srv, st, _ := ckSealServer(t, "two-person", realDevices)
+	eng := ckAs(t, srv, "akhan")
+	var run checkout.Run
+	json.Unmarshal(call(t, srv, "POST", "/api/checkout/runs", `{}`, eng).Body.Bytes(), &run)
+	path := "/api/checkout/runs/" + run.ID
+	tags := srv.rt.Tags()
+
+	// a plain runtime force on the point's tag
+	if err := tags.Force("SP", 70.0); err != nil {
+		t.Fatal(err)
+	}
+	rec := call(t, srv, "POST", path+"/results", `{"point":"SP","outcome":"pass"}`, eng)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "forced (SP)") {
+		t.Errorf("a pass over a force: %d %s", rec.Code, rec.Body)
+	}
+	rec = call(t, srv, "POST", path+"/results", `{"point":"SP","outcome":"fail","note":"reads the forced value"}`, eng)
+	var res checkout.Result
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if rec.Code != http.StatusCreated || res.Override != "forced (SP)" {
+		t.Errorf("a fail over a force: %d %s", rec.Code, rec.Body)
+	}
+	tags.UnforceAll()
+	if rec := call(t, srv, "POST", path+"/results", `{"point":"SP","outcome":"pass"}`, eng); rec.Code != http.StatusCreated {
+		t.Errorf("a pass once the force is gone: %d %s", rec.Code, rec.Body)
+	}
+
+	// a substitute (#707) on an input
+	sub, err := srv.rt.Substitute("Level", runtime.SubstituteRequest{Value: 40.0, For: time.Hour, By: "op"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = call(t, srv, "POST", path+"/results", `{"point":"LVL","outcome":"pass"}`, eng)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "substituted (Level)") {
+		t.Errorf("a pass over a substitute: %d %s", rec.Code, rec.Body)
+	}
+
+	// the seal is refused while either stands on a sheet tag
+	for _, p := range []string{"OUT"} {
+		call(t, srv, "POST", path+"/results", `{"point":"`+p+`","outcome":"pass"}`, eng)
+	}
+	srv.rt.Restore(sub.ID, "op")
+	rec = call(t, srv, "POST", path+"/results", `{"point":"LVL","outcome":"pass"}`, eng)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("a pass once the substitute is gone: %d %s", rec.Code, rec.Body)
+	}
+	sup := ckAs(t, srv, "jsmith")
+	if err := tags.Force("Level", 41.0); err != nil {
+		t.Fatal(err)
+	}
+	rec = call(t, srv, "POST", path+"/seal", `{}`, sup)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "LVL forced (Level)") {
+		t.Errorf("a seal over a force: %d %s", rec.Code, rec.Body)
+	}
+	tags.UnforceAll()
+	sub, err = srv.rt.Substitute("Level", runtime.SubstituteRequest{Value: 40.0, For: time.Hour, By: "op"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec = call(t, srv, "POST", path+"/seal", `{}`, sup)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "LVL substituted (Level)") {
+		t.Errorf("a seal over a substitute: %d %s", rec.Code, rec.Body)
+	}
+	srv.rt.Restore(sub.ID, "op")
+	if rec := call(t, srv, "POST", path+"/seal", `{}`, sup); rec.Code != http.StatusCreated {
+		t.Errorf("a seal with nothing standing: %d %s", rec.Code, rec.Body)
+	}
+	if g, _ := st.Get(run.ID); g.State != checkout.StateSealed {
+		t.Errorf("run %+v", g)
+	}
+}
+
+// The checkout's own force on its output is the test: a pass on that point is
+// recorded while it stands.
+func TestCheckoutOwnForceIsNotAnOverride(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(t, r.srv, "POST", r.path+"/results", `{"point":"OUT","outcome":"pass"}`, r.eng); rec.Code != http.StatusCreated {
+		t.Errorf("a pass on the point the checkout itself forces: %d %s", rec.Code, rec.Body)
+	}
+	call(t, r.srv, "POST", r.path+"/force/release", `{}`, r.eng)
 }

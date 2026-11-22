@@ -83,6 +83,10 @@ type entry struct {
 	EvSha  string `json:"evsha,omitempty"`
 	Unreal string `json:"unreal,omitempty"`
 
+	// kind result: what the controller saw standing on the point's tag when it
+	// recorded ("forced: X", "substituted: X"), from the controller
+	Override string `json:"override,omitempty"`
+
 	// kind result
 	Point   string `json:"point,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
@@ -117,8 +121,13 @@ type Result struct {
 	// Seen is what the controller read at the point's tag when the result
 	// was recorded, and Quality its quality: written by the controller, never
 	// by the client.
-	Seen      any    `json:"seen,omitempty"`
-	Quality   string `json:"quality,omitempty"`
+	Seen    any    `json:"seen,omitempty"`
+	Quality string `json:"quality,omitempty"`
+	// Override says a force or a substitute (other than this checkout's own
+	// force on the point) stood on the point's tag when the result was
+	// recorded: what the reading then says is not the wiring's. Only a fail or
+	// a note is recorded so; the controller refuses a pass.
+	Override  string `json:"override,omitempty"`
 	By        string `json:"by"`
 	Principal string `json:"principal,omitempty"`
 	// Force is the checkout force the point last had in the run, when it had
@@ -351,7 +360,7 @@ func (s *Store) apply(e entry) error {
 			return errors.New("a result for a run that is not open")
 		}
 		res := Result{Run: e.Run, Seq: e.Seq, At: e.At, Point: e.Point,
-			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, By: e.By, Principal: e.Principal}
+			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, Override: e.Override, By: e.By, Principal: e.Principal}
 		if fs := r.forces[e.Point]; len(fs) > 0 {
 			last := fs[len(fs)-1]
 			res.Force = &ForceRef{Seq: last.rec.Seq, Value: last.rec.Value, Seconds: last.rec.Seconds, Ended: last.ended}
@@ -496,6 +505,17 @@ func (s *Store) BeginWith(rehearsal bool, sheetHash, title, by, principal, evide
 // Record adds a result for a point of an open run. A fail and a note say
 // why: a pass may have no words.
 func (s *Store) Record(run, point, outcome, note string, seen any, quality, by, principal string) (Result, error) {
+	return s.RecordWith(run, point, outcome, note, seen, quality, "", by, principal)
+}
+
+// RecordWith is Record with what the controller saw standing on the point's
+// tag: a force or a substitute that is not this checkout's own. A pass is
+// refused while one stands (a reading through an override proves nothing about
+// the wiring); a fail or a note is recorded with it.
+func (s *Store) RecordWith(run, point, outcome, note string, seen any, quality, override, by, principal string) (Result, error) {
+	if override != "" && outcome == Pass {
+		return Result{}, invalid("a pass is not recorded while %s: the reading is not the wiring's. Clear it and record the pass again; a fail or a note may be recorded now", override)
+	}
 	switch outcome {
 	case Pass:
 	case Fail, Note:
@@ -520,7 +540,7 @@ func (s *Store) Record(run, point, outcome, note string, seen any, quality, by, 
 	if r.State != StateOpen {
 		return Result{}, ErrNotOpen
 	}
-	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, By: by, Principal: principal}
+	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, Override: override, By: by, Principal: principal}
 	if err := s.append(e); err != nil {
 		return Result{}, err
 	}

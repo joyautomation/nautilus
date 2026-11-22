@@ -180,6 +180,9 @@ type SealInput struct {
 	// run's results) or single.
 	Mode     string
 	Evidence Evidence
+	// Overrides are the forces and substitutes the controller finds standing
+	// on the sheet's tags at the seal: none may stand.
+	Overrides []string
 }
 
 // EvidenceDigest is a hash of the evidence, so the devices a run began against
@@ -355,6 +358,9 @@ func (s *Store) Seal(in SealInput) (SealedRecord, error) {
 	}
 	if r.EvidenceSha != "" && r.EvidenceSha != EvidenceDigest(in.Evidence) {
 		return SealedRecord{}, refuse("what the controller is connected to changed since this run began (its drivers or device endpoints): abandon the run and begin again, so every result is against the same devices")
+	}
+	if len(in.Overrides) > 0 {
+		return SealedRecord{}, refuse("%d point(s) have a force or a substitute standing on their tag: %s (a sign-off over an override says nothing about the wiring: clear them first)", len(in.Overrides), listIDs(in.Overrides))
 	}
 	statement := ""
 	if recorders[in.Principal] {

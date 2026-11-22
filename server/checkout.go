@@ -262,9 +262,30 @@ func (a *checkoutAPI) checkoutResult(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, http.StatusUnprocessableEntity, err
 		}
-		res, err := a.co.Store.Record(run.ID, pt.ID, req.Outcome, req.Note, seen, quality, noteAuthor(pr.String()), pr.String())
+		res, err := a.co.Store.RecordWith(run.ID, pt.ID, req.Outcome, req.Note, seen, quality, a.overridden(pt), noteAuthor(pr.String()), pr.String())
 		return res, http.StatusCreated, err
 	})
+}
+
+// overridden says what stands on the point's tag that makes its reading not the
+// wiring's: a force or a substitute (#707) on the tag or its root or a member
+// of it, other than this checkout's own force on this very point (that one is
+// the test). "" when nothing does. A force is checked against the force
+// table's own overlap rule, a substitute against the tag and its ancestors.
+func (a *checkoutAPI) overridden(pt checkout.Point) string {
+	tags := a.s.rt.Tags()
+	if f := tags.ForcedOverlap(pt.Tag); f != "" {
+		a.co.ck.mu.Lock()
+		own := a.co.ck.force != nil && a.co.ck.force.point == pt.ID
+		a.co.ck.mu.Unlock()
+		if !own {
+			return "forced (" + f + ")"
+		}
+	}
+	if sub, ok := tags.SubstituteCovering(pt.Tag); ok {
+		return "substituted (" + sub + ")"
+	}
+	return ""
 }
 
 // checkoutReading is what the controller reads at the point's tag now and

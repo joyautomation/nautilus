@@ -55,6 +55,12 @@ quality when the result was recorded, so a result says what was seen and the
 client cannot. A later result for a point supersedes an earlier one in the
 view and leaves it in the file.
 
+A **pass** is refused while a force or a substitute stands on the point's tag
+(on the tag, its root or a member of it; the checkout's own force on the point it
+is testing is the test, and does not count): a reading through an override says
+nothing about the wiring. A fail or a note is recorded, with what stood on the
+tag (`override`). Clear the force or the substitute and record the pass again.
+
 A run marked **rehearsal** (against virtual devices) stays a rehearsal: it
 cannot be changed into a live one, and a later step will refuse to seal it.
 
@@ -195,7 +201,8 @@ It refuses when
 - the **sheet changed** since the run began (`checkout.yaml` was edited and
   deployed): a seal signs the results against one sheet, so abandon the run and
   begin again;
-- a **checkout force** is standing or being started or ended;
+- a **checkout force** is standing or being started or ended, or any other
+  force or substitute stands on a point's tag;
 - a point has **no result yet**, or its latest result is a **fail** or only a
   **note** (a note is no verdict: record a pass once the point is checked; a
   later pass supersedes a fail or a note, and both stay in the file and in the

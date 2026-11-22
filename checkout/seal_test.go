@@ -510,3 +510,44 @@ func TestOpenSweepsASealedRecordTheFileDoesNotKnow(t *testing.T) {
 		t.Errorf("an older record after the key changed: %v", err)
 	}
 }
+
+// A reading through a force or a substitute proves nothing about the wiring: a
+// pass is not recorded then, a fail or a note is (and says what stood), and a
+// seal is refused while any override stands.
+func TestPassIsRefusedWhileAnOverrideStands(t *testing.T) {
+	s, _ := openStore(t)
+	defer s.Close()
+	run, _ := s.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	if _, err := s.RecordWith(run.ID, "XV101", Pass, "", 1, "good", "forced (XV101_Cmd)", "alice", "user:alice"); err == nil || !strings.Contains(err.Error(), "not recorded while forced") {
+		t.Fatalf("a pass over a force: %v", err)
+	}
+	r, err := s.RecordWith(run.ID, "XV101", Fail, "reads forced", 1, "good", "substituted (X)", "alice", "user:alice")
+	if err != nil || r.Override != "substituted (X)" {
+		t.Fatalf("a fail over an override: %+v %v", r, err)
+	}
+	// it is in the file, and survives a restart
+	p := s.path
+	s.Close()
+	s2, err := Open(p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if got := s2.Latest(run.ID)["XV101"]; got.Override != "substituted (X)" {
+		t.Errorf("after reopening: %+v", got)
+	}
+}
+
+func TestSealRefusedWhileAnOverrideStands(t *testing.T) {
+	s, _, run := sealedStore(t)
+	defer s.Close()
+	in := sealIn(run, "bob")
+	in.Overrides = []string{"LSH101 forced (LSH101)"}
+	if _, err := s.Seal(in); err == nil || !strings.Contains(err.Error(), "force or a substitute standing") {
+		t.Errorf("a seal over a force: %v", err)
+	}
+	in.Overrides = nil
+	if _, err := s.Seal(in); err != nil {
+		t.Errorf("without it: %v", err)
+	}
+}
