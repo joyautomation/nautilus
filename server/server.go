@@ -705,6 +705,8 @@ type Server struct {
 func New(rt *runtime.Runtime, opts ...Options) *Server {
 	s := newServer(rt, opts...)
 	s.pages = controllerPages()
+	// the controller's routes, then any the caller lists (mounts_controller.go)
+	s.mounts = append(controllerMounts(), s.mounts...)
 	return s
 }
 
@@ -986,13 +988,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/notes", s.audited("note.add", noteAddTarget, s.handleNoteAdd))
 	mux.Handle("POST /api/notes/{id}/revise", s.audited("note.revise", noteChangeTarget, s.handleNoteRevise))
 	mux.Handle("POST /api/notes/{id}/retract", s.audited("note.retract", noteChangeTarget, s.handleNoteRetract))
-	mux.HandleFunc("GET /api/push/key", s.handlePushKey)
-	mux.HandleFunc("GET /api/push/subscriptions", s.handlePushList)
-	mux.HandleFunc("GET /api/push/health", s.handlePushHealth)
-	mux.Handle("POST /api/push/subscribe", s.audited("push.subscribe", pushTarget, s.handlePushSubscribe))
-	mux.Handle("POST /api/push/confirm-revocations", s.audited("push.confirm-revocations", pushConfirmTarget, s.handlePushConfirm))
-	mux.Handle("DELETE /api/push/subscribe", s.audited("push.unsubscribe", pushTarget, s.handlePushUnsubscribe))
-	mux.Handle("POST /api/parameters/import", s.audited("param.import", s.paramImportTarget, s.handleParametersImport))
 	mux.HandleFunc("GET /api/drivers", s.handleDrivers)
 	// Alarms: always registered, 404 when no engine — see server/alarms.go.
 	// Registering them unconditionally is what makes "this controller has
@@ -1000,16 +995,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/alarms", s.handleAlarms)
 	mux.HandleFunc("GET /api/alarms/journal", s.handleAlarmJournal)
 	mux.Handle("POST /api/alarms/ack", s.audited("alarm.ack", ackTarget, s.handleAlarmAck))
-	// Ack links (#715): GET is the confirm page and changes nothing (a
-	// mail scanner that opens links acks nothing); POST acknowledges.
-	// The paths are acklink.Path (TestAckLinkRoutesAreAcklinkPath).
-	mux.HandleFunc("GET /alarm-ack/{token}", s.handleAckLinkPage)
-	mux.Handle("POST /alarm-ack/{token}", s.audited("alarm.ack", linkAuditTarget, s.handleAckLink, s.checkLink))
-	// Inbound acknowledgements (#715): the SMS and voice provider posts a
-	// reply's code or a call's keypress, signed (InboundSMSPath,
-	// InboundVoicePath; TestInboundRoutesAreTheirPaths).
-	mux.Handle("POST /alarm-inbound/sms", s.audited("alarm.ack", inboundAuditTarget, s.handleInboundAck, s.checkInbound("sms")))
-	mux.Handle("POST /alarm-inbound/voice/{token}", s.audited("alarm.ack", inboundAuditTarget, s.handleInboundAck, s.checkInbound("voice")))
 	mux.Handle("POST /api/alarms/shelve", s.audited("alarm.shelve", shelveTarget, s.handleAlarmShelve))
 	mux.Handle("POST /api/alarms/unshelve", s.audited("alarm.unshelve", unshelveTarget, s.handleAlarmUnshelve))
 	// Equipment out of service (#715 PR 5): its alarms suppressed until a
@@ -1022,22 +1007,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/program", s.handleGetProgram)
 	mux.Handle("PUT /api/program", s.audited("program.edit", s.programTarget, s.handlePutProgram))
 	mux.Handle("POST /api/program/rollback", s.audited("program.rollback", s.rollbackTarget, s.handleRollback))
-	mux.HandleFunc("GET /api/program/history", s.handleProgramHistory)
-	mux.Handle("POST /api/program/activate", s.audited("program.activate", s.activateTarget, s.handleActivate))
-	mux.HandleFunc("GET /api/io", s.handleIO)
-	mux.HandleFunc("GET /api/iolink/{port}/params", s.handleParamList)
-	mux.HandleFunc("GET /api/iolink/{port}/params/{ref}", s.handleParamRead)
-	mux.Handle("PUT /api/iolink/{port}/params/{ref}", s.audited("param.write", s.paramTarget, s.handleParamWrite))
-	mux.HandleFunc("GET /api/io/files", s.handleIOFiles)
 	mux.HandleFunc("GET /api/config/schema", s.handleConfigSchema)
-	mux.HandleFunc("GET /api/config/files", s.handleConfigFiles)
-	mux.Handle("POST /api/io/staged", s.audited("config.stage", ioStageTarget, s.handleIOStage))
-	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)
-	mux.Handle("POST /api/io/staged/{id}/validate", s.audited("config.validate", ioStagedTarget, s.handleIOValidate))
-	mux.Handle("POST /api/io/staged/{id}/apply", s.audited("config.apply", ioApplyTarget, s.handleIOApply))
-	mux.HandleFunc("GET /api/config/patch", s.handleConfigPatch)
-	mux.Handle("POST /api/config/commit", s.audited("config.commit", configCommitTarget, s.handleConfigCommit))
-	mux.Handle("POST /api/io/revert/cancel", s.audited("config.revert.cancel", nil, s.handleIOCancelRevert))
 	mux.HandleFunc("GET /api/forces", s.handleForces)
 	mux.HandleFunc("GET /api/substitutes", s.handleSubstitutes)
 	mux.Handle("POST /api/substitutes", s.audited("substitute.start", s.substituteStartTarget, s.handleSubstituteStart))
@@ -1050,23 +1020,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/sfc/step", s.audited("sfc.step", sfcTarget(true), s.handleSFCStep))
 	mux.Handle("POST /api/sfc/transition", s.audited("sfc.transition", sfcTarget(false), s.handleSFCTransition))
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
-	mux.Handle("POST /api/cluster/clear-duplicate", s.audited("redundancy.clear-duplicate", s.clearDuplicateTarget, s.handleClearDuplicate))
-	mux.Handle("POST /api/cluster/commission", s.audited("redundancy.commission", s.commissionTarget, s.handleCommission))
-	mux.Handle("POST /api/cluster/recommission", s.audited("redundancy.recommission", s.recommissionTarget, s.handleRecommission))
-	mux.Handle("POST /api/cluster/vouch", s.audited("redundancy.vouch", s.vouchTarget, s.handleVouch))
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/me", s.handleMe)
-	// Sign-in and sign-out journal themselves (auth.signin, auth.signout),
-	// outside the audited seam: TestEveryWriteRouteIsAudited names them.
-	mux.HandleFunc("GET /signin", s.handleSignInPage)
-	mux.HandleFunc("POST /api/signin", s.handleSignIn)
-	mux.HandleFunc("POST /api/signout", s.handleSignOut)
-	mux.HandleFunc("POST /api/elevate", s.handleElevate)
-	mux.HandleFunc("GET /auth/oidc/start", s.handleOIDCStart)
-	mux.HandleFunc("GET /auth/oidc/callback", s.handleOIDCCallback)
-	mux.HandleFunc("GET /auth/oidc/elevated", s.handleOIDCElevated)
-	mux.HandleFunc("GET /api/history", s.handleHistory)
-	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
 		// The HMI owns "/" (and whatever paths its own build wants under
 		// it, "/assets/" included); the built-in dashboard moves out of

@@ -5,5 +5,6 @@
 # main red when two PRs that are fine alone land together. 59a564af: 9,239,028;
 # after cutting image/png: 9,169,323; after the alarm seams (#1239 D): 8,888,537.
 # after the server's pages seam (#1239 C1a): 8,017,522 in CI (7,978,007 on mira1).
+# after the controller route groups move to server.New only (#1239 C1b): 7,819,191 local.
 # v0.22.0 was 7.27 MB; the target is that plus ~5%.
-8097697
+7905000

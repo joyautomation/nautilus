@@ -7,29 +7,19 @@ import (
 	"testing"
 )
 
-// A controller (New) answers the sign-in page as the HTML page; the
-// playground (NewPlayground) answers the same route with its message as
-// plain text and no markup, because it carries no templates (pages.go).
+// A controller (New) answers the sign-in page as the HTML page. The
+// playground (NewPlayground) has no sign-in route at all: it is in the auth
+// mount, which only New adds (mounts_controller_test.go), so the browser
+// build carries neither the route nor the templates (pages.go).
 func TestPlaygroundServesNoHTMLPages(t *testing.T) {
 	ctl := call(t, New(newTestRuntime(t)), "GET", "/signin", "")
 	if ct := ctl.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") ||
 		!strings.Contains(ctl.Body.String(), "<!doctype html>") {
 		t.Errorf("controller sign-in page: %s %q", ct, ctl.Body)
 	}
-
 	pg := call(t, NewPlayground(newTestRuntime(t)), "GET", "/signin", "")
-	if pg.Code != ctl.Code {
-		t.Errorf("playground status %d, controller %d: only the body may differ", pg.Code, ctl.Code)
-	}
-	body := pg.Body.String()
-	if ct := pg.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
-		t.Errorf("playground sign-in page Content-Type %q, want text/plain", ct)
-	}
-	if pg.Header().Get("X-Content-Type-Options") != "nosniff" {
-		t.Error("playground page: no nosniff")
-	}
-	if strings.Contains(body, "<") || !strings.Contains(body, "not set up") {
-		t.Errorf("playground sign-in page %q: want the notice, no markup", body)
+	if strings.Contains(pg.Body.String(), "<!doctype html>") || strings.Contains(pg.Body.String(), "not set up") {
+		t.Errorf("playground answered the sign-in page: %d %q", pg.Code, pg.Body)
 	}
 }
 

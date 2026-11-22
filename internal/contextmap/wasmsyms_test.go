@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -27,34 +29,59 @@ var wasmUnlinked = []string{
 	"html/template",
 }
 
-func TestWasmLinksNoTemplateEngine(t *testing.T) {
+// builtWasmNames builds the playground's wasm unstripped (the name section
+// is what the symbol tests read) once and returns its function names.
+var (
+	wasmNamesOnce sync.Once
+	wasmNames     []string
+	wasmNamesErr  error
+)
+
+func builtWasmNames(t *testing.T) []string {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("builds the playground's wasm")
 	}
-	out, err := exec.Command("go", "env", "GOMOD").Output()
-	if err != nil {
-		t.Fatalf("go env GOMOD: %v", err)
+	wasmNamesOnce.Do(func() {
+		out, err := exec.Command("go", "env", "GOMOD").Output()
+		if err != nil {
+			wasmNamesErr = fmt.Errorf("go env GOMOD: %v", err)
+			return
+		}
+		root := filepath.Dir(strings.TrimSpace(string(out)))
+		dir, err := os.MkdirTemp("", "wasmsyms")
+		if err != nil {
+			wasmNamesErr = err
+			return
+		}
+		defer os.RemoveAll(dir)
+		bin := filepath.Join(dir, "naut.wasm")
+		// Not stripped (no -s): the name section is what this reads.
+		cmd := exec.Command("go", "build", "-trimpath", "-o", bin, "./cmd/naut-wasm")
+		cmd.Dir = root
+		cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+		if b, err := cmd.CombinedOutput(); err != nil {
+			wasmNamesErr = fmt.Errorf("go build ./cmd/naut-wasm: %v\n%s", err, b)
+			return
+		}
+		wasm, err := os.ReadFile(bin)
+		if err != nil {
+			wasmNamesErr = err
+			return
+		}
+		wasmNames, wasmNamesErr = wasmFuncNames(wasm)
+	})
+	if wasmNamesErr != nil {
+		t.Fatalf("the playground's wasm: %v", wasmNamesErr)
 	}
-	root := filepath.Dir(strings.TrimSpace(string(out)))
-	bin := filepath.Join(t.TempDir(), "naut.wasm")
-	// Not stripped (no -s): the name section is what this reads.
-	cmd := exec.Command("go", "build", "-trimpath", "-o", bin, "./cmd/naut-wasm")
-	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
-	if b, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build ./cmd/naut-wasm: %v\n%s", err, b)
+	if len(wasmNames) < 1000 {
+		t.Fatalf("only %d function names: not the name section this test expects", len(wasmNames))
 	}
-	wasm, err := os.ReadFile(bin)
-	if err != nil {
-		t.Fatal(err)
-	}
-	names, err := wasmFuncNames(wasm)
-	if err != nil {
-		t.Fatalf("reading the wasm's name section: %v", err)
-	}
-	if len(names) < 1000 {
-		t.Fatalf("only %d function names: not the name section this test expects", len(names))
-	}
+	return wasmNames
+}
+
+func TestWasmLinksNoTemplateEngine(t *testing.T) {
+	names := builtWasmNames(t)
 	// The name section spells a package path with _ for /
 	// (html_template.init). server imports html/template, so its
 	// initialiser is always there: if it is not found, the spelling has
@@ -89,6 +116,48 @@ func TestWasmLinksNoTemplateEngine(t *testing.T) {
 		if n > 0 {
 			t.Errorf("cmd/naut-wasm links %d functions of %s (first %s): something the playground reaches renders a template. "+
 				"Render through the server's pages seam (server/pages.go), which only server.New installs", n, pkg, first)
+		}
+	}
+}
+
+// controllerHandlers are server handlers of the controller-only route groups
+// (server/mounts_controller.go): only server.New mounts them, so the
+// playground's wasm must link none. A name is matched as a prefix, so a
+// handler's closures count. handleState is the core handler that proves the
+// spelling below still matches something.
+var controllerHandlers = []string{
+	"handleSignIn", "handleSignOut", "handleSignInPage", "handleElevate",
+	"handleOIDCStart", "handleOIDCCallback", "handleOIDCElevated",
+	"handlePushKey", "handlePushList", "handlePushHealth", "handlePushSubscribe", "handlePushUnsubscribe", "handlePushConfirm",
+	"handleAckLinkPage", "handleAckLink", "handleInboundAck",
+	"handleClearDuplicate", "handleCommission", "handleRecommission", "handleVouch",
+	"handleIO", "handleIOFiles", "handleIOStage", "handleIOStaged", "handleIOValidate", "handleIOApply", "handleIOCancelRevert",
+	"handleConfigFiles", "handleConfigPatch", "handleConfigCommit",
+	"handleProgramHistory", "handleActivate", "handleParametersImport",
+	"handleParamList", "handleParamRead", "handleParamWrite",
+	"handleHistory",
+}
+
+func TestWasmLinksNoControllerRoutes(t *testing.T) {
+	names := builtWasmNames(t)
+	// the name section spells github.com/joyautomation/nautilus/server's
+	// *Server methods like this
+	const server = "github.com_joyautomation_nautilus_server.__Server_."
+	has := func(handler string) (string, bool) {
+		for _, f := range names {
+			if strings.HasPrefix(f, server+handler) {
+				return f, true
+			}
+		}
+		return "", false
+	}
+	if _, ok := has("handleState"); !ok {
+		t.Fatal("no server.(*Server).handleState in the wasm's names: the name section's spelling changed; fix the matching here")
+	}
+	for _, h := range controllerHandlers {
+		if f, ok := has(h); ok {
+			t.Errorf("cmd/naut-wasm links %s: a controller-only route group is reachable from the playground. "+
+				"Register it in a Mount of server/mounts_controller.go, which only server.New installs", f)
 		}
 	}
 }
