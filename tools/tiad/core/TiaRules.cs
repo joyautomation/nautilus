@@ -977,6 +977,7 @@ namespace Tiad
         public const string NotSecure = "the connection is not secure communication, and tiad sends no password over it";
         public const string SecureUnread = "tiad could not read whether the connection is secure communication, so it sends no password over it";
         public const string TypesUnread = "tiad could not read which legitimations the CPU offers, so it sends no password";
+        public const string DownloadNeedsPassword = "the session's station has cpu.accessControl fullAccessUser, so its CPU asks credentials going online once a hardware load put them there, and the compare after this download would: secrets.fullAccessPassword (the password of the CPU's user \"nautilus\") is required; nothing was sent to the CPU";
 
         readonly object mu = new object();
         readonly OnlineLogin login;

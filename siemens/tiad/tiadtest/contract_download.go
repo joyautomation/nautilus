@@ -386,16 +386,14 @@ func contractResolve(t *testing.T, start Starter) {
 			d.StartAfter = tiad.No()
 		}
 		body := map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": d}
-		sec := map[string]string{}
+		sec := map[string]string{"fullAccessPassword": BenchFullAccessPassword}
 		if rc.Protection {
 			sec["protection"] = "pw"
 		}
 		if rc.ConfigurationPassword {
 			sec["configurationPassword"] = BenchConfigurationPassword
 		}
-		if len(sec) > 0 {
-			body["secrets"] = sec
-		}
+		body["secrets"] = sec
 		status, b := rawJSON(t, c, "POST", path, body)
 		var env struct {
 			Data struct {
@@ -426,7 +424,7 @@ func contractResolve(t *testing.T, start Starter) {
 	// A partly agreed reinitialize names the DBs not agreed.
 	a.SetQuestions(t, []tiad.Question{qReinit})
 	_, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true,
-		"decisions": map[string]any{"reinitialize": []string{"tags"}, "startAfter": false}})
+		"decisions": map[string]any{"reinitialize": []string{"tags"}, "startAfter": false}, "secrets": benchLoginJSON})
 	if !strings.Contains(string(b), "(not agreed: Prog_DB)") {
 		t.Errorf("a partly agreed reinitialize: %s", b)
 	}
@@ -464,7 +462,7 @@ func contractDownloadRequest(t *testing.T, start Starter) {
 	}
 	// Null decisions are no answers.
 	a.SetQuestions(t, []tiad.Question{qStop})
-	status, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCpu": nil}})
+	status, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCpu": nil}, "secrets": benchLoginJSON})
 	if status != http.StatusConflict || envelopeKind(b) != tiad.KindDecisionRequired {
 		t.Fatalf("a null decision: HTTP %d %s, want decision_required", status, b)
 	}

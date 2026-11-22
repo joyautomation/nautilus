@@ -841,7 +841,7 @@ func TestAgentSaysUnknownWhenTIADiesInsideTheDownload(t *testing.T) {
 	real := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
 		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
 	for _, dies := range []string{"downloading", "preparing"} {
-		for _, req := range []tiad.DownloadRequest{ dry, real} {
+		for _, req := range []tiad.DownloadRequest{dry, real} {
 			name := fmt.Sprintf("TIA dies %s, dry run %v", dies, req.DryRun)
 			p, s := downloadReady(t)
 			c := p.Client()
@@ -1163,7 +1163,7 @@ func TestAgentJournalsTheHardwareAttestation(t *testing.T) {
 func TestAgentKeepsTheProtectionPasswordOut(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionPassword}})
-	sec := &tiad.Secrets{Protection: "protection-must-not-leak"}
+	sec := &tiad.Secrets{Protection: "protection-must-not-leak", FullAccessPassword: tiadtest.BenchFullAccessPassword}
 	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Secrets: sec, Decisions: tiad.Decisions{StartAfter: tiad.No()}}); err != nil {
 		t.Fatal(err)
 	}

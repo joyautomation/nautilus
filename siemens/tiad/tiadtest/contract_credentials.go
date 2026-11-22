@@ -28,17 +28,26 @@ func contractCredentials(t *testing.T, start Starter) {
 	}
 
 	// The first hardware load asks nothing going online (the CPU has no
-	// access control yet), but the compare right after it does: without
-	// the password the load lands and cannot be shown equal.
+	// access control yet), but the compare right after it would: a
+	// download of a fullAccessUser station without the password is
+	// refused before anything reaches the CPU, a dry run too.
 	hw := AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
-	_, err := s.Download(ctx, hw)
-	refused("the first load without the password", err, tiad.KindOutcomeUnknown, LoginNoPassword)
-	if n := len(a.Loaded(t)); n != 1 {
-		t.Fatalf("loaded %d, want the first load", n)
+	for _, req := range []tiad.DownloadRequest{hw, {Address: benchCPU, Software: true, Announced: true, DryRun: true}} {
+		if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), LoginDownloadNeedsPassword) {
+			t.Fatalf("a download without the password (dry run %v): %v", req.DryRun, err)
+		}
+	}
+	if n := len(a.Loaded(t)); n != 0 {
+		t.Fatalf("loaded %d, want nothing", n)
+	}
+	hw.Secrets = BenchDownloadSecrets()
+	if r, err := s.Download(ctx, hw); err != nil || !r.Downloaded || !r.CompareEqual {
+		t.Fatalf("the first load with the password: %+v %v", r, err)
 	}
 
 	// Compare: with the password it is equal; without one, or with a
 	// wrong one, refused, naming why.
+	var err error
 	if r, err := s.CompareWith(ctx, BenchCompare); err != nil || !r.Equal {
 		t.Fatalf("compare with the password: %+v %v", r, err)
 	}
@@ -57,12 +66,10 @@ func contractCredentials(t *testing.T, start Starter) {
 		t.Fatalf("fingerprint read with the password: %+v %v", r, err)
 	}
 
-	// A download: refused going online without the password (in doubt,
+	// A download with a wrong password: refused going online (in doubt,
 	// as any refusal inside TIA's download call), nothing loaded; with
-	// it, loaded and compared equal.
+	// the right one, loaded and compared equal.
 	sw := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
-	_, err = s.Download(ctx, sw)
-	refused("a download without the password", err, tiad.KindOutcomeUnknown, LoginNoPassword)
 	sw.Secrets = &tiad.Secrets{FullAccessPassword: wrong.FullAccessPassword}
 	_, err = s.Download(ctx, sw)
 	refused("a download with a wrong password", err, tiad.KindOutcomeUnknown, LoginAskedAgain)
@@ -78,9 +85,8 @@ func contractCredentials(t *testing.T, start Starter) {
 	if r.Deploy.Fingerprint == nil || r.Deploy.FingerprintError != "" {
 		t.Fatalf("the deploy's fingerprint read: %+v", r.Deploy)
 	}
-	hw.Secrets = BenchDownloadSecrets()
 	if r, err := s.Download(ctx, hw); err != nil || !r.Downloaded {
-		t.Fatalf("a hardware load with the password: %+v %v", r, err)
+		t.Fatalf("a second hardware load with the password: %+v %v", r, err)
 	}
 	r, err = s.Download(ctx, sw)
 	if err != nil || r.Deploy == nil {

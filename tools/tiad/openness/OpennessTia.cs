@@ -85,6 +85,11 @@ namespace Tiad.Openness
         {
             get { return record.TrustedBlindly; }
         }
+        // LoggedIn is true once this handler answered credentials.
+        public bool LoggedIn
+        {
+            get { return record.LoggedIn.Count > 0; }
+        }
 
         // gone is called when the handler cannot be detached: TIA's
         // objects are disposed, so TIA is taken to be gone.
@@ -260,7 +265,7 @@ namespace Tiad.Openness
         {
             if (Asked.Count == 0)
             {
-                return record.LoggedIn.Count == 0 ? null : new TiaException(TiaNames.LoginFailed(address, TiaNames.Message(e)), e);
+                return LoggedIn ? new TiaException(TiaNames.LoginFailed(address, TiaNames.Message(e)), e) : null;
             }
             return new TiaException(TiaNames.OnlineRefused(address, Asked, TiaNames.Message(e)), e);
         }
@@ -1334,6 +1339,7 @@ namespace Tiad.Openness
                         if (st != OnlineState.Online)
                         {
                             if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
+                            if (online.LoggedIn) throw new TiaException(TiaNames.LoginFailed(address, "online state " + st));
                             throw new TiaException("TIA could not go online to " + address + ": " + st);
                         }
                         CompareResult cr = sw.CompareToOnline();
@@ -1645,6 +1651,7 @@ namespace Tiad.Openness
                         if (st != OnlineState.Online)
                         {
                             if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
+                            if (online.LoggedIn) throw new TiaException(TiaNames.LoginFailed(address, "online state " + st));
                             throw new TiaException("fingerprint read: TIA could not go online to " + address + ": " + st);
                         }
                         FingerprintDataResult res = fp.GetFingerprintData(fat, asks.Handle);

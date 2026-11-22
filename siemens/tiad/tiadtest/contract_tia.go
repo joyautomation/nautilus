@@ -66,6 +66,9 @@ const BenchFullAccessPassword = "Bench-access-2026"
 // "nautilus" holds BenchFullAccessPassword (#789 stage 5 (A)).
 var BenchLogin = &tiad.OnlineSecrets{FullAccessPassword: BenchFullAccessPassword}
 
+// benchLoginJSON is BenchLogin as a raw request's secrets.
+var benchLoginJSON = map[string]string{"fullAccessPassword": BenchFullAccessPassword}
+
 // BenchCompare is a compare with BenchLogin.
 var BenchCompare = tiad.CompareRequest{Secrets: BenchLogin}
 

@@ -244,6 +244,15 @@ namespace Tiad
             {
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
             }
+            // A station with a Full access user turns the CPU's access
+            // control on at its hardware load, and from then on going
+            // online to it asks credentials (section 3.9): the compare
+            // after this download would, so without the password it could
+            // only end in doubt. Refused before anything reaches the CPU.
+            if (s.Station.Cpu.AccessControl == StationRules.AccessFullAccessUser && req.Secrets.FullAccessPassword == "")
+            {
+                throw TiadException.BadRequest("{0}", LoginUse.DownloadNeedsPassword);
+            }
             // The hardware configuration loads unverified (#789 hardware
             // gate): a real download that loads it needs the opt-in and
             // the operator's attestation, checked before anything reaches

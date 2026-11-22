@@ -1286,6 +1286,9 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if !s.compiled {
 		return nil, fail(http.StatusConflict, tiad.KindNotCompiled, "the project changed since the last full compile; compile hardware and software first")
 	}
+	if s.station.CPU.AccessControl == tiad.AccessFullAccessUser && (req.Secrets == nil || req.Secrets.FullAccessPassword == "") {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", LoginDownloadNeedsPassword)
+	}
 	call := "download"
 	if req.DryRun {
 		call = "dry run"

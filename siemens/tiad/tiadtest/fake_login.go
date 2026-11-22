@@ -12,6 +12,9 @@ const (
 	LoginNoPassword  = `the request carries no secrets.fullAccessPassword (the password of the CPU's user "nautilus", which cpu.accessControl fullAccessUser makes), so tiad has no credentials to answer`
 	LoginTrustedHere = "this operation trusted the CPU's certificate blindly, and tiad sends no password to a CPU it cannot verify"
 	LoginAskedAgain  = `TIA asked credentials again after tiad answered them as the user "nautilus": the CPU refused secrets.fullAccessPassword, and tiad never tries a password twice`
+	// LoginDownloadNeedsPassword is the agent's refusal of a download of
+	// a fullAccessUser station without the password.
+	LoginDownloadNeedsPassword = `the session's station has cpu.accessControl fullAccessUser, so its CPU asks credentials going online once a hardware load put them there, and the compare after this download would: secrets.fullAccessPassword (the password of the CPU's user "nautilus") is required; nothing was sent to the CPU`
 	// LoginQuestion is how the agent names TIA's credentials question.
 	LoginQuestion = "credentials (OnlineAuthenticationConfiguration)"
 )
