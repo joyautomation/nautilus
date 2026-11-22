@@ -158,13 +158,20 @@ func TestInboundSMSAcks(t *testing.T) {
 	}
 	noSecrets(t, e, code)
 
-	// The same code again: the occurrence waits on nobody now.
-	rec = reply(t, s, alicePhone, "ACK "+code)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "matches no alarm waiting on you") {
-		t.Fatalf("second reply: %d %s", rec.Code, rec.Body)
+	// The same code again, or bob's for the same occurrence: already
+	// acknowledged, said so, and not counted as a wrong code.
+	bobCode := codeFor(t, s, "HiTemp", "bob")
+	for _, r := range [][2]string{{alicePhone, code}, {bobPhone, bobCode}} {
+		rec = reply(t, s, r[0], "ACK "+r[1])
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "already acknowledged") {
+			t.Fatalf("stale reply: %d %s", rec.Code, rec.Body)
+		}
+		if e := lastAudit(t, s); e.Result == audit.ResultOK {
+			t.Fatalf("stale reply journalled %+v", e)
+		}
 	}
-	if e := lastAudit(t, s); e.Result == audit.ResultOK {
-		t.Fatalf("second reply journalled %+v", e)
+	if s.inboundTries.blocked("bob", 1, time.Now()) || s.inboundAll.blocked(everyoneKey, 1, time.Now()) {
+		t.Fatal("a stale code counted as a wrong one")
 	}
 }
 
@@ -302,20 +309,94 @@ func TestInboundWrongCodesAreLimited(t *testing.T) {
 		t.Fatalf("bob: %s", rec.Body)
 	}
 
+	// One short of the controller-wide budget, a right code still acks.
+	s = inboundServer(t)
+	people0 := []string{alicePhone, bobPhone, "+15550110", "+15550111"}
+	for i := range InboundTriesAll - 1 {
+		reply(t, s, people0[i%len(people0)], "ACK "+wrong)
+	}
+	if rec := reply(t, s, "+15550110", "ACK "+codeFor(t, s, "HiTemp", "akhan")); !strings.Contains(rec.Body.String(), "Acknowledged") {
+		t.Fatalf("one short of the budget: %s", rec.Body)
+	}
+
 	// The controller-wide budget: InboundTriesAll wrong codes from anyone,
 	// then nobody's code is taken for a day.
 	s = inboundServer(t)
 	people := []string{"alice", "bob", "akhan", "jsmith"}
 	phones := map[string]string{"alice": alicePhone, "bob": bobPhone, "akhan": "+15550110", "jsmith": "+15550111"}
+	codes := map[string]string{}
+	for _, p := range people {
+		codes[p] = codeFor(t, s, "HiTemp", p) // sent before the budget ran out
+	}
 	for i := range InboundTriesAll {
 		reply(t, s, phones[people[i%len(people)]], "ACK "+wrong)
 	}
 	for _, p := range people {
 		if !s.inboundTries.blocked(p, InboundTries, time.Now()) {
-			reply(t, s, phones[p], "ACK "+codeFor(t, s, "HiTemp", p))
+			reply(t, s, phones[p], "ACK "+codes[p])
 			if state(s.alarms, "HiTemp") != alarm.UnackActive {
 				t.Fatalf("%s acknowledged past the controller's budget", p)
 			}
+		}
+	}
+}
+
+// Ten wrong codes in a day suspend SMS acknowledgements, visibly: one
+// system entry in the audit trail, SMSAckSuspended (naut run's system
+// alarm) while it lasts, and pages carry no code meanwhile. It ends by
+// itself when the oldest wrong code is a day old.
+func TestSMSAckSuspended(t *testing.T) {
+	s := inboundServer(t)
+	occ := occOf(t, s.alarms, "HiTemp").Occurrence
+	wrong := "ACK 00000000"
+	if s.AckCode("HiTemp", occ, "alice") == wrong[4:] {
+		wrong = "ACK 00000001"
+	}
+	phones := []string{alicePhone, bobPhone, "+15550110", "+15550111"}
+	for i := range InboundTriesAll - 1 {
+		reply(t, s, phones[i%len(phones)], wrong)
+	}
+	if s.SMSAckSuspended() || s.AckCode("HiTemp", occ, "alice") == "" {
+		t.Fatal("suspended one wrong code early")
+	}
+	reply(t, s, phones[(InboundTriesAll-1)%len(phones)], wrong)
+	if !s.SMSAckSuspended() || s.AckCode("HiTemp", occ, "alice") != "" {
+		t.Fatal("not suspended, or a page still offers a code")
+	}
+	count := func() int {
+		n := 0
+		for _, e := range s.audit.ring.Recent() {
+			if e.Action == "alarm.sms-ack-suspended" {
+				n++
+				if e.User != "system" || e.Detail["until"] == "" {
+					t.Fatalf("entry %+v", e)
+				}
+			}
+		}
+		return n
+	}
+	reply(t, s, alicePhone, wrong)
+	if n := count(); n != 1 {
+		t.Fatalf("%d suspension entries, want 1", n)
+	}
+	// A day on: the oldest leaves the window, and codes are offered again.
+	s.inboundAll.mu.Lock()
+	w := s.inboundAll.wrong[everyoneKey]
+	w[0] = w[0].Add(-inboundAllWindow)
+	s.inboundAll.mu.Unlock()
+	if s.SMSAckSuspended() || s.AckCode("HiTemp", occ, "alice") == "" {
+		t.Fatal("still suspended once the oldest wrong code is a day old")
+	}
+}
+
+// A number two people share is told so at most inboundReplies times an
+// hour, too.
+func TestInboundSharedNumberRepliesAreCapped(t *testing.T) {
+	s := inboundServer(t)
+	for i := range inboundReplies + 2 {
+		rec := reply(t, s, sharedPhone, "ACK 12345678")
+		if got := strings.Contains(rec.Body.String(), "<Message>"); got != (i < inboundReplies) {
+			t.Fatalf("refusal %d: %s", i+1, rec.Body)
 		}
 	}
 }

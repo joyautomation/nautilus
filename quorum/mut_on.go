@@ -329,6 +329,8 @@ var Mutations = []string{
 	"inbound_no_global_budget",          // server: the controller-wide budget of wrong reply codes is not enforced (#715)
 	"inbound_any_alarm",                 // server: a reply code is tried against every standing occurrence, not only those whose escalation can page the person by SMS (#715)
 	"inbound_unknown_as_refused",        // server: an inbound ack the pair's log did not confirm is journalled as refused (#715)
+	"sms_ack_offered_while_suspended",   // server: an SMS page offers a reply code while SMS acknowledgements are suspended (#715)
+	"inbound_stale_code_counted",        // server: a good code for an occurrence acknowledged since counts as a wrong code (#715)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

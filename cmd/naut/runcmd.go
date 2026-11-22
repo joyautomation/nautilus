@@ -353,6 +353,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if proj.Alarms != nil && proj.Alarms.Channels != nil && proj.Alarms.Channels.Push != nil {
 		sysAlarms = append(sysAlarms, pushHeldAlarm(&srvRef))
 	}
+	if proj.Alarms != nil && proj.Alarms.Oncall.Inbound.Takes("sms") {
+		sysAlarms = append(sysAlarms, smsAckSuspendedAlarm(&srvRef))
+	}
 	proj.PushSend = pushChannel(&srvRef)
 	alarmStateDir, err := openAlarmContacts(proj, dir, os.Getenv, os.Stderr, proj.Runtime.Coordinator != nil)
 	if err != nil {
@@ -939,6 +942,27 @@ func pushHeldAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 		Active: func() bool {
 			s := srv.Load()
 			return s != nil && s.PushHeld() > 0
+		},
+	}
+}
+
+// SMSAckSuspendedAlarmID is the system alarm raised while this controller
+// takes no SMS reply: too many wrong reply codes in a day (#715 inbound).
+const SMSAckSuspendedAlarmID = "nautilus.sms-ack-suspended"
+
+// smsAckSuspendedAlarm is raised while SMS acknowledgements are suspended:
+// someone may be guessing codes, and pages offer no reply until it ends.
+func smsAckSuspendedAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
+	return project.SystemAlarm{
+		Def: alarm.Def{
+			ID: SMSAckSuspendedAlarmID, Tag: "__nautilus.sms-ack-suspended",
+			Name:     "SMS acknowledgements suspended for up to a day: too many wrong reply codes (someone may be forging replies); links and the HMI still acknowledge",
+			Priority: alarm.High, Class: "system",
+			AckRequired: true, AutoClear: true,
+		},
+		Active: func() bool {
+			s := srv.Load()
+			return s != nil && s.SMSAckSuspended()
 		},
 	}
 }

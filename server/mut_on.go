@@ -63,6 +63,8 @@ import "os"
 //   - inbound_no_global_budget: the controller-wide budget of wrong reply codes is not enforced (#715);
 //   - inbound_any_alarm: a reply code is tried against every standing occurrence, not only those whose escalation can page the person by SMS (#715);
 //   - inbound_unknown_as_refused: an inbound ack the pair's log did not confirm is journalled as refused (#715);
+//   - sms_ack_offered_while_suspended: an SMS page offers a reply code while SMS acknowledgements are suspended (#715);
+//   - inbound_stale_code_counted: a good code for an occurrence acknowledged since counts as a wrong code (#715);
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutServer(name string) bool { return name == mutOn }

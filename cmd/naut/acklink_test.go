@@ -347,3 +347,24 @@ func TestInboundChecks(t *testing.T) {
 		t.Fatalf("by IP: %v %v", errs, warns)
 	}
 }
+
+// The suspended-SMS-acks system alarm (#715 inbound) follows the server:
+// none before it exists, raised while SMSAckSuspended, a system alarm
+// that clears itself.
+func TestSMSAckSuspendedAlarm(t *testing.T) {
+	var ref atomic.Pointer[server.Server]
+	a := smsAckSuspendedAlarm(&ref)
+	if a.Def.ID != SMSAckSuspendedAlarmID || a.Def.Class != "system" || !a.Def.AutoClear || a.Active() {
+		t.Fatalf("def %+v active %v", a.Def, a.Active())
+	}
+	proj := inboundProject(t, "")
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring, _ := ackLinkKeyring(proj, "", "peer-token", &bytes.Buffer{})
+	ref.Store(server.New(rt, server.Options{AckLinks: ring, Inbound: &server.Inbound{URL: "https://hmi.example:8443", SMS: true}}))
+	if a.Active() {
+		t.Fatal("raised with nothing suspended")
+	}
+}

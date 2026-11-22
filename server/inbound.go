@@ -104,11 +104,50 @@ const (
 
 // AckCode is the reply code an SMS page to principal about alarmID's
 // occurrence occ carries; "" when this controller takes no SMS replies.
+//
+// While SMS acknowledgements are suspended (SMSAckSuspended) none is
+// made: the page then offers the link or the HMI, never a reply that would
+// be refused.
 func (s *Server) AckCode(alarmID, occ, principal string) string {
 	if s.inbound == nil || !s.inbound.SMS || s.ackLinks == nil {
 		return ""
 	}
+	if s.SMSAckSuspended() && !mutServer("sms_ack_offered_while_suspended") {
+		return ""
+	}
 	return s.ackLinks.Code(alarmID, occ, canonPrincipal(principal))
+}
+
+// SMSAckSuspended reports whether this controller takes no SMS reply now:
+// InboundTriesAll wrong codes within a day (someone may be guessing). It
+// ends by itself as the oldest leaves the day; naut run raises a system
+// alarm while it lasts.
+func (s *Server) SMSAckSuspended() bool {
+	return s.inbound != nil && s.inbound.SMS && s.inboundAll.blocked(everyoneKey, InboundTriesAll, time.Now())
+}
+
+// noteSuspended journals, once per suspension, that SMS acknowledgements
+// were suspended, and until when.
+func (s *Server) noteSuspended(now time.Time) {
+	s.inboundAll.mu.Lock()
+	w := s.inboundAll.recent(everyoneKey, now)
+	first := len(w) >= InboundTriesAll && !s.inboundAll.noted
+	if first {
+		s.inboundAll.noted = true
+	}
+	var until time.Time
+	if first {
+		// It ends when the oldest wrong code that makes up the count
+		// leaves the window.
+		until = w[len(w)-InboundTriesAll].Add(s.inboundAll.span())
+	}
+	s.inboundAll.mu.Unlock()
+	if first {
+		slog.Warn("alarm: SMS acknowledgements suspended: too many wrong reply codes; links and the HMI still acknowledge", "until", until.UTC())
+		s.RecordSystem("alarm.sms-ack-suspended", "", map[string]any{
+			"wrongCodes": InboundTriesAll, "within": inboundAllWindow.String(), "until": until.UTC().Format(time.RFC3339),
+		})
+	}
 }
 
 // canonPrincipal is principal as the contacts file keys it: a local user
@@ -143,6 +182,8 @@ type tries struct {
 	mu     sync.Mutex
 	wrong  map[string][]time.Time
 	window time.Duration // 0: inboundTriesWindow
+	// noted: the suspension now under way was journalled (inboundAll).
+	noted bool
 }
 
 func (t *tries) span() time.Duration {
@@ -156,7 +197,11 @@ func (t *tries) span() time.Duration {
 func (t *tries) blocked(key string, limit int, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.recent(key, now)) >= limit && !mutServer("inbound_tries_unlimited")
+	b := len(t.recent(key, now)) >= limit && !mutServer("inbound_tries_unlimited")
+	if !b {
+		t.noted = false // a later suspension is a new one
+	}
+	return b
 }
 
 func (t *tries) fail(p string, now time.Time) {
@@ -264,8 +309,13 @@ func (s *Server) checkInbound(kind string) preStep {
 				// Nothing is said back to a number nobody here has.
 				return refuseWith(r, auditTarget{}, http.StatusForbidden, "the sender is not an SMS contact on this controller", "", true)
 			case len(callers) > 1:
-				return refuseWith(r, auditTarget{}, http.StatusForbidden, "the sender's number is the SMS contact of more than one person here",
-					"Not acknowledged: this number belongs to more than one person on the controller. Acknowledge from the link or the HMI.", true)
+				reply, key, now := "Not acknowledged: this number belongs to more than one person on the controller. Acknowledge from the link or the HMI.", "shared:"+strings.Join(callers, ","), time.Now()
+				if s.inboundReplies.blocked(key, inboundReplies, now) {
+					reply = ""
+				} else {
+					s.inboundReplies.fail(key, now)
+				}
+				return refuseWith(r, auditTarget{}, http.StatusForbidden, "the sender's number is the SMS contact of more than one person here", reply, true)
 			}
 			p := canonPrincipal(callers[0])
 			who := r.WithContext(context.WithValue(r.Context(), actorKey{}, actor{pr: linkPrincipal(p)}))
@@ -302,9 +352,14 @@ func (s *Server) checkInbound(kind string) preStep {
 				reason, reply := "the code matches no alarm waiting on this person", "Not acknowledged: that code matches no alarm waiting on you."
 				if errors.Is(err, acklink.ErrAmbiguous) {
 					reason, reply = "the code matches more than one alarm", "Not acknowledged: that code matches more than one alarm. Acknowledge from the link or the HMI."
+				} else if _, done := s.ackLinks.MatchCode(code, p, s.answered(p)); done == nil && !mutServer("inbound_stale_code_counted") {
+					// A good code for an occurrence acknowledged since (the
+					// other person paged got there first): not a guess.
+					reason, reply = "the code's alarm was already acknowledged", "That alarm was already acknowledged."
 				} else {
 					s.inboundTries.fail(p, now)
 					s.inboundAll.fail(everyoneKey, now)
+					s.noteSuspended(now)
 				}
 				return refuseSender(http.StatusForbidden, reason, reply)
 			}
@@ -356,6 +411,29 @@ func (s *Server) standing(p string) []acklink.Standing {
 			continue
 		}
 		if s.inbound != nil && s.inbound.MayPage != nil && !s.inbound.MayPage(rec, p, "sms") && !mutServer("inbound_any_alarm") {
+			continue
+		}
+		st := acklink.Standing{Alarm: rec.ID, Occ: rec.Occurrence}
+		if rec.ActiveMs > 0 {
+			st.Since = time.UnixMilli(rec.ActiveMs)
+		}
+		out = append(out, st)
+	}
+	return out
+}
+
+// answered is every occurrence acknowledged now whose escalation can page
+// p by SMS: a code for one is stale, not a guess.
+func (s *Server) answered(p string) []acklink.Standing {
+	if s.alarms == nil {
+		return nil
+	}
+	var out []acklink.Standing
+	for _, rec := range s.alarms.Records() {
+		if rec.Occurrence == "" || rec.State == alarm.UnackActive || rec.State == alarm.UnackRTN {
+			continue
+		}
+		if s.inbound != nil && s.inbound.MayPage != nil && !s.inbound.MayPage(rec, p, "sms") {
 			continue
 		}
 		st := acklink.Standing{Alarm: rec.ID, Occ: rec.Occurrence}

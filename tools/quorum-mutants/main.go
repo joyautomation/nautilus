@@ -469,6 +469,8 @@ var table = []mutation{
 	{"inbound_no_global_budget", []string{"TestInboundWrongCodesAreLimited"}},
 	{"inbound_any_alarm", []string{"TestInboundCodesOnlyForAlarmsThatPageThePerson"}},
 	{"inbound_unknown_as_refused", []string{"TestInboundUnknownOutcome"}},
+	{"sms_ack_offered_while_suspended", []string{"TestSMSAckSuspended"}},
+	{"inbound_stale_code_counted", []string{"TestInboundSMSAcks"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -589,6 +591,8 @@ var rowPkgs = map[string][]string{
 	"inbound_no_global_budget":          {"./server"},
 	"inbound_any_alarm":                 {"./server"},
 	"inbound_unknown_as_refused":        {"./server"},
+	"sms_ack_offered_while_suspended":   {"./server"},
+	"inbound_stale_code_counted":        {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},
 	"redundancy_same_origin":            {"./server"},

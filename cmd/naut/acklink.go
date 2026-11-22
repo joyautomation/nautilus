@@ -222,9 +222,9 @@ func inboundOptions(proj *project.Project) *server.Inbound {
 }
 
 // mayPage is the server's Inbound.MayPage: whether an alarm's escalation
-// policy can page the person by the kind. Nil (every standing occurrence)
-// only when the escalation config cannot be had, which naut run has
-// already refused.
+// policy can page the person by the kind. Without an escalation config
+// (which naut run has already refused) it says no for every alarm: no
+// code is taken.
 func mayPage(proj *project.Project) func(alarm.Record, string, string) bool {
 	ec, err := proj.Alarms.EscalationConfig()
 	if err != nil || ec == nil {
