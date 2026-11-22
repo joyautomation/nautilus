@@ -361,3 +361,29 @@ func TestRangedTagRefusesNaNAndInfinity(t *testing.T) {
 		t.Errorf("-Inf on an open-min range: err = %v", err)
 	}
 }
+
+// A setpoint declared with `type: REAL` (or INT, BOOL) is a parameter like
+// the same setpoint with no type: it was silently left out of /api/parameters
+// (#718 demo). A UDT, a TIME and a STRING are not parameters.
+func TestTypedScalarSetpointIsAParameter(t *testing.T) {
+	typed := func(name, typ string, init any) TagDef {
+		d := Setpoint(name, init)
+		d.Type = typ
+		return d
+	}
+	rt, err := New(Options{
+		Program: `PROGRAM P
+VAR_EXTERNAL R : REAL; N : INT; B : BOOL; END_VAR
+END_PROGRAM`,
+		Tags: []TagDef{typed("R", "REAL", 1.5), typed("N", "INT", 3), typed("B", "BOOL", true), Setpoint("Untyped", 2.0)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"R", "N", "B", "Untyped"} {
+		param(t, rt, name) // fails the test when it is missing
+	}
+	if p := param(t, rt, "R"); p.Init != 1.5 {
+		t.Errorf("R init = %v, want 1.5", p.Init)
+	}
+}

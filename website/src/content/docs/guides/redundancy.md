@@ -280,6 +280,9 @@ never computes.
   (the account chip says "local session", and the journal records it), and is
   replicated once the log returns. A copy of the log that is not known complete
   honours only local sessions.
+  When a controller briefly refuses a request for that reason (the browser sees
+  a transient refusal), the operator is asked to sign in again and gets a local
+  session, so nobody is locked out.
 - The identity shown in `/api/cluster` comes from `POD_NAME`, and the
   proxy target from `POD_IP` — both from the downward API:
 

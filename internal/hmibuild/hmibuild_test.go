@@ -63,11 +63,25 @@ func TestBuildsTheDefaultAppFromMimics(t *testing.T) {
 	}
 	// naut's diagnostics and alarms pages, and the project's own
 	// FilterCell on the components page
-	if got := strings.Join(res.Pages, " "); got != "/ /pumps /diagnostics /log /alarms /components" {
-		t.Errorf("pages = %q, want / /pumps /diagnostics /log /alarms /components", got)
+	if got := strings.Join(res.Pages, " "); got != "/ /pumps /diagnostics /parameters /log /configuration /alarms /components" {
+		t.Errorf("pages = %q, want / /pumps /diagnostics /parameters /log /configuration /alarms /components", got)
 	}
 	if !strings.Contains(string(res.Files["index.html"]), "<title>Filter gallery</title>") {
 		t.Errorf("index.html: %s", res.Files["index.html"])
+	}
+	// the built-in screens carry the account chip (who, Sign out), the
+	// parameters list and the configuration editor (#711 #718 demo: none of
+	// them was mounted)
+	var js strings.Builder
+	for name, b := range res.Files {
+		if strings.HasSuffix(name, ".js") {
+			js.Write(b)
+		}
+	}
+	for _, want := range []string{"Sign out", "/api/parameters", "/api/config", "needs the config permission"} {
+		if !strings.Contains(js.String(), want) {
+			t.Errorf("the built default app lacks %q", want)
+		}
 	}
 }
 
@@ -202,8 +216,8 @@ func TestComponentsPageDrawsEachExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(res.Pages, " "); got != "/ /diagnostics /log /alarms /components" {
-		t.Errorf("pages = %q, want / /diagnostics /log /alarms /components", got)
+	if got := strings.Join(res.Pages, " "); got != "/ /diagnostics /parameters /log /configuration /alarms /components" {
+		t.Errorf("pages = %q, want / /diagnostics /parameters /log /configuration /alarms /components", got)
 	}
 	var all strings.Builder
 	for name, b := range res.Files {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/retain"
 )
 
@@ -115,11 +116,27 @@ func (b *paramBook) noteWrite(path, by string, val any) {
 	b.edits[name] = retain.ParamEdit{By: by, AtMs: now().UnixMilli(), Val: val}
 }
 
+// scalarParamType reports whether an IEC type name declared with `type:` is a
+// plain number or BOOL: `type: REAL` on a setpoint is a parameter like the
+// same setpoint with no type (it was silently left out, #718 demo). A UDT, a
+// TIME, a STRING and an enumeration are not (their init reads back
+// differently from what the manifest wrote).
+func scalarParamType(name string) bool {
+	t, err := st.ResolveTypeName(name, nil)
+	if err != nil || t == nil || t.Enum != nil {
+		return false
+	}
+	return t.Kind == ir.TypeBool || t.Kind == ir.TypeReal || t.Kind == ir.TypeInt
+}
+
 // initParams records each scalar setpoint's manifest init.
 func (r *Runtime) initParams(defs []TagDef) {
 	for _, d := range defs {
-		if d.Role != RoleSetpoint || d.Name == "" || d.Type != "" || d.Init == nil {
+		if d.Role != RoleSetpoint || d.Name == "" || d.Init == nil {
 			continue
+		}
+		if d.Type != "" && !scalarParamType(d.Type) {
+			continue // a UDT (or a TIME, STRING, enumeration): not a parameter
 		}
 		switch d.Init.(type) {
 		case float64, int, int64, bool:

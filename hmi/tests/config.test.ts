@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { HANDLED, sectionField, rawFields, validate, type Field, type Json, type Schema } from '../src/lib/config/schema.js';
 import { ConfigClient, classify } from '../src/lib/config/client.js';
 import { patch } from '../src/lib/config/yamlpatch.js';
-import { driverRows, deviceRows, setField, addDriver, addDevice, removeRow, overlay } from '../src/lib/config/form.js';
+import { driverRows, deviceRows, setField, addDriver, addDevice, removeRow, overlay, appliesTo, fieldsForType } from '../src/lib/config/form.js';
 
 const full = JSON.parse(readFileSync('../tools/vscode-iec/schemas/nautilus.schema.json', 'utf8')) as {
 	properties: Record<string, Schema>;
@@ -300,5 +300,34 @@ describe('config schema: the controller\'s option lists', () => {
 	it('are absent when the controller sent none', () => {
 		const prof = (sectionField(slice('devices'), 'devices').item as Field).fields?.find((f) => f.key === 'profile') as Field;
 		expect(prof.options).toBe(undefined);
+	});
+});
+
+describe('config form: a driver row offers its own type\'s settings (#711 demo)', () => {
+	const d = sectionField(slice('drivers'), 'drivers').item as Field;
+	const keys = (type: string, value: Record<string, Json> = { type }) => fieldsForType(d, type, value).map((f) => f.key);
+	it('a modbus driver does not offer host, slot, broker or the sparkplug settings', () => {
+		const k = keys('modbus');
+		for (const gone of ['host', 'slot', 'broker', 'group-id', 'state-form', 'endpoint', 'pki-dir']) expect(k.includes(gone)).toBe(false);
+		for (const kept of ['type', 'name', 'manifest', 'scan-rate', 'scan-classes', 'validate']) expect(k.includes(kept)).toBe(true);
+	});
+	it('an eip driver offers host and slot, a sparkplug host its broker, an opcua client its endpoint', () => {
+		expect(keys('eip').includes('host') && keys('eip').includes('slot')).toBe(true);
+		expect(keys('sparkplug-host').includes('broker') && !keys('sparkplug-host').includes('slot')).toBe(true);
+		expect(keys('opcua-client').includes('endpoint') && keys('opcua-client').includes('username')).toBe(true);
+	});
+	it('a setting the row already has stays, so a stray one can be seen and removed', () => {
+		expect(keys('modbus', { type: 'modbus', host: '10.0.0.5' }).includes('host')).toBe(true);
+	});
+	it('no type yet (or an unknown one) shows everything', () => {
+		expect(fieldsForType(d, undefined, {}).length).toBe((d.fields as Field[]).length);
+		expect(fieldsForType(d, 'nonsense', { type: 'nonsense' }).length).toBe((d.fields as Field[]).length);
+	});
+	it('appliesTo reads a leading list, later sentences, and nothing from prose', () => {
+		const f = (description: string) => ({ key: 'x', kind: 'string', required: false, description }) as Field;
+		const known = ['eip', 'modbus', 'opcua-client'];
+		expect(appliesTo(f('eip / modbus: poll period'), known)).toEqual(['eip', 'modbus']);
+		expect(appliesTo(f('eip: a. opcua-client: b'), known)).toEqual(['eip', 'opcua-client']);
+		expect(appliesTo(f('Names this driver: in rows'), known)).toBe(null);
 	});
 });

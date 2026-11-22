@@ -17,7 +17,9 @@ them.
 The built-in HMI has a **Log** page (the shift log): write a note, mark it a
 handover, edit your own within the hour, add an addendum to anyone's. In your own
 `hmi/` app, put `<ShiftLog />` on a page, or `<NotesPanel target={{ kind: 'tag', id: 'P101' }} />`
-on a faceplate (the kit exports both, and `NotesClient`).
+on a faceplate (the kit exports both, and `NotesClient`). The Log page also lists
+every note written on equipment, tags and alarms, each with what it is about, and
+times are shown in the browser's zone, labelled.
 
 ## Turn it on
 

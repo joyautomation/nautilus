@@ -29,12 +29,19 @@
 	let {
 		client = new ParametersClient(),
 		auto = true,
+		pollMs = 10000,
 		driftOnly = $bindable(false)
 	}: {
 		/** Default: `new ParametersClient()` (/api/parameters through the kit's fetch). */
 		client?: ParametersClient;
 		/** Read once on mount. Off, the host calls `load()` through `bind:this`. */
 		auto?: boolean;
+		/**
+		 * Read again this often (ms) while the page is visible, so a setpoint
+		 * written elsewhere (a faceplate, the API, OPC UA) shows here without
+		 * pressing Read. 0 turns it off. Reads that overlap are dropped by `load`.
+		 */
+		pollMs?: number;
 		/** Show only parameters whose plant value is not the manifest's init:. */
 		driftOnly?: boolean;
 	} = $props();
@@ -67,6 +74,11 @@
 
 	onMount(() => {
 		if (auto) void load();
+		if (!auto || pollMs <= 0) return;
+		const t = setInterval(() => {
+			if (!document.hidden && !busy) void load();
+		}, pollMs);
+		return () => clearInterval(t);
 	});
 
 	/** Take the repo's value for `which`: dry run, confirm what changes, apply. */
@@ -102,7 +114,7 @@
 	function who(p: Parameter): string {
 		if (!p.editedBy) return '';
 		const name = p.editedBy.replace(/^user:/, '');
-		return p.editedAtMs ? `${name}, ${new Date(p.editedAtMs).toLocaleString()}` : name;
+		return p.editedAtMs ? `${name}, ${new Date(p.editedAtMs).toLocaleString([], { timeZoneName: 'short' })}` : name;
 	}
 </script>
 
