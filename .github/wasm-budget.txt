@@ -1,0 +1,5 @@
+# The most bytes cmd/naut-wasm may weigh, stripped and gzipped (gzip -9, as the
+# docs image serves it). A PR that grows it past this fails ci-ok; one that
+# shrinks it lowers the number in the same diff (a ratchet). Measured at
+# 59a564af: 9,239,028. v0.22.0 was 7.27 MB; the target is that plus ~5%.
+9300000
