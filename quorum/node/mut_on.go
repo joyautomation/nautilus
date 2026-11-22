@@ -78,6 +78,8 @@ var mutations = []string{
 	"dup_answered_before_write",      // node: a clear or fence is answered before its write is durable: a crash then loses what the command reported done
 	"lower_history_peer_synced",      // node: a peer's log at a lower or forked history is one to defer and yield to (#1029 3c-3c-2a)
 	"contacts_part_users",            // node: the alarm contacts' credMAC uses the users part's label, so a users MAC verifies as contacts (#715)
+	"recommission_beside_live",       // node: recommission goes ahead while a voter hears another live boot of this controller's name (#1029 3c-3c-2b)
+	"live_check_witness_skipped",     // node: recommission's live-copy check skips a witness that does not answer it (#1207 review)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

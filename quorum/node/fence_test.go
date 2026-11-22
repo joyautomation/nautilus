@@ -208,13 +208,16 @@ func TestARecommissionProposesAboveTheFence(t *testing.T) {
 	}
 	b := c.start("b")
 	c.waitFor("b to hear the witness", leases(20), func() bool { return b.Status().WitnessIncarnation != 0 })
+	// Past a lease and D: b's previous boot is out of the witness's live
+	// boots (recommission refuses beside one, #1029 3c-3c-2b).
+	time.Sleep(leases(2))
 	probe, _ := b.RecommissionChecked(opCtx(t), "op", RecommissionRequest{})
 	fence := probe.Members[2].Fence
 	if fence == 0 {
 		t.Fatalf("the witness reports no fence: %+v", probe.Members[2])
 	}
-	if _, err := b.RecommissionChecked(opCtx(t), "op", RecommissionRequest{Floor: probe.Suggested}); err != nil {
-		t.Fatalf("re-commission: %v", err)
+	if rep, err := b.RecommissionChecked(opCtx(t), "op", RecommissionRequest{Floor: probe.Suggested}); err != nil {
+		t.Fatalf("re-commission: %v %s", err, rep.Refused)
 	}
 	// Recommission writes Gen one below the fence; the proposal at its
 	// next look is Gen+1.

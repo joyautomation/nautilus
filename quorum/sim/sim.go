@@ -159,6 +159,15 @@ type Options struct {
 	// only, never to a running clone (the sim before the #1113 review), for
 	// measuring against the old model.
 	PeerNeverReachesClone bool
+	// PeerLinkReachesEveryBox: the peer link reaches, and is reached
+	// from, every running box of the peer's name, not only the one that
+	// took its address (tookAddress): the handshake's Adopts go to each,
+	// and each one's frames count as the peer's. A wiped old box switched
+	// back on beside its replacement (#1029 3c-3c-2b, D1) may hold the
+	// same address; the protocol can't tell which box answers, so the D1
+	// cells run with it (the #1207 review: without it the old box never
+	// heard the peer's reply, and could never re-adopt).
+	PeerLinkReachesEveryBox bool
 }
 
 func (o *Options) defaults() {
@@ -644,25 +653,32 @@ func (w *World) tick(n *node) {
 		w.send(n.addr, W, b)
 	}
 	p, msgs, probe := n.adopt.Tick(now)
-	standby := false
+	// peer: the probe goes to the peer too, the standby's (#1029 step 1)
+	// or an uncommissioned boot's (#1029 3c-3c-2b, D1).
+	standby, peer := false, false
 	if probe == nil {
 		probe = n.cand.Probe(now) // the standby's probe of the witness (#1029 layer 2)
 		standby = probe != nil
+		peer = standby && quorum.ProbesPeer()
 	} else {
 		n.cand.Probe(now)
+		peer = quorum.AdoptProbesPeer()
 	}
 	if p != nil {
 		w.persist(n, p)
 	}
 	w.sendAdopts(n, msgs)
 	if probe != nil {
-		// Only to the witness, and not a request the candidate keeps.
+		// Not a request the candidate keeps.
 		probe.Promise = n.voter.Relay(w.local(n))
 		b, _ := probe.MarshalBinary()
 		w.viaProbe = standby
 		w.send(n.addr, W, b)
-		if standby && quorum.ProbesPeer() {
-			w.sendPeerVote(n, b) // the peer hears this boot too (#1029 step 1)
+		if peer {
+			// On the probes' draws: the adoption probe's witness copy
+			// keeps the draws it had before it reached the peer.
+			w.viaProbe = true
+			w.sendPeerVote(n, b) // the peer hears this boot too
 		}
 		w.viaProbe = false
 	}
@@ -884,7 +900,7 @@ func learnNames(a Addr) []quorum.NodeID {
 // heard its peer in the handshake, so it never switched to a rebuilt
 // witness).
 func (w *World) fromPeer(n *node, from Addr) bool {
-	return from == peerOf(n.addr) || (w.tookAddress[from] && original(from) == peerOf(n.addr))
+	return from == peerOf(n.addr) || ((w.tookAddress[from] || w.o.PeerLinkReachesEveryBox) && original(from) == peerOf(n.addr))
 }
 
 // sendAdopts sends a controller's handshake messages to its peer, over the
@@ -895,7 +911,7 @@ func (w *World) sendAdopts(n *node, msgs []quorum.Adopt) {
 		b, _ := m.MarshalBinary()
 		to := peerOf(n.addr)
 		w.send(n.addr, to, b)
-		if c := cloneOf(to); c != to && w.tookAddress[c] {
+		if c := cloneOf(to); c != to && (w.tookAddress[c] || w.o.PeerLinkReachesEveryBox) {
 			if cn := w.nodes[c]; cn != nil && cn.up {
 				w.send(n.addr, c, b)
 			}

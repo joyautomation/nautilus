@@ -265,7 +265,30 @@ func (s *Server) recommissionTarget(r *http.Request, body []byte) auditTarget {
 		}
 	}
 	b.acceptBody.detail(t.detail)
-	t.answered, t.failed = answeredReport, failedReport
+	// The report, and beside it which members answered the check for
+	// another live process of this controller's name and what was not
+	// checked (#1029 3c-3c-2b, naut-lead's ruling).
+	t.answered = func(body []byte) any {
+		v := answeredReport(body)
+		if m, ok := v.(map[string]any); ok {
+			for k, x := range liveChecked(body) {
+				m[k] = x
+			}
+		}
+		return v
+	}
+	t.failed = func(body []byte) map[string]any {
+		d := failedReport(body)
+		if lc := liveChecked(body); lc != nil {
+			if d == nil {
+				d = map[string]any{}
+			}
+			for k, x := range lc {
+				d[k] = x
+			}
+		}
+		return d
+	}
 	return t
 }
 
@@ -412,4 +435,34 @@ func writeOutcome(w http.ResponseWriter, report any, outcome, reason string) {
 		out["error"] = reason
 	}
 	writeJSON(w, code, out)
+}
+
+// liveChecked reads a recommission answer's live-copy check
+// (node.RecommissionReport.Live, LiveUnchecked): the members that
+// answered it, and what was not checked. Nil when the command made none.
+func liveChecked(body []byte) map[string]any {
+	var ans struct {
+		Report struct {
+			Live []struct {
+				Member  string `json:"member"`
+				Err     string `json:"error"`
+				Refused string `json:"refused"`
+			} `json:"live"`
+			LiveUnchecked []string `json:"liveUnchecked"`
+		} `json:"report"`
+	}
+	if json.Unmarshal(body, &ans) != nil || len(ans.Report.Live) == 0 {
+		return nil
+	}
+	answered := []string{}
+	for _, a := range ans.Report.Live {
+		if a.Err == "" && a.Refused == "" {
+			answered = append(answered, a.Member)
+		}
+	}
+	d := map[string]any{"liveAnswered": answered}
+	if len(ans.Report.LiveUnchecked) > 0 {
+		d["liveUnchecked"] = ans.Report.LiveUnchecked
+	}
+	return d
 }

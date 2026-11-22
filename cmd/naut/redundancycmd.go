@@ -642,6 +642,9 @@ func printRecommissionAnswer(w io.Writer, code int, b []byte) {
 		}
 		fmt.Fprintf(bw, "highest term known: %d; a floor above it: %d\n", ans.Report.Evidence, ans.Report.Suggested)
 	}
+	for _, u := range ans.Report.LiveUnchecked {
+		fmt.Fprintf(bw, "not checked: %s\n", u)
+	}
 	if ans.Outcome != "done" {
 		fmt.Fprintf(bw, "REFUSED, nothing changed: %s\n", ans.Error)
 		return

@@ -331,6 +331,14 @@ var Mutations = []string{
 	"inbound_unknown_as_refused",        // server: an inbound ack the pair's log did not confirm is journalled as refused (#715)
 	"sms_ack_offered_while_suspended",   // server: an SMS page offers a reply code while SMS acknowledgements are suspended (#715)
 	"inbound_stale_code_counted",        // server: a good code for an occurrence acknowledged since counts as a wrong code (#715)
+	"adopt_probe_unseq",                 // an uncommissioned boot's adoption probe carries no Seq, so no voter notes its boot (#1029 3c-3c-2b, D1)
+	"adopt_probe_witness_only",          // an uncommissioned boot's adoption probe goes to the witness only, not the peer (#1029 3c-3c-2b, D1)
+	"peer_takes_beside_live",            // a commissioned controller takes an uncommissioned peer boot's re-adoption while its voter hears another live boot of the name (#1029 3c-3c-2b, D1)
+	"recommission_beside_live",          // node: recommission goes ahead while a voter hears another live boot of this controller's name (#1029 3c-3c-2b)
+	"live_check_witness_skipped",        // node: recommission's live-copy check skips a witness that does not answer it (#1207 review)
+	"empty_pair_needs_accept",           // oplog: a new pair's vouch after a restart needs --accept-loss though no copy holds anything (#1029 3c-3c-2b, S2)
+	"set_aside_forgotten",               // oplog: a second identity change before a copy synced forgets the first one's set-aside log (#1207 re-check)
+	"empty_pair_unchecked",              // oplog: the plain vouch for a new pair skips its four conditions (#1029 3c-3c-2b, S2)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

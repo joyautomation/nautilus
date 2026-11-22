@@ -265,6 +265,13 @@ type RecommissionReport struct {
 	VouchRefused string          `json:"vouchRefused,omitempty"`
 	Picture      json.RawMessage `json:"picture,omitempty"`
 	Refused      string          `json:"refused,omitempty"`
+	// Live is the peer's and the witness's answer to whether they hear
+	// another live boot of this controller's name (liveCopyCheck), and
+	// LiveUnchecked says what could not be checked: each member that did
+	// not answer, so a live copy reachable only through it is not ruled
+	// out (naut-lead's ruling on #1029 3c-3c-2b: tell the person).
+	Live          []DupAnswer `json:"live,omitempty"`
+	LiveUnchecked []string    `json:"liveUnchecked,omitempty"`
 }
 
 // RecommissionChecked is the operator's recommission (#1029 3c-3c): the
@@ -285,6 +292,13 @@ func (e *Elector) RecommissionChecked(ctx context.Context, by string, req Recomm
 	var who string
 	rep.Evidence, who, rep.Unheard = floorEvidence(rep.Members)
 	rep.Suggested = rep.Evidence + commissionMargin
+	if !self.Commissioned {
+		var why string
+		rep.Live, rep.LiveUnchecked, why = e.liveCopyCheck(ctx)
+		if why != "" {
+			return refuse("%s", why)
+		}
+	}
 	if why := recommissionRefusal(self, wit, rep.Evidence, who, rep.Unheard, req); why != "" {
 		return refuse("%s", why)
 	}
@@ -298,6 +312,55 @@ func (e *Elector) RecommissionChecked(ctx context.Context, by string, req Recomm
 		return rep, ErrCommandRefused
 	}
 	return rep, nil
+}
+
+// liveCopyCheck asks the peer's and the witness's voters which boots of
+// this controller's name they heard within a lease and D, and refuses
+// when one names a boot other than this one (#1029 3c-3c-2b): another
+// process of the name runs, perhaps the box that replaced this one (a
+// wiped old box switched back on beside it). Re-commissioning here would
+// make two commissioned controllers of one name. This boot's own probes
+// carry its sequence (D1's fix), so the voters hear it too: it is not
+// counted. A voter that started under a lease and D ago can't say, and
+// refuses (fail closed), and so does a witness that does not answer (it
+// must answer anyway, recommissionRefusal). A peer that does not answer
+// is not counted (a peer that is down is the both-lost case): it is named
+// in unchecked instead, for the person to check that the old box is off
+// (naut-lead's ruling).
+func (e *Elector) liveCopyCheck(ctx context.Context) (live []DupAnswer, unchecked []string, refused string) {
+	if mut("recommission_beside_live") {
+		return nil, nil, ""
+	}
+	name := string(e.o.Self)
+	q := dupOp{Op: "check", Name: name}
+	live = []DupAnswer{e.dupRemote(ctx, string(e.o.Peer), e.peer, q), e.dupRemote(ctx, "witness", e.wit, q)}
+	var hearing []string
+	for _, a := range live {
+		if a.Refused != "" {
+			return live, nil, a.Refused // a voter started too lately to say (fail closed)
+		}
+		if a.Err != "" && a.Member == "witness" && !mut("live_check_witness_skipped") {
+			// The witness must answer (recommissionRefusal): a check it
+			// missed after its state answered is no "none" (the #1207
+			// review, fail closed).
+			return live, nil, "the witness must answer the check for another process of this name: " + a.Err
+		}
+		if a.Err != "" {
+			unchecked = append(unchecked, fmt.Sprintf("%s did not answer: a live copy of %s reachable only through %s can't be ruled out; check that the old box is off", a.Member, name, a.Member))
+			continue
+		}
+		for _, b := range a.Boots {
+			if b != e.nonce {
+				hearing = append(hearing, fmt.Sprintf("%s (boot %x)", a.Member, b))
+				break
+			}
+		}
+	}
+	if len(hearing) == 0 {
+		return live, unchecked, ""
+	}
+	return live, unchecked, fmt.Sprintf("%s hear(s) another process named %s within the last lease and a quarter: a controller the voters count as %s runs beside this one, perhaps the box that replaced it (or this box's previous boot, if it restarted just now). Re-commissioning here would make two. If the other box is the member, switch this one off; if this box is to be the member, stop the other, confirm it is down (powered off, or its process ended), and run this again a lease and a quarter later",
+		strings.Join(hearing, " and "), name, name)
 }
 
 // floorEvidence is the highest term any member that answered knows, who

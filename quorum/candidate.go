@@ -397,6 +397,14 @@ func (c *Candidate) PushProbe(now Instant) *Request {
 // boot of its name any voter sees.
 func ProbesPeer() bool { return !mut("standby_probes_witness_only") }
 
+// AdoptProbesPeer reports whether a driver sends an uncommissioned boot's
+// adoption probe (Adoption.Tick's) to its peer as well as to the witness.
+// It does (#1029 3c-3c-2b, D1): a wiped old box beside its replacement
+// that reached only the witness would leave the peer's voter blind to it,
+// and once a split moved the box to the peer's side, nobody there would
+// have marked its name.
+func AdoptProbesPeer() bool { return !mut("adopt_probe_witness_only") }
+
 // NoteMark takes whether one of this candidate's voters marks its name a
 // confirmed duplicate (Reply.Marked), from every reply meant for this
 // boot, a relay probe's included: the driver calls it before handing the

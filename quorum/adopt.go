@@ -300,6 +300,15 @@ func (a *Adoption) Tick(now Instant) (*Persist, []Adopt, *Request) {
 	var probe *Request
 	if st.Incarnation == 0 {
 		probe = &Request{From: a.self, Nonce: a.c.cfg.Nonce, Fences: a.v.Fences(), Uncommissioned: true}
+		// It carries the candidate's next sequence number, like any
+		// probe (#1029 3c-3c-2b, D1): a voter notes a boot only from a
+		// frame with Seq > 0, and a wiped box back beside its
+		// replacement sends nothing else, so with Seq 0 no voter ever
+		// held it as a second boot of the name and none marked it.
+		if !mut("adopt_probe_unseq") {
+			a.c.seq++
+			probe.Seq = a.c.seq
+		}
 	}
 	if len(a.held) > 0 {
 		return nil, nil, probe // a message waits for its write; it goes then
@@ -469,6 +478,23 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 			}
 			if !fresh || !a.heardAt(m.Incarnation) || !ok {
 				accept = false
+			}
+		}
+		// A commissioned controller takes an uncommissioned peer boot's
+		// re-adoption only while its own voter hears no other live boot
+		// of the peer's name (#1029 3c-3c-2b, D1). A wiped old box back
+		// beside its replacement would otherwise be re-adopted here at
+		// once, before any voter had marked the name, and then lead on
+		// its side of a split while the replacement leads on the other.
+		// The cost: a controller that lost its file re-adopts only once
+		// its previous boot has aged out of this voter's live boots
+		// (measured: p50 1.3 s, p99 2.5 s at a 2 s lease, against 0.26 s
+		// before), and is never marked for it.
+		if accept && st.Incarnation != 0 && m.CommitInc == 0 && !mut("peer_takes_beside_live") {
+			for _, b := range a.v.LiveBoots(now, a.peer) {
+				if b != m.Nonce {
+					accept = false
+				}
 			}
 		}
 		if !accept {

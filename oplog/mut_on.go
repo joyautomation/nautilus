@@ -112,7 +112,16 @@ import "os"
 //     no longer be true);
 //   - vouch_keeps_term_synced: a vouch on a leader caught up for its term
 //     waits for its next term to use the one-shot (a fork chosen there
-//     stays a fork).
+//     stays a fork);
+//   - empty_pair_needs_accept: a new pair's synced copy alone (every copy
+//     answering, none lost, all at history 0, every log empty) still needs
+//     --accept-loss, as after a controller's restart before its first
+//     catch-up (#1029 3c-3c-2b, S2);
+//   - set_aside_forgotten: a second identity change before a copy synced
+//     forgets the first one's set-aside log (#1207 re-check);
+//   - empty_pair_unchecked: the plain vouch for a new pair skips its four
+//     conditions, so a copy silent, lost, at a history or holding entries
+//     is overridden without --accept-loss.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutOplog(name string) bool { return name == mutOn }
