@@ -511,6 +511,6 @@ p{margin:.75rem 0;font-size:.9rem}
 <button type="submit">Acknowledge</button>
 </form>
 <p>The link works once, until {{.Expires}}.</p>{{end}}{{end}}
-{{if .Home}}<p><a href="{{.Home}}">Open the HMI</a></p>{{end}}
+{{if .Home}}<p><a href="{{.Home}}" rel="noreferrer">Open the HMI</a></p>{{end}}
 </main></body></html>
 `))

@@ -157,11 +157,26 @@ func TestPushPageCarriesItsLinkAndFits(t *testing.T) {
 	if err := json.Unmarshal(pageBody(m), &p); err != nil || p.Ack != m.AckURL || p.Name != "" {
 		t.Fatalf("a long link: kept %v, name %q: %v", p.Ack == m.AckURL, p.Name, err)
 	}
+	// A name of characters JSON would escape for HTML is not six times
+	// its length: it is cut, not dropped.
+	m.AckURL = link
+	m.Alarm.Name, m.Alarm.Area = strings.Repeat("<", 2000), strings.Repeat("&", 2000)
+	p = pushPayload{}
+	if err := json.Unmarshal(pageBody(m), &p); err != nil || len(p.Name) != pageFieldMax || len(p.Area) != pageFieldMax || p.Ack != link {
+		t.Fatalf("escaped words: name %d area %d bytes, link kept %v: %v", len(p.Name), len(p.Area), p.Ack == link, err)
+	}
 	// One that cannot fit at all: the page goes without it.
 	m.AckURL = "https://hmi.example/alarm-ack/" + strings.Repeat("t", webpush.MaxPayload)
 	b = pageBody(m)
 	p = pushPayload{}
 	if err := json.Unmarshal(b, &p); err != nil || len(b) > webpush.MaxPayload || p.Ack != "" || p.Alarm != "Hi" {
 		t.Fatalf("an oversize link: %d bytes, ack kept %v: %v", len(b), p.Ack != "", err)
+	}
+	// An id that alone is too long: the page still goes, its id cut.
+	m.Alarm.ID = strings.Repeat("<", webpush.MaxPayload)
+	b = pageBody(m)
+	p = pushPayload{}
+	if err := json.Unmarshal(b, &p); err != nil || len(b) > webpush.MaxPayload || p.Alarm == "" {
+		t.Fatalf("an oversize id: %d bytes, id %d: %v", len(b), len(p.Alarm), err)
 	}
 }

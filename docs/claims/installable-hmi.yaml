@@ -14,14 +14,17 @@ claims:
   - id: PWA-002
     claim: >-
       Tapping a notification never acknowledges by itself: the worker never
-      calls the controller from a tap. A page with an ack link opens that
-      link's acknowledge page in a window of its own, leaving the open HMI
-      where it was; Open alarms, and a page without a link, open the alarms
-      page.
+      calls the controller from a tap. A page with an ack link asks the
+      browser for a new window on that link's acknowledge page, and does not
+      send the open HMI window there; Open alarms, and a page without a
+      link, open the alarms page.
     source: "#notifications-alarms-on-a-phone"
     tests:
       - go ./internal/hmibuild TestPWAWorkerClickOpensTheAlarmsAndActsOnNothing
       - go ./internal/hmibuild TestPWAWorkerTapOpensTheAckPage
+    note: >-
+      Tested in a JavaScript harness of the worker; what a browser or an
+      installed app does with clients.openWindow is not tested.
 
   - id: PWA-004
     claim: >-

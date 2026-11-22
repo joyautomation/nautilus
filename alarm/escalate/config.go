@@ -34,6 +34,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/joyautomation/nautilus/alarm"
 )
@@ -149,8 +150,13 @@ func (o *Oncall) prepareAck() error {
 		return nil
 	}
 	u, err := url.Parse(o.AckURL)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
-		return fmt.Errorf("alarms.oncall.ack-url: %q is not a plain URL of the HMI (want e.g. https://hmi.plant.example:8443, no query, no user)", o.AckURL)
+	// A link is ack-url + /alarm-ack/<token> as written, and a phone's
+	// worker takes it only in that plain shape (a lower-case scheme, no @,
+	// no space or control character): one it would not take makes every
+	// push page arrive with no link.
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" ||
+		!strings.HasPrefix(o.AckURL, u.Scheme+"://") || strings.ContainsFunc(o.AckURL, func(r rune) bool { return r == '@' || r == '\\' || unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return fmt.Errorf("alarms.oncall.ack-url: %q is not a plain URL of the HMI (want e.g. https://hmi.plant.example:8443, a lower-case scheme, no query, no user, no @, no spaces)", o.AckURL)
 	}
 	switch u.Scheme {
 	case "https":

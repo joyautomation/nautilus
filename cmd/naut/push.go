@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -118,19 +119,34 @@ func pageBody(m escalate.Message) []byte {
 		Alarm: r.ID, Name: cutUTF8(r.Name, pageFieldMax), State: string(r.State), Priority: fmt.Sprint(r.Priority),
 		Area: cutUTF8(r.Area, pageFieldMax), AtMs: r.ActiveMs, Level: m.Level, Ack: m.AckURL,
 	}
-	b, _ := json.Marshal(p)
+	b := pageJSON(p)
 	// What a push cannot carry is dropped, least useful first: the words,
-	// then the link. The page itself always goes (a person who cannot tap
-	// to acknowledge can still open the HMI).
+	// then the link, then most of an id that alone is too long. The page
+	// itself always goes (a person who cannot tap to acknowledge can still
+	// open the HMI).
 	if len(b) > webpush.MaxPayload {
 		p.Name, p.Area = "", ""
-		b, _ = json.Marshal(p)
+		b = pageJSON(p)
 	}
 	if len(b) > webpush.MaxPayload {
 		p.Ack = ""
-		b, _ = json.Marshal(p)
+		b = pageJSON(p)
+	}
+	if len(b) > webpush.MaxPayload {
+		p.Alarm = cutUTF8(p.Alarm, pageFieldMax)
+		b = pageJSON(p)
 	}
 	return b
+}
+
+// pageJSON is p as JSON without HTML escaping: a < in a name is one byte
+// of the page, not six.
+func pageJSON(p pushPayload) []byte {
+	var buf bytes.Buffer
+	e := json.NewEncoder(&buf)
+	e.SetEscapeHTML(false)
+	_ = e.Encode(p)
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
 // cutUTF8 is s cut to at most n bytes on a character boundary.

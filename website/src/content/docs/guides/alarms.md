@@ -633,13 +633,19 @@ alarms:
   address always is): `naut check` warns when the manifest does not list
   it.
 - **A push carries its link inside the encrypted page:** the push service
-  never sees it. Tapping the notification opens the link's page in a
-  window of its own (the HMI you had open stays where it was), and you
-  press **Acknowledge** there, so a tap on a lock screen by mistake
-  acknowledges nothing. Where the phone shows actions, **Open alarms**
-  goes to the HMI's alarms instead. With no `ack-url`, or for an alarm
-  that needs no acknowledgement, a tap opens the alarms. The page has a
-  link back to the HMI.
+  never sees it. Tapping the notification asks the browser for a new
+  window on the link's page (the worker does not send the HMI you had
+  open there), and you press **Acknowledge** there, so a tap on a lock
+  screen by mistake acknowledges nothing. Where the phone shows actions,
+  **Open alarms** goes to the HMI's alarms instead. With no `ack-url`, or
+  for an alarm that needs no acknowledgement, a tap opens the alarms. The
+  page has a link back to the HMI. A push page always fits one push: a
+  long name or area is cut, and if the page is still too big the words
+  are left out, then the link, never the page. **A phone's subscription
+  outlives signing out,** so on a shared device whoever taps the page can
+  press Acknowledge as the person paged, as with an email on a shared
+  inbox: turn notifications off there, or use
+  `ack-from-notification: sign-in`.
 - **A voice call carries no link,** and neither does a webhook: it goes
   to a system, which must not act as the person. A call can take a
   keypress instead (below).

@@ -119,7 +119,7 @@ func TestAckLinkFromAPush(t *testing.T) {
 	u := s.AckLinkURL("HiTemp", occOf(t, s.alarms, "HiTemp").Occurrence, "alice", "push", 1)
 	path := strings.TrimPrefix(u, "https://hmi.example")
 	rec := call(t, s, "GET", path, "", func(r *http.Request) { r.Header.Set("Sec-Fetch-Mode", "navigate") })
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `<form method="post">`) || !strings.Contains(rec.Body.String(), `<a href="https://hmi.example">Open the HMI</a>`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `<form method="post">`) || !strings.Contains(rec.Body.String(), `<a href="https://hmi.example" rel="noreferrer">Open the HMI</a>`) {
 		t.Fatalf("confirm page: %d\n%s", rec.Code, rec.Body)
 	}
 	rec = call(t, s, "POST", path, "")

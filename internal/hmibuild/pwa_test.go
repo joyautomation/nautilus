@@ -194,9 +194,13 @@ func newSWWith(t *testing.T, files map[string][]byte) *swHarness {
 			skipWaiting: function () { return Promise.resolve(); },
 			addEventListener: function (n, f) { handlers[n] = f; } };
 		var claimed = false;
+		// as a browser's: any scheme parses; one with no scheme throws
 		function URL(u) {
-			var m = /^(https?:\/\/[^\/]+)(\/[^?#]*)?/.exec(u);
-			this.origin = m[1]; this.pathname = m[2] || '/';
+			var m = /^([A-Za-z][A-Za-z0-9+.-]*):(\/\/([^\/?#]*))?([^?#]*)/.exec(u);
+			if (!m) throw new TypeError('Invalid URL: ' + u);
+			this.protocol = m[1].toLowerCase() + ':';
+			this.origin = m[2] ? this.protocol + '//' + m[3] : 'null';
+			this.pathname = m[4] || '/';
 		}
 		var console = { error: function () { errors.push(Array.prototype.join.call(arguments, ' ')); } };
 		var errors = [];
@@ -682,9 +686,13 @@ func TestPWAWorkerClickOpensTheAlarmsAndActsOnNothing(t *testing.T) {
 // else in it is ignored and the page shows as one without a link.
 func TestPWAWorkerTakesOnlyAnAckLink(t *testing.T) {
 	for link, ok := range map[string]bool{
-		"https://hmi.example/alarm-ack/AbC_-09":                      true,
-		"https://hmi.example:8443/plant1/alarm-ack/AbC":              true,
-		"http://10.0.0.5:8080/alarm-ack/AbC":                         true, // ack-url-insecure
+		"https://hmi.example/alarm-ack/AbC_-09":         true,
+		"https://hmi.example:8443/plant1/alarm-ack/AbC": true,
+		"http://10.0.0.5:8080/alarm-ack/AbC":            true, // ack-url-insecure
+		// every other shape alarms.oncall.ack-url accepts (prepareAck)
+		"https://[fd00::1]:8443/alarm-ack/AbC":                       true,
+		"https://hmi.example/a/b-c_d.e/alarm-ack/AbC":                true,
+		"https://hmi.example/plant%201/alarm-ack/AbC":                true,
 		"javascript:alert(1)//alarm-ack/x":                           false,
 		"https://evil.example/login":                                 false,
 		"https://hmi.example/alarm-ack/":                             false,
@@ -696,6 +704,21 @@ func TestPWAWorkerTakesOnlyAnAckLink(t *testing.T) {
 		"/alarm-ack/a":                                               false,
 		"data:text/html,<p>/alarm-ack/a":                             false,
 		"https://hmi.example/alarm-ack/" + strings.Repeat("a", 5000): false,
+		// anchored at both ends, http(s) only, nothing between the
+		// host and /alarm-ack/ but a path (Fable review on #1229)
+		"ftp://h/alarm-ack/a":                    false,
+		"javascript:void//https://h/alarm-ack/a": false,
+		"web+x:https://h/alarm-ack/a":            false,
+		"intent://h/alarm-ack/a":                 false,
+		"x https://h/alarm-ack/a":                false,
+		"javascript:'https://h/alarm-ack/a'":     false,
+		"https://h/?u=/alarm-ack/a":              false,
+		"https://h#/alarm-ack/a":                 false,
+		"https://h/p@q/alarm-ack/a":              false,
+		"HTTPS://h/alarm-ack/a":                  false,
+		"https://h\\evil/alarm-ack/a":            false,
+		"https://h\u0001x/alarm-ack/a":           false,
+		"https://h/p\u007f/alarm-ack/a":          false,
 	} {
 		h := pushHarness(t)
 		h.vm.Set("link", link)
@@ -762,6 +785,14 @@ func TestPWAWorkerTapOpensTheAckPage(t *testing.T) {
 	tap(h, "alarms")
 	if h.run(t, `navigated.join(',')`).String() != "/alarms" || h.run(t, `opened.length`).ToInteger() != 0 {
 		t.Errorf("Open alarms: navigated %v opened %v", h.run(t, `navigated`), h.run(t, `opened`))
+	}
+	// A window the platform refuses: the notification is gone, so the
+	// alarms open instead of nothing.
+	h = pushHarness(t)
+	h.run(t, `var tries = 0; self.clients.openWindow = function (u) { tries++; if (tries === 1) return Promise.reject(new TypeError('refused')); opened.push(u); return Promise.resolve({}); }`)
+	tap(h, "")
+	if got := h.run(t, `opened.join(',')`).String(); got != "/alarms" {
+		t.Errorf("a refused window: opened %q, want the alarms", got)
 	}
 	// Data that names a link describe() would not take is not opened.
 	h = pushHarness(t)

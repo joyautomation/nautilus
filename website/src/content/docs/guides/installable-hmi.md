@@ -110,9 +110,12 @@ It says plainly when it cannot:
 Each alarm that pages you shows as `HIGH: <alarm name>` with its state, area
 and time. A second page for the same alarm replaces the first. When the
 controller sends ack links (`alarms.oncall.ack-url`), the page says **Tap to
-acknowledge**: tapping it opens that alarm's acknowledge page in a window of
-its own, and you press **Acknowledge** there (the tap alone never
-acknowledges, and the worker never acts on an alarm itself). **Open alarms**,
+acknowledge**: tapping it asks the browser for a new window on that alarm's
+acknowledge page, and you press **Acknowledge** there (the tap alone never
+acknowledges, and the worker never acts on an alarm itself). The worker
+takes the link only as the controller's `/alarm-ack/<token>` under an
+`http(s)` address; anything else in a page is ignored, and the page shows
+as one without a link. **Open alarms**,
 where the phone shows actions, goes to the alarms page. Without ack links, or
 for an alarm that needs no acknowledgement, tapping opens the alarms page
 (`/alarms`). [Alarms](/guides/alarms/#acknowledging-from-the-page) has what
@@ -121,7 +124,10 @@ removes your other devices.
 
 What it will not do: it ends with a password change, a removed or disabled
 user or a revoked role (sign in and turn it on again), not when you sign out,
-and it needs the push service to be reachable from the controller.
+and it needs the push service to be reachable from the controller. Because it
+outlives signing out, turn it off on a shared device: with ack links, whoever
+taps a page there can acknowledge as you (unless the site sets
+`ack-from-notification: sign-in`).
 
 **What has been verified:** the controller's half against a fake push service
 that decrypts, and the worker and the card in Chromium. The ack-link tap

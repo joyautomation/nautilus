@@ -293,7 +293,7 @@ self.addEventListener('activate', (e) => {
 // /alarm-ack/<token> under its ack-url, which may carry a path. Anything
 // else in it is ignored, so a tap only ever opens an ack link or the
 // alarms.
-const ACK = /^https?:\/\/[^\/?#@\s]+(\/[^?#@\s]*)?\/alarm-ack\/[A-Za-z0-9_-]+$/;
+const ACK = /^https?:\/\/[^\/?#@\\\s\x00-\x1f\x7f]+(\/[^?#@\\\s\x00-\x1f\x7f]*)?\/alarm-ack\/[A-Za-z0-9_-]+$/;
 
 function ackLink(v) {
 	return typeof v === 'string' && v.length <= 4096 && ACK.test(v) ? v : '';
@@ -347,7 +347,8 @@ self.addEventListener('notificationclick', (e) => {
 	const data = e.notification.data || {};
 	const ack = e.action === 'alarms' ? '' : ackLink(data.ack);
 	if (ack) {
-		e.waitUntil(self.clients.openWindow(ack));
+		// the notification is gone: a window refused still leaves the alarms
+		e.waitUntil(self.clients.openWindow(ack).catch(() => self.clients.openWindow('/alarms')));
 		return;
 	}
 	const url = data.url || '/alarms';
