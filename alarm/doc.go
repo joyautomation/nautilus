@@ -26,8 +26,8 @@
 //
 //   - Journal records what happened (RingJournal in memory, FileJournal as
 //     rotated JSONL, MultiJournal fanning out; package alarm/pgjournal keeps
-//     it in Postgres) and
-//     Notifier ships it somewhere (LogNotifier, WebhookNotifier). Both run
+//     it in Postgres) and Notifier ships it somewhere (LogNotifier,
+//     WebhookNotifier). Both run
 //     off the scan goroutine; a slow endpoint drops events with a counter
 //     rather than stalling the scan.
 //

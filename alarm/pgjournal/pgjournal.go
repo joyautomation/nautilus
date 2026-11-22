@@ -1,7 +1,7 @@
 // Package pgjournal keeps the alarm journal in Postgres (alarms.journal.sink:
 // postgres). It is its own package so that only the controller links
 // database/sql and the driver: cmd/naut registers it with the manifest
-// (project.RegisterAlarmJournal), and the playground's wasm never sees it
+// (project.RegisterAlarmPostgres), and the playground's wasm never sees it
 // (docs/design/context-map.md §2).
 package pgjournal
 
