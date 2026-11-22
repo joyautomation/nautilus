@@ -58,6 +58,10 @@ type Oncall struct {
 	// "sign-in" (the person signs in as themselves first). "" is the
 	// default.
 	AckFromNotification string `yaml:"ack-from-notification" json:"ackFromNotification,omitempty"`
+	// Inbound, when set, takes acknowledgements back through the SMS and
+	// voice provider (#715): an SMS reply "ACK <code>", a keypress on the
+	// call. Off when absent.
+	Inbound *Inbound `yaml:"inbound" json:"inbound,omitempty"`
 
 	loc *time.Location
 }
@@ -71,6 +75,57 @@ const (
 	// as the person paged, for that one occurrence, once, within a day.
 	DefaultAckFrom = AckByLink
 )
+
+// Inbound is `alarms.oncall.inbound:`: the provider (sms:, voice:
+// channels) calls the controller back with replies and keypresses.
+type Inbound struct {
+	// URL is this controller (or its pair) as the provider reaches it,
+	// https only: the provider posts SMS replies to <url>/alarm-inbound/sms
+	// (set it as the number's messaging webhook) and keypresses to the
+	// URL the call names. The provider's signature is checked against
+	// this URL, so it must be exactly what the provider calls.
+	URL string `yaml:"url" json:"url"`
+	// Channels are the kinds that take replies: sms, voice, or both.
+	Channels []string `yaml:"channels" json:"channels"`
+}
+
+// Takes reports whether inbound acknowledgements by kind are on.
+func (in *Inbound) Takes(kind string) bool {
+	return in != nil && slices.Contains(in.Channels, kind)
+}
+
+// prepareInbound checks alarms.oncall.inbound against the channels this
+// controller has.
+func (o *Oncall) prepareInbound(channels []string) error {
+	in := o.Inbound
+	if in == nil {
+		return nil
+	}
+	if o.AckFrom() == AckBySignIn {
+		return fmt.Errorf("alarms.oncall.inbound: a reply or a keypress cannot sign in, and ack-from-notification is sign-in: remove inbound, or use ack-from-notification: link")
+	}
+	u, err := url.Parse(in.URL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return fmt.Errorf("alarms.oncall.inbound.url: %q is not an https URL of this controller as the provider reaches it (want e.g. https://hmi.plant.example:8443, no query, no user)", in.URL)
+	}
+	if len(in.Channels) == 0 {
+		return fmt.Errorf("alarms.oncall.inbound.channels: name sms, voice or both")
+	}
+	seen := map[string]bool{}
+	for i, k := range in.Channels {
+		if k != "sms" && k != "voice" {
+			return fmt.Errorf("alarms.oncall.inbound.channels[%d]: %q is not sms or voice", i, k)
+		}
+		if seen[k] {
+			return fmt.Errorf("alarms.oncall.inbound.channels[%d]: %q is listed twice", i, k)
+		}
+		seen[k] = true
+		if !slices.Contains(channels, k) {
+			return fmt.Errorf("alarms.oncall.inbound.channels[%d]: %q, but alarms.channels has no %s:", i, k, k)
+		}
+	}
+	return nil
+}
 
 // AckFrom is what an ack link needs, the default filled in.
 func (o *Oncall) AckFrom() string {
@@ -227,6 +282,9 @@ func (c *Config) Prepare(channels []string) error {
 		o.loc = loc
 	}
 	if err := o.prepareAck(); err != nil {
+		return err
+	}
+	if err := o.prepareInbound(channels); err != nil {
 		return err
 	}
 	ids := map[string]bool{}

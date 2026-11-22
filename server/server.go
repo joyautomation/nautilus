@@ -303,6 +303,10 @@ type Options struct {
 	// link acknowledges only for a browser signed in as the person it was
 	// sent to. False (the default): the link alone acknowledges.
 	AckLinkSignIn bool
+	// Inbound takes acknowledgements back through the SMS and voice
+	// provider: an SMS reply's code, a call's keypress (#715, inbound.go).
+	// Nil: /alarm-inbound/ answers that this controller takes none.
+	Inbound *Inbound
 
 	// Audit is the runtime audit journal (#709): every write route records
 	// one entry per request to it, accepted or refused, before the client
@@ -612,8 +616,15 @@ type Server struct {
 	ackURL        string
 	ackLinkSignIn bool
 	links         linkBook
-	unknowns      *unknowns // proposals answered "outcome unknown", for their resolution (oplog_unknown.go)
-	audit         *auditor
+	// inbound SMS and voice acknowledgements (#715, inbound.go)
+	inbound      *Inbound
+	inboundTries tries
+	// inboundReplies counts the refusals texted to each person;
+	// inboundAll the wrong codes from anyone, over a day.
+	inboundReplies tries
+	inboundAll     tries
+	unknowns       *unknowns // proposals answered "outcome unknown", for their resolution (oplog_unknown.go)
+	audit          *auditor
 
 	resync time.Duration
 	diag   time.Duration
@@ -696,6 +707,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		onlineEdits = opts[0].OnlineEdits
 	}
 	s := &Server{
+		inboundAll:  tries{window: inboundAllWindow},
 		rt:          rt,
 		interval:    interval,
 		resync:      resync,
@@ -739,6 +751,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.subLog = opts[0].SubstituteLog
 		s.alarmLog = opts[0].AlarmLog
 		s.ackLinks, s.ackURL, s.ackLinkSignIn = opts[0].AckLinks, opts[0].AckURL, opts[0].AckLinkSignIn
+		s.inbound = opts[0].Inbound
 		s.notes, s.notesLog = opts[0].Notes, opts[0].NotesLog
 	}
 	var rec audit.Recorder
@@ -952,6 +965,11 @@ func (s *Server) Handler() http.Handler {
 	// The paths are acklink.Path (TestAckLinkRoutesAreAcklinkPath).
 	mux.HandleFunc("GET /alarm-ack/{token}", s.handleAckLinkPage)
 	mux.Handle("POST /alarm-ack/{token}", s.audited("alarm.ack", linkAuditTarget, s.handleAckLink, s.checkLink))
+	// Inbound acknowledgements (#715): the SMS and voice provider posts a
+	// reply's code or a call's keypress, signed (InboundSMSPath,
+	// InboundVoicePath; TestInboundRoutesAreTheirPaths).
+	mux.Handle("POST /alarm-inbound/sms", s.audited("alarm.ack", inboundAuditTarget, s.handleInboundAck, s.checkInbound("sms")))
+	mux.Handle("POST /alarm-inbound/voice/{token}", s.audited("alarm.ack", inboundAuditTarget, s.handleInboundAck, s.checkInbound("voice")))
 	mux.Handle("POST /api/alarms/shelve", s.audited("alarm.shelve", shelveTarget, s.handleAlarmShelve))
 	mux.Handle("POST /api/alarms/unshelve", s.audited("alarm.unshelve", unshelveTarget, s.handleAlarmUnshelve))
 	mux.HandleFunc("GET /api/stream", s.handleStream)
@@ -1070,6 +1088,15 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 		// does: a standby forwards it (the leader checks it with the same
 		// pair-derived key), and never answers it from its own engine.
 		link := strings.HasPrefix(r.URL.Path, acklink.Path) && !mutServer("link_not_forwarded")
+		// So does a provider's inbound reply or keypress: it carries its
+		// signature, which the leader checks against the same configured
+		// URL.
+		inbound := strings.HasPrefix(r.URL.Path, InboundPath) && !mutServer("inbound_not_forwarded")
+		// Answered as the provider's only on its two routes; anything else
+		// under the prefix is a plain answer.
+		inboundRoute := r.Method == http.MethodPost && (r.URL.Path == InboundSMSPath ||
+			(strings.HasPrefix(r.URL.Path, InboundVoicePath) && len(r.URL.Path) > len(InboundVoicePath) && !strings.Contains(r.URL.Path[len(InboundVoicePath):], "/")))
+		link = link || inbound
 		if (!strings.HasPrefix(r.URL.Path, "/api/") && !link) ||
 			r.URL.Path == "/api/cluster" ||
 			// The pair's operator commands act on this controller and its
@@ -1085,6 +1112,23 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			// Nobody here can act on the alarm: say so on the page, for a
 			// GET too (this store's engine does not scan).
 			const msg = "No controller is leading right now, so the alarm cannot be acknowledged from here. Try the link again in a minute, or open the HMI."
+			if inbound && inboundRoute {
+				auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
+					// A call hears why; an SMS gets nothing back: this
+					// replica has not checked the sender, and a reply would
+					// go to whatever number the request names.
+					kind, reply := "sms", ""
+					if strings.HasPrefix(r.URL.Path, InboundVoicePath) {
+						kind, reply = "voice", "Not acknowledged: no controller is leading right now. Try again in a minute, or open the HMI."
+					}
+					s.inboundRefused(w, kind, http.StatusServiceUnavailable, "no controller is leading", reply, true)
+				})
+				return
+			}
+			if inbound {
+				http.Error(w, "no controller is leading", http.StatusServiceUnavailable)
+				return
+			}
 			if r.Method == http.MethodPost {
 				auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
 					s.linkRefused(w, http.StatusServiceUnavailable, msg)

@@ -542,7 +542,8 @@ alarms:
   address always is): `naut check` warns when the manifest does not list
   it.
 - **A voice call carries no link,** and neither does a webhook: it goes
-  to a system, which must not act as the person.
+  to a system, which must not act as the person. A call can take a
+  keypress instead (below).
 - **On a redundant pair** both controllers sign links with a key they
   derive from `NAUTILUS_PEER_TOKEN`, so a link sent before a takeover
   works after it, and a link used on one is refused on the other: the
@@ -559,6 +560,83 @@ alarms:
   controller writes it to its access log, where it stays usable until it
   is used or its 24 hours run out. Keep such logs as private as the
   pages.
+
+### Replying to an SMS, pressing 1 on a call
+
+The SMS and voice provider can also bring an acknowledgement back: a
+reply to an SMS page, a keypress during the call. It is off until the
+manifest turns it on:
+
+```yaml
+alarms:
+  oncall:
+    inbound:
+      url: https://hmi.plant.example:8443   # the controller as the provider reaches it
+      channels: [sms, voice]                # either, or both
+```
+
+- **SMS.** Each SMS page then ends "Reply ACK 12345678 to acknowledge."
+  Set the number's messaging webhook at the provider to
+  `<url>/alarm-inbound/sms` (POST). A reply `ACK 12345678` (or just the
+  digits; case, spaces and dashes do not matter) acknowledges that
+  occurrence as the person the sender's number belongs to, and the
+  provider texts back "Acknowledged …". The code is the credential,
+  since a sender's number can be forged: it names one occurrence of one
+  alarm for one person, and lives for 24 hours after the page. Two pages
+  of one occurrence to one person within the same hour carry the same
+  code.
+- **Voice.** The call says "Press 1 to acknowledge." and the provider
+  posts the key to a URL the call names (no setup at the provider).
+  1 from the number called acknowledges as the person called; another
+  key does nothing.
+- **Only the provider is believed.** Every request must carry the
+  provider's signature (`X-Twilio-Signature`), under the channel's own
+  token (`sms.token`, `voice.token`), over the configured `url` plus the
+  path: never over the address the request arrived at. So `url` must be
+  exactly what the provider calls (scheme, host, port), https only, and
+  its host must be one the controller answers by (`server.allowed-hosts`;
+  `naut check` warns). A request that does not check is refused with
+  403 and journalled.
+- **Who replied.** The sender's number must be the SMS contact of exactly
+  one person in the contacts file. A number nobody has gets no answer at
+  all; a number two people share is told to use the link or the HMI.
+  A code is tried only against the alarms whose escalation can page that
+  person by SMS. Five wrong codes from one person in an hour, and their
+  codes are refused until the hour has passed; ten from anyone in a day,
+  and the controller suspends SMS acknowledgements until the oldest is a
+  day old: the system alarm `nautilus.sms-ack-suspended` stands while it
+  lasts, the audit trail records `alarm.sms-ack-suspended` once with its
+  end, and SMS pages stop offering a code (links and the HMI still
+  acknowledge). A good code for an alarm someone acknowledged since is
+  answered "already acknowledged" and does not count. So a guess hits with probability (those
+  alarms' standing occurrences × 26) / 10⁸, and there are at most ten a
+  day per controller: with 100 standing, about one in 4 000 per day of
+  sustained guessing. The counts live in memory: a restart or a takeover
+  starts them again. A person is texted at most three refusals an hour,
+  then nothing (an auto-responder cannot loop with the controller).
+- **Then it is a link.** The person must still stand here and hold `ack`
+  for the alarm; the acknowledgement takes the same path as a link (the
+  pair's operator-intent log, spent once, across a takeover), and the
+  audit entry is `alarm.ack` with `via: sms` or `via: voice`. Neither the
+  number nor the message's text is ever journalled or logged.
+- **The provider always hears 200** with a TwiML answer, a refusal too
+  (otherwise it sends no reply and plays the caller an error); the audit
+  entry keeps the refusal's own status and reason. Two answers are not
+  TwiML: a controller whose audit journal cannot be written refuses the
+  acknowledgement as it refuses any, and the caller hears the provider's
+  error. An acknowledgement the pair's log took but did not confirm in
+  time is journalled as unknown, and the reply says to check the HMI.
+  A refusal before the code matched is journalled under the person the
+  number names, marked as named by the number only.
+- **Refusals are journalled** as any refused write is: the first five a
+  minute from one address for one person in full, the rest folded into
+  one summary entry (the provider calls from a few addresses, so a flood
+  of forged requests costs the trail a summary, not a row each).
+- **While no controller leads** (an election), a reply gets no answer
+  (the standby has not checked who sent it) and a keypress hears "not
+  acknowledged"; try again in a minute.
+- **Not with `ack-from-notification: sign-in`:** a reply cannot sign in,
+  so the manifest is refused with both.
 
 Check a policy offline:
 

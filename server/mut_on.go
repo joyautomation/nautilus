@@ -52,6 +52,19 @@ import "os"
 //   - link_reason_html: a refused ack link is journalled with its page's HTML as the reason (#715);
 //   - link_acks_on_standby: a replica that does not lead acknowledges an ack link on its own engine (#715);
 //   - link_session_cookie_refused: a signed-in browser from another origin is refused on a link in link mode instead of the link alone acting (#715);
+//   - inbound_unsigned: a provider's reply or keypress is taken without its signature checking (#715);
+//   - inbound_tries_unlimited: a person who sent too many wrong reply codes is not refused (#715);
+//   - inbound_callee_unchecked: a keypress acknowledges though the call's number is not the person's (#715);
+//   - inbound_any_key: a keypress other than 1 acknowledges (#715);
+//   - inbound_status_on_wire: a refused reply or keypress answers the provider with its status instead of 200 TwiML (#715);
+//   - inbound_not_forwarded: a standby answers a provider's reply itself instead of forwarding it to the leader (#715);
+//   - voice_link_acks_here: a call's keypress URL acknowledges as an ack link (#715);
+//   - inbound_replies_unlimited: a person is texted every refusal of their replies, without limit (#715);
+//   - inbound_no_global_budget: the controller-wide budget of wrong reply codes is not enforced (#715);
+//   - inbound_any_alarm: a reply code is tried against every standing occurrence, not only those whose escalation can page the person by SMS (#715);
+//   - inbound_unknown_as_refused: an inbound ack the pair's log did not confirm is journalled as refused (#715);
+//   - sms_ack_offered_while_suspended: an SMS page offers a reply code while SMS acknowledgements are suspended (#715);
+//   - inbound_stale_code_counted: a good code for an occurrence acknowledged since counts as a wrong code (#715);
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutServer(name string) bool { return name == mutOn }

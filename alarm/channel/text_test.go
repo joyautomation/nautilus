@@ -56,3 +56,41 @@ func TestSMSKeepsTheLinkWhole(t *testing.T) {
 		t.Fatal("huge link cut")
 	}
 }
+
+// An SMS with a reply code (#715 inbound) says how to reply, and keeps the
+// code and the link whole under the cut; the code alone replaces "in the
+// HMI".
+func TestSMSCarriesTheReplyCodeWhole(t *testing.T) {
+	link := "https://hmi.example:8443/alarm-ack/" + strings.Repeat("B", 150)
+	m := linkMessage(strings.Repeat("very long alarm name ", 30), link)
+	m.AckCode = "12345678"
+	s := smsText(m)
+	if !strings.HasSuffix(s, " Reply ACK 12345678 to acknowledge. "+link) {
+		t.Fatalf("sms: %s", s)
+	}
+	if n := len([]rune(s)); n > smsMax {
+		t.Fatalf("sms is %d runes, more than %d", n, smsMax)
+	}
+	m.AckURL = ""
+	s = smsText(m)
+	if !strings.HasSuffix(s, " Reply ACK 12345678 to acknowledge.") || strings.Contains(s, "in the HMI") {
+		t.Fatalf("code only: %s", s)
+	}
+}
+
+// A call with a keypress URL wraps the message in a one-digit Gather
+// posting to it; the URL is escaped (it lands in an attribute).
+func TestVoiceGathersAKeypress(t *testing.T) {
+	m := linkMessage("Tank <high>", "")
+	if got := voiceTwiml(m); strings.Contains(got, "Gather") || !strings.Contains(got, "Acknowledge it in the HMI.") {
+		t.Fatalf("no URL: %s", got)
+	}
+	m.AckURL = `https://hmi.example/alarm-inbound/voice/tok?a=1&b="2"`
+	got := voiceTwiml(m)
+	want := `<Response><Gather numDigits="1" timeout="10" method="POST" action="https://hmi.example/alarm-inbound/voice/tok?a=1&amp;b=&#34;2&#34;">` +
+		`<Say loop="2">Alarm. Priority high. Tank &lt;high&gt;. Escalation level 2. Press 1 to acknowledge.</Say></Gather>` +
+		`<Say>Not acknowledged. Acknowledge it in the HMI.</Say></Response>`
+	if got != want {
+		t.Fatalf("twiml\n got %s\nwant %s", got, want)
+	}
+}

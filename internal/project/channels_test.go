@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/acklink"
+	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/channel/channeltest"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/alarm/oncall"
@@ -42,6 +44,15 @@ func newChannelsRig(t *testing.T, smtpOpts channeltest.SMTPOptions, contacts map
 // mints, under a key from the pair token, for email and SMS.
 func newChannelsRigLinks(t *testing.T, smtpOpts channeltest.SMTPOptions, contacts map[string]oncall.Contact, links bool) *channelsRig {
 	t.Helper()
+	return newChannelsRigWith(t, smtpOpts, contacts, links, false)
+}
+
+// newChannelsRigWith is newChannelsRigLinks that also takes SMS replies
+// (alarms.oncall.inbound, #715) when inbound is set, wired as naut run
+// wires it: the server makes the codes and checks the provider's
+// signature under sms.token, the sender found in the contacts file.
+func newChannelsRigWith(t *testing.T, smtpOpts channeltest.SMTPOptions, contacts map[string]oncall.Contact, links, inbound bool) *channelsRig {
+	t.Helper()
 	smtpOpts.User, smtpOpts.Pass = "alarms", "mail-pass-1"
 	r := &channelsRig{smtp: channeltest.NewSMTP(t, smtpOpts), sms: channeltest.NewProvider(t)}
 	manifest := alarmTags + fmt.Sprintf(`
@@ -64,6 +75,9 @@ alarms:
         - { after: 10m, notify: [roster:maint], via: [sms] }
         - { after: 30m, notify: [carol, dave], via: [email] }
 `, r.smtp.Addr, r.smtp.CAFile, r.sms.URL, r.sms.CAFile)
+	if inbound {
+		manifest = strings.Replace(manifest, "    ack-url: https://hmi.example\n", "    ack-url: https://hmi.example\n    inbound: { url: \"https://hmi.example\", channels: [sms] }\n", 1)
+	}
 	proj, err := Load(alarmFS(manifest, nil), "")
 	if err != nil {
 		t.Fatal(err)
@@ -104,6 +118,12 @@ alarms:
 			}
 			return srv.Load().AckLinkURL(m.Alarm.ID, m.Alarm.Occurrence, m.To, via, m.Level)
 		}
+		proj.AckCode = func(m escalate.Message, via string) string {
+			if via != "sms" {
+				return ""
+			}
+			return srv.Load().AckCode(m.Alarm.ID, m.Alarm.Occurrence, m.To)
+		}
 	}
 	_, rt := loadAlarmsWith(t, proj)
 	if r.a, err = proj.NewAlarms(rt); err != nil {
@@ -113,6 +133,15 @@ alarms:
 	o := server.Options{Alarms: r.a.Engine}
 	if links {
 		o.AckLinks, o.AckURL = ring, proj.Alarms.Oncall.AckURL
+	}
+	if in := proj.Alarms.Oncall.Inbound; in != nil {
+		o.Inbound = &server.Inbound{URL: in.URL, SMS: in.Takes("sms"), Voice: in.Takes("voice"),
+			Verify: func(kind, u string, form url.Values, sig string) bool {
+				tok, _ := st.Secret(kind + ".token")
+				return channel.CheckSignature(tok, u, form, sig)
+			},
+			Callers: st.Callers,
+		}
 	}
 	r.srv = server.New(rt, o)
 	srv.Store(r.srv)
@@ -249,6 +278,58 @@ func TestEscalationAckByLinkStopsLevelThree(t *testing.T) {
 // send, journalled no-contact; a mail server's refusal is journalled by
 // class and code. Neither row, nor the journal API, carries an address or
 // the server's text.
+// The done-when with inbound SMS (#715 PR 3b-2): bob's SMS page says
+// "Reply ACK <code>"; his reply, relayed and signed by the provider,
+// acknowledges the occurrence as bob, and level 3 never goes. A forged
+// reply (unsigned) and a reply from a number nobody has do nothing.
+func TestEscalationAckBySMSReplyStopsLevelThree(t *testing.T) {
+	r := newChannelsRigWith(t, channeltest.SMTPOptions{}, map[string]oncall.Contact{
+		"alice": {Email: "alice@example.com"},
+		"bob":   {SMS: "+15550101"},
+		"carol": {Email: "carol@example.com"},
+	}, true, true)
+	r.run(10*time.Minute + 10*time.Second)
+	reqs := r.sms.Requests()
+	if len(reqs) != 1 {
+		t.Fatalf("%d SMS", len(reqs))
+	}
+	_, after, ok := strings.Cut(reqs[0].Body, "Reply ACK ")
+	if !ok || len(after) < acklink.CodeDigits {
+		t.Fatalf("bob's SMS carries no code: %s", reqs[0].Body)
+	}
+	code := after[:acklink.CodeDigits]
+	post := func(from, body string, sign bool) *httptest.ResponseRecorder {
+		form := url.Values{"From": {from}, "To": {"+15550100"}, "Body": {body}}
+		req := httptest.NewRequest("POST", "http://localhost"+server.InboundSMSPath, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if sign {
+			req.Header.Set(channel.SignatureHeader, channel.Signature("sms-token-1", "https://hmi.example"+server.InboundSMSPath, form))
+		}
+		rec := httptest.NewRecorder()
+		r.srv.Handler().ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := post("+15550101", "ACK "+code, false); rec.Code != http.StatusForbidden {
+		t.Fatalf("unsigned: %d %s", rec.Code, rec.Body)
+	}
+	if rec := post("+15550999", "ACK "+code, true); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "<Message>") {
+		t.Fatalf("stranger: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ := r.a.Engine.Lookup("intrusion"); rec.State != alarm.UnackActive {
+		t.Fatalf("acknowledged by a forged reply: %s", rec.State)
+	}
+	if rec := post("+15550101", "ack "+code, true); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Acknowledged Zone 15 intrusion as bob") {
+		t.Fatalf("bob's reply: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ := r.a.Engine.Lookup("intrusion"); rec.AckBy != "bob" {
+		t.Fatalf("acknowledged by %q, want bob", rec.AckBy)
+	}
+	r.run(30 * time.Minute)
+	if mails := r.smtp.Mails(); len(mails) != 1 {
+		t.Fatalf("the reply's ack did not stop level 3: %d mails", len(mails))
+	}
+}
+
 func TestEscalationFailuresNeverCarryAnAddress(t *testing.T) {
 	r := newChannelsRig(t, channeltest.SMTPOptions{RcptCode: 550}, map[string]oncall.Contact{
 		"alice": {Email: "alice@example.com"},

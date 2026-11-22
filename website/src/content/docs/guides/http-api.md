@@ -225,6 +225,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/alarms/shelve`](#alarms) | Shelve until a time |
 | `POST` | [`/api/alarms/unshelve`](#alarms) | Unshelve |
 | `GET`, `POST` | [`/alarm-ack/{token}`](#alarms) | An ack link from a page: confirm, then acknowledge |
+| `POST` | [`/alarm-inbound/sms`, `/alarm-inbound/voice/{token}`](#alarms) | The SMS and voice provider's reply or keypress, signed |
 | `GET` | [`/api/program`](#programs) | The running program source and status |
 | `PUT` | [`/api/program`](#programs) | Warm-swap a new program source |
 | `POST` | [`/api/program/rollback`](#programs) | Back to the previous source |
@@ -971,6 +972,25 @@ channel and the link's ID; never the token.
 | `404` | Not a link this controller signed, or it sends no links |
 | `409` | Already used, a new occurrence since, or the alarm waits on nobody |
 | `410` | Expired |
+
+### `POST /alarm-inbound/sms` and `/alarm-inbound/voice/{token}`
+
+The SMS and voice provider's callbacks (`alarms.oncall.inbound`, see
+[alarms](/guides/alarms/#replying-to-an-sms-pressing-1-on-a-call)): an
+SMS reply `ACK <code>`, a call's keypress. Not an API: the body is the
+provider's form (`application/x-www-form-urlencoded`, at most 16 KiB),
+and the credential is the provider's `X-Twilio-Signature` over the
+configured URL, then the code or the call's token. The audit entry is
+`alarm.ack` with `detail.via: "sms"` or `"voice"`, the occurrence, the
+channel and the code's or link's ID; never the number, the text, the
+code or the token.
+
+| Status | When |
+| --- | --- |
+| `200` | Always, for a signed request: TwiML, saying whether it acknowledged (nothing to a number nobody has). The audit entry keeps the refusal's own status. |
+| `400` | Not a form |
+| `403` | The signature does not check |
+| `404` | This controller takes no replies of that kind |
 
 ### `POST /api/alarms/shelve` and `/unshelve`
 

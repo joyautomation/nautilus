@@ -13,10 +13,13 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/acklink"
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
+	"github.com/joyautomation/nautilus/alarm/oncall"
 	"github.com/joyautomation/nautilus/internal/pairkey"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/securefile"
@@ -45,8 +48,8 @@ var linkKinds = map[string]bool{channel.KindEmail: true, channel.KindSMS: true}
 // pair's (NAUTILUS_PEER_TOKEN): the key is derived from it. Else the key
 // is the state directory's AckLinkKeyName, made when absent.
 func ackLinkKeyring(proj *project.Project, stateDir, peerToken string, stderr io.Writer) (*acklink.Keyring, error) {
-	if proj.Alarms == nil || proj.Alarms.Oncall.AckURL == "" || len(proj.Alarms.Channels.Kinds()) == 0 {
-		return nil, nil // no link to send, or nothing that pages a person
+	if proj.Alarms == nil || (proj.Alarms.Oncall.AckURL == "" && proj.Alarms.Oncall.Inbound == nil) || len(proj.Alarms.Channels.Kinds()) == 0 {
+		return nil, nil // no link or reply to take, or nothing that pages a person
 	}
 	if proj.Alarms.Oncall.AckFrom() == escalate.AckBySignIn && !signInPossible(proj) {
 		return nil, errors.New("alarms.oncall.ack-from-notification: sign-in, but nobody can sign in here (no auth: users or auth.oidc): add users (naut users add) or use the default (link)")
@@ -161,33 +164,116 @@ func ackLinkHook(srv *atomic.Pointer[server.Server]) func(escalate.Message, stri
 		s := srv.Load()
 		// An alarm that needs no acknowledgement gets no link: it would
 		// open a page that can only say there is nothing to acknowledge.
-		if s == nil || !linkKinds[via] || !m.Alarm.AckRequired {
+		if s == nil || !m.Alarm.AckRequired {
+			return ""
+		}
+		if via == channel.KindVoice {
+			// A call carries no link: the provider posts the keypress to
+			// this URL (alarms.oncall.inbound), "" when keypresses are off.
+			return s.VoiceAckURL(m.Alarm.ID, m.Alarm.Occurrence, m.To, m.Level)
+		}
+		if !linkKinds[via] {
 			return ""
 		}
 		return s.AckLinkURL(m.Alarm.ID, m.Alarm.Occurrence, m.To, via, m.Level)
 	}
 }
 
-// ackLinkChecks are naut check's findings on alarms.oncall's ack links.
+// ackCodeHook is the dispatcher's AckCode: an SMS page's reply code, when
+// alarms.oncall.inbound takes SMS replies (#715).
+func ackCodeHook(srv *atomic.Pointer[server.Server]) func(escalate.Message, string) string {
+	return func(m escalate.Message, via string) string {
+		s := srv.Load()
+		if s == nil || via != channel.KindSMS || !m.Alarm.AckRequired {
+			return ""
+		}
+		return s.AckCode(m.Alarm.ID, m.Alarm.Occurrence, m.To)
+	}
+}
+
+// inboundOptions is the server's alarms.oncall.inbound: the provider's
+// signature checked under the kind's token (sms.token, voice.token) and
+// the sender found in the contacts file, both read at each request so a
+// changed file is seen. Nil when inbound is off or there is no store.
+func inboundOptions(proj *project.Project) *server.Inbound {
+	if proj.Alarms == nil || proj.Alarms.Oncall.Inbound == nil {
+		return nil
+	}
+	st, ok := proj.AlarmDirectory.(*oncall.Store)
+	if !ok || st == nil {
+		return nil
+	}
+	in := proj.Alarms.Oncall.Inbound
+	return &server.Inbound{
+		URL:   in.URL,
+		SMS:   in.Takes(channel.KindSMS),
+		Voice: in.Takes(channel.KindVoice),
+		Verify: func(kind, u string, form url.Values, sig string) bool {
+			key := map[string]string{channel.KindSMS: channel.SecretSMSToken, channel.KindVoice: channel.SecretVoiceToken}[kind]
+			tok, err := st.Secret(key)
+			if err != nil || key == "" {
+				return false
+			}
+			return channel.CheckSignature(tok, u, form, sig)
+		},
+		Callers: st.Callers,
+		MayPage: mayPage(proj),
+	}
+}
+
+// mayPage is the server's Inbound.MayPage: whether an alarm's escalation
+// policy can page the person by the kind. Without an escalation config
+// (which naut run has already refused) it says no for every alarm: no
+// code is taken.
+func mayPage(proj *project.Project) func(alarm.Record, string, string) bool {
+	ec, err := proj.Alarms.EscalationConfig()
+	if err != nil || ec == nil {
+		return func(alarm.Record, string, string) bool { return false }
+	}
+	return func(rec alarm.Record, principal, kind string) bool {
+		since := time.UnixMilli(rec.WaitMs)
+		if rec.WaitMs == 0 {
+			since = time.UnixMilli(rec.ActiveMs)
+		}
+		return ec.MayPage(rec.Def, since, principal, kind)
+	}
+}
+
+// ackLinkChecks are naut check's findings on alarms.oncall's ack links
+// and inbound replies.
 func ackLinkChecks(proj *project.Project) (errs, warns []string) {
-	if proj.Alarms == nil || proj.Alarms.Oncall.AckURL == "" {
+	if proj.Alarms == nil {
 		return nil, nil
 	}
 	o := proj.Alarms.Oncall
+	if in := o.Inbound; in != nil {
+		if u, err := url.Parse(in.URL); err == nil && !hostAllowed(proj, u.Hostname()) {
+			warns = append(warns, fmt.Sprintf("alarms.oncall.inbound.url: the controller answers %s only if it is an allowed host: add it to server.allowed-hosts (or NAUTILUS_ALLOWED_HOSTS on the box), or the provider's replies are refused", u.Hostname()))
+		}
+	}
+	if o.AckURL == "" {
+		return errs, warns
+	}
 	if o.AckURLInsecure {
 		warns = append(warns, "alarms.oncall.ack-url-insecure: true: an ack link acknowledges as the person paged, and it crosses the network in plaintext; serve the HMI over https (server.tls) and drop the option")
 	}
 	if o.AckFrom() == escalate.AckBySignIn && !signInPossible(proj) {
 		errs = append(errs, "alarms.oncall.ack-from-notification: sign-in, but nobody can sign in here (no auth: users or auth.oidc), so no link could ever acknowledge: add users (naut users add) or use the default (link)")
 	}
-	if u, err := url.Parse(o.AckURL); err == nil && u.Hostname() != "" && net.ParseIP(u.Hostname()) == nil &&
-		u.Hostname() != "localhost" && !slices.ContainsFunc(proj.Server.AllowedHosts, func(h string) bool { return strings.EqualFold(h, u.Hostname()) }) {
+	if u, err := url.Parse(o.AckURL); err == nil && !hostAllowed(proj, u.Hostname()) {
 		warns = append(warns, fmt.Sprintf("alarms.oncall.ack-url: the controller answers %s only if it is an allowed host: add it to server.allowed-hosts (or NAUTILUS_ALLOWED_HOSTS on the box), or a link opens a refusal", u.Hostname()))
 	}
 	if !slices.ContainsFunc(proj.Alarms.Channels.Kinds(), func(k string) bool { return linkKinds[k] || k == channel.KindPush }) {
 		warns = append(warns, "alarms.oncall.ack-url is set, but no channel here carries a link (email, sms or push): no page will have one")
 	}
 	return errs, warns
+}
+
+// hostAllowed reports whether the controller answers requests for host
+// by default or by server.allowed-hosts.
+func hostAllowed(proj *project.Project, host string) bool {
+	return host == "" || net.ParseIP(host) != nil || host == "localhost" ||
+		slices.ContainsFunc(proj.Server.AllowedHosts, func(h string) bool { return strings.EqualFold(h, host) })
 }
 
 // signInPossible reports whether anyone can sign in to the project's

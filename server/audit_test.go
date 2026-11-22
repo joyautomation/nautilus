@@ -16,6 +16,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -179,6 +180,9 @@ type auditRow struct {
 	// pathOf, when set, is the path for the server the row made (an ack
 	// link's token is minted per server).
 	pathOf func(*Server) string
+	// reqOf, when set, finishes the request for the server the row made
+	// (a provider's signed form, #715 inbound).
+	reqOf func(*Server, *http.Request)
 	// The one entry the request must leave.
 	action, target, user, source, result string
 	before, after                        any // checked when non-nil
@@ -495,6 +499,44 @@ func auditRows() []auditRow {
 		{name: "ack by a forged link", pattern: "POST /alarm-ack/{token}", server: linkServer, person: true,
 			method: "POST", path: acklink.Path + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 			action: "alarm.ack", user: "anonymous", source: "api", result: "refused"},
+		// Inbound (#715): an SMS reply's code, a call's keypress, signed by
+		// the provider; a request whose signature does not check is
+		// journalled anonymously.
+		{name: "ack by sms reply", pattern: "POST /alarm-inbound/sms", server: inboundServer, person: true,
+			method: "POST", path: InboundSMSPath,
+			reqOf: func(s *Server, r *http.Request) {
+				occ, _ := s.alarms.Lookup("HiTemp")
+				code := s.AckCode("HiTemp", occ.Occurrence, "alice")
+				signed(smsToken, InboundSMSPath, url.Values{"From": {alicePhone}, "Body": {"ACK " + code}})(r)
+			},
+			action: "alarm.ack", target: "HiTemp", user: "user:alice", source: "api", result: "ok",
+			check: func(t *testing.T, e audit.Entry) {
+				if e.Detail["via"] != "sms" {
+					t.Errorf("detail %v, want via: sms", e.Detail)
+				}
+			}},
+		{name: "ack by an unsigned sms", pattern: "POST /alarm-inbound/sms", server: inboundServer, person: true,
+			method: "POST", path: InboundSMSPath, body: "From=%2B15550102&Body=ACK+12345678",
+			header: map[string]string{"Content-Type": "application/x-www-form-urlencoded"},
+			action: "alarm.ack", user: "anonymous", source: "api", result: "refused"},
+		{name: "ack by keypress", pattern: "POST /alarm-inbound/voice/{token}", server: inboundServer, person: true,
+			method: "POST", pathOf: func(s *Server) string {
+				occ, _ := s.alarms.Lookup("HiTemp")
+				return strings.TrimPrefix(s.VoiceAckURL("HiTemp", occ.Occurrence, "alice", 1), inboundBase)
+			},
+			reqOf: func(s *Server, r *http.Request) {
+				signed(voiceToken, r.URL.Path, url.Values{"To": {alicePhone}, "Digits": {"1"}})(r)
+			},
+			action: "alarm.ack", target: "HiTemp", user: "user:alice", source: "api", result: "ok",
+			check: func(t *testing.T, e audit.Entry) {
+				if e.Detail["via"] != "voice" {
+					t.Errorf("detail %v, want via: voice", e.Detail)
+				}
+			}},
+		{name: "ack by a forged keypress", pattern: "POST /alarm-inbound/voice/{token}", server: inboundServer, person: true,
+			method: "POST", path: InboundVoicePath + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", body: "To=%2B15550102&Digits=1",
+			header: map[string]string{"Content-Type": "application/x-www-form-urlencoded", "X-Twilio-Signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAA="},
+			action: "alarm.ack", user: "anonymous", source: "api", result: "refused"},
 		{name: "shelve", pattern: "POST /api/alarms/shelve", server: none,
 			method: "POST", path: "/api/alarms/shelve", body: `{"id":"HiTemp","seconds":300}`,
 			action: "alarm.shelve", target: "HiTemp", user: "anonymous", source: "api", result: "ok",
@@ -790,6 +832,9 @@ func TestEveryWritePathJournalsExactlyOneEntry(t *testing.T) {
 			rec := call(t, srv, row.method, path, row.body, func(r *http.Request) {
 				for k, v := range row.header {
 					r.Header.Set(k, v)
+				}
+				if row.reqOf != nil {
+					row.reqOf(srv, r)
 				}
 			})
 			es := srv.audit.ring.Recent()

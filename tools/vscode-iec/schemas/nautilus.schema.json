@@ -1898,6 +1898,26 @@
           "enum": ["link", "sign-in"],
           "description": "What an ack link needs. link (default): the link alone acknowledges, as the person it was sent to, if they still hold ack. sign-in: only a browser signed in as that person may use it."
         },
+        "inbound": {
+          "type": "object",
+          "description": "Take acknowledgements back through the SMS and voice provider: an SMS reply \"ACK <code>\", a keypress on the call. Off when absent. Not with ack-from-notification: sign-in.",
+          "additionalProperties": false,
+          "required": ["url", "channels"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "pattern": "^https://",
+              "description": "This controller as the provider reaches it, exactly (https). The provider's signature is checked against it; SMS replies go to <url>/alarm-inbound/sms."
+            },
+            "channels": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "enum": ["sms", "voice"]},
+              "description": "The kinds that take replies: sms, voice, or both. Each must be a configured channel."
+            }
+          }
+        },
         "rosters": {
           "type": "array",
           "items": {

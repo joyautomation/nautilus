@@ -3,6 +3,7 @@ package escalate
 import (
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -229,6 +230,53 @@ func (c *Config) Select(d alarm.Def, since time.Time) *Policy {
 		return p
 	}
 	return nil
+}
+
+// MayPage reports whether the policy that covers alarm d, escalating
+// since, can page principal by channel kind via at any level: named on
+// it, or a member of a roster it names (any shift, on call now or not).
+// A local user name compares ignoring case, an oidc: name exactly.
+func (c *Config) MayPage(d alarm.Def, since time.Time, principal, via string) bool {
+	p := c.Select(d, since)
+	if p == nil {
+		return false
+	}
+	for _, l := range p.Levels {
+		if !slices.Contains(l.Via, via) {
+			continue
+		}
+		for _, n := range l.Notify {
+			if id, ok := strings.CutPrefix(n, RosterPrefix); ok {
+				if r := c.Oncall.Roster(id); r != nil && slices.ContainsFunc(r.everyone(), func(m string) bool { return SamePrincipal(m, principal) }) {
+					return true
+				}
+				continue
+			}
+			if SamePrincipal(n, principal) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// everyone is every member a roster names, in any shift.
+func (r *Roster) everyone() []string {
+	out := slices.Clone(r.Members)
+	for _, sh := range r.Shifts {
+		out = append(out, sh.Members...)
+	}
+	return out
+}
+
+// SamePrincipal reports whether a and b name the same person: a local user
+// name ignoring case (and a user: prefix), an oidc: name exactly.
+func SamePrincipal(a, b string) bool {
+	oa, ob := strings.HasPrefix(a, "oidc:"), strings.HasPrefix(b, "oidc:")
+	if oa || ob {
+		return a == b
+	}
+	return strings.EqualFold(strings.TrimPrefix(a, "user:"), strings.TrimPrefix(b, "user:"))
 }
 
 // Step is one send of a policy: a level (0-based) and its repeat (0 is the

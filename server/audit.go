@@ -807,6 +807,13 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 	e.Before, e.After = audit.Cap(e.Before, valueCap), audit.Cap(e.After, valueCap)
 	a.s.audit.record(e)
 	buf.header.Del(linkReasonHeader) // the seam's, never the client's
+	if buf.header.Get(providerAnswerHeader) != "" {
+		// An SMS or voice provider (#715 inbound) acts on a TwiML reply
+		// only from a 2xx: the entry keeps the refusal's status, the wire
+		// says 200.
+		buf.header.Del(providerAnswerHeader)
+		status = http.StatusOK
+	}
 	w.WriteHeader(status)
 	w.Write(buf.body.Bytes())
 }

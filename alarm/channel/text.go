@@ -109,17 +109,28 @@ func smsText(m escalate.Message) string {
 	if r := clean(m.Reason); r != "" {
 		s += " " + r + "."
 	}
-	if m.AckURL == "" {
+	// What acknowledges is never cut (a cut link or code acknowledges
+	// nothing): the prose gives way to it.
+	var tail string
+	if m.AckCode != "" {
+		tail = " Reply ACK " + m.AckCode + " to acknowledge."
+	}
+	if m.AckURL != "" {
+		tail += " " + m.AckURL
+	}
+	if tail == "" {
 		return truncate(s+" Acknowledge it in the HMI.", smsMax)
 	}
-	// The link is never cut (a cut link acknowledges nothing): the prose
-	// gives way to it.
-	return truncate(s, max(smsMax-1-len([]rune(m.AckURL)), smsProseMin)) + " " + m.AckURL
+	return truncate(s, max(smsMax-len([]rune(tail)), smsProseMin)) + tail
 }
 
-// voiceText is what the call says.
+// voiceText is what the call says: with a keypress URL (inbound, #715),
+// how to acknowledge by pressing 1.
 func voiceText(m escalate.Message) string {
 	s := fmt.Sprintf("Alarm. Priority %s. %s. Escalation level %d.", strings.ToLower(priorityLabel(m)), alarmName(m), m.Level)
+	if m.AckURL != "" {
+		return truncate(s, 270) + " Press 1 to acknowledge."
+	}
 	s += " Acknowledge it in the HMI."
 	return truncate(s, 300)
 }
