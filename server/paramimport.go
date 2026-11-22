@@ -25,7 +25,9 @@ import (
 // read-only tag and a tag's min/max refuse it exactly as they refuse a
 // single write, and there is no way past them here. Only a parameter (a
 // scalar setpoint with a literal init:) is named; anything else is refused.
-// Any refusal stops the whole set: nothing is written. A standby does not
+// Any refusal stops the whole set: nothing is written. The check and the
+// write are one step under the store's lock (Tags.WriteSet), so the set is
+// never half in, and the answer's from/to are what the store held and holds. A standby does not
 // import (a request reaching one is forwarded to the leader, and refused
 // here if it is not one).
 //
@@ -33,14 +35,12 @@ import (
 // of #718 slice 2 commits it as theirs. One journal entry (param.import)
 // records every name with its old and new value.
 
-// paramWrite applies the checked set; a var so a test can make one write fail
-// after validation.
-var paramWrite = func(t *runtime.Tags, ops []runtime.WriteOp, by string) []error {
-	return t.WriteAs(ops, by)
-}
-
 // paramImportMax bounds one set.
-const paramImportMax = 10000
+//
+// 500: one journal entry holds the old and new value of every name (it is
+// capped at valueMax), and a controller's tuned setpoints are dozens to a
+// few hundred. A bigger set is split.
+const paramImportMax = 500
 
 type paramImportRequest struct {
 	Version    int            `json:"version"`
@@ -53,7 +53,7 @@ type ParamImportResult struct {
 	Name   string `json:"name"`
 	From   any    `json:"from,omitempty"`
 	To     any    `json:"to,omitempty"`
-	Status string `json:"status"` // change | unchanged | refused
+	Status string `json:"status"` // change (dry run) | applied | unchanged | refused
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -79,6 +79,10 @@ func paramKind(v any) string {
 func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) {
 	if code, msg := s.authorize(r, PermConfig, ""); code != 0 {
 		WriteRefusal(w, code, msg)
+		return
+	}
+	if s.tagWriter != nil {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "this server mirrors a controller it does not run: import on that controller"})
 		return
 	}
 	if s.cluster != nil && !s.cluster.Status().IsLeader {
@@ -171,19 +175,24 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 			refuse(p.Name, fmt.Sprintf("it holds a %s, the set has a %s", paramKind(p.Value), paramKind(want)))
 			continue
 		}
-		if runtime.ParamValuesEqual(p.Value, want) {
-			answer.Results = append(answer.Results, ParamImportResult{Name: p.Name, From: p.Value, To: want, Status: "unchanged"})
-			continue
-		}
-		answer.Results = append(answer.Results, ParamImportResult{Name: p.Name, From: p.Value, To: want, Status: "change"})
+		answer.Results = append(answer.Results, ParamImportResult{Name: p.Name, Status: "change"})
 		ops = append(ops, runtime.WriteOp{Path: p.Name, Value: want})
 		opAt = append(opAt, len(answer.Results)-1)
 	}
-	for i, err := range s.rt.Tags().CheckWrites(ops) {
-		if err != nil {
-			res := &answer.Results[opAt[i]]
-			res.Status, res.Reason = "refused", err.Error()
+	// The one locked step: every op is checked (force, read-only, range, the
+	// strict conversion to the tag's type) and, only if all pass and this is
+	// not a dry run, written, so a set is never half in. From, To and
+	// "unchanged" are read inside that lock, not from the earlier snapshot.
+	outcomes := s.rt.Tags().WriteSet(ops, s.principalOf(r), refused || req.DryRun)
+	for i, o := range outcomes {
+		res := &answer.Results[opAt[i]]
+		res.From, res.To = o.From, o.To
+		switch {
+		case o.Err != nil:
+			res.Status, res.Reason = "refused", o.Err.Error()
 			refused = true
+		case o.Unchanged:
+			res.Status = "unchanged"
 		}
 	}
 	if refused {
@@ -191,69 +200,43 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusUnprocessableEntity, answer)
 		return
 	}
-	if req.DryRun || len(ops) == 0 {
+	if req.DryRun {
 		writeJSON(w, http.StatusOK, answer)
 		return
-	}
-	for i, err := range paramWrite(s.rt.Tags(), ops, s.principalOf(r)) {
-		if err != nil {
-			// Only a race with a force or a range change lands here: the
-			// set was whole when checked. Each result says whether it is in.
-			res := &answer.Results[opAt[i]]
-			res.Status, res.Reason = "failed", err.Error()
-			refused = true
-		}
 	}
 	for i := range answer.Results {
 		if answer.Results[i].Status == "change" {
 			answer.Results[i].Status = "applied"
 		}
 	}
-	if refused {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "the set was only partly written: the results marked applied are in the controller, the ones marked failed are not", "answer": answer})
-		return
-	}
 	answer.Applied = true
 	writeJSON(w, http.StatusOK, answer)
 }
 
 // paramImportTarget is the journal entry's view of an import: the names it
-// carries, each with the live value before and the value asked for.
+// carries (at most paramImportMax, so a huge body costs the seam nothing),
+// each with the live value before. After is what landed: only the values
+// the import changed, as the store holds them; a refused or dry-run entry
+// keeps the set that was asked for.
 func (s *Server) paramImportTarget(_ *http.Request, body []byte) auditTarget {
 	var req paramImportRequest
 	decodeBody(body, &req)
 	before := map[string]any{}
-	for n := range req.Parameters {
-		before[n] = s.valueOf(n)
+	if len(req.Parameters) <= paramImportMax {
+		for n := range req.Parameters {
+			before[n] = s.valueOf(n)
+		}
 	}
 	return auditTarget{
 		target: fmt.Sprintf("%d parameters", len(req.Parameters)),
 		before: before, after: req.Parameters,
 		detail: map[string]any{"dryRun": req.DryRun},
-		// What the controller holds now: only the values that landed.
 		answered: func(b []byte) any {
 			var a ParamImportAnswer
 			if json.Unmarshal(b, &a) != nil || !a.Applied {
-				return nil
+				return req.Parameters
 			}
 			return paramImportWritten(a.Results)
-		},
-		// A set that was only partly written says which values are in and
-		// which are not.
-		failed: func(b []byte) map[string]any {
-			var f struct {
-				Answer *ParamImportAnswer `json:"answer"`
-			}
-			if json.Unmarshal(b, &f) != nil || f.Answer == nil {
-				return nil
-			}
-			notWritten := map[string]string{}
-			for _, r := range f.Answer.Results {
-				if r.Status == "failed" {
-					notWritten[r.Name] = r.Reason
-				}
-			}
-			return map[string]any{"written": paramImportWritten(f.Answer.Results), "notWritten": notWritten}
 		},
 	}
 }
@@ -267,4 +250,12 @@ func paramImportWritten(rs []ParamImportResult) map[string]any {
 		}
 	}
 	return out
+}
+
+// paramImportRefusal names what a refused import tried to do by parsing the
+// body alone: how many parameters, and whether it was a dry run.
+func paramImportRefusal(_ *http.Request, body []byte) auditTarget {
+	var req paramImportRequest
+	decodeBody(body, &req)
+	return auditTarget{target: fmt.Sprintf("%d parameters", len(req.Parameters)), detail: map[string]any{"dryRun": req.DryRun}}
 }

@@ -504,11 +504,13 @@ tag refuses it exactly as it refuses a single write, and nothing here goes past
 them. A name that is not a parameter, a value of another kind, and a name that
 repeats another (tag names ignore case) are refused too. **One refusal stops the
 whole set**: the answer is `422` with every result and nothing was written.
-`dryRun` answers `200` or `422` the same way and writes nothing. The set is
-validated whole before the first write. If a write then fails anyway, the
-answer is `409` with every result marked `applied` (it is in the controller) or
-`failed` (it is not), and the journal entry carries the same two lists
-(`written`, `notWritten`): there is no silent partial import. Each value
+`dryRun` answers `200` or `422` the same way and writes nothing. The check and
+the write are one step under the store's lock, including the conversion to the
+tag's declared type (an `INT` refuses `70000` and `7.5`), so a set is never
+half in: it is all written or none is. Each result's `from` and `to` are the
+values the store held and holds. A set is at most 500 names (one journal entry
+holds every old and new value); split a bigger one. A server that mirrors a
+controller it does not run answers `501`. Each value
 lands attributed to the principal that imported it, so `parameters.writeBack`
 commits it as theirs. One `param.import` journal entry records every name with
 its old and new value. A standby forwards the request to the leader and a

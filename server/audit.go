@@ -1020,6 +1020,7 @@ var refusalTargets = map[string]targetFunc{
 	"force.set":        nameValueTarget,
 	"substitute.start": nameValueTarget,
 	"force.clear":      pathTarget("name"),
+	"param.import":     paramImportRefusal,
 	"alarm.ack":        ackTarget,
 	"alarm.shelve":     shelveTarget,
 	"alarm.unshelve":   unshelveTarget,

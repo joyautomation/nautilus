@@ -2,8 +2,9 @@ package server
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,11 +16,12 @@ import (
 func importRuntime(t *testing.T) *runtime.Runtime {
 	t.Helper()
 	rt, err := runtime.New(runtime.Options{
-		Program: "PROGRAM P\nVAR_EXTERNAL SP : REAL; Fan : REAL; On : BOOL; END_VAR\nEND_PROGRAM",
+		Program: "PROGRAM P\nVAR_EXTERNAL SP : REAL; Fan : REAL; On : BOOL; N : INT; END_VAR\nEND_PROGRAM",
 		Tags: []runtime.TagDef{
 			runtime.Setpoint("SP", 65.0, runtime.Range(fptr(10), fptr(90))),
 			runtime.Setpoint("Fan", 20.0, runtime.Range(nil, fptr(50))),
 			runtime.Setpoint("On", true),
+			runtime.Setpoint("N", int64(5)),
 		},
 	})
 	if err != nil {
@@ -187,42 +189,81 @@ func TestParameterImportNeedsWriteOnEveryTag(t *testing.T) {
 	}
 }
 
-// If a write fails after the set validated, the answer and the journal entry
-// say exactly which values are in and which are not.
-func TestParameterImportPartialWriteIsReported(t *testing.T) {
-	srv := auditServerRT(t, importRuntime(t), Options{})
-	old := paramWrite
-	defer func() { paramWrite = old }()
-	paramWrite = func(t *runtime.Tags, ops []runtime.WriteOp, by string) []error {
-		errs := t.WriteAs(ops[:1], by) // the first op lands
-		for range ops[1:] {
-			errs = append(errs, errors.New("driver said no"))
+// A set the store would convert-refuse (an INT's width, a fraction to an
+// INT) is refused WHOLE, by the real run and the dry run alike: the check and
+// the write are one step, so nothing is half in.
+func TestParameterImportConversionRefusalWritesNothing(t *testing.T) {
+	for _, body := range []string{
+		`{"version":1,"parameters":{"SP":70,"N":70000}}`,
+		`{"version":1,"parameters":{"SP":70,"N":7.5}}`,
+		`{"version":1,"dryRun":true,"parameters":{"SP":70,"N":70000}}`,
+	} {
+		rt := importRuntime(t)
+		srv := New(rt)
+		code, a, resp := importCall(t, srv, body)
+		if code != http.StatusUnprocessableEntity || a.Applied {
+			t.Fatalf("%s: %d %s", body, code, resp)
 		}
-		return errs
+		if liveParam(t, srv, "SP") != 65.0 || fmt.Sprint(liveParam(t, srv, "N")) != "5" {
+			t.Fatalf("%s: a value was written (SP=%v N=%v)", body, liveParam(t, srv, "SP"), liveParam(t, srv, "N"))
+		}
 	}
-	rec := call(t, srv, "POST", "/api/parameters/import", `{"version":1,"parameters":{"Fan":30,"SP":70}}`)
-	if rec.Code != http.StatusConflict {
+}
+
+// The answer's from/to and the journal are what the store held and holds:
+// an unchanged value is not written and takes no attribution, and the entry's
+// after is only what landed.
+func TestParameterImportReportsWhatLanded(t *testing.T) {
+	srv := auditServerRT(t, importRuntime(t), Options{})
+	rec := call(t, srv, "POST", "/api/parameters/import", `{"version":1,"parameters":{"SP":70,"Fan":20,"N":6}}`)
+	if rec.Code != 200 {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	var got struct {
-		Answer ParamImportAnswer `json:"answer"`
+	var a ParamImportAnswer
+	json.Unmarshal(rec.Body.Bytes(), &a)
+	st := map[string]ParamImportResult{}
+	for _, r := range a.Results {
+		st[r.Name] = r
 	}
-	json.Unmarshal(rec.Body.Bytes(), &got)
-	st := map[string]string{}
-	for _, r := range got.Answer.Results {
-		st[r.Name] = r.Status
+	if st["SP"].Status != "applied" || st["SP"].From != 65.0 || st["SP"].To != 70.0 || st["Fan"].Status != "unchanged" || st["N"].To != 6.0 {
+		t.Fatalf("results %+v", st)
 	}
-	if st["Fan"] != "applied" || st["SP"] != "failed" || got.Answer.Applied {
-		t.Fatalf("results %v: %s", st, rec.Body)
+	for _, p := range srv.rt.Parameters() {
+		if p.Name == "Fan" && p.EditedBy != "" {
+			t.Errorf("an unchanged value took attribution: %+v", p)
+		}
 	}
-	if liveParam(t, srv, "Fan") != 30.0 || liveParam(t, srv, "SP") != 65.0 {
-		t.Fatal("what the answer says is not what the controller holds")
+	e := srv.audit.ring.Recent()[0]
+	after, _ := e.After.(map[string]any)
+	if e.Result != "ok" || len(after) != 2 || after["SP"] != 70.0 || after["N"] != 6.0 {
+		t.Fatalf("journal after = %#v (%s)", e.After, e.Result)
 	}
-	es := srv.audit.ring.Recent()
-	e := es[0]
-	w, _ := e.Detail["written"].(map[string]any)
-	nw, _ := e.Detail["notWritten"].(map[string]string)
-	if e.Action != "param.import" || w["Fan"] != 30.0 || nw["SP"] != "driver said no" || len(w) != 1 || len(nw) != 1 {
-		t.Fatalf("journal entry: %+v", e)
+	// A dry run's entry keeps the set that was asked for.
+	call(t, srv, "POST", "/api/parameters/import", `{"version":1,"dryRun":true,"parameters":{"SP":71}}`)
+	if d, _ := srv.audit.ring.Recent()[0].After.(map[string]any); d["SP"] != 71.0 {
+		t.Fatalf("dry run after = %#v", srv.audit.ring.Recent()[0].After)
+	}
+}
+
+// A server that mirrors a controller it does not run holds no setpoint of its
+// own: import is refused (501), as a force is.
+func TestParameterImportRefusedOnAMirror(t *testing.T) {
+	srv := New(importRuntime(t), Options{TagWriter: func(string, any) error { return nil }})
+	if rec := call(t, srv, "POST", "/api/parameters/import", `{"version":1,"parameters":{"SP":70}}`); rec.Code != http.StatusNotImplemented || liveParam(t, srv, "SP") != 65.0 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+// A set over the cap is refused before anything is read.
+func TestParameterImportSizeCap(t *testing.T) {
+	srv := New(importRuntime(t))
+	var sb strings.Builder
+	sb.WriteString(`{"version":1,"parameters":{"SP":70`)
+	for i := 0; i < paramImportMax; i++ {
+		sb.WriteString(`,"x` + strconv.Itoa(i) + `":1`)
+	}
+	sb.WriteString(`}}`)
+	if code, _, body := importCall(t, srv, sb.String()); code != http.StatusBadRequest || liveParam(t, srv, "SP") != 65.0 {
+		t.Fatalf("%d %s", code, body)
 	}
 }

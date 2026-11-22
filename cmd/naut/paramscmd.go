@@ -19,11 +19,11 @@ import (
 	"github.com/joyautomation/nautilus/server"
 )
 
-const paramsUsage = `naut params — a controller's tuned setpoints as a file (read-only)
+const paramsUsage = `naut params — a controller's tuned setpoints as a file
 
 A parameter is a scalar setpoint tag with a literal init: in the manifest.
 Operators tune it live; the repo keeps the init. These commands read the
-live values; nothing here writes to the controller.
+live values; export and diff only read, import writes.
 
 Usage:
   naut params export --host <controller> [--port 8080] [--drift] [-o <file>]
