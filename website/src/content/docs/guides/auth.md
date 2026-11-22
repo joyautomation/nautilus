@@ -63,8 +63,8 @@ Each built-in role adds to the one before:
 |---|---|
 | `viewer` | `read` |
 | `operator` | `write` (tag writes), `ack` (alarms), `sfc` (step and transition commands), `note` ([operator notes and the shift log](/guides/notes/)) |
-| `supervisor` | `shelve`, `out-of-service` (taking equipment's alarms out of service), `substitute`, `audit` (reading the journal) |
-| `engineer` | `force`, `edit` (online edits, rollbacks), `activate`, `deploy` (a Logix or Siemens download), `config` (live I/O configuration, and [IO-Link](/guides/io-link/) parameter writes, journalled as `param.write` on `<port device>/<variable>`) |
+| `supervisor` | `shelve`, `out-of-service` (taking equipment's alarms out of service), `substitute`, `audit` (reading the journal), `signoff` (sealing an [I/O checkout](/guides/checkout/) run: a fresh password, and by default someone who recorded none of its results) |
+| `engineer` | `force`, `edit` (online edits, rollbacks), `activate`, `deploy` (a Logix or Siemens download), `config` (live I/O configuration, and [IO-Link](/guides/io-link/) parameter writes, journalled as `param.write` on `<port device>/<variable>`), `checkout` (recording the results of an [I/O checkout](/guides/checkout/), per area; forcing an output there needs `force` too) |
 | `administrator` | `users`, `override`, `redundancy` (the redundant pair's operator commands: [clearing a duplicate mark](/guides/redundancy/)) |
 
 A custom role `inherits` one role (built-in or custom), then can `allow` more permissions or `deny` some.

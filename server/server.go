@@ -438,6 +438,9 @@ type Options struct {
 	// log's index and takes its place. Neither: /api/notes answers 404.
 	Notes    *notes.Store
 	NotesLog *NotesLog
+	// Checkout turns the I/O checkout on (#719); nil leaves /api/checkout
+	// answering 404.
+	Checkout *CheckoutOptions
 	// SessionLog, on a redundant pair, carries browser sessions through the
 	// pair's operator log so they survive a takeover (#716).
 	SessionLog *SessionLog
@@ -599,10 +602,11 @@ type Server struct {
 	historian   string
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
-	paramWB     *ParamWriteBack // parameter write-back (#718); nil: off
-	push        *pushService    // Web Push subscriptions (push.go); nil: off
-	notes       *notes.Store    // operator notes, standing alone (notes.go)
-	notesLog    *NotesLog       // a pair's notes (notes.go)
+	paramWB     *ParamWriteBack  // parameter write-back (#718); nil: off
+	push        *pushService     // Web Push subscriptions (push.go); nil: off
+	notes       *notes.Store     // operator notes, standing alone (notes.go)
+	notesLog    *NotesLog        // a pair's notes (notes.go)
+	checkout    *CheckoutOptions // the I/O checkout (checkout.go)
 	mounts      []Mount
 	noteClock   func() time.Time // tests
 	pushKey     string           // its VAPID public key
@@ -758,6 +762,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.ackLinks, s.ackURL, s.ackLinkSignIn = opts[0].AckLinks, opts[0].AckURL, opts[0].AckLinkSignIn
 		s.inbound = opts[0].Inbound
 		s.notes, s.notesLog = opts[0].Notes, opts[0].NotesLog
+		s.checkout = opts[0].Checkout
 		s.mounts = opts[0].Mounts
 	}
 	var rec audit.Recorder
@@ -946,6 +951,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/parameters", s.handleParameters)
 	mux.HandleFunc("GET /api/parameters/patch", s.handleParametersPatch)
+	mux.HandleFunc("GET /api/checkout", s.handleCheckout)
+	mux.HandleFunc("GET /api/checkout/runs/{id}", s.handleCheckoutRun)
+	mux.Handle("POST /api/checkout/runs", s.audited("checkout.begin", s.checkoutTarget("checkout.begin"), s.checkoutBegin))
+	mux.Handle("POST /api/checkout/runs/{id}/results", s.audited("checkout.result", s.checkoutTarget("checkout.result"), s.checkoutResult))
+	mux.Handle("POST /api/checkout/runs/{id}/abandon", s.audited("checkout.abandon", s.checkoutTarget("checkout.abandon"), s.checkoutAbandon))
 	mux.HandleFunc("GET /api/notes", s.handleNotesList)
 	mux.HandleFunc("GET /api/notes/counts", s.handleNotesCounts)
 	mux.HandleFunc("GET /api/notes/{id}", s.handleNoteGet)

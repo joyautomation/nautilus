@@ -117,6 +117,10 @@ var actionClass = map[string]string{
 	// Ending the subscriptions a mass revocation held (#722): phones stop
 	// being paged on a person's word.
 	"push.confirm-revocations": strict,
+	// A checkout result is a person signing for a point (#719): never unrecorded.
+	"checkout.begin":   strict,
+	"checkout.result":  strict,
+	"checkout.abandon": strict,
 	// A note is operator intent with words (#720): never unrecorded.
 	"note.add":        strict,
 	"note.revise":     strict,
@@ -1079,6 +1083,9 @@ func readRefusedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 // form body: checkLink answers them itself, with its own target, before
 // the seam's preAuthorize (acklink.go).
 var refusalTargets = map[string]targetFunc{
+	"checkout.begin":       checkoutRefusal("checkout.begin"),
+	"checkout.result":      checkoutRefusal("checkout.result"),
+	"checkout.abandon":     checkoutRefusal("checkout.abandon"),
 	"tag.write":            nameValueTarget,
 	"force.set":            nameValueTarget,
 	"substitute.start":     nameValueTarget,

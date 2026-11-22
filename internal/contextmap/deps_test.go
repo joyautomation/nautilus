@@ -110,6 +110,11 @@ func rules(u universe) []rule {
 			why:  "operator notes are a revision chain kept in a file or an index of the log's note entries; they know no permission, alarm, tag or server, which decide before a revision exists",
 		},
 		{
+			from: []string{"checkout"},
+			to:   u.allBut(),
+			why:  "the checkout record is a sheet of points and a chained file of results; it knows no permission, tag store, alarm or server, which decide before an entry exists",
+		},
+		{
 			from: []string{"internal/webpush"},
 			to:   u.allBut(),
 			why:  "Web Push is a seam: it encrypts, signs and sends, and knows no principal, session, alarm or store; the server hands it strings and keeps its rows in retain",

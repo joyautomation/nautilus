@@ -43,6 +43,7 @@ import (
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/auth/users"
+	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/floatip"
 	"github.com/joyautomation/nautilus/internal/lsp"
@@ -594,6 +595,23 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			defer ns.Close()
 		}
 	}
+	// The I/O checkout (#719), only for a project that turned it on: a
+	// controller on its own keeps its runs in a file in the state directory.
+	// A pair refuses it (the server says so) until the results go through
+	// the log.
+	if sh := proj.CheckoutSheet(); sh != nil {
+		co := &server.CheckoutOptions{Sheet: sh, Signoff: proj.Checkout.SignoffRule()}
+		if pair == nil && proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
+			if st, err := openCheckout(proj, dir, os.Getenv); err != nil {
+				fmt.Fprintf(os.Stderr, "naut run: the I/O checkout is off: %v\n", err)
+				co.OpenErr = err.Error()
+			} else {
+				co.Store = st
+				defer st.Close()
+			}
+		}
+		sopts.Checkout = co
+	}
 	// Program provenance: a built binary decodes the history its archive
 	// carries; a checkout captures live from git. Lazy (first request pays,
 	// not startup) and nil-safe — no repo just means an empty history.
@@ -914,6 +932,22 @@ func openNotes(proj *project.Project, dir string, getenv func(string) string) (*
 	}
 	return notes.Open(filepath.Join(sd, NotesFile))
 }
+
+// openCheckout opens the checkout runs file of a controller on its own, in
+// its state directory (#719).
+func openCheckout(proj *project.Project, dir string, getenv func(string) string) (*checkout.Store, error) {
+	sd, err := controllerStateDir("the I/O checkout", proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(sd, 0o700); err != nil {
+		return nil, err
+	}
+	return checkout.Open(filepath.Join(sd, CheckoutFile), nil)
+}
+
+// CheckoutFile is the name of the checkout runs file in the state directory.
+const CheckoutFile = "checkout.jsonl"
 
 // NotesFile is the name of the notes file in the state directory.
 const NotesFile = "notes.jsonl"

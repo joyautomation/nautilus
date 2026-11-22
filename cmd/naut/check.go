@@ -872,6 +872,20 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		fmt.Printf("%s: %d substitutable inputs\n", loc.file, n)
 	}
 
+	// Checkout (#719): the sheet's points name tags the project has, a
+	// forced point is a declared output, and a single-person sign-off warns.
+	cerrs, cwarns := proj.CheckCheckout(rt)
+	for _, m := range cerrs {
+		errs++
+		fmt.Printf("%s: error: %s\n", loc.file, m)
+	}
+	for _, m := range cwarns {
+		fmt.Printf("%s: warning: %s\n", loc.file, m)
+	}
+	if sh := proj.CheckoutSheet(); sh != nil {
+		fmt.Printf("%s: %d checkout points\n", loc.file, len(sh.Points))
+	}
+
 	// Scenes: every *.scene.json at the root really binds struct tags the
 	// manifest declares, and every kind really finds its members on them.
 	// Same offline discipline as alarms; docs/design/spatial-hmi.md §3b.
@@ -917,7 +931,7 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 	for _, d := range defs {
 		eqKeys = append(eqKeys, alarm.EquipmentOf(d))
 	}
-	if prep, perrs, pwarns := proj.CheckPlant(os.DirFS(dir), eqKeys); proj.Plant != nil {
+	if prep, perrs, pwarns := proj.CheckPlant(os.DirFS(dir), rt, eqKeys); proj.Plant != nil {
 		for _, m := range perrs {
 			errs++
 			fmt.Printf("%s: error: %s\n", loc.file, m)

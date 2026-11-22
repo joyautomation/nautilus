@@ -29,6 +29,7 @@ import (
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/auth"
+	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/dialect"
@@ -67,7 +68,11 @@ type Manifest struct {
 	PWA *PWAConfig `yaml:"pwa"`
 	// pwaIcon is PWA.Icon's bytes, read by ReadManifest.
 	pwaIcon []byte
-	Tasks   []TaskConfig `yaml:"tasks"`
+	// Checkout is the I/O checkout (#719): the sheet's file and the
+	// sign-off rule. checkoutSheet is the sheet, read by ReadManifest.
+	Checkout      *CheckoutConfig `yaml:"checkout"`
+	checkoutSheet *checkout.Sheet
+	Tasks         []TaskConfig `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
 	// tag set stays a separate reviewable artifact instead of a 500-line
@@ -1196,6 +1201,11 @@ type Project struct {
 	PWA     *PWAConfig
 	PWAIcon []byte
 
+	// Checkout is the manifest's checkout: section (#719), nil without one;
+	// CheckoutSheet is the sheet it names.
+	Checkout *CheckoutConfig
+	checkout *checkout.Sheet
+
 	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
 	// load projects too, and must not touch a cluster to do it.
@@ -1345,6 +1355,17 @@ func hasProgramDecl(src []byte) bool {
 // several — one per site — sharing the same programs and differing in which
 // tag files they compose.
 func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
+	return readManifest(fsys, name, false)
+}
+
+// ReadManifestForCheckoutInit is ReadManifest without reading the checkout
+// sheet (its settings are still checked): `naut checkout init` writes the sheet a manifest's checkout: section
+// asks for, so it must read a manifest whose sheet is not there yet.
+func ReadManifestForCheckoutInit(fsys fs.FS) (*Manifest, error) {
+	return readManifest(fsys, "", true)
+}
+
+func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 	if name == "" {
 		name = ManifestName
 	}
@@ -1392,6 +1413,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 		m.plant = pl
 	}
 	if err := m.readPWA(fsys); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if err := m.readCheckout(fsys, !noSheet); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if m.Parameters != nil {
@@ -1450,6 +1474,79 @@ type PWAConfig struct {
 }
 
 var pwaColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// CheckoutConfig is the manifest's checkout: section (#719).
+type CheckoutConfig struct {
+	// File is the sheet, relative to the project; checkout.yaml when empty.
+	File string `yaml:"file"`
+	// Signoff is who may seal a run: "two-person" (the default) needs a
+	// signer who recorded none of the run's results; "single" lets the
+	// person who recorded them sign. naut check warns on single, and the
+	// sealed record says so.
+	Signoff string `yaml:"signoff"`
+}
+
+// Checkout sign-off rules.
+const (
+	SignoffTwoPerson = "two-person"
+	SignoffSingle    = "single"
+)
+
+// SignoffRule is the sign-off rule in force: two-person unless the manifest
+// says single.
+func (c *CheckoutConfig) SignoffRule() string {
+	if c != nil && c.Signoff == SignoffSingle {
+		return SignoffSingle
+	}
+	return SignoffTwoPerson
+}
+
+// DefaultCheckoutFile is the sheet's name when the manifest names none.
+const DefaultCheckoutFile = "checkout.yaml"
+
+// readCheckout validates the checkout: section (the sign-off rule, the sheet's
+// path, which stays inside the project) and, when readSheet, reads and
+// validates the sheet.
+func (m *Manifest) readCheckout(fsys fs.FS, readSheet bool) error {
+	c := m.Checkout
+	if c == nil {
+		return nil
+	}
+	switch c.Signoff {
+	case "", SignoffTwoPerson, SignoffSingle:
+	default:
+		return fmt.Errorf("checkout.signoff %q is not one of two-person, single", c.Signoff)
+	}
+	file := c.File
+	if file == "" {
+		file = DefaultCheckoutFile
+	}
+	fp, err := projectPath(file)
+	if err != nil {
+		return fmt.Errorf("checkout.file: %w", err)
+	}
+	if !readSheet {
+		return nil
+	}
+	raw, err := fs.ReadFile(fsys, fp)
+	if err != nil {
+		return fmt.Errorf("checkout: no %s in the project: `naut checkout init` writes one from the project's I/O tags", fp)
+	}
+	var sh checkout.Sheet
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&sh); err != nil {
+		return fmt.Errorf("%s: %w", fp, err)
+	}
+	if err := sh.Validate(); err != nil {
+		return fmt.Errorf("%s: %w", fp, err)
+	}
+	m.checkoutSheet = &sh
+	return nil
+}
+
+// CheckoutSheet is the checkout sheet, nil without a checkout: section.
+func (p *Project) CheckoutSheet() *checkout.Sheet { return p.checkout }
 
 // maxPWAIcon bounds the icon file read at load.
 const maxPWAIcon = 4 << 20
@@ -1833,6 +1930,8 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		HMIScreens:  screens,
 		PWA:         m.PWA,
 		PWAIcon:     m.pwaIcon,
+		Checkout:    m.Checkout,
+		checkout:    m.checkoutSheet,
 
 		AuthStateDir: m.authStateDir(),
 		AuthOIDC:     m.authOIDC(),

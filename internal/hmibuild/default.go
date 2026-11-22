@@ -80,8 +80,9 @@ type galleryComp struct {
 // all, the connection and the theme. A click on equipment with a panel
 // opens it beside the drawing (the kit's EquipmentPanel), and every
 // bound label carries a sparkline.
-func defaultApp(project, title string, extra []json.RawMessage) (*appSource, error) {
+func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSource, error) {
 	mimics := Mimics(project)
+	mimics = schemesLast(mimics, areas)
 	if len(mimics) == 0 {
 		return nil, &Error{Messages: []string{"nothing to build: the project has no hmi/ app (src/routes) and no *.mimic.json"}}
 	}
@@ -94,6 +95,7 @@ func defaultApp(project, title string, extra []json.RawMessage) (*appSource, err
 	used := map[string]bool{}
 	takenSlug := map[string]bool{}
 	var assets []json.RawMessage
+	routeOf := map[string]string{} // a mimic's slug -> its route
 	// the ids the caller's descriptors make pages for: a mimic piece that
 	// names one of them (plant:) leaves its page to it
 	fromPlant := map[string]bool{}
@@ -162,6 +164,9 @@ func defaultApp(project, title string, extra []json.RawMessage) (*appSource, err
 		pageMod := fmt.Sprintf("nx:default/page%d.svelte", i)
 		a.virtual[pageMod] = vmod{kind: component, text: fmt.Sprintf(defaultPage,
 			jsq(filepath.Join(project, filepath.FromSlash(m))), strings.Join(imports, "\n"), strings.Join(registry, ", "))}
+		if _, ok := routeOf[slugOf(m)]; !ok {
+			routeOf[slugOf(m)] = id
+		}
 		r, _ := routeFor(strings.TrimPrefix(id, "/"))
 		r.Page = pageMod
 		r.Layouts = []int{0}
@@ -222,6 +227,20 @@ func defaultApp(project, title string, extra []json.RawMessage) (*appSource, err
 			a.routes = append(a.routes, r)
 		}
 		screens = append(screens, fmt.Sprintf("{ id: %s, href: %s, label: %s }", jsq("/assets"), jsq("/assets"), jsq("Assets")))
+		// an area page for each area the caller passed (the plant model's),
+		// linking to its process scheme when a mimic is named for it
+		al := areaList(areas, routeOf)
+		if len(al) == 0 {
+			al = json.RawMessage("[]")
+		}
+		a.virtual["nx:default/areas"] = vmod{kind: plain, text: "export const areas = " + string(al) + ";\n"}
+		if string(al) != "[]" {
+			a.virtual["nx:default/area.svelte"] = vmod{kind: component, text: defaultArea}
+			r, _ := routeFor("areas/[id]")
+			r.Page = "nx:default/area.svelte"
+			r.Layouts = []int{0}
+			a.routes = append(a.routes, r)
+		}
 	}
 	if !takenSlug["components"] {
 		a.addComponentsPage(project, []int{0})
@@ -892,12 +911,16 @@ const defaultAssetsIndex = `<script>
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { assets } from 'nx:default/assets';
+	import { areas } from 'nx:default/areas';
+	const areaOf = (label) => areas.find((a) => (a.label ?? a.id) === label);
 </script>
 
 <div class="nx-page">
 	<h1>Assets</h1>
 	{#each assetGroups(assets) as g (g.area)}
-		{#if g.area}<h2>{g.area}</h2>{/if}
+		{#if g.area}
+			<h2>{#if areaOf(g.area)}<a href={resolve('/areas/' + assetSlug(areaOf(g.area).id)) + page.url.search}>{g.area}</a>{:else}{g.area}{/if}</h2>
+		{/if}
 		<ul>
 			{#each g.assets as a (a.id)}
 				<li><a href={resolve('/assets/' + assetSlug(a.id)) + page.url.search}>{assetTitle(a)}</a>{#if a.subtitle}<span class="sub"> {a.subtitle}</span>{/if}</li>
@@ -934,3 +957,82 @@ const defaultAsset = `<script>
 	<p>No asset by that name. <a href={resolve('/assets') + page.url.search}>All assets</a></p>
 {/if}
 `
+
+// areaList is the areas as one JSON array: each with the route of the
+// mimic named for it (its file's slug is the area id's), when there is one.
+func areaList(list []json.RawMessage, routeOf map[string]string) json.RawMessage {
+	var out []map[string]any
+	seen := map[string]bool{}
+	for _, d := range list {
+		var a map[string]any
+		if json.Unmarshal(d, &a) != nil {
+			continue
+		}
+		id, _ := a["id"].(string)
+		slug := assetSlug(id)
+		if slug == "" || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		if r, ok := routeOf[slug]; ok {
+			a["scheme"] = r
+		}
+		out = append(out, a)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(out)
+	return b
+}
+
+// defaultArea is one area's page: the kit's AreaPage.
+const defaultArea = `<script>
+	import { AreaPage, assetSlug } from '@joyautomation/nautilus-hmi';
+	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
+	import { assets } from 'nx:default/assets';
+	import { areas } from 'nx:default/areas';
+	import { alarms } from 'nx:default/client';
+	const area = $derived(areas.find((a) => assetSlug(a.id) === page.params.id));
+</script>
+
+{#if area}
+	<AreaPage
+		{area}
+		{assets}
+		alarms={alarms.supported ? alarms : null}
+		href={(a) => resolve('/assets/' + assetSlug(a.id)) + page.url.search}
+		schemeHref={area.scheme ? resolve(area.scheme) + page.url.search : undefined}
+	/>
+{:else}
+	<p>No area by that name. <a href={resolve('/assets') + page.url.search}>All assets</a></p>
+{/if}
+`
+
+// schemesLast puts the mimics named for an area (the process schemes
+// `naut hmi scheme` writes) after the others, so writing one never takes
+// the home page from a screen that was there: the first mimic is "/".
+func schemesLast(mimics []string, areas []json.RawMessage) []string {
+	named := map[string]bool{}
+	for _, d := range areas {
+		var a struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(d, &a) == nil && assetSlug(a.ID) != "" {
+			named[assetSlug(a.ID)] = true
+		}
+	}
+	if len(named) == 0 {
+		return mimics
+	}
+	var first, last []string
+	for _, m := range mimics {
+		if named[slugOf(m)] {
+			last = append(last, m)
+		} else {
+			first = append(first, m)
+		}
+	}
+	return append(first, last...)
+}

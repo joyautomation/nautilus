@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/audit"
-	"github.com/joyautomation/nautilus/auth"
 )
 
 // Elevation (#708 PR 5c, docs/design/identity-audit.md §2): a browser
@@ -74,7 +73,7 @@ func (s *Server) handleElevate(w http.ResponseWriter, r *http.Request) {
 	// refused before any hashing, so a viewer's sessions cannot keep the
 	// password-hash slots busy (#1088 review).
 	if !s.holdsElevated(a) {
-		refuse(http.StatusForbidden, "nothing to confirm: "+se.user+" holds none of the elevated permissions ("+strings.Join(auth.ElevatedPermissions, ", ")+")", "no elevated permission", nil)
+		refuse(http.StatusForbidden, "nothing to confirm: "+se.user+" holds none of the elevated permissions ("+strings.Join(s.elevatedNames(), ", ")+")", "no elevated permission", nil)
 		return
 	}
 	if se.oidc {
@@ -149,7 +148,7 @@ func (s *Server) handleElevate(w http.ResponseWriter, r *http.Request) {
 // holdsElevated reports whether a's principal holds any elevated
 // permission, anywhere.
 func (s *Server) holdsElevated(a actor) bool {
-	for _, p := range auth.ElevatedPermissions {
+	for _, p := range s.elevatedNames() {
 		if s.policy.Holds(a.pr, p) {
 			return true
 		}

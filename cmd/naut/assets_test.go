@@ -223,12 +223,12 @@ func TestTagRootIsTheAlarmEnginesDefaultEquipment(t *testing.T) {
 // refused: the two would be one page (#714).
 func TestPlantIDAgainstAnUnnamedDevicesPage(t *testing.T) {
 	p := plantTestProjectWith(t, "  - { id: conv2, type: Pump, tag: P101 }\n")
-	_, errs, _ := p.CheckPlant(fstest.MapFS{}, nil)
+	_, errs, _ := p.CheckPlant(fstest.MapFS{}, nil, nil)
 	if all := strings.Join(errs, "\n"); !strings.Contains(all, "equipment conv2 and device CONV2 would share the page /assets/conv2") {
 		t.Errorf("errors %q", all)
 	}
 	p = plantTestProject(t)
-	if _, errs, _ := p.CheckPlant(fstest.MapFS{}, nil); len(errs) != 0 {
+	if _, errs, _ := p.CheckPlant(fstest.MapFS{}, nil, nil); len(errs) != 0 {
 		t.Errorf("the plain test plant: %v", errs)
 	}
 }
@@ -250,5 +250,30 @@ func TestPlantAssetKeysAlarmsOnTheTagRoot(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no page for Dot1")
+	}
+}
+
+func TestPlantAreasListTheEquipmentThatHasAPage(t *testing.T) {
+	p := plantTestProject(t)
+	assets := plantAssets(p)
+	areas := plantAreas(p, assets)
+	if len(areas) != 1 {
+		t.Fatalf("%d areas", len(areas))
+	}
+	var a struct {
+		ID, Label string
+		Assets    []string
+	}
+	if err := json.Unmarshal(areas[0], &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.ID != "Receiving" || a.Label != "Receiving dock" || strings.Join(a.Assets, ",") != "P101,Belt1" {
+		t.Errorf("area %+v: the equipment with a page, in the plant's order", a)
+	}
+	if got := plantAreas(p, nil); len(got) != 1 || strings.Contains(string(got[0]), "P101") {
+		t.Errorf("with no pages the area lists none: %s", got)
+	}
+	if plantAreas(&project.Project{}, nil) != nil {
+		t.Error("no plant, no areas")
 	}
 }
