@@ -13,14 +13,14 @@ check() { # SIZE LIMIT
   echo "$line"
   [ -z "${GITHUB_STEP_SUMMARY:-}" ] || echo "**$line**" >>"$GITHUB_STEP_SUMMARY"
   if [ "$size" -gt "$limit" ]; then
-    echo "::error::cmd/naut-wasm grew past its budget ($size > $limit). Find what leaked in with: GOOS=js GOARCH=wasm go list -deps ./cmd/naut-wasm. Raising .github/wasm-budget.txt needs a reason in the PR; set it to the new size plus 1% ($(( size + size / 100 ))), never tighter, so concurrent merges of small legitimate growth do not turn main red."
+    echo "::error::cmd/naut-wasm grew past its budget ($size > $limit). Find what leaked in with: GOOS=js GOARCH=wasm go list -deps ./cmd/naut-wasm. Raising .github/wasm-budget.txt needs a reason in the PR; set it to the new size plus 1% ($(( size + size / 100 ))), never tighter, and measured by CI, not locally (a local build ran about 47 KB under CI), so concurrent merges of small legitimate growth do not turn main red."
     return 1
   fi
   # Headroom over 2%: say so, so the next PR does not spend what this one saved.
   # The suggested limit is the size plus 1%: a ratchet step tighter than that
   # turns main red when two PRs, each fine alone, land together.
   if [ $(( (limit - size) * 50 )) -gt "$limit" ]; then
-    echo "::notice::the wasm is more than 2% under its limit: lower .github/wasm-budget.txt to $(( size + size / 100 ))"
+    echo "::notice::the wasm is more than 2% under its limit: lower .github/wasm-budget.txt to $(( size + size / 100 )) (take the size from the CI run, not a local build: they differ by about 0.5%)"
   fi
 }
 
