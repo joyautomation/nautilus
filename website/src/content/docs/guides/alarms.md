@@ -603,8 +603,12 @@ alarms:
   A code is tried only against the alarms whose escalation can page that
   person by SMS. Five wrong codes from one person in an hour, and their
   codes are refused until the hour has passed; ten from anyone in a day,
-  and the controller takes no code until the oldest is a day old (links
-  and the HMI still acknowledge). So a guess hits with probability (those
+  and the controller suspends SMS acknowledgements until the oldest is a
+  day old: the system alarm `nautilus.sms-ack-suspended` stands while it
+  lasts, the audit trail records `alarm.sms-ack-suspended` once with its
+  end, and SMS pages stop offering a code (links and the HMI still
+  acknowledge). A good code for an alarm someone acknowledged since is
+  answered "already acknowledged" and does not count. So a guess hits with probability (those
   alarms' standing occurrences × 26) / 10⁸, and there are at most ten a
   day per controller: with 100 standing, about one in 4 000 per day of
   sustained guessing. The counts live in memory: a restart or a takeover
