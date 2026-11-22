@@ -373,15 +373,22 @@ func TestTypedScalarSetpointIsAParameter(t *testing.T) {
 	}
 	rt, err := New(Options{
 		Program: `PROGRAM P
-VAR_EXTERNAL R : REAL; N : INT; B : BOOL; END_VAR
+VAR_EXTERNAL R : REAL; N : INT; B : BOOL; T : TIME; END_VAR
 END_PROGRAM`,
-		Tags: []TagDef{typed("R", "REAL", 1.5), typed("N", "INT", 3), typed("B", "BOOL", true), Setpoint("Untyped", 2.0)},
+		Tags: []TagDef{typed("R", "REAL", 1.5), typed("N", "INT", 3), typed("B", "BOOL", true), typed("T", "TIME", 5000), Setpoint("Untyped", 2.0)},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"R", "N", "B", "Untyped"} {
 		param(t, rt, name) // fails the test when it is missing
+	}
+	// a TIME setpoint reads back differently from its manifest init, so it is
+	// not a parameter even with a numeric init
+	for _, p := range rt.Parameters() {
+		if p.Name == "T" {
+			t.Errorf("TIME setpoint T listed as a parameter: %v", p)
+		}
 	}
 	if p := param(t, rt, "R"); p.Init != 1.5 {
 		t.Errorf("R init = %v, want 1.5", p.Init)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -77,6 +78,11 @@ func TestBuildsTheDefaultAppFromMimics(t *testing.T) {
 		if strings.HasSuffix(name, ".js") {
 			js.Write(b)
 		}
+	}
+	// the Configuration link is gated on the config permission (the headline
+	// of the needs: field), and only that link
+	if !regexp.MustCompile(`label:\s*"Configuration",\s*needs:\s*"config"`).MatchString(js.String()) {
+		t.Errorf("the Configuration screen is not gated with needs: config")
 	}
 	for _, want := range []string{"Sign out", "/api/parameters", "/api/config", "needs the config permission"} {
 		if !strings.Contains(js.String(), want) {

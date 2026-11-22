@@ -389,9 +389,9 @@ serves them at `/`, with the engineering dashboard moved to `/_nautilus/`:
   setpoints against the manifest's `init:`), the shift Log (with every
   note on equipment, tags and alarms listed under it), and Configuration
   (the drivers and devices as forms; shown only to a session that holds the
-  `config` permission), the active alarms
-  (the banner opens `/alarms`, to acknowledge and shelve them) and Ack
-  all, who is signed in with Sign out, the connection and a theme switch. The pages are live and their
+  `config` permission), and the active alarms
+  (the banner opens `/alarms`, to acknowledge and shelve them). The bar also
+  has Ack all, who is signed in with Sign out, the connection and a theme switch. The pages are live and their
   controls write, as in the editor; a click on equipment with a `panel`
   opens it. Each page shows its whole
   drawing at once, fitted to the window's width and height and centred,
