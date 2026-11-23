@@ -158,8 +158,11 @@ stream in H.264, and a low-resolution one is the right one for a slow link.
   They are never in an error, a log or an answer, and neither is the camera's address.
 - **The stream starts on the first request and stops 30 seconds after the last one.**
   A camera nobody is watching is not being read.
-- **The player** is the kit's own (the asset page's "Watch live"): Safari and iPhone
-  play the HLS playlist natively, other browsers through Media Source Extensions.
+- **The player** is the kit's own (the asset page's "Watch live"): a browser with
+  Media Source Extensions (Chrome, Firefox, Edge, Safari on a Mac) plays it through
+  them, and measures the bitrate; one without (an iPhone) is given the playlist and
+  plays it natively, with the bitrate not measured. An RTSP camera with no
+  `snapshot-url` has no still to show: the page says so and offers Watch live.
   The latency is a few segments, about 4 to 8 seconds; this is not a control view.
 - **Who may view, the caps and the journal** are the same as for motion-JPEG: a
   viewer is a lease kept alive by the player's requests and dropped 15 seconds

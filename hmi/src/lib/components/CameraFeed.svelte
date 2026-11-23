@@ -70,7 +70,7 @@
 
 	// snapshots at the camera's interval (also retrying after a failure), paused while hidden
 	$effect(() => {
-		if (live) return;
+		if (live || !camera.snapshot) return; // a camera with no still is asked for none
 		const id = setInterval(() => {
 			if (document.visibilityState !== 'hidden') nonce = Date.now();
 		}, Math.max(1, camera.interval) * 1000);
@@ -101,7 +101,7 @@
 <figure class="feed">
 	<figcaption>
 		<span class="name">{camera.label}</span>
-		<span class="mode">{live ? 'Live video' : 'Still image, refreshes every ' + camera.interval + ' s'}</span>
+		<span class="mode">{live ? 'Live video' : camera.snapshot ? 'Still image, refreshes every ' + camera.interval + ' s' : 'No still image from this camera'}</span>
 	</figcaption>
 	{#if !camera.view}
 		<p class="msg bad" role="status">{NO_VIEW}</p>
@@ -109,6 +109,8 @@
 	{#if live && hls}
 		<!-- svelte-ignore a11y_media_has_caption -->
 		<video bind:this={video} muted playsinline autoplay aria-label={alt}></video>
+	{:else if !live && !camera.snapshot}
+		<div class="nostill" role="img" aria-label={alt}>No still image: click Watch live to see the camera.</div>
 	{:else}
 	{#key live}
 		<img {src} {alt} onerror={failed} onload={loaded} />
@@ -152,6 +154,17 @@
 		font-size: var(--font-xs, 0.85rem);
 	}
 	img,
+	.nostill {
+		display: grid;
+		place-items: center;
+		min-height: 7rem;
+		padding: var(--space-3, 12px);
+		border: 1px dashed var(--border, currentColor);
+		border-radius: var(--radius, 6px);
+		color: var(--muted, inherit);
+		font-size: 0.875rem;
+		text-align: center;
+	}
 	video {
 		max-width: 100%;
 		border-radius: var(--radius-sm);

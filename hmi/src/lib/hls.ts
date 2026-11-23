@@ -4,7 +4,7 @@
 // playground's wasm, so every npm dependency grows it. The controller serves
 // a narrow, known shape (one fragmented-MP4 H.264 playlist with a sliding
 // window of ~2 s segments), which a small player can follow with Media Source
-// Extensions. Safari and iOS play HLS natively and get the playlist URL.
+// Extensions where a browser has them; a browser with only native HLS (iPhone) gets the playlist URL.
 //
 // The logic is pure and tested (tests/hls.test.ts); `playHls` is the thin
 // DOM-facing loop, with everything it touches injectable through `env`.
@@ -266,7 +266,10 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 	opts.signal?.addEventListener('abort', stop);
 	if (opts.signal?.aborted) stop();
 
-	if (native) {
+	// Media Source Extensions where there are any (it measures the bitrate and does the
+	// same thing everywhere: Chrome's own native HLS is newer and refuses what the
+	// controller's segments are, a Safari without MSE (iPhone) is where native is needed)
+	if (native && !MS) {
 		video.src = playlistUrl;
 		void video.play?.()?.catch?.(() => {});
 		return { stop, native: true };

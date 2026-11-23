@@ -275,10 +275,18 @@ describe('playHls', () => {
 		expect(errors).toEqual([['This browser cannot play live video from this camera.', 0]]);
 	});
 
+	it('prefers Media Source Extensions over native HLS when both exist', async () => {
+		const v: any = { src: '', play: () => Promise.resolve() };
+		const h = playHls(v, '/api/cameras/c1/hls/', { env: { native: true, MediaSource: class {} as any }, fetch: (async () => new Response('x', { status: 404 })) as any });
+		expect(h.native).toBe(false);
+		expect(v.src).toBe('');
+		h.stop();
+	});
+
 	it('hands the playlist to the browser where HLS is native, and measures nothing', async () => {
 		const v: any = { src: '', play: () => Promise.resolve() };
 		const bit: number[] = [];
-		const h = playHls(v, '/api/cameras/c1/hls/', { env: { native: true }, onBitrate: (b) => bit.push(b) });
+		const h = playHls(v, '/api/cameras/c1/hls/', { env: { native: true, MediaSource: undefined }, onBitrate: (b) => bit.push(b) });
 		expect(v.src).toBe('/api/cameras/c1/hls/index.m3u8');
 		expect(h.native).toBe(true);
 		h.stop();
