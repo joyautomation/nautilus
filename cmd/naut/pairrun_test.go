@@ -884,11 +884,11 @@ func TestAPairOfMembersSharesTheCheckout(t *testing.T) {
 		t.Error("the controllers hold different canonical chains")
 	}
 	// each says which key it signs with; both see both
-	stop := make(chan struct{})
-	defer close(stop)
+	dctx, dstop := context.WithCancel(context.Background())
+	defer dstop()
 	for _, n := range []*pairNode{l, s} {
 		st := n.m.cl.Store()
-		go n.m.checkoutDuties(st, func() (int, error) { return 0, nil }, func() {})
+		go n.m.checkoutDuties(dctx, st, func() (int, error) { return 0, nil }, func() {})
 	}
 	pairWait(t, "both keys on both controllers", 10*time.Second, func() bool {
 		return len(ls.KeyFingerprints()) == 2 && len(ss.KeyFingerprints()) == 2
@@ -897,4 +897,56 @@ func TestAPairOfMembersSharesTheCheckout(t *testing.T) {
 		t.Error("the two controllers announced one key")
 	}
 	_ = filepath.Join
+}
+
+// The checkout duties follow the lead by term, in any state of the store: a lead
+// lost, or lost and won again between two steps, lets the force go at once; a
+// halted store still lets it go; a leader reconciles and a standby does not.
+func TestCheckoutDutiesFollowTheLeadByTerm(t *testing.T) {
+	var demotions, reconciles, announces int
+	var halt string
+	conds := map[string]string{}
+	d := &checkoutDuty{halted: func() string { return halt }, announce: func(string) error { announces++; return nil }, name: "a", reconcile: func() (int, error) { reconciles++; return 0, nil }, demoted: func() { demotions++ },
+		condition: func(k, m string) { conds[k] = m }}
+
+	d.step(false, 1) // a standby: nothing to let go, nothing to end
+	if demotions != 0 || reconciles != 0 {
+		t.Fatalf("a standby acted: demotions %d, reconciles %d", demotions, reconciles)
+	}
+	d.step(true, 2) // leads in term 2
+	d.step(true, 2)
+	if demotions != 0 || reconciles != 2 {
+		t.Fatalf("the leader: demotions %d, reconciles %d (want 0, 2)", demotions, reconciles)
+	}
+	d.step(true, 3) // lost and won again inside one tick: another term
+	if demotions != 1 {
+		t.Fatalf("a re-won lead in a new term did not let the force go: demotions %d", demotions)
+	}
+	d.step(false, 3) // lost for good
+	if demotions != 2 {
+		t.Fatalf("losing the lead did not let the force go: demotions %d", demotions)
+	}
+	d.step(false, 3)
+	if demotions != 2 {
+		t.Fatalf("a standby let a force go again: demotions %d", demotions)
+	}
+	// a halted store: still lets the force go, and neither announces nor reconciles
+	d.step(true, 4)
+	before, announced := reconciles, announces
+	halt = "an entry from a newer build"
+	d.step(true, 4)
+	if conds["checkout-halted"] == "" || reconciles != before || announces != announced {
+		t.Fatalf("a halted store: condition %q, reconciles %d (before %d), announces %d (before %d)", conds["checkout-halted"], reconciles, before, announces, announced)
+	}
+	halt = ""
+	d.step(true, 4)
+	if conds["checkout-halted"] != "" || reconciles != before+1 {
+		t.Fatalf("a store that is no longer halted: condition %q, reconciles %d", conds["checkout-halted"], reconciles)
+	}
+	halt = "an entry from a newer build"
+	d.step(true, 4)
+	d.step(false, 4)
+	if demotions != 3 {
+		t.Fatalf("a halted controller that lost the lead did not let its force go: demotions %d", demotions)
+	}
 }

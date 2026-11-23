@@ -83,6 +83,8 @@ type pairMember struct {
 	// cl is the pair's I/O checkout (#719 slice 5): runs in the log. Made by
 	// startLog only when wantCheckout was set (the project has a checkout
 	// section and auth users), so a project without one gets no key file.
+	// cl is set once in startLog, before the log node starts, so nothing that
+	// reads it (endSuperseded, the duties) can run before it is set.
 	cl           *server.CheckoutLog
 	wantCheckout bool
 	sess         *server.SessionLog // the pair's browser sessions (#716)
@@ -1220,55 +1222,88 @@ func peerServer(h http.Handler) *http.Server {
 var _ server.Commissioner = (*leader.Quorum)(nil)
 
 // checkoutDuties are what a pair's controller does about the I/O checkout (#719
-// slice 5) besides serving it, once a second until the process ends:
-//
-//   - it says which key it signs with, in the log, so both controllers' pages
-//     show both keys (asked again until the log takes it: the pair may have no
-//     majority at start);
-//   - on the controller that runs the program, and only there, it ends a force
-//     the log has standing that this controller is not driving (reconcile):
-//     a force is the old leader's own output drive and does not fail over, and
-//     a start whose answer was lost can commit later under a new leader. On a
-//     standby it would propose ends for a force the leader is driving, so it
-//     is not called there.
-func (m *pairMember) checkoutDuties(st *checkout.Store, reconcile func() (int, error), demoted func()) {
-	name := string(m.o.Self)
+// slice 5) besides serving it, once a second until ctx ends (see checkoutDuty).
+func (m *pairMember) checkoutDuties(ctx context.Context, st *checkout.Store, reconcile func() (int, error), demoted func()) {
+	d := &checkoutDuty{halted: st.Halted, announce: st.AnnounceKey, name: string(m.o.Self), reconcile: reconcile, demoted: demoted, condition: m.q.SetCondition}
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	shown := ""
-	led := false
-	for range t.C {
-		// a checkout that stopped on an entry from a newer build is a standing
-		// condition of the pair (naut redundancy status, /api/cluster), with its fix
-		if why := st.Halted(); why != shown {
-			shown = why
-			if why == "" {
-				m.q.SetCondition("checkout-halted", "")
-			} else {
-				m.q.SetCondition("checkout-halted", "the I/O checkout has stopped on this controller: "+why+". Bring this controller up to the build the other one runs, then restart it; the oplog, notes, alarms and substitutes are unaffected")
-			}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			d.step(m.q.IsLeader(), m.q.Term())
 		}
-		if shown != "" {
-			continue // its checkout state is stale: it neither announces nor ends forces from it
+	}
+}
+
+// checkoutDuty is one controller's checkout duties, a step at a time:
+//
+//   - a lead that is lost, or won again in another term between two steps, lets
+//     the force this controller drove go at once (demoted: unforced here, nothing
+//     proposed, since it no longer leads). A runtime's own takeover has dropped
+//     its forces; the checkout's "I drive it" state must not outlive that. This
+//     is tracked by term, not a flag sampled once a second, and runs whatever
+//     state the checkout store is in;
+//   - a checkout that stopped on an entry from a newer build is a standing
+//     condition of the pair (naut redundancy status, /api/cluster), with its fix;
+//     its state is stale, so it neither announces its key nor ends forces;
+//   - it says which key it signs with, in the log, so both pages show both keys
+//     (asked again until the log takes it);
+//   - on the controller that leads, and only there, it ends a force the log has
+//     standing that this controller is not driving (the other controller's, or a
+//     start whose answer was lost, once its log has synced); on a standby it would
+//     propose ends for a force the leader is driving.
+type checkoutDuty struct {
+	halted    func() string
+	announce  func(controller string) error
+	name      string
+	reconcile func() (int, error)
+	demoted   func()
+	condition func(key, msg string)
+
+	led      bool
+	term     uint64
+	shown    string // the halt shown as a condition
+	lastWarn string // the last reconcile error logged, so a standing one is said once
+}
+
+func (d *checkoutDuty) step(lead bool, term uint64) {
+	// leadership first, in any state of the store
+	if d.led && (!lead || term != d.term) {
+		d.demoted()
+		d.led = false
+	}
+	if lead && !d.led {
+		d.led, d.term = true, term
+	}
+	if why := d.halted(); why != d.shown {
+		d.shown = why
+		if why == "" {
+			d.condition("checkout-halted", "")
+		} else {
+			d.condition("checkout-halted", "the I/O checkout has stopped on this controller: "+why+". Update this controller to the build the other one runs, then restart it; the oplog, notes, alarms and substitutes are unaffected")
 		}
-		if err := st.AnnounceKey(name); err != nil {
-			slog.Debug("checkout: the key is not announced yet", "error", err)
+	}
+	if d.shown != "" {
+		return // its checkout state is stale: it neither announces nor ends forces from it
+	}
+	if err := d.announce(d.name); err != nil {
+		slog.Debug("checkout: the key is not announced yet", "error", err)
+	}
+	if !lead {
+		return
+	}
+	switch n, err := d.reconcile(); {
+	case err != nil:
+		if err.Error() != d.lastWarn { // asked again each step; said when it changes
+			d.lastWarn = err.Error()
+			slog.Warn("checkout: could not end a force the log still has", "error", err)
 		}
-		if lead := m.q.IsLeader(); !lead {
-			if led {
-				// lost the lead without exiting: the force it was driving is let go here
-				// at once (nothing is proposed: it no longer leads)
-				demoted()
-			}
-			led = false
-			continue
-		}
-		led = true
-		switch n, err := reconcile(); {
-		case err != nil:
-			slog.Warn("checkout: could not end a force the log still has", "error", err) // asked again
-		case n > 0:
-			slog.Warn("checkout: a force nothing on this controller drives was recorded as interrupted (the other controller's, or one whose start was not confirmed)", "forces", n)
-		}
+	case n > 0:
+		d.lastWarn = ""
+		slog.Warn("checkout: a force nothing on this controller drives was recorded as interrupted (the other controller's, or one whose start was not confirmed)", "forces", n)
+	default:
+		d.lastWarn = ""
 	}
 }

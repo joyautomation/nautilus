@@ -717,3 +717,30 @@ func TestDemotionLetsAForceGoAndARePromotionFindsNoneStanding(t *testing.T) {
 	}
 	co.Demoted() // and again: nothing to do
 }
+
+// A force still starting when its controller loses the lead is let go by the
+// start itself: Demoted finds nothing applied yet, and the start must not then
+// arm a timer and leave the output forced here with nothing watching it.
+func TestDemotionDuringAStartLetsTheForceGo(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	reached, release := holdAt(t, "applied")
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- r.force(t, goodForce) }()
+	<-reached
+	ckOf(r.srv).Demoted()
+	release()
+	if rec := <-done; rec.Code != http.StatusConflict {
+		t.Errorf("a start on a controller that lost the lead: %d %s, want 409", rec.Code, rec.Body)
+	}
+	if r.forced("Out") {
+		t.Error("the output stays forced here after the demotion, with no timer or watch")
+	}
+	co := ckOf(r.srv)
+	co.ck.mu.Lock()
+	still := co.ck.force != nil
+	co.ck.mu.Unlock()
+	if still {
+		t.Error("the force's slot is still taken")
+	}
+}

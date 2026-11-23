@@ -251,7 +251,8 @@ func TestAPairsServersAnswerTheCheckoutAndShowBothKeys(t *testing.T) {
 	// the second becomes the standby: a force drives an output, so not from it
 	standing[1].Store(false)
 	rec = call(t, stand, "POST", "/api/checkout/runs/"+run.ID+"/force", `{"point":"OUT","value":1,"seconds":10,"confirm":"OUT"}`, seng)
-	if rec.Code == http.StatusCreated || (rec.Code == http.StatusConflict && !strings.Contains(rec.Body.String(), "standby")) {
+	// (the standby's server turns any write away before the checkout sees it)
+	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "standby") {
 		t.Errorf("a force from the standby: %d %s", rec.Code, rec.Body)
 	}
 }

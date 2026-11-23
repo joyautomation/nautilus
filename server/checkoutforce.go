@@ -213,7 +213,7 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		ckHook("applied")
 		a.co.ck.mu.Lock()
 		// the run was abandoned while this was starting: let the force go again
-		if f.abandoned || a.co.ck.force != f {
+		if f.abandoned || f.ending || a.co.ck.force != f {
 			a.co.ck.mu.Unlock()
 			a.s.rt.Tags().UnforceIf(name, gen)
 			return nil, http.StatusConflict, checkout.ErrNotOpen
@@ -222,9 +222,9 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		started = true
 		// a timer's duration runs on the monotonic clock
 		f.timer = time.AfterFunc(d, func() { a.guarded(func() { a.endCheckoutForce(f, checkout.ForceExpired, "controller") }) })
-		a.co.ck.mu.Unlock()
 		watched := make(chan struct{})
-		f.watched = watched
+		f.watched = watched // under the lock: Demoted and Stop read it there
+		a.co.ck.mu.Unlock()
 		go func() {
 			defer close(watched)
 			a.watchCheckoutForce(f)
@@ -380,6 +380,15 @@ func (co *CheckoutOptions) ReconcileForces() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// the controller's own end of a force nothing here drove is journalled like
+	// its expiry is
+	co.ck.mu.Lock()
+	a := co.api
+	co.ck.mu.Unlock()
+	if a != nil && a.s.audit != nil {
+		a.s.audit.record(audit.Entry{Action: "checkout.force-end", Target: rec.Point, User: "system", Source: audit.SourceSystem, Result: audit.ResultOK,
+			Detail: map[string]any{"run": rec.Run, "point": rec.Point, "how": checkout.ForceInterrupted, "by": "controller"}})
+	}
 	return 1, nil
 }
 
@@ -436,10 +445,12 @@ func (a *checkoutAPI) dropForceLocally(f *ckForce) {
 		f.timer.Stop()
 	}
 	close(f.done)
-	w := f.watched
+	// what the force had applied, read under the lock the start sets it under: a
+	// start still between ForceIfFree and its lock sees ending and lets go itself
+	ready, tag, gen, w := f.ready, f.tag, f.gen, f.watched
 	a.co.ck.mu.Unlock()
-	if f.ready {
-		a.s.rt.Tags().UnforceIf(f.tag, f.gen)
+	if ready {
+		a.s.rt.Tags().UnforceIf(tag, gen)
 	}
 	a.co.ck.mu.Lock()
 	if a.co.ck.force == f {
