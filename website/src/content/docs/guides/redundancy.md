@@ -179,7 +179,8 @@ never computes.
 - **On takeover**, the new leader re-reads the retain store (the old
   leader may have accepted retunes or edits while this replica idled),
   discards program frames so warm-start logic runs against live field
-  values, and zeroes its scan clock so the first `dt` is one scan, not
+  values (`FIRST_SCAN()` is TRUE on its first scan, on every takeover,
+  so initialisation under it runs as at a start), and zeroes its scan clock so the first `dt` is one scan, not
   the hours it spent standing by. Process state is deliberately **not**
   replicated — configuration travels through the retain store, process
   state re-derives from the field.

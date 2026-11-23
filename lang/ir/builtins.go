@@ -62,8 +62,10 @@ func init() {
 // scan in progress. A host without it has no first scan to report.
 type ScanInfo interface {
 	// FirstScan is true for the whole of a program's first scan after it
-	// starts or is downloaded, and false from the second scan on. An online
-	// edit (a warm swap, which keeps the program's state) is not a start.
+	// starts or is downloaded, or after a redundant pair's takeover (which
+	// resets the program's state), and false from the second scan on. An
+	// online edit (a warm swap, which keeps the program's state) is not a
+	// start, nor is a leadership resumed in the same term.
 	FirstScan() bool
 }
 

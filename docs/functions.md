@@ -565,7 +565,7 @@ clamp to the string instead of faulting.
 
 | Name | Signature | Result | Behavior |
 | --- | --- | --- | --- |
-| `FIRST_SCAN` | `FIRST_SCAN()` | BOOL | TRUE for the whole of the program's first scan after it starts or is downloaded, FALSE from the second scan on. An online edit keeps the program's state, so it is not a start, and neither is a rollback |
+| `FIRST_SCAN` | `FIRST_SCAN()` | BOOL | TRUE for the whole of the program's first scan after it starts or is downloaded, or after a redundant pair's takeover (which resets the program's state), FALSE from the second scan on. An online edit keeps the program's state, so it is not a start, and neither is a rollback or a leadership resumed in the same term |
 
 `FIRST_SCAN()` is how a program seeds state from the world once: a ladder
 function contact `FIRST_SCAN() { next := Clock.SECOND }`, or
