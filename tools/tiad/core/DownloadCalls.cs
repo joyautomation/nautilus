@@ -287,6 +287,13 @@ namespace Tiad
             {
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
             }
+            // A kept CPU's access control turned on by an apply on this
+            // session loads only by the attestation route (TurnOnRule).
+            if (s.AccessTurnOn && !s.AccessTurnOnLoaded)
+            {
+                string turnWhy = TurnOnRule.DownloadRefusal(req, s.AccessTurnOnTried);
+                if (turnWhy != null) throw TiadException.BadRequest("{0}", turnWhy + "; nothing was sent to the CPU");
+            }
             // A station with a Full access user turns the CPU's access
             // control on at its hardware load, and from then on going
             // online to it asks credentials (section 3.9): the compare
@@ -535,7 +542,11 @@ namespace Tiad
                     // (#1180 review), as it must get the hardware opt-in,
                     // and with it any outsideChanges accept the request
                     // carries: an overwrite must be on the record (#789).
+                    bool marked = !req.DryRun && s.AccessTurnOn && !s.AccessTurnOnLoaded;
+                    if (marked) MarkTurnOnPending(s, req);
                     if (!req.DryRun) Record(t, s, req, ranWith, run);
+                    // Recorded: TIA's download comes next, and may load.
+                    if (marked) s.AccessTurnOnTried = true;
                     try
                     {
                         // A dry run never starts the CPU, whatever the request
@@ -713,6 +724,21 @@ namespace Tiad
                 throw Unknown("TIA reported the download loaded, but the compare right after it differs (" + (names.Count == 0 ? "no differences named" : string.Join(", ", names.ToArray())) + ")", acting, false, result);
             }
             outcome = "loaded state=" + (result.State == "" ? "unknown" : result.State + " (" + result.StateSource + ")") + " compare=equal blocks=[" + TiaNames.BlockLabels(cmp.Blocks, 20) + "]" + (req.Hardware ? " hardwareVerified=false" : "");
+            if (s.AccessTurnOn && !s.AccessTurnOnLoaded)
+            {
+                s.AccessTurnOnLoaded = true;
+                Log.Line("audit access-turn-on session={0} address={1} loaded (route {2})", s.Id, Json.Quote(req.Address), Json.Quote(run == null ? "" : run.UserManagementReset));
+                string marker = work.Resolve(s.Project) + TurnOnRule.MarkerSuffix;
+                try
+                {
+                    File.Delete(marker);
+                }
+                catch (Exception e)
+                {
+                    // The gate stays on the next open: never looser.
+                    Log.Line("audit access-turn-on session={0} removing the turn-on pending mark failed: {1}", s.Id, Json.Quote(e.GetType().Name + ": " + e.Message));
+                }
+            }
             o["dryRun"] = false;
             o["downloaded"] = true;
             o["compareEqual"] = true;
@@ -977,6 +1003,23 @@ namespace Tiad
             });
         }
 
+        // MarkTurnOnPending marks the session's project turn-on pending
+        // before a gated download's deploy record saves it (TurnOnRule
+        // .MarkerSuffix); failing refuses the download, with nothing sent.
+        void MarkTurnOnPending(Session s, DownloadRequest req)
+        {
+            string marker = work.Resolve(s.Project) + TurnOnRule.MarkerSuffix;
+            try
+            {
+                File.WriteAllText(marker, "{\"session\":" + Json.Quote(s.Id) + ",\"address\":" + Json.Quote(req.Address) + "}\n");
+            }
+            catch (Exception e)
+            {
+                throw new TiadException(500, Kinds.OperationFailed, "marking the project turn-on pending failed (" + e.GetType().Name + ": " + e.Message + "); nothing was sent to the CPU");
+            }
+            Log.Line("audit access-turn-on session={0} project={1} marked turn-on pending before the deploy record", s.Id, Json.Quote(s.Project));
+        }
+
         object Save(Call c)
         {
             NeedTia();
@@ -992,6 +1035,7 @@ namespace Tiad
                 {
                     if (s.Unclean) throw CpuReuse.Unclean("saving it");
                     if (s.ForeignChanged) throw Ownership.Unusable("saving it");
+                    if (s.AccessTurnOn && !s.AccessTurnOnLoaded) throw TiadException.BadRequest("{0}", TurnOnRule.SaveRefused);
                     return t.Save(s.Handle, archive);
                 });
                 var o = new Obj();

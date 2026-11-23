@@ -146,6 +146,7 @@ namespace Tiad.Test
                 T("AccessPlan", AccessPlan),
                 T("AccessStepsNewCpu", AccessStepsNewCpu),
                 T("AccessStepsKeptCpu", AccessStepsKeptCpu),
+                T("TurnOnCheck", TurnOnCheck),
                 T("AccessStepsReadBack", AccessStepsReadBack),
                 T("AccessPrepare", AccessPrepare),
                 T("AccessRecordsKnownAnswer", AccessRecordsKnownAnswer),

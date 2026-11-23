@@ -52,6 +52,20 @@ namespace Tiad
         // fullAccessRecordOnly, failed or not: its record shows what tiad
         // was told, so UserManagementRule refuses a reset to tiad's user.
         public bool AccessRecordOnly;
+        // AccessTurnOn is set once an apply on this session turned, or
+        // set out to turn, a kept CPU's access control on
+        // (accessControlTurnOn, TurnOnRule), failed or not; AccessTurnOnLoaded
+        // once a download on it then loaded. Until then a download goes
+        // ahead only as TurnOnRule.DownloadRefusal lets it, and the
+        // project is not saved.
+        public bool AccessTurnOn, AccessTurnOnLoaded;
+        // AccessTurnOnTried is set once a download on this session that the
+        // turn-on gate let through reached the deploy record (so TIA may
+        // have loaded it and the CPU may now ask credentials), or the
+        // session opened a project marked turn-on pending (TurnOnPending):
+        // the gate then lets attestation.cpuAccessControl "enabled" too,
+        // whose logon route needs tiad logged on as "nautilus".
+        public bool AccessTurnOnTried;
         // UploadedFrom is the address this session last uploaded from
         // successfully (its CPU's identity checked), "" for none: the
         // project's CPU settings are then that CPU's, a later apply that

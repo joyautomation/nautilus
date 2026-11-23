@@ -506,7 +506,7 @@ namespace Tiad
                     {
                         if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) s.AccessControlSet = true;
                         CheckPolicy(t, h, st, sec);
-                        t.ApplyStation(h, st, CpuReuse.Create, sec, new List<string>(), s.Made);
+                        t.ApplyStation(h, st, CpuReuse.Create, sec, false, new List<string>(), s.Made);
                     }
                     catch
                     {
@@ -570,8 +570,17 @@ namespace Tiad
                 RetireIfTrusted();
                 throw;
             }
+            // A project an unverified turn-on download saved stays gated.
+            if (File.Exists(full + TurnOnRule.MarkerSuffix))
+            {
+                s.AccessTurnOn = true;
+                s.AccessTurnOnTried = true;
+                Log.Line("audit access-turn-on session={0} project={1} opened turn-on pending", s.Id, Json.Quote(s.Project));
+            }
             sessions.End(s);
-            return SessionJson(s);
+            var o = SessionJson(s);
+            if (s.AccessTurnOn) o["notes"] = new[] { TurnOnRule.PendingNote };
+            return o;
         }
 
         object ListSessions(Call c)
@@ -644,6 +653,7 @@ namespace Tiad
                 Station st = Station.Read(r.Child("station"));
                 Secrets sec = Secrets.Read(r.Child("secrets"));
                 bool recordOnly = r.Bool("fullAccessRecordOnly");
+                bool turnOn = r.Bool("accessControlTurnOn");
                 r.Done();
                 CheckStation(st, sec);
                 sec.Records = records;
@@ -652,6 +662,7 @@ namespace Tiad
                     if (st.Cpu.AccessControl != StationRules.AccessFullAccessUser) throw TiadException.BadRequest("{0}", "fullAccessRecordOnly goes with cpu.accessControl fullAccessUser");
                     Log.Line("audit access-record session={0} project={1} fullAccessRecordOnly=yes", s.Id, Json.Quote(s.Project));
                 }
+                if (turnOn && st.Cpu.AccessControl != StationRules.AccessFullAccessUser) throw TiadException.BadRequest("{0}", TurnOnRule.NeedsFullAccessUser);
                 // The session's state changes only on the TIA thread, in
                 // call order. Until TIA has applied the spec, the project
                 // is neither compiled nor described by any spec, so a
@@ -665,13 +676,55 @@ namespace Tiad
                     ProjectCpu pc = s.Unclean ? null : t.ReadCpu(s.Handle);
                     string decision = CpuReuse.Decide(pc, st.Cpu, s.Unclean);
                     string protection = ConfigProtection.Nothing;
+                    // Whether this apply turns a kept CPU's access control
+                    // on (accessControlTurnOn over "Disabled").
+                    bool turning = false;
                     if (decision == CpuReuse.Reuse)
                     {
                         CpuReuse.Collides(pc, st);
                         protection = ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
-                        AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "");
-                        WebRule.Plan(pc.AccessControl, st.WebServer);
+                        AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "", turnOn);
+                        WebRule.Plan(AccessRule.After(pc.AccessControl, st.Cpu.AccessControl, turnOn), st.WebServer);
+                        turning = turnOn && pc.AccessControl == TurnOnRule.Disabled;
                         kept = pc.Others;
+                    }
+                    if (turning)
+                    {
+                        // Read before any write: a refusal leaves the
+                        // session as it was.
+                        try
+                        {
+                            TurnOnRule.Check(t.ReadTurnOn(s.Handle), notes);
+                        }
+                        catch (TiadException e)
+                        {
+                            Log.Line("audit access-turn-on session={0} project={1} refused: {2}", s.Id, Json.Quote(s.Project), Json.Quote(e.Message));
+                            throw;
+                        }
+                    }
+                    else if (turnOn)
+                    {
+                        notes.Add(TurnOnRule.NothingNote);
+                    }
+                    // A pending mark over a project whose access control
+                    // reads off (the archive failed before it saved, or an
+                    // upload brought the CPU's off state back): no load of
+                    // it turns the CPU's on, so the gate goes.
+                    if (!turning && s.AccessTurnOn && !s.AccessTurnOnLoaded && decision == CpuReuse.Reuse && pc.AccessControl == TurnOnRule.Disabled)
+                    {
+                        string marker = work.Resolve(s.Project) + TurnOnRule.MarkerSuffix;
+                        try
+                        {
+                            File.Delete(marker);
+                            s.AccessTurnOn = false;
+                            s.AccessTurnOnTried = false;
+                            notes.Add(TurnOnRule.ClearedNote);
+                            Log.Line("audit access-turn-on session={0} project={1} pending mark removed: the project's access control reads \"Disabled\"", s.Id, Json.Quote(s.Project));
+                        }
+                        catch (Exception e)
+                        {
+                            Log.Line("audit access-turn-on session={0} removing the turn-on pending mark failed: {1}", s.Id, Json.Quote(e.GetType().Name + ": " + e.Message));
+                        }
                     }
                     if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) s.AccessControlSet = true;
                     if (recordOnly) s.AccessRecordOnly = true;
@@ -706,7 +759,32 @@ namespace Tiad
                     s.Compiled = false;
                     s.Station = null;
                     s.Unclean = true;
-                    t.ApplyStation(s.Handle, st, decision, sec, notes, s.Made);
+                    if (turning)
+                    {
+                        // From the first write on: gated until a download
+                        // on this session loads it (a turn-on after an
+                        // upload re-arms a spent gate).
+                        s.AccessTurnOn = true;
+                        s.AccessTurnOnLoaded = false;
+                        s.AccessTurnOnTried = false;
+                        Log.Line("audit access-turn-on session={0} project={1} accessControlTurnOn=yes from={2}", s.Id, Json.Quote(s.Project), Json.Quote(pc.AccessControl));
+                    }
+                    t.ApplyStation(s.Handle, st, decision, sec, turning, notes, s.Made);
+                    if (turning)
+                    {
+                        // Read again with access control on: TIA may read a
+                        // role's runtime rights only then. A refusal here
+                        // leaves the session unclean: close it unsaved.
+                        try
+                        {
+                            TurnOnRule.Check(t.ReadTurnOn(s.Handle), new List<string>());
+                        }
+                        catch (TiadException e)
+                        {
+                            Log.Line("audit access-turn-on session={0} project={1} refused after the turn-on (session unclean): {2}", s.Id, Json.Quote(s.Project), Json.Quote(e.Message));
+                            throw TiadException.BadRequest("{0}", e.Message + TurnOnRule.LateRefusal);
+                        }
+                    }
                     s.Unclean = false;
                     string kn = CpuReuse.KeptNote(kept);
                     if (kn != null) notes.Add(kn);

@@ -231,6 +231,7 @@ namespace Tiad
         {
             c.RequireContentType("application/octet-stream");
             string full = UrlPath(c);
+            if (TurnOnRule.IsMarker(full)) throw TiadException.BadRequest("{0}", TurnOnRule.MarkerFileRefused);
             if (Directory.Exists(full))
             {
                 throw TiadException.BadRequest("{0} is a directory", work.Rel(full));
@@ -293,6 +294,7 @@ namespace Tiad
         object DeleteFile(Call c)
         {
             string full = UrlPath(c);
+            if (TurnOnRule.IsMarker(full)) throw TiadException.BadRequest("{0}", TurnOnRule.MarkerFileRefused);
             if (!File.Exists(full))
             {
                 throw TiadException.NotFound("no file {0}", c.Var("path"));

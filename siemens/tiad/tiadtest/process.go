@@ -142,10 +142,14 @@ type Script struct {
 	// on (the bench CPU's is off).
 	UploadWebServer bool `json:"uploadWebServer,omitempty"`
 	// UploadAnonymous makes an upload bring an active anonymous user.
-	UploadAnonymous bool           `json:"uploadAnonymous,omitempty"`
-	AccessRecords   string         `json:"accessRecords,omitempty"`
-	Delays          []ScriptedCall `json:"delays,omitempty"`
-	Failures        []ScriptedCall `json:"failures,omitempty"`
+	UploadAnonymous bool `json:"uploadAnonymous,omitempty"`
+	// UploadAnonymousRoles and UploadUsers are AccessScript's.
+	UploadAnonymousRoles []AnonymousRoleScript `json:"uploadAnonymousRoles,omitempty"`
+	UploadUsers          []string              `json:"uploadUsers,omitempty"`
+	RightsOnlyWhenOn     bool                  `json:"rightsOnlyWhenOn,omitempty"`
+	AccessRecords        string                `json:"accessRecords,omitempty"`
+	Delays               []ScriptedCall        `json:"delays,omitempty"`
+	Failures             []ScriptedCall        `json:"failures,omitempty"`
 }
 
 // ScriptedCall names an ITia call ("Compile", "OpenProject", ...).
@@ -385,6 +389,9 @@ func (p *Process) SetAccess(t testing.TB, a AccessScript) {
 	p.script.UploadAccessControl = a.UploadAccessControl
 	p.script.UploadWebServer = a.UploadWebServer
 	p.script.UploadAnonymous = a.UploadAnonymous
+	p.script.UploadAnonymousRoles = a.UploadAnonymousRoles
+	p.script.UploadUsers = a.UploadUsers
+	p.script.RightsOnlyWhenOn = a.RightsOnlyWhenOn
 	p.script.AccessRecords = a.Records
 	s := p.script
 	p.mu.Unlock()

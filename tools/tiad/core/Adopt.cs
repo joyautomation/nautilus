@@ -58,6 +58,10 @@ namespace Tiad
             var source = new Obj();
             string src;
             string recordAddress = null;
+            // pending: the deploy turned its CPU's access control on and is
+            // not verified loaded, so the adopted project is marked turn-on
+            // pending (TurnOnRule.MarkerSuffix).
+            bool pending = false;
             if (id != "")
             {
                 if (!DeployIdShape(id)) throw TiadException.NotFound("no deploy {0}", Json.Quote(id));
@@ -77,6 +81,8 @@ namespace Tiad
                 }
                 source["deploy"] = id;
                 source["sha256"] = sha;
+                object turned;
+                pending = record.TryGetValue("accessTurnOn", out turned) && turned is bool && (bool)turned && RecordStr(record, "status") != DeployStatus.Loaded;
                 recordAddress = address;
                 o["address"] = address;
             }
@@ -199,6 +205,14 @@ namespace Tiad
                 o["cpu"] = pc == null ? null : pc.ToJson();
                 if (cpuWhy != null) o["cpuError"] = cpuWhy;
                 o["keptDevices"] = pc == null ? new List<object>() : KeptDevice.ToJson(pc.Others);
+                if (pending)
+                {
+                    // Before the adopt counts as done: a failure here
+                    // removes the placed project.
+                    File.WriteAllText(full + TurnOnRule.MarkerSuffix, "{\"deploy\":" + Json.Quote(id) + "}\n");
+                    o["notes"] = new[] { TurnOnRule.PendingNote };
+                    Log.Line("audit access-turn-on adopt project={0} deploy={1} marked turn-on pending (record not loaded)", Json.Quote(project), id);
+                }
                 Log.Line("audit adopt project={0} source={1} sha256={2} replace={3}", Json.Quote(project),
                     Json.Quote(id != "" ? "deploy:" + id : "archive:" + (string)source["archive"]), sha, replace ? "yes" : "no");
                 placed = false;

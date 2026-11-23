@@ -102,8 +102,15 @@ type Fake struct {
 	uploadAccess string
 	uploadWeb    bool
 	// uploadAnonymous: an upload brings an active anonymous user.
-	uploadAnonymous bool
-	accessRecords   string
+	uploadAnonymous      bool
+	uploadAnonymousRoles []AnonymousRoleScript
+	// turnOnPending holds the projects marked turn-on pending (the
+	// agent's TurnOnRule.MarkerSuffix files).
+	turnOnPending map[string]bool
+	// rightsOnlyWhenOn: AccessScript.RightsOnlyWhenOn.
+	rightsOnlyWhenOn bool
+	uploadUsers      []string
+	accessRecords    string
 
 	// fingerprint scripts the fingerprint reads (SetFingerprint).
 	// tlsTrusted is set once the fake's TIA answered a TLS question
@@ -215,6 +222,15 @@ type session struct {
 	// recordOnly is set once an apply on this session asked for
 	// fullAccessRecordOnly (the agent's Session.AccessRecordOnly).
 	recordOnly bool
+	// turnOn is set once an apply on this session turned a kept CPU's
+	// access control on (accessControlTurnOn), failed or not, and
+	// turnOnLoaded once a download on it then loaded (the agent's
+	// Session.AccessTurnOn, AccessTurnOnLoaded).
+	turnOn, turnOnLoaded bool
+	// turnOnTried: a gated download reached the deploy record, or the
+	// session opened a project marked turn-on pending (the agent's
+	// Session.AccessTurnOnTried).
+	turnOnTried bool
 	// uploadedFrom is the address this session last uploaded from
 	// successfully, "" for none (the agent's Session.UploadedFrom): a
 	// later apply keeps it, a new upload clears it when it starts.
@@ -859,6 +875,9 @@ func (f *Fake) putFile(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if isTurnOnMarker(p) {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", TurnOnMarkerFileRefused)
+	}
 	b, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "body: %v", err)
@@ -889,11 +908,19 @@ func (f *Fake) deleteFile(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if isTurnOnMarker(p) {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", TurnOnMarkerFileRefused)
+	}
 	if _, ok := f.files[p]; !ok {
 		return nil, fail(http.StatusNotFound, tiad.KindNotFound, "no file %s", p)
 	}
 	delete(f.files, p)
 	return struct{}{}, nil
+}
+
+// isTurnOnMarker is the agent's TurnOnRule.IsMarker.
+func isTurnOnMarker(p string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimRight(p, ". ")), ".turn-on-pending")
 }
 
 func (f *Fake) installGSD(r *http.Request) (any, *failure) {
@@ -1040,6 +1067,11 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 			delete(f.saved, p)
 		}
 	}
+	for p := range f.turnOnPending {
+		if strings.HasPrefix(strings.ToLower(p), strings.ToLower(guard)) {
+			delete(f.turnOnPending, p)
+		}
+	}
 	// As tiad does: the new project's policy is read once it is made, so
 	// a refusal comes after the old project of that name was replaced.
 	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
@@ -1058,7 +1090,7 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	var notes []string
-	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, true, &notes); fl != nil {
+	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, true, false, &notes); fl != nil {
 		delete(f.sessions, s.id)
 		f.retireIfTrusted()
 		return nil, fl
@@ -1105,6 +1137,11 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 			s.changed = false
 		}
 		f.openRecords(s.access)
+	}
+	// A project an unverified turn-on download saved stays gated.
+	if f.turnOnPending[p] {
+		s.turnOn, s.turnOnTried = true, true
+		return tiad.Session{ID: s.id, Project: p, Notes: []string{tiad.TurnOnPendingNote}}, nil
 	}
 	return tiad.Session{ID: s.id, Project: p}, nil
 }
@@ -1178,6 +1215,7 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		Station              tiad.Station `json:"station"`
 		Secrets              tiad.Secrets `json:"secrets"`
 		FullAccessRecordOnly bool         `json:"fullAccessRecordOnly"`
+		AccessControlTurnOn  bool         `json:"accessControlTurnOn"`
 	}
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
@@ -1187,6 +1225,10 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	}
 	if req.FullAccessRecordOnly && req.Station.CPU.AccessControl != tiad.AccessFullAccessUser {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "fullAccessRecordOnly goes with cpu.accessControl fullAccessUser")
+	}
+	turnOn := req.AccessControlTurnOn
+	if turnOn && req.Station.CPU.AccessControl != tiad.AccessFullAccessUser {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", TurnOnNeedsFullAccessUser)
 	}
 	// As the agent does: decided from the project's CPU before any write,
 	// so a refusal leaves the session as it was.
@@ -1198,19 +1240,40 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	var kept []tiad.KeptDevice
 	protection := actNothing
 	found := s.node
+	turning := false
 	if reuse {
 		var fl *failure
 		if protection, fl = planProtection(s.protection, req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword != ""); fl != nil {
 			return nil, fl
 		}
 		current := s.accessControl
-		if fl := planAccess(&current, req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword != ""); fl != nil {
+		if fl := planAccess(&current, req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword != "", turnOn); fl != nil {
 			return nil, fl
 		}
-		if fl := planWeb(&current, req.Station.WebServer); fl != nil {
+		turning = turnOn && current == AccessDisabled
+		after := current
+		if turning {
+			after = AccessEnabled
+		}
+		if fl := planWeb(&after, req.Station.WebServer); fl != nil {
 			return nil, fl
 		}
 		kept = s.others
+	}
+	if turning {
+		// Read before any write: a refusal leaves the session as it was.
+		if fl := s.turnOnCheck(&notes, f.rightsOnlyWhenOn && s.accessControl != AccessEnabled); fl != nil {
+			return nil, fl
+		}
+	} else if turnOn {
+		notes = append(notes, TurnOnNothingNote)
+	}
+	// As the agent: a pending mark over a project whose access control
+	// reads off goes.
+	if !turning && s.turnOn && !s.turnOnLoaded && reuse && s.accessControl == AccessDisabled {
+		delete(f.turnOnPending, s.project)
+		s.turnOn, s.turnOnTried = false, false
+		notes = append(notes, TurnOnClearedNote)
 	}
 	// As the agent: once asked on this session, failed or not, a reset to
 	// tiad's user is refused (its record shows what tiad was told).
@@ -1256,17 +1319,31 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	was, wasChanged := s.compiled && !wrote, s.changed || wrote
 	s.station, s.uploaded, s.compiled, s.changed = nil, false, false, true
 	s.unclean = true
+	if turning {
+		// From the first write on; a turn-on after an upload re-arms a
+		// spent gate.
+		s.turnOn, s.turnOnLoaded, s.turnOnTried = true, false, false
+	}
 	if n := protectionNote(s.protection, req.Station.CPU.ConfigurationProtection); n != "" {
 		notes = append(notes, n)
 	}
 	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
 		return nil, fl
 	}
-	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, !reuse, &notes); fl != nil {
+	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, !reuse, turning, &notes); fl != nil {
 		return nil, fl
 	}
 	if fl := s.applyWeb(req.Station.WebServer, req.Secrets, !reuse, &notes); fl != nil {
 		return nil, fl
+	}
+	if turning {
+		// As the agent: read again with access control on; a refusal
+		// leaves the session unclean.
+		var again []string
+		if fl := s.turnOnCheck(&again, f.rightsOnlyWhenOn && s.accessControl != AccessEnabled); fl != nil {
+			fl.msg += TurnOnLateRefusal
+			return nil, fl
+		}
 	}
 	s.unclean = false
 	if n := keptNote(kept); n != "" {
@@ -1567,6 +1644,11 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	}
 	if !s.compiled {
 		return nil, fail(http.StatusConflict, tiad.KindNotCompiled, "the project changed since the last full compile; compile hardware and software first")
+	}
+	if s.turnOn && !s.turnOnLoaded {
+		if why := tiad.TurnOnDownloadRefusal(req, s.turnOnTried); why != "" {
+			return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s; nothing was sent to the CPU", why)
+		}
 	}
 	if s.station.CPU.AccessControl == tiad.AccessFullAccessUser && (req.Secrets == nil || req.Secrets.FullAccessPassword == "") {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", LoginDownloadNeedsPassword)
@@ -1882,6 +1964,10 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		}
 		return nil, fl
 	}
+	if s.turnOn && !s.turnOnLoaded {
+		s.turnOnLoaded = true
+		delete(f.turnOnPending, s.project)
+	}
 	res := tiad.DownloadResult{Downloaded: true, Questions: asked, State: said, StateSource: source, KeptDevices: keptList(s.kept), CompareEqual: true, BlindTrust: f.blindTrust}
 	// As the agent's equal compare names them: every program block the
 	// project holds, each seen identical ("Main [OB1]").
@@ -2087,6 +2173,22 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s.ensureAccess()
 	s.access.anonymous = f.uploadAnonymous
 	s.access.dropGrants()
+	s.access.anonymousRoles = nil
+	for _, ar := range f.uploadAnonymousRoles {
+		s.access.anonymousRoles = append(s.access.anonymousRoles, ar.Name)
+		if !ar.System {
+			rights := map[string]bool{}
+			for _, x := range ar.Rights {
+				rights[x] = true
+			}
+			s.access.roles[ar.Name] = rights
+		}
+	}
+	for _, u := range f.uploadUsers {
+		if _, ok := s.access.users[u]; !ok {
+			s.access.users[u] = &fakeUser{roles: map[string]bool{}}
+		}
+	}
 	// What this session made in the users and roles belongs to the
 	// station the upload replaces.
 	removed := s.removeMade()
@@ -2459,6 +2561,9 @@ func (f *Fake) save(r *http.Request) (any, *failure) {
 	}
 	if s.foreignChanged {
 		return nil, foreignUnusable("saving it")
+	}
+	if s.turnOn && !s.turnOnLoaded {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", TurnOnSaveRefused)
 	}
 	p := s.project
 	if req.Archive {

@@ -124,6 +124,10 @@ type access struct {
 	roles     map[string]map[string]bool
 	ours      map[string]bool
 	anonymous bool
+	// anonymousRoles are the roles the anonymous user holds: a custom
+	// one is in roles; any other is a system role, whose rights tiad
+	// cannot read.
+	anonymousRoles []string
 }
 
 // fullAccessRight is the runtime right Full access's identifier.
@@ -152,7 +156,8 @@ type fakeUser struct {
 }
 
 func (a access) clone() access {
-	c := access{users: map[string]*fakeUser{}, roles: map[string]map[string]bool{}, ours: map[string]bool{}, anonymous: a.anonymous}
+	c := access{users: map[string]*fakeUser{}, roles: map[string]map[string]bool{}, ours: map[string]bool{}, anonymous: a.anonymous,
+		anonymousRoles: append([]string(nil), a.anonymousRoles...)}
 	for n, u := range a.users {
 		rs := map[string]bool{}
 		for r := range u.roles {
@@ -209,8 +214,9 @@ func (a access) deleteRole(role string) {
 }
 
 // planAccess is AccessRule.Plan: current is the kept CPU's state, or nil
-// for a CPU the apply makes.
-func planAccess(current *string, want string, havePassword bool) *failure {
+// for a CPU the apply makes; turnOn is accessControlTurnOn, which lets a
+// kept CPU whose access control reads exactly Disabled.
+func planAccess(current *string, want string, havePassword, turnOn bool) *failure {
 	bad := func(f string, a ...any) *failure { return fail(http.StatusBadRequest, tiad.KindBadRequest, f, a...) }
 	if want == tiad.AccessKeep {
 		return nil
@@ -224,11 +230,117 @@ func planAccess(current *string, want string, havePassword bool) *failure {
 	if current == nil || *current == AccessEnabled {
 		return nil
 	}
+	if *current == AccessDisabled {
+		if turnOn {
+			return nil
+		}
+		return bad("%s", TurnOnNotAsked)
+	}
 	what := "set to " + strconv.Quote(*current)
 	if *current == AccessAbsent {
 		what = "not available (no such setting)"
 	}
-	return bad("the project's CPU has its access control %s, and tiad turns access control on only for a CPU it makes: to keep the CPU as found, set cpu.accessControl to keep", what)
+	return bad(`the project's CPU has its access control %s, and tiad turns access control on only for a CPU it makes, or one it keeps whose access control reads "Disabled" (accessControlTurnOn): to keep the CPU as found, set cpu.accessControl to keep`, what)
+}
+
+// The agent's TurnOnRule words (Access.cs).
+const (
+	TurnOnNotAsked            = `the project's CPU has its access control set to "Disabled", and tiad turns access control on for a CPU it keeps only when the apply asks it (accessControlTurnOn; naut: --turn-on-access-control), never from the spec's default; the project as turned on then loads only by a hardware download that resets the CPU's user management with attestation.cpuAccessControl "disabled": to keep the CPU as found, set cpu.accessControl to keep`
+	TurnOnNeedsFullAccessUser = "accessControlTurnOn goes with cpu.accessControl fullAccessUser"
+	TurnOnNothingNote         = `accessControlTurnOn: the CPU's access control was not "Disabled" in the project before this apply, so it turned nothing on`
+	TurnedOnNote              = `TURNED ON the kept CPU's access control ("Disabled" -> "EnabledWithAccessControl", accessControlTurnOn): this project loads only by a hardware download that resets the CPU's user management to the project's, with attestation.cpuAccessControl "disabled", and is not saved before that load`
+	TurnOnSaveRefused         = `an apply on this session turned the kept CPU's access control on (accessControlTurnOn), or the session opened a project marked turn-on pending, and the project is not saved before a download on this session loads it: a saved project would carry access control on to a later session without the opt-in; download it (hardware, userManagementResetToProject, attestation.cpuAccessControl "disabled"), or close the session without saving`
+)
+
+// More of the agent's TurnOnRule words.
+const (
+	TurnOnMarkerFileRefused = `files ending in .turn-on-pending are tiad's marks of a project whose CPU access control was turned on and not verified loaded: the file API neither writes nor deletes them (a verified load, an apply that finds the project's access control off, or a create or adopt of the project removes one)`
+	TurnOnClearedNote       = `the turn-on pending mark is removed: the project's access control reads "Disabled", so no load of it turns the CPU's on`
+	TurnOnLateRefusal       = "; the apply had written, so the session is unclean: close it without saving"
+)
+
+// turnOnReadOnly are TurnOnRule's read-only runtime rights.
+var turnOnReadOnly = map[string]bool{"WebReadTags": true, "WebAllowDiagnostics": true, "WebReadSyslog": true, "WebReadWatchTables": true}
+
+// turnOnCheck is TurnOnRule.Check over s's project: before any write, a
+// refusal of an active anonymous user holding more than read rights (or
+// rights tiad cannot read); otherwise the notes on the anonymous user and
+// the other local users.
+//
+// hideRights reads every custom role as holding no right
+// (AccessScript.RightsOnlyWhenOn while access control is off).
+func (s *session) turnOnCheck(notes *[]string, hideRights bool) *failure {
+	s.ensureAccess()
+	a := s.access
+	if a.anonymous {
+		var bad, read []string
+		for _, r := range a.anonymousRoles {
+			rights, custom := a.roles[r]
+			if hideRights {
+				rights = nil
+			}
+			if !custom {
+				bad = append(bad, fmt.Sprintf("role %q: rights tiad cannot read (TIA reads only a custom role's: give the anonymous user a custom role instead)", r))
+				continue
+			}
+			var w []string
+			for _, x := range namesOf(rights) {
+				if turnOnReadOnly[x] {
+					read = append(read, x)
+				} else {
+					w = append(w, x)
+				}
+			}
+			if len(w) > 0 {
+				bad = append(bad, fmt.Sprintf("role %q: %s", r, strings.Join(w, ", ")))
+			}
+		}
+		if len(bad) > 0 {
+			return fail(http.StatusBadRequest, tiad.KindBadRequest,
+				"accessControlTurnOn is refused: the project's anonymous user is active and holds rights beyond reading (%s): once access control is on anyone who reaches the CPU gets them without a password, so the CPU would look protected and not be; remove the anonymous user's write rights in the project, or do not turn access control on (set cpu.accessControl to keep)",
+				strings.Join(bad, "; "))
+		}
+		if len(read) == 0 {
+			*notes = append(*notes, "WARNING: the project's anonymous user is active and holds no runtime right: once access control is on it gets nothing, but anyone who reaches the CPU is let in as it")
+		} else {
+			sort.Strings(read)
+			*notes = append(*notes, "WARNING: the project's anonymous user is active: once access control is on anyone who reaches the CPU gets, without a password, "+strings.Join(compact(read), ", "))
+		}
+	} else {
+		*notes = append(*notes, "the project's anonymous user is not active")
+	}
+	var others []string
+	for _, u := range namesOf(a.users) {
+		if u != FullAccessUser {
+			others = append(others, strconv.Quote(u))
+		}
+	}
+	if len(others) == 0 {
+		*notes = append(*notes, `the project holds no local user besides "nautilus"`)
+	} else {
+		*notes = append(*notes, `once access control is on, the project's local users besides "nautilus" may log on to the CPU with their own rights: `+strings.Join(others, ", "))
+	}
+	return nil
+}
+
+// compact drops adjacent repeats of a sorted list.
+func compact(l []string) []string {
+	var out []string
+	for _, x := range l {
+		if len(out) == 0 || out[len(out)-1] != x {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+func namesOf[V any](m map[string]V) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 func (s *session) ensureAccess() {
@@ -290,7 +402,7 @@ func (s *session) prepareAccess(want, password string, recordOnly bool, notes *[
 // applyAccess is AccessSteps.Run on s's project. madeCPU is the CPU the
 // apply made; what it makes is recorded on s at once. A found user's
 // password is prepareAccess's.
-func (s *session) applyAccess(want, password string, madeCPU bool, notes *[]string) *failure {
+func (s *session) applyAccess(want, password string, madeCPU, turnOn bool, notes *[]string) *failure {
 	tiaFail := func(m string) *failure {
 		return fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", m)
 	}
@@ -306,8 +418,13 @@ func (s *session) applyAccess(want, password string, madeCPU bool, notes *[]stri
 	if !madeCPU {
 		current = &s.accessControl
 	}
-	if fl := planAccess(current, want, password != ""); fl != nil {
+	if fl := planAccess(current, want, password != "", turnOn); fl != nil {
 		return fl
+	}
+	if !madeCPU && s.accessControl == AccessDisabled {
+		// planAccess let it: only on accessControlTurnOn.
+		s.accessControl = AccessEnabled
+		*notes = append(*notes, TurnedOnNote)
 	}
 	if madeCPU {
 		if s.accessControl == AccessAbsent {
@@ -402,6 +519,25 @@ type AccessScript struct {
 	// UploadAnonymous makes an upload bring a project whose anonymous
 	// user is active.
 	UploadAnonymous bool `json:"uploadAnonymous,omitempty"`
+	// UploadAnonymousRoles are the roles an upload's anonymous user
+	// holds; UploadUsers the local users it brings besides any the
+	// project held (no roles).
+	UploadAnonymousRoles []AnonymousRoleScript `json:"uploadAnonymousRoles,omitempty"`
+	UploadUsers          []string              `json:"uploadUsers,omitempty"`
+	// RightsOnlyWhenOn makes TIA read every custom role as holding no
+	// runtime right while the CPU's access control is off (unproven
+	// either way on the bench): tiad's second read, after the turn-on,
+	// then sees them.
+	RightsOnlyWhenOn bool `json:"rightsOnlyWhenOn,omitempty"`
+}
+
+// AnonymousRoleScript is a role the anonymous user holds: a custom role
+// with its runtime rights on the CPU, or (System) a system role, whose
+// rights tiad cannot read.
+type AnonymousRoleScript struct {
+	Name   string   `json:"name"`
+	Rights []string `json:"rights,omitempty"`
+	System bool     `json:"system,omitempty"`
 }
 
 // SetAccess scripts access control (AccessScript).
@@ -412,6 +548,9 @@ func (f *Fake) SetAccess(a AccessScript) {
 	f.uploadAccess = a.UploadAccessControl
 	f.uploadWeb = a.UploadWebServer
 	f.uploadAnonymous = a.UploadAnonymous
+	f.uploadAnonymousRoles = a.UploadAnonymousRoles
+	f.uploadUsers = a.UploadUsers
+	f.rightsOnlyWhenOn = a.RightsOnlyWhenOn
 	f.accessRecords = a.Records
 }
 

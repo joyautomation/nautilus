@@ -221,8 +221,16 @@ namespace Tiad
         // cpu.accessControl (AccessSteps.Run), then webServer and its
         // users (WebSteps.Run, after access control). notes gets what the caller
         // should know besides the changes; made collects what it made in
-        // the project's users and roles, as soon as it is made.
-        void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made);
+        // the project's users and roles, as soon as it is made. turnOn
+        // turns a kept CPU's access control on when it reads "Disabled"
+        // (accessControlTurnOn, TurnOnRule; the agent checked it first).
+        void ApplyStation(object project, Station next, string decision, Secrets secrets, bool turnOn, List<string> notes, AccessMade made);
+
+        // ReadTurnOn reads what TurnOnRule.Check needs of the project
+        // before an apply turns its kept CPU's access control on: its
+        // local users, and its anonymous user (active, its roles and their
+        // runtime rights on the project's CPU).
+        TurnOnFacts ReadTurnOn(object project);
 
         // ReadPolicy is the project's password policy for local users.
         PasswordPolicy ReadPolicy(object project);

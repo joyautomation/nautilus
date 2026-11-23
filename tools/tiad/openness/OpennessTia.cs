@@ -822,7 +822,7 @@ namespace Tiad.Openness
             return null;
         }
 
-        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made)
+        public void ApplyStation(object project, Station next, string decision, Secrets secrets, bool turnOn, List<string> notes, AccessMade made)
         {
             string cannot = CannotApply(next);
             if (cannot != null) throw new TiaException(cannot);
@@ -853,7 +853,7 @@ namespace Tiad.Openness
                     "PnDeviceName", next.Cpu.ProfinetName);
                 ProtectionSteps.Run(new MasterSecret(station, cpu), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
                 var access = new Access(p, station, cpu);
-                AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+                AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, turnOn, made, notes);
                 access.LogRights();
                 WebSteps.Run(new Web(this, cpu), access, next.WebServer, secrets, decision == CpuReuse.Create, made, notes);
                 return true;
@@ -1155,8 +1155,14 @@ namespace Tiad.Openness
 
             public List<string> RoleRights(string role)
             {
+                return RightsOf(Role(role));
+            }
+
+            // RightsOf is every runtime right r holds on this CPU.
+            public List<string> RightsOf(CustomRole r)
+            {
                 var l = new List<string>();
-                foreach (DeviceFunctionRight x in Role(role).GetAssignedDeviceFunctionRights(Device())) l.Add(x.Identifier);
+                foreach (DeviceFunctionRight x in r.GetAssignedDeviceFunctionRights(Device())) l.Add(x.Identifier);
                 l.Sort(StringComparer.Ordinal);
                 return l;
             }
@@ -1965,6 +1971,35 @@ namespace Tiad.Openness
         {
             TiaNames.CheckAttribute("the CPU " + cpu.Name, Attributes("DeviceItem", cpu), name);
             return Convert.ToString(cpu.GetAttribute(name), System.Globalization.CultureInfo.InvariantCulture) ?? "";
+        }
+
+        // ReadTurnOn reads the project's local users and its anonymous
+        // user: whether it is active, and the runtime rights on the
+        // project's CPU of each role it holds (a custom role's; any other
+        // role's rights are read as unreadable).
+        public TurnOnFacts ReadTurnOn(object project)
+        {
+            return Tia(delegate
+            {
+                Project p = Of(project).Project;
+                HwDevice d = StationOf(p);
+                if (d == null) throw new TiaException("the project holds no CPU");
+                var access = new Access(p, d, CpuOf(d));
+                var f = new TurnOnFacts { Users = access.UserNames() };
+                ProjectUser a = Users.Umac(p).AnonymousUser;
+                f.AnonymousActive = a != null && a.IsActive;
+                if (a != null)
+                {
+                    foreach (Role r in a.Roles)
+                    {
+                        var ar = new AnonymousRole { Name = r.Name ?? "" };
+                        CustomRole cr = r as CustomRole;
+                        if (cr != null) ar.Rights = access.RightsOf(cr);
+                        f.AnonymousRoles.Add(ar);
+                    }
+                }
+                return f;
+            });
         }
 
         // ReadCpu reads the project's CPU: the CPU device item's name,
