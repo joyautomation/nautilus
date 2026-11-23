@@ -26,6 +26,7 @@ import (
 // WriteOutputs enqueues changed values; a writer goroutine pushes them to the
 // controller (latest value wins per tag).
 type Driver struct {
+	fence.CutLabel
 	host     string
 	port     int
 	slot     int
@@ -1335,6 +1336,7 @@ func (d *Driver) send(ctx context.Context, term uint64) (context.Context, contex
 		return nil, nil, errNewTerm
 	}
 	sctx, cancel := fence.Context(ctx, deadline)
+	sctx = fence.WithDevice(sctx, d.CutDriver("ethernet-ip"))
 	return sctx, cancel, nil
 }
 

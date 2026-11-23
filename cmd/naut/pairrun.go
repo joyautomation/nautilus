@@ -24,6 +24,7 @@ import (
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/checkout"
+	"github.com/joyautomation/nautilus/internal/fence"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
@@ -888,6 +889,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		return raw, err
 	})
 	m.q.SetLogStatus(func() *leader.LogStatus { return m.logStatus() })
+	m.q.SetWritesCut(fence.CutCounts)
 	sl.Attach(n)
 	nl.Attach(n)
 	if cl != nil {

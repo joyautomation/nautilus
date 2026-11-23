@@ -562,6 +562,13 @@ retried, and an SNMP set goes out once (`retries:` applies to polls
 only), so an action-valued object (an outlet reboot) never runs twice
 because an answer was lost.
 
+Each write cut at its send deadline is counted by device. `naut
+redundancy status` and `/api/cluster` (`writesCut`) show about the last five
+minutes, for example `writes cut at the send deadline (last 5 min): plc1
+14, bmc2 3`: a device on that line answers slower than the pair's send
+budget, so lower its `timeout:` or lengthen `redundancy.lease`. A write
+that was not started because the gate was closed is not counted.
+
 A source's `timeout:` is kept as it is (it bounds its polls too): on a
 pair, each write is cut at its own send deadline whatever the timeout
 says. `naut check` warns when a timeout a source that takes writes sets

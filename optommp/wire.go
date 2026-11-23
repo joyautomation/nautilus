@@ -72,6 +72,9 @@ type Client struct {
 	hdr     [16]byte
 	sent    time.Time     // when the last request went out (zero: none yet)
 	gap     time.Duration // the longest send-to-next-answer span since quiet
+
+	// Device names this client in the writes-cut counter (fence.Cut).
+	Device string
 }
 
 // Dial connects to host:port (port 0 means 2001).
@@ -154,9 +157,12 @@ func (c *Client) WriteBy(addr uint32, data []byte, deadline time.Time) (err erro
 		}
 		stop := fence.Arm(c.conn, deadline)
 		defer func() {
-			stop()
+			fired := stop()
 			if err != nil {
 				fence.Reset(c.conn)
+				if fired || !time.Now().Before(deadline) {
+					fence.Cut(c.Device) // began, and its deadline passed: one write cut
+				}
 			}
 		}()
 	}

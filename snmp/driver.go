@@ -731,3 +731,6 @@ var (
 	_ nio.BatchReader     = (*Driver)(nil)
 	_ nio.QualityReporter = (*Driver)(nil)
 )
+
+// SetCutLabel names this driver for the writes-cut counter (fence.CutLabel).
+func (d *Driver) SetCutLabel(driver string, multi bool) { d.base.SetCutLabel(driver, multi) }

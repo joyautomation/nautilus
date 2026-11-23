@@ -153,6 +153,7 @@ type tagRef struct {
 
 // Driver polls one processor.
 type Driver struct {
+	fence.CutLabel
 	m        Manifest
 	scanRate time.Duration
 	retryMin time.Duration
@@ -1290,6 +1291,7 @@ func (d *Driver) flush(c *Client) error {
 // term's values.
 func (d *Driver) flushCount(c *Client) (int, error) {
 	d.rearm(c)
+	c.Device = d.CutDriver("optommp")
 	d.mu.Lock()
 	if len(d.pending) == 0 {
 		d.mu.Unlock()

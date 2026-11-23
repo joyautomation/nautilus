@@ -15,6 +15,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/quorum/node"
@@ -615,5 +616,22 @@ func TestPairAClosingLeaderEndsItsStreamsAtOnce(t *testing.T) {
 	r.nodes[lead].crash()
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("the leader took %s to close, want well under a second", d)
+	}
+}
+
+// #710: a pair member's status carries the writes cut at the send
+// deadline: on the controller's own Status and on GET /api/cluster.
+func TestPairStatusShowsWritesCut(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	fence.ResetCutsForTest()
+	t.Cleanup(fence.ResetCutsForTest)
+	fence.Cut("plc9")
+	if got := r.nodes[lead].m.q.Status().WritesCut["plc9"]; got != 1 {
+		t.Fatalf("Status().WritesCut = %v, want plc9 1", r.nodes[lead].m.q.Status().WritesCut)
+	}
+	code, body, _ := r.call(lead, "GET", "/api/cluster", "")
+	if code != 200 || !strings.Contains(body, `"writesCut":{"plc9":1}`) {
+		t.Fatalf("GET /api/cluster = %d %s; want writesCut with plc9", code, body)
 	}
 }

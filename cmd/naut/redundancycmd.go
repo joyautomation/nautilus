@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/quorum"
@@ -387,7 +388,8 @@ func printClusterStatus(w io.Writer, b []byte) {
 			Superseded  string   `json:"superseded"`
 			Forked      []string `json:"forked"`
 		} `json:"log"`
-		Stream *leader.StreamStatus `json:"stream"`
+		Stream    *leader.StreamStatus `json:"stream"`
+		WritesCut map[string]int       `json:"writesCut"`
 	}
 	if json.Unmarshal(b, &st) != nil {
 		w.Write(b)
@@ -442,6 +444,9 @@ func printClusterStatus(w io.Writer, b []byte) {
 	}
 	if s := st.Stream; s != nil {
 		fmt.Fprintln(bw, streamLine(s))
+	}
+	if line := fence.CutLine(st.WritesCut); line != "" {
+		fmt.Fprintf(bw, "writes cut at the send deadline (last %d min): %s\n", int(fence.CutWindow.Minutes()), line)
 	}
 	for _, x := range st.Warnings {
 		fmt.Fprintf(bw, "warning: %s\n", x)

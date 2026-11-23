@@ -107,3 +107,18 @@ func TestTheRealBoxMadeASpareRecoversWithTheCommand(t *testing.T) {
 	r.handLeadTo("a")
 	r.handLeadTo("b")
 }
+
+// #710: naut redundancy status names the writes cut at the send deadline,
+// by device, and says nothing when none were.
+func TestStatusPrintsWritesCutAtTheSendDeadline(t *testing.T) {
+	var out strings.Builder
+	printClusterStatus(&out, []byte(`{"mode":"quorum","pod":"a","leader":"a","isLeader":true,"writesCut":{"plc1":14,"bmc2":3}}`))
+	if !strings.Contains(out.String(), "writes cut at the send deadline (last 5 min): bmc2 3, plc1 14\n") {
+		t.Fatalf("status:\n%s", out.String())
+	}
+	out.Reset()
+	printClusterStatus(&out, []byte(`{"mode":"quorum","pod":"a","leader":"a","isLeader":true}`))
+	if strings.Contains(out.String(), "writes cut") {
+		t.Fatalf("no cuts, no line:\n%s", out.String())
+	}
+}

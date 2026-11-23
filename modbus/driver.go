@@ -164,6 +164,7 @@ type classAssignment struct {
 // values per source; each source's loop pushes them to its device (latest
 // value wins per tag).
 type Driver struct {
+	fence.CutLabel
 	manifest Manifest
 	plan     Plan
 	scanRate time.Duration
@@ -1892,6 +1893,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 			return nil, nil, false
 		}
 		wctx, cancel := fence.Context(ctx, deadline)
+		wctx = fence.WithDevice(wctx, d.CutName(s.cfg.ID))
 		return wctx, cancel, true
 	}
 

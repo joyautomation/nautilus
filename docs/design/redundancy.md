@@ -1425,6 +1425,18 @@ plan measures it with a pause hook in exactly that spot.
 | PLCnext (`plcnext`, `project_full.go`) | **none**: flushes its output image from its own loop | **refused under `redundancy:` for now**, by load and `naut check` (#832). Its `poll()` flushes every scan on the shm route, because that write is the shim's watchdog heartbeat, and on change over gRPC. Gating it is later work. |
 | Floating IP | (new) | §8 |
 
+**Writes cut at the deadline are counted (#710).** A write whose send deadline passed while it
+was on the wire (its socket reset by the timer or by the failure, its outcome unknown) is
+recorded once, by device, in `fence.Cut`: Modbus TCP and EtherNet/IP in the transport that
+resets the socket, OptoMMP and OPC UA client where they reset it, the `hw/base.go` drivers
+(Redfish, SNMP, Prometheus) and the READ/WRITE channels where the failed send's deadline is
+seen. A write refused because the gate was closed, or whose deadline had passed before it
+started, is not a cut (a transport that can tell wraps `fence.ErrNotStarted`). About the last five minutes (15 s buckets, fixed memory per device) are in
+`leader.Status.WritesCut`, so `/api/cluster` and `naut redundancy status` name the devices too
+slow for the budget. The Sparkplug host is not counted: it drops on a term change and has its
+own `WriteDrops`. Device names are the manifest's source or driver id, `driver/id` where the
+project has several drivers.
+
 The test plan's I3 oracle checks every row.
 
 ## 4. The state stream and hot takeover

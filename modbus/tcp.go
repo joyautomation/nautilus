@@ -185,10 +185,13 @@ func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) 
 		dl, _ := ctx.Deadline()
 		stop := fence.Arm(c.nc, dl)
 		defer func() {
-			stop()
+			fired := stop()
 			var exc ExceptionError
 			if err != nil && !errors.As(err, &exc) {
 				fence.Reset(c.nc)
+				// A send that began and failed with its deadline passed (or
+				// reset by the timer at it) is one write cut.
+				fence.CutSend(ctx, fired)
 			}
 		}()
 	}

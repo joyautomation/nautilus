@@ -1,6 +1,7 @@
 package opcua
 
 import (
+	"github.com/joyautomation/nautilus/internal/fence"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,9 +32,14 @@ func TestOPCUAFencedWriteResetsItsSession(t *testing.T) {
 	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Speed"]; return ok })
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
 
+	fence.ResetCutsForTest()
 	silent.Store(true)
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 5.0})
 	waitFor(t, "the unanswered write's socket reset", func() bool { return d.aborts.Load() > 0 })
+	// #710: the timer and the failure both saw it; it is one write cut.
+	if got := fence.CutCounts(); len(got) != 1 || got[d.name] != 1 {
+		t.Fatalf("writes cut = %v, want %s 1", got, d.name)
+	}
 	silent.Store(false)
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 6.0})
 	waitFor(t, "the next write over a reconnected session", func() bool { return ts.get(t, "Setpoint") == 6.0 })

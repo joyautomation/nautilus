@@ -71,6 +71,11 @@ type Status struct {
 	Marked []string `json:"marked,omitempty"`
 	Held   bool     `json:"held,omitempty"`
 	Spare  bool     `json:"spare,omitempty"`
+	// WritesCut is a redundant pair member's count, by device, of writes
+	// cut at the send deadline in the last five minutes (#710, design
+	// §3.4): the write's outcome is unknown, so a device on this list is
+	// too slow for the pair's send budget.
+	WritesCut map[string]int `json:"writesCut,omitempty"`
 }
 
 // StreamStatus is a pair's state stream (#710 S1b, design §4.1) as one

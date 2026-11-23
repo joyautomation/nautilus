@@ -87,6 +87,13 @@ func fencedDriver(t *testing.T) (*Driver, *source) {
 // every request. A bit's write is its own send: a gate that closes while
 // its register is read stops the write, and the register runs after it.
 func TestModbusGateClosedAfterTheBitReadStopsItsWrite(t *testing.T) {
+	fence.ResetCutsForTest()
+	defer func() {
+		// A write not started because the gate closed is not a cut.
+		if got := fence.CutCounts(); len(got) != 0 {
+			t.Errorf("a closed gate recorded cuts: %v", got)
+		}
+	}()
 	d, s := fencedDriver(t)
 	var mu sync.Mutex
 	open := true
@@ -162,8 +169,14 @@ func TestModbusFencedWriteResetsTheSocketAtItsDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tc.Close()
+	fence.ResetCutsForTest()
 	start := time.Now()
 	d.flushWrites(context.Background(), s, tc)
+	// One request was on the wire at its deadline: one write cut, by the
+	// source's id (#710). The two writes behind it never started.
+	if got := fence.CutCounts(); len(got) != 1 || got["DEV"] != 1 {
+		t.Fatalf("writes cut = %v, want DEV 1 (once, however the failure was seen)", got)
+	}
 	if took := time.Since(start); took > 2*time.Second {
 		t.Fatalf("the unanswered write held the flush %s; want it abandoned at its 200 ms deadline", took)
 	}
