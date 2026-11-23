@@ -226,6 +226,59 @@ func (c *Client) post(ctx context.Context, body []byte, token string) ([]byte, i
 	return raw, resp.StatusCode, nil
 }
 
+// escapeRawControls makes a reply parseable when the CPU put raw control
+// bytes (0x00-0x1F) inside a JSON string. A real 1510SP on firmware 3.1
+// does: DiagnosticBuffer.Browse sends 0x0A inside long_text and help_text
+// (issue #1334), which encoding/json refuses. Each such byte inside a
+// string becomes its JSON escape (\n, \t, ... or \u00XX). Bytes outside
+// strings (whitespace between tokens) and sequences the CPU already
+// escaped stay as they are. A reply with no such byte is returned as is,
+// uncopied.
+func escapeRawControls(raw []byte) []byte {
+	const hex = "0123456789abcdef"
+	var out []byte // allocated at the first byte that needs escaping
+	inString, escaped := false, false
+	for i, b := range raw {
+		switch {
+		case !inString:
+			inString = b == '"'
+		case escaped:
+			escaped = false
+		case b == '\\':
+			escaped = true
+		case b == '"':
+			inString = false
+		case b < 0x20:
+			if out == nil {
+				out = make([]byte, i, len(raw)+16)
+				copy(out, raw[:i])
+			}
+			switch b {
+			case '\n':
+				out = append(out, '\\', 'n')
+			case '\r':
+				out = append(out, '\\', 'r')
+			case '\t':
+				out = append(out, '\\', 't')
+			case '\b':
+				out = append(out, '\\', 'b')
+			case '\f':
+				out = append(out, '\\', 'f')
+			default:
+				out = append(out, '\\', 'u', '0', '0', hex[b>>4], hex[b&15])
+			}
+			continue
+		}
+		if out != nil {
+			out = append(out, b)
+		}
+	}
+	if out == nil {
+		return raw
+	}
+	return out
+}
+
 // batch sends calls as one bulk request (or a plain request for one call)
 // with the given token, and returns one Reply per call, in order.
 func (c *Client) batch(ctx context.Context, calls []Call, token string) ([]Reply, error) {
@@ -254,6 +307,7 @@ func (c *Client) batch(ctx context.Context, calls []Call, token string) ([]Reply
 	if err != nil {
 		return nil, err
 	}
+	raw = escapeRawControls(raw)
 	var resps []response
 	if len(reqs) == 1 {
 		var r response

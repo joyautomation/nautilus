@@ -1,0 +1,23 @@
+{"jsonrpc":"2.0","id":3,"result":{"entries":[{"timestamp":"2026-11-23T16:18:46.74706664Z","status":"incoming","short_text":"Session authentication successful -","long_text":"Security information: Session authentication successful
+ SessionID 1536-256
+ 
+ PLC_1 
+  
+Client IPAddr: 192.0.2.201
+","help_text":"The event reports detailed information of a successfully established authenticated session.
+","event":{"textlist_id":2,"text_id":17448}},{"timestamp":"2026-11-23T16:18:45.708334336Z","status":"incoming","short_text":"Session authentication successful -","long_text":"Security information: Session authentication successful
+ SessionID 1536-256
+ 
+ PLC_1 
+  
+Client IPAddr: 192.0.2.201
+","help_text":"The event reports detailed information of a successfully established authenticated session.
+","event":{"textlist_id":2,"text_id":17448}},{"timestamp":"2026-11-23T16:17:58.178255728Z","status":"incoming","short_text":"Session authentication successful - Summary message for 3 occurrences during the last 20 second(s)","long_text":"Security information: Session authentication successful
+ SessionID 1536-17155
+ Summary message for 3 occurrences during the last 20 second(s)
+
+ PLC_1 
+  
+Client IPAddr: 192.0.2.201
+","help_text":"The event reports detailed information of a successfully established authenticated session.
+","event":{"textlist_id":2,"text_id":17448}}],"last_modified":"2026-11-23T16:18:46.74706664Z","count_current":579,"count_max":1000,"language":"en-US"}}

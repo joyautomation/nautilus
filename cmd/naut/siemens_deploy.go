@@ -145,7 +145,7 @@ flags or the manifest:
   NAUTILUS_SIEMENS_FULL_ACCESS_PASSWORD    the CPU user "nautilus" (Full access)
   NAUTILUS_SIEMENS_WEB_PASSWORD_<USER>     each web user's password
                                            (NAUTILUS_SIEMENS_PASSWORD for
-                                           target.siemens.online.user)
+                                           target.siemens.online.user, diag, serve)
   NAUTILUS_SIEMENS_PROTECTION_PASSWORD     a protected CPU's password
 `
 
