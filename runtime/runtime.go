@@ -343,6 +343,7 @@ type Runtime struct {
 	imgRound   uint64
 	imgPhase   int
 	imgSlowest int
+	imgStamps  []uint64
 	// carried is the tags a state image carries (imagetags.go), fixed in New.
 	carried *carrySet
 	// ready is the driver as an io.InputsReadier (nil when it is not one),

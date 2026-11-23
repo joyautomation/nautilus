@@ -269,7 +269,10 @@ func (r *Runtime) TakeImage(img *Image) bool {
 		return false // not asked for, or already taken
 	}
 	progs := r.namedPrograms()
-	stamps := make([]uint64, len(progs)) // one per task, off the scan path
+	// One stamp per task, in a slice kept under imgMu: the stream asks
+	// every few milliseconds, and allocates nothing after the first rounds.
+	r.imgStamps = append(r.imgStamps[:0], make([]uint64, len(progs))...)
+	stamps := r.imgStamps
 	for i := range stamps {
 		stamps[i] = imageStamp(r.imgRound, 0)
 		if r.imgPhase == 1 && i != r.imgSlowest {
