@@ -26,6 +26,8 @@ export interface Camera {
 	live: boolean;
 	/** The live stream is HLS (an RTSP camera): play it with `playHls` in a <video>, not as an <img>. */
 	hls: boolean;
+	/** The playground's virtual camera: the kit draws it itself (VirtualCamera); there is no still or stream to ask for. */
+	local: boolean;
 	/** The camera pans, tilts and zooms (ONVIF): show the pad to a person who holds the `ptz` permission. */
 	ptz: boolean;
 	/** A still exists. */
@@ -69,6 +71,7 @@ function normalize(j: any): Camera | null {
 		live: j.live === true,
 		hls: j.hls === true,
 		ptz: j.ptz === true,
+		local: j.local === true,
 		snapshot: j.snapshot === true,
 		watching: n(j.watching, 0),
 		bps: n(j.bps, 0)

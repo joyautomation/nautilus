@@ -229,9 +229,40 @@ runs, as for motion-JPEG.
 
 ### What the CPU cost is
 
-Not measured yet: a figure belongs to a measurement on the small ARM controllers,
-which has not been taken. Passing H.264 through involves no decoding, but the
-controller does read, repackage and serve every byte of each watched stream.
+Passing H.264 through involves no decoding, but the controller does read, repackage
+and serve every byte of each watched stream. Measured once, on a **Verdin AM62 (two
+Cortex-A53 cores at 1.25 GHz, a PREEMPT_RT Yocto image)**, with the relay at normal
+priority and no pinning, reading a 1280x720, 15 frames a second, about 1.7 Mbit/s
+H.264 stream from a test source over the LAN and serving it to a viewer that fetched
+the playlist and every segment, as a browser does (one 60-second window each, after a
+15-second warm-up):
+
+| | the controller process | whole board (both cores) | the process's memory |
+|---|---|---|---|
+| idle, no viewer | 1.7% of one core | 3.6% | 33 MB |
+| one stream watched | 5.9% of one core | 6.2% | 42 MB |
+| two streams watched | 7.6% of one core | 7.6% | 47 MB (peak 49 MB) |
+
+The second stream cost about 1.7 points of one core more than the first: well
+under a tenth of one core per stream at this size. The whole-board figure counts the
+kernel's network threads, which on a PREEMPT_RT kernel run as threads of their own.
+Treat it as one measurement of one board, not a guarantee: other bitrates, more cameras
+and slower links have not been measured, and a controller that is also running a
+real program was not measured either (the program here was an empty one).
+
+Starting `naut run` on such a board builds the screens first, and on these two cores
+that was still running at both cores' full use after a minute and a half (it takes
+about four seconds on a desktop); build the controller on a faster machine
+(`naut build`) and run the binary.
+
+### In the playground
+
+A `kind: virtual` camera in a playground project shows on its asset's page as a
+simulated camera: colour bars, a line sweeping down, the camera's name, the word
+SIMULATED and a clock, drawn on a canvas by the page itself. Nothing is fetched, no
+stream or still exists, and there is no Watch live button. The same row on a real
+controller serves a generated picture from the controller instead. Cameras of any
+other kind are not shown in the playground.
 
 ## ONVIF cameras
 
@@ -404,5 +435,6 @@ token always counts as fresh), and is journalled as `camera.snapshot-purge`.
 
 - `hls` cameras: live video of that kind is a later step. An `hls` camera shows a still
   if a `snapshot-url` is given.
-- The playground draws no camera: the camera relay is controller-only code and
-  is not in the browser build.
+- The playground has no camera relay (it is controller-only code and none of it is in
+  the browser build): only a `kind: virtual` camera shows there, as a test pattern the
+  page draws itself (see below). Every other kind needs a controller.

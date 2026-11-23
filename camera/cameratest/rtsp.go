@@ -213,6 +213,7 @@ type Opts struct {
 	Loops     int           // times the clip is sent (default 1); "forever" is Loops < 0
 	MTU       int           // default 1200
 	Pause     time.Duration // between pictures (default none)
+	Addr      string        // listen address (default 127.0.0.1:0): a bench serves the LAN
 }
 
 // Server is a fake camera.
@@ -229,7 +230,11 @@ type Server struct {
 // Start runs a fake camera until the test ends.
 func Start(t testing.TB, o Opts) *Server {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	addr := o.Addr
+	if addr == "" {
+		addr = "127.0.0.1:0"
+	}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
