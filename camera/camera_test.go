@@ -5,7 +5,6 @@ package camera
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"image/jpeg"
 	"io"
 	"mime/multipart"
@@ -87,6 +86,7 @@ func TestSnapshotFetchesWithBasicAndDigestCredentials(t *testing.T) {
 	jb := jpegBytes()
 	basic := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if u, p, ok := r.BasicAuth(); !ok || u != "viewer" || p != "pw" {
+			w.Header().Set("Www-Authenticate", `Basic realm="cam"`)
 			w.WriteHeader(401)
 			return
 		}
@@ -259,23 +259,23 @@ func (l *lockedBuf) Write(p []byte) (int, error) {
 }
 func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
 
-func TestLimiterHoldsTheCameraCapAndTheControllersCap(t *testing.T) {
+func TestLimiterHoldsTheCameraCapTheControllersCapAndEachPersons(t *testing.T) {
 	l := NewLimiter(3)
 	a := Camera{ID: "a", MaxViewers: 2}
 	b := Camera{ID: "b", MaxViewers: 2}
-	r1, err := l.Acquire(a)
+	r1, err := l.Acquire(a, "p1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	r2, _ := l.Acquire(a)
-	if _, err := l.Acquire(a); err == nil || !strings.Contains(err.Error(), "max-viewers") {
+	r2, _ := l.Acquire(a, "p2")
+	if _, err := l.Acquire(a, "p3"); err == nil || !strings.Contains(err.Error(), "max-viewers") {
 		t.Errorf("a third viewer of a two-viewer camera: %v", err)
 	}
-	r3, err := l.Acquire(b)
+	r3, err := l.Acquire(b, "p3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := l.Acquire(b); err == nil || !strings.Contains(err.Error(), "3 live streams") {
+	if _, err := l.Acquire(b, "p4"); err == nil || !strings.Contains(err.Error(), "3 live streams") {
 		t.Errorf("past the controller's cap: %v", err)
 	}
 	r1()
@@ -283,15 +283,26 @@ func TestLimiterHoldsTheCameraCapAndTheControllersCap(t *testing.T) {
 	if l.Watching("a") != 1 {
 		t.Errorf("watching a = %d after one release (twice called)", l.Watching("a"))
 	}
-	if _, err := l.Acquire(b); err != nil {
+	if _, err := l.Acquire(b, "p4"); err != nil {
 		t.Errorf("a place was freed and is refused: %v", err)
 	}
 	r2()
 	r3()
-	if fmt.Sprint(l.Watching("a"), l.Watching("b")) != "0 1" {
-		t.Errorf("watching a, b = %d, %d", l.Watching("a"), l.Watching("b"))
+	// one person cannot take every place
+	l = NewLimiter(8)
+	c := Camera{ID: "c", MaxViewers: 8}
+	for i := 0; i < MaxPerPerson; i++ {
+		if _, err := l.Acquire(c, "same"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if c := (Camera{}); c.Viewers() != DefaultMaxViewers || c.Interval() != DefaultIntervalSeconds {
+	if _, err := l.Acquire(c, "same"); err == nil || !strings.Contains(err.Error(), "already watching") {
+		t.Errorf("a person past their own cap: %v", err)
+	}
+	if _, err := l.Acquire(c, "other"); err != nil {
+		t.Errorf("another person was refused for the first one's places: %v", err)
+	}
+	if cm := (Camera{}); cm.Viewers() != DefaultMaxViewers || cm.Interval() != DefaultIntervalSeconds {
 		t.Error("the defaults are not applied")
 	}
 }
@@ -311,4 +322,190 @@ func TestMeterIsTheAverageSinceTheFirstByte(t *testing.T) {
 	if m.BitsPerSecond() != 0 {
 		t.Error("reset did not clear the meter")
 	}
+}
+
+// A transport or parser error carries the camera's address and its own bytes:
+// whatever leaves the package is fixed words.
+func TestErrorsFromABrokenCameraCarryNeitherItsAddressNorItsBytes(t *testing.T) {
+	// a camera that promises a body and resets the connection
+	reset := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100000")
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write([]byte{0xFF, 0xD8, 0xFF, 0})
+		w.(http.Flusher).Flush()
+		hj, _, _ := w.(http.Hijacker).Hijack()
+		rst(hj)
+	}))
+	defer reset.Close()
+	f := &Fetcher{}
+	_, err := f.Snapshot(context.Background(), Camera{ID: "c", Asset: "A", Kind: KindSnapshot, URL: reset.URL})
+	if err == nil || strings.Contains(err.Error(), "127.0.0.1") || strings.Contains(err.Error(), "tcp") {
+		t.Errorf("a body cut short: %v", err)
+	}
+	// a part with a malformed header: the camera's own bytes must not be echoed
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=b")
+		io.WriteString(w, "--b\r\nthis line has no colon SECRETTEXT\r\n\r\n")
+	}))
+	defer bad.Close()
+	err = f.Relay(context.Background(), Camera{ID: "c", Asset: "A", Kind: KindMJPEG, URL: bad.URL}, nil, io.Discard, func() {}, nil)
+	if err == nil || strings.Contains(err.Error(), "SECRETTEXT") || strings.Contains(err.Error(), "127.0.0.1") {
+		t.Errorf("a malformed part: %v", err)
+	}
+	// a stream cut in the middle of a frame
+	cut := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=b")
+		io.WriteString(w, "--b\r\nContent-Type: image/jpeg\r\n\r\n\xff\xd8\xff")
+		w.(http.Flusher).Flush()
+		hj, _, _ := w.(http.Hijacker).Hijack()
+		rst(hj)
+	}))
+	defer cut.Close()
+	err = f.Relay(context.Background(), Camera{ID: "c", Asset: "A", Kind: KindMJPEG, URL: cut.URL}, nil, io.Discard, func() {}, nil)
+	if err != nil && (strings.Contains(err.Error(), "127.0.0.1") || strings.Contains(err.Error(), "tcp")) {
+		t.Errorf("a stream cut mid-frame: %v", err)
+	}
+}
+
+// No credential goes out before the camera asks: a digest camera is never sent
+// the password in basic, and a camera is answered in the scheme it asked for.
+func TestCredentialsAreSentOnlyAfterTheChallengeAndInItsScheme(t *testing.T) {
+	jb := jpegBytes()
+	var firstAuth, basicSeen []string
+	digestCam := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a := r.Header.Get("Authorization")
+		if a == "" {
+			firstAuth = append(firstAuth, "")
+			w.Header().Set("Www-Authenticate", `Digest realm="cam", nonce="n1", qop="auth"`)
+			w.WriteHeader(401)
+			return
+		}
+		if strings.HasPrefix(a, "Basic ") {
+			basicSeen = append(basicSeen, a)
+			w.WriteHeader(401)
+			return
+		}
+		w.Write(jb)
+	}))
+	defer digestCam.Close()
+	f := &Fetcher{Secret: secrets(map[string]string{"camera.d": "viewer:pw"})}
+	if _, err := f.Snapshot(context.Background(), Camera{ID: "d", Asset: "A", Kind: KindSnapshot, URL: digestCam.URL, Credentials: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstAuth) != 1 || len(basicSeen) != 0 {
+		t.Errorf("a digest camera saw %d unauthenticated requests and %d basic headers: the password must not go out in basic", len(firstAuth), len(basicSeen))
+	}
+	// one that asks for basic is then sent it straight away
+	var auths []string
+	basicCam := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a := r.Header.Get("Authorization")
+		auths = append(auths, a)
+		if a == "" {
+			w.Header().Set("Www-Authenticate", `Basic realm="cam"`)
+			w.WriteHeader(401)
+			return
+		}
+		w.Write(jb)
+	}))
+	defer basicCam.Close()
+	bc := Camera{ID: "b", Asset: "A", Kind: KindSnapshot, URL: basicCam.URL, Credentials: true}
+	f.Secret = secrets(map[string]string{"camera.b": "viewer:pw"})
+	for i := 0; i < 2; i++ {
+		if _, err := f.Snapshot(context.Background(), bc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(auths) != 3 || auths[0] != "" || auths[1] == "" || auths[2] == "" {
+		t.Errorf("basic camera saw %q: want one challenge, then credentials straight away", auths)
+	}
+	// a digest algorithm the controller does not speak is said, not guessed
+	sha := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Www-Authenticate", `Digest realm="cam", nonce="n", algorithm=SHA-256, qop="auth"`)
+		w.WriteHeader(401)
+	}))
+	defer sha.Close()
+	f.Secret = secrets(map[string]string{"camera.s": "viewer:pw"})
+	if _, err := f.Snapshot(context.Background(), Camera{ID: "s", Asset: "A", Kind: KindSnapshot, URL: sha.URL, Credentials: true}); err == nil || !strings.Contains(err.Error(), "MD5 only") {
+		t.Errorf("a SHA-256 digest camera: %v", err)
+	}
+}
+
+// The credentials ride a redirect, so it stays on the same host, port and
+// scheme: https to http would send them in the clear.
+func TestARedirectKeepsHostPortAndScheme(t *testing.T) {
+	check := (&Fetcher{}).client().CheckRedirect
+	from := func(u string) *http.Request { r, _ := http.NewRequest("GET", u, nil); return r }
+	for _, tc := range []struct {
+		to   string
+		want bool // allowed
+	}{
+		{"https://cam.example:8443/b", true},
+		{"https://cam.example:8443/", true},
+		{"http://cam.example:8443/b", false},  // scheme downgrade
+		{"https://cam.example:9443/b", false}, // another port
+		{"https://other.example:8443/b", false},
+	} {
+		err := check(from(tc.to), []*http.Request{from("https://cam.example:8443/a")})
+		if (err == nil) != tc.want {
+			t.Errorf("redirect to %s: %v, allowed should be %v", tc.to, err, tc.want)
+		}
+	}
+}
+
+// A camera that sends a frame and goes quiet does not hold its place: the stream
+// ends and says so.
+func TestAStreamThatGoesQuietEnds(t *testing.T) {
+	old := StreamIdle
+	StreamIdle = 150 * time.Millisecond
+	defer func() { StreamIdle = old }()
+	jb := jpegBytes()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mw := multipart.NewWriter(w)
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary="+mw.Boundary())
+		h := textproto.MIMEHeader{}
+		h.Set("Content-Type", "image/jpeg")
+		pw, _ := mw.CreatePart(h)
+		pw.Write(jb)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // then nothing, until the controller gives up
+	}))
+	defer srv.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- (&Fetcher{}).Relay(context.Background(), Camera{ID: "q", Asset: "A", Kind: KindMJPEG, URL: srv.URL}, nil, io.Discard, func() {}, nil)
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "stopped sending") {
+			t.Errorf("a quiet camera ended the stream with %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a camera that went quiet held the stream for 5 s")
+	}
+}
+
+func TestACredentialInAURLsQueryIsRefused(t *testing.T) {
+	for _, u := range []string{"http://10.0.0.1/snap.jpg?user=a&pwd=b", "http://10.0.0.1/s?token=abc", "http://10.0.0.1/s?apikey=1", "http://10.0.0.1/s?Password=x"} {
+		errs := Validate([]Camera{{ID: "a", Asset: "A", Kind: KindSnapshot, URL: u}})
+		if len(errs) == 0 || !strings.Contains(errs[0].Error(), "query") {
+			t.Errorf("%s: %v", u, errs)
+		}
+		for _, e := range errs {
+			if strings.Contains(e.Error(), "pwd=b") || strings.Contains(e.Error(), "abc") {
+				t.Errorf("the error repeats the credential: %v", e)
+			}
+		}
+	}
+	if errs := Validate([]Camera{{ID: "a", Asset: "A", Kind: KindSnapshot, URL: "http://10.0.0.1/snap.jpg?channel=1&res=low"}}); len(errs) != 0 {
+		t.Errorf("a harmless query refused: %v", errs)
+	}
+}
+
+// rst closes a connection with a reset, so the reader's error names both ends
+// ("read tcp 127.0.0.1:1->127.0.0.1:2: connection reset by peer").
+func rst(c net.Conn) {
+	if tc, ok := c.(*net.TCPConn); ok {
+		tc.SetLinger(0)
+	}
+	c.Close()
 }

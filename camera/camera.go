@@ -142,6 +142,8 @@ func Validate(cams []Camera) []error {
 			switch {
 			case err != nil || u.Host == "":
 				bad("%s is not a URL with a host", f.name)
+			case queryCredentials(u):
+				bad("%s holds a user name, password or token in its query: set credentials: true and put them in the secrets file (naut alarms secrets set camera.<id>)", f.name)
 			case u.User != nil:
 				bad("%s holds a user name or password: set credentials: true and put them in the secrets file (naut alarms secrets set camera.<id>)", f.name)
 			case !schemeOK(c.Kind, f.name, u.Scheme):
@@ -156,6 +158,19 @@ func Validate(cams []Camera) []error {
 		}
 	}
 	return errs
+}
+
+// queryCredentials reports a URL whose query names a credential (user,
+// password, token and their usual spellings): the manifest is committed, and the
+// URL is logged by the camera's own server.
+func queryCredentials(u *url.URL) bool {
+	for k := range u.Query() {
+		switch strings.ToLower(k) {
+		case "user", "username", "usr", "login", "pass", "password", "passwd", "pwd", "token", "key", "apikey", "api_key", "auth", "secret":
+			return true
+		}
+	}
+	return false
 }
 
 // Kinds lists the kinds, for messages.
@@ -198,6 +213,9 @@ func SplitCredentials(secret string) (user, pass string, err error) {
 	user, pass, ok := strings.Cut(secret, ":")
 	if !ok || user == "" {
 		return "", "", errors.New("a camera secret is user:password")
+	}
+	if strings.ContainsAny(user, "\"\r\n") {
+		return "", "", errors.New("a camera secret's user name may not hold a quote or a line break")
 	}
 	return user, pass, nil
 }

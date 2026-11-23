@@ -94,10 +94,14 @@ var actionClass = map[string]string{
 	// while the journal is down like the other operator actions.
 	"push.subscribe":   operator,
 	"push.unsubscribe": operator,
-	"alarm.ack":        operator,
-	"alarm.shelve":     operator,
-	"alarm.unshelve":   operator,
-	"sfc.step":         operator,
+	// Watching a camera live (#724): journalled when it starts and ends, and, like
+	// the other operator actions, allowed while the journal is down (the entry is
+	// kept in memory and written later).
+	"camera.view":    operator,
+	"alarm.ack":      operator,
+	"alarm.shelve":   operator,
+	"alarm.unshelve": operator,
+	"sfc.step":       operator,
 	// Back in service shows alarms again: a way back, as a force's clear.
 	"alarm.in-service": recovery,
 	"sfc.transition":   operator,
