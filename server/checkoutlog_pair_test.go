@@ -5,13 +5,18 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/checkout"
+	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
 )
 
@@ -198,6 +203,72 @@ func TestCheckoutLogHandsOtherKindsOn(t *testing.T) {
 	if done, err := cl.Apply(oplog.Entry{Kind: oplog.KindCheckout}); !done || err == nil {
 		t.Errorf("a checkout entry with no body: done=%v err=%v", done, err)
 	}
+}
+
+// A server over a pair's log store answers the checkout (the 503 is for a
+// pair whose store is a file), a person on the standby's screen records into
+// the one run, both keys are on the page, and a force is refused on the standby.
+func TestAPairsServersAnswerTheCheckoutAndShowBothKeys(t *testing.T) {
+	cp := newCheckoutPair(t)
+	var standing [2]atomic.Bool
+	standing[0].Store(true)
+	standing[1].Store(true) // both answer for the test's sign-in; the second is then made the standby
+	mk := func(i int) *Server {
+		co := &CheckoutOptions{Store: cp.cls[i].Store(), Sheet: ckSheet(), Signoff: "two-person"}
+		srv, _, _ := patServerSettings(t, newTestRuntime(t), ckOpts(Options{Cluster: pairSeat{&standing[i]}}, co), authSettingsFor())
+		ckReg(srv, co)
+		return srv
+	}
+	lead, stand := mk(0), mk(1)
+	// each controller says which key it signs with; both pages show both
+	if err := cp.cls[0].Store().AnnounceKey("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cp.cls[1].Store().AnnounceKey("b"); err != nil {
+		t.Fatal(err)
+	}
+	cp.wait(t, func() bool {
+		return len(cp.cls[0].Store().KeyFingerprints()) == 2 && len(cp.cls[1].Store().KeyFingerprints()) == 2
+	})
+	eng := ckAs(t, lead, "akhan")
+	rec := call(t, lead, "GET", "/api/checkout", "", eng)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/checkout on a pair's leader: %d %s", rec.Code, rec.Body)
+	}
+	var v checkoutView
+	json.Unmarshal(rec.Body.Bytes(), &v)
+	if v.KeyFingerprints["a"] == "" || v.KeyFingerprints["b"] == "" || v.KeyFingerprints["a"] == v.KeyFingerprints["b"] || v.KeyFingerprint != v.KeyFingerprints["a"] {
+		t.Errorf("the page's keys: own %q, pair %v", v.KeyFingerprint, v.KeyFingerprints)
+	}
+	// begun on one controller, recorded on the other's server: one run
+	var run checkout.Run
+	json.Unmarshal(call(t, lead, "POST", "/api/checkout/runs", `{}`, eng).Body.Bytes(), &run)
+	seng := ckAs(t, stand, "akhan")
+	if rec := call(t, stand, "POST", "/api/checkout/runs/"+run.ID+"/results", `{"point":"SP","outcome":"pass"}`, seng); rec.Code != http.StatusCreated {
+		t.Fatalf("a result through the other controller's server: %d %s", rec.Code, rec.Body)
+	}
+	cp.wait(t, func() bool { g, _ := cp.cls[0].Store().Get(run.ID); return g.Results == 1 })
+	// the second becomes the standby: a force drives an output, so not from it
+	standing[1].Store(false)
+	rec = call(t, stand, "POST", "/api/checkout/runs/"+run.ID+"/force", `{"point":"OUT","value":1,"seconds":10,"confirm":"OUT"}`, seng)
+	if rec.Code == http.StatusCreated || (rec.Code == http.StatusConflict && !strings.Contains(rec.Body.String(), "standby")) {
+		t.Errorf("a force from the standby: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// pairSeat is a pair member whose leadership a test can take away.
+type pairSeat struct{ leads *atomic.Bool }
+
+func (c pairSeat) Status() leader.Status {
+	return leader.Status{Mode: "quorum", IsLeader: c.leads.Load(), LeaderAddr: "http://127.0.0.1:1"}
+}
+
+func authSettingsFor() auth.Settings {
+	return auth.Settings{Users: map[string][]auth.Grant{
+		"akhan":  {{Role: auth.Engineer}},
+		"jsmith": {{Role: auth.Supervisor}},
+		"ghost":  {{Role: auth.Operator}},
+	}}
 }
 
 // Propose can return on a follower once the leader committed, before this

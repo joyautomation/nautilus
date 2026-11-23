@@ -101,12 +101,44 @@ func (s *Store) Reset() {
 	s.seq, s.prev, s.lines = 0, "", nil
 	s.outcome = map[uint64]applied{}
 	s.halted = nil
+	s.keys = nil
 	// the records kept for the old history's seals are not the new history's
 	if files, _ := filepath.Glob(filepath.Join(filepath.Dir(s.path), "checkout-sealed-*.json*")); len(files) > 0 {
 		for _, f := range files {
 			os.Remove(f)
 		}
 	}
+}
+
+// AnnounceKey puts this controller's signing key fingerprint in the log under
+// its name, so each controller's page shows both keys of the pair (a seal is
+// signed by the controller it is made on). It does nothing and returns nil on a
+// store with no key, and an error when the log cannot take it (it is asked
+// again).
+func (s *Store) AnnounceKey(controller string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.key == nil || s.propose == nil {
+		return nil
+	}
+	if s.keys[controller] == Fingerprint(s.key.pub) {
+		return nil
+	}
+	return s.append(entry{Kind: kindKey, By: controller, Note: Fingerprint(s.key.pub)})
+}
+
+// KeyFingerprints is each controller's signing key as it announced it (a pair).
+func (s *Store) KeyFingerprints() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.keys) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(s.keys))
+	for k, v := range s.keys {
+		out[k] = v
+	}
+	return out
 }
 
 // ApplyLogged folds one committed log entry into the store, on every replica:

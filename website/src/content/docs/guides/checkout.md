@@ -9,9 +9,9 @@ doing that point by point. It is **optional**: a project with no `checkout:`
 section has no checkout page, no routes and no prompts, and nothing about
 forces or alarms changes.
 
-This page describes what is built so far: the sheet, recording results,
-forcing an output, and the permissions. The HMI page, the sealed and exported
-sheet and a redundant pair come in later steps, and say so below.
+This page describes the sheet, recording results, forcing an output, the
+permissions, the Checkout page, the export, signing off, and the checkout on a
+redundant pair.
 
 ## The sheet
 
@@ -282,6 +282,47 @@ so a site that copies the audit journal off the box has an independent anchor
 for `verify --audit`. (`--audit` looks the entry up; it does not check the
 journal's own chain: use `naut audit verify` for that.)
 
+## A redundant pair
+
+On a redundant pair the checkout needs the same `checkout:` section and an
+`auth:` block with users on both controllers (as notes do), and keeps its runs in
+the replicated operator-intent log, not in a file. Every begin, result, force,
+abandon and seal is an entry that both controllers apply, so both hold the same
+runs and a person on either controller's screen records into one run. A write
+with no majority is refused before anything is proposed and is never queued for
+when a controller returns; a run begun on both controllers in the same moment is
+resolved by the log's order (the second is refused). A write answered "outcome
+unknown" may still be recorded: look at the run before doing it again.
+
+A force is a controller's own output drive and never fails over. The controller
+that runs the program ends any standing force it is not driving (the other
+controller's, or a start whose answer was lost), a controller that loses the lead
+lets its own force go at once, and a standby refuses to force. A controller's
+shutdown lets a standing force go and records it as interrupted.
+
+A seal is signed by the controller it is made on, with that controller's key, so a
+pair has two fingerprints to record: `GET /api/checkout` shows both
+(`keyFingerprints`, each announced through the log). Every replica checks a seal
+when it applies it (the signature, the key, the hash, the run, the signer, the
+two-person rule, and that no point's latest result is a fail or a note) and keeps
+the record it rebuilt, so editing `checkout.yaml` later does not lose it; a
+controller that replays the log after the sheet changed can rebuild an earlier
+record only from the other controller's copy. `naut checkout verify --chain` takes
+either controller's canonical results file (the same bytes on both).
+
+A controller that reads a checkout entry from a newer build stops its checkout
+only (the oplog, notes, alarms and substitutes go on) and raises the
+`checkout-halted` condition, shown by `naut redundancy status`, with the fix:
+bring it up to the build the other controller runs and restart it. Upgrade both
+controllers together. A halt that no upgrade clears (an entry the log should
+never have taken) is cleared by replacing the log's history (`naut redundancy
+vouch`).
+
+The log is never compacted, so what a checkout adds stays. A run of 3,000 points
+with two passes each, a note on one in ten and a seal is about 1.8 MB of log
+(about 300 bytes an entry, the seal's 1.3 KB), which a test measures and holds
+under 4 MB.
+
 ## Limits
 
 What a sign-off does not do, stated plainly:
@@ -300,8 +341,3 @@ What a sign-off does not do, stated plainly:
   as it begins, and the refusal names `checkout: real-io`.
 - Whoever holds the controller's state directory (the results file and the key)
   can forge both; keep copies elsewhere.
-
-## Not yet
-
-- A redundant pair: its controllers answer that the checkout is not available
-  yet, rather than keep results on one box.

@@ -41,4 +41,8 @@ func TestAPairsWriteAnswersSayWhetherAnythingIsWaiting(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "newer build") {
 		t.Errorf("a halted store: %d %s", rec.Code, rec.Body)
 	}
+	// and a halted controller ends no force from its stale record
+	if n, err := co.ReconcileForces(); n != 0 || err != nil {
+		t.Errorf("a halted store reconciled forces: %d %v", n, err)
+	}
 }

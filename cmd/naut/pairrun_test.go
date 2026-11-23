@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/joyautomation/nautilus/checkout"
 	"io"
 	"maps"
 	"net"
@@ -216,6 +218,10 @@ func startPairNodeWith(t *testing.T, files fstest.MapFS, env map[string]string, 
 
 // startPairNodeFull is startPairNodeWith with pmod applied to the loaded
 // project first (a driver, a takeover wait).
+// testWantCheckout makes a harness member keep the I/O checkout in the log, as
+// runProject does for a project that turned it on.
+var testWantCheckout bool
+
 func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, ln, api net.Listener, mod func(*pairDeps), pmod func(*project.Project)) *pairNode {
 	t.Helper()
 	proj := loadPair(t, files)
@@ -235,6 +241,10 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		t.Fatal(err)
 	}
 	wireRedundancy(proj, m.q)
+	if testWantCheckout {
+		m.wantCheckout = true
+		os.Chmod(filepath.Dir(m.o.StatePath), 0o700) // the checkout's signing key is made there
+	}
 	rt, err := runtime.New(proj.Runtime)
 	if err != nil {
 		t.Fatal(err)
@@ -829,3 +839,62 @@ func (r *pairRig) peerHTTP() *http.Client {
 // testPeerToken is a pair's peer token in these tests: long enough for
 // peer TLS (#710), as `naut redundancy new-pair` draws one.
 const testPeerToken = "peer-secret-0123456789abcdef0123456789abcdef"
+
+// Two naut run members with the I/O checkout in the log (#719 slice 5): a run
+// begun on the leader is on the standby, results go either way into one run, the
+// canonical chains are the same bytes, and each controller says which key it
+// signs with so both pages show both.
+func TestAPairOfMembersSharesTheCheckout(t *testing.T) {
+	testWantCheckout = true
+	t.Cleanup(func() { testWantCheckout = false })
+	nodes, _, _ := startLoopbackPair(t, true)
+	var lead, stand string
+	pairWait(t, "a leader", 15*time.Second, func() bool {
+		switch {
+		case nodes["a"].m.q.Node().IsLeader():
+			lead, stand = "a", "b"
+		case nodes["b"].m.q.Node().IsLeader():
+			lead, stand = "b", "a"
+		}
+		return lead != ""
+	})
+	l, s := nodes[lead], nodes[stand]
+	if l.m.cl == nil || s.m.cl == nil {
+		t.Fatal("the members did not compose the checkout log")
+	}
+	ls, ss := l.m.cl.Store(), s.m.cl.Store()
+	var run checkout.Run
+	pairWait(t, "the log to count a majority (a begin to be taken)", 20*time.Second, func() bool {
+		r, err := ls.Begin(false, "sheethash", "T", "alice", "user:alice")
+		if err == nil {
+			run = r
+			return true
+		}
+		if !errors.Is(err, checkout.ErrNoMajority) {
+			t.Fatalf("begin on the leader: %v", err)
+		}
+		return false
+	})
+	pairWait(t, "the standby to hold the run", 5*time.Second, func() bool { _, ok := ss.Get(run.ID); return ok })
+	if _, err := ss.Record(run.ID, "A", checkout.Pass, "", 1, "good", "bob", "user:bob"); err != nil {
+		t.Fatalf("record through the standby: %v", err)
+	}
+	pairWait(t, "the leader to hold the result", 5*time.Second, func() bool { g, _ := ls.Get(run.ID); return g.Results == 1 })
+	if !bytes.Equal(ls.ExportChain(), ss.ExportChain()) {
+		t.Error("the controllers hold different canonical chains")
+	}
+	// each says which key it signs with; both see both
+	stop := make(chan struct{})
+	defer close(stop)
+	for _, n := range []*pairNode{l, s} {
+		st := n.m.cl.Store()
+		go n.m.checkoutDuties(st, func() (int, error) { return 0, nil }, func() {})
+	}
+	pairWait(t, "both keys on both controllers", 10*time.Second, func() bool {
+		return len(ls.KeyFingerprints()) == 2 && len(ss.KeyFingerprints()) == 2
+	})
+	if ls.KeyFingerprints()["a"] == ls.KeyFingerprints()["b"] {
+		t.Error("the two controllers announced one key")
+	}
+	_ = filepath.Join
+}

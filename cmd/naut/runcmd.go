@@ -402,6 +402,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		if alarms != nil {
 			eng = alarms.Engine
 		}
+		// the I/O checkout (#719) keeps its runs in the log on a pair, for a
+		// project that turned it on and has users to sign for them
+		pair.wantCheckout = proj.CheckoutSheet() != nil && proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC())
 		if subLog, alarmLog, notesLog, err = pair.startLog(rt, 0, eng); err != nil {
 			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
 			return 1
@@ -601,7 +604,16 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// the log.
 	if sh := proj.CheckoutSheet(); sh != nil {
 		co := &server.CheckoutOptions{Sheet: sh, Signoff: proj.Checkout.SignoffRule(), Evidence: checkoutEvidence(fsys, manifest, dir, proj.Checkout.Attested())}
-		if pair == nil && proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
+		if pair != nil && pair.cl != nil {
+			// a pair: the runs are the log's, on both controllers
+			st := pair.cl.Store()
+			st.SetSheet(sh)
+			co.Store = st
+			if why := st.KeyError(); why != "" {
+				fmt.Fprintf(os.Stderr, "naut run: checkout: sealing is off here (results are still recorded): the signing key cannot be used: %s\n", why)
+			}
+			go pair.checkoutDuties(st, co.ReconcileForces, co.Demoted)
+		} else if pair == nil && proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 			if st, err := openCheckout(proj, dir, os.Getenv); err != nil {
 				fmt.Fprintf(os.Stderr, "naut run: the I/O checkout is off: %v\n", err)
 				co.OpenErr = err.Error()
@@ -623,6 +635,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 				}
 			}
 		}
+		// a standing force is let go, and recorded as interrupted, when the
+		// controller shuts down: no timer or watch outlives it
+		defer co.Stop()
 		co.Install(&sopts)
 	}
 	// Program provenance: a built binary decodes the history its archive

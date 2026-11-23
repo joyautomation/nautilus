@@ -23,6 +23,7 @@ import (
 	"github.com/joyautomation/nautilus/alarm/oncall"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth/users"
+	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
@@ -75,15 +76,20 @@ type pairMember struct {
 
 	// The replicated log of operator intent, mounted on the peer listener
 	// once the runtime exists (startLog); 503 until then.
-	logH       swapHandler
-	log        *oplog.Node
-	al         *server.AlarmLog   // nil without alarms
-	nl         *server.NotesLog   // the pair's operator notes (#720)
-	sess       *server.SessionLog // the pair's browser sessions (#716)
-	rt         *runtime.Runtime
-	logStop    context.CancelFunc
-	logDone    chan struct{}
-	logPending atomic.Bool // the log opened before the box could be read (logIdentity)
+	logH swapHandler
+	log  *oplog.Node
+	al   *server.AlarmLog // nil without alarms
+	nl   *server.NotesLog // the pair's operator notes (#720)
+	// cl is the pair's I/O checkout (#719 slice 5): runs in the log. Made by
+	// startLog only when wantCheckout was set (the project has a checkout
+	// section and auth users), so a project without one gets no key file.
+	cl           *server.CheckoutLog
+	wantCheckout bool
+	sess         *server.SessionLog // the pair's browser sessions (#716)
+	rt           *runtime.Runtime
+	logStop      context.CancelFunc
+	logDone      chan struct{}
+	logPending   atomic.Bool // the log opened before the box could be read (logIdentity)
 	// stuckTerm is the term whose catch-up last failed (driveLog), 0 once
 	// it succeeds: the log is read-only under this leader (node.LogState).
 	stuckTerm atomic.Uint64
@@ -706,12 +712,25 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	// from it by replay, here, and emptied when a history is superseded.
 	nl := server.NewNotesLog()
 	m.nl = nl
+	var cl *server.CheckoutLog
+	if m.wantCheckout {
+		var cerr error
+		if cl, cerr = server.NewCheckoutLog(filepath.Dir(m.o.StatePath)); cerr != nil {
+			return nil, nil, nil, fmt.Errorf("the I/O checkout: %w", cerr)
+		}
+		m.cl = cl
+	}
 	sess := server.NewSessionLog()
 	m.sess = sess
 	sess.SetFile(filepath.Join(filepath.Dir(m.o.StatePath), "session-ends.json"))
 	apply := func(e oplog.Entry) error {
 		if done, err := nl.Apply(e); done {
 			return err
+		}
+		if cl != nil {
+			if done, err := cl.Apply(e); done {
+				return err
+			}
 		}
 		if done, err := sess.Apply(e); done {
 			return err
@@ -753,7 +772,12 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		Counts: witnessCounts(wit, m.q.Node().CountedIncarnation),
 		Apply:  apply,
 		// the log started empty in this process (a rebind to another box): so do its notes
-		OnEmptied: nl.EndSuperseded,
+		OnEmptied: func() {
+			nl.EndSuperseded()
+			if cl != nil {
+				cl.EndSuperseded()
+			}
+		},
 		Lapse: func(e oplog.Entry, now time.Time) bool {
 			return sl.Lapse(e, now) || (al != nil && al.Lapse(e, now))
 		},
@@ -792,6 +816,9 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	m.q.SetLogStatus(func() *leader.LogStatus { return m.logStatus() })
 	sl.Attach(n)
 	nl.Attach(n)
+	if cl != nil {
+		cl.Attach(n)
+	}
 	sess.Attach(n)
 	if al != nil {
 		al.Attach(n)
@@ -881,6 +908,9 @@ func (m *pairMember) endSuperseded() {
 		}
 		if m.nl != nil {
 			m.nl.EndSuperseded() // its notes are now the new history's
+		}
+		if m.cl != nil {
+			m.cl.EndSuperseded() // and its checkout runs
 		}
 	}
 }
@@ -1188,3 +1218,57 @@ func peerServer(h http.Handler) *http.Server {
 // The pair's Quorum answers the commissioning routes (a fake in the
 // server's tests would not say when the interface moves).
 var _ server.Commissioner = (*leader.Quorum)(nil)
+
+// checkoutDuties are what a pair's controller does about the I/O checkout (#719
+// slice 5) besides serving it, once a second until the process ends:
+//
+//   - it says which key it signs with, in the log, so both controllers' pages
+//     show both keys (asked again until the log takes it: the pair may have no
+//     majority at start);
+//   - on the controller that runs the program, and only there, it ends a force
+//     the log has standing that this controller is not driving (reconcile):
+//     a force is the old leader's own output drive and does not fail over, and
+//     a start whose answer was lost can commit later under a new leader. On a
+//     standby it would propose ends for a force the leader is driving, so it
+//     is not called there.
+func (m *pairMember) checkoutDuties(st *checkout.Store, reconcile func() (int, error), demoted func()) {
+	name := string(m.o.Self)
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	shown := ""
+	led := false
+	for range t.C {
+		// a checkout that stopped on an entry from a newer build is a standing
+		// condition of the pair (naut redundancy status, /api/cluster), with its fix
+		if why := st.Halted(); why != shown {
+			shown = why
+			if why == "" {
+				m.q.SetCondition("checkout-halted", "")
+			} else {
+				m.q.SetCondition("checkout-halted", "the I/O checkout has stopped on this controller: "+why+". Bring this controller up to the build the other one runs, then restart it; the oplog, notes, alarms and substitutes are unaffected")
+			}
+		}
+		if shown != "" {
+			continue // its checkout state is stale: it neither announces nor ends forces from it
+		}
+		if err := st.AnnounceKey(name); err != nil {
+			slog.Debug("checkout: the key is not announced yet", "error", err)
+		}
+		if lead := m.q.IsLeader(); !lead {
+			if led {
+				// lost the lead without exiting: the force it was driving is let go here
+				// at once (nothing is proposed: it no longer leads)
+				demoted()
+			}
+			led = false
+			continue
+		}
+		led = true
+		switch n, err := reconcile(); {
+		case err != nil:
+			slog.Warn("checkout: could not end a force the log still has", "error", err) // asked again
+		case n > 0:
+			slog.Warn("checkout: a force nothing on this controller drives was recorded as interrupted (the other controller's, or one whose start was not confirmed)", "forces", n)
+		}
+	}
+}

@@ -73,6 +73,7 @@ type ckForce struct {
 	until               time.Time // monotonic
 	timer               *time.Timer
 	done                chan struct{} // closed when it ends
+	watched             chan struct{} // closed when its watch goroutine has returned (nil until it starts)
 }
 
 type ckState struct {
@@ -127,6 +128,10 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 	a.checkoutWrite(w, r, "point", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
 		if a.s.tagWriter != nil {
 			return nil, http.StatusNotImplemented, fmt.Errorf("this server mirrors a controller it does not run: force on that controller")
+		}
+		if a.s.cluster != nil && !a.s.cluster.Status().IsLeader {
+			// a force drives an output: only the controller that runs the program
+			return nil, http.StatusConflict, fmt.Errorf("this controller is the standby: force an output on the controller that is running the program")
 		}
 		pt, ok := a.co.Sheet.Point(req.Point)
 		if !ok {
@@ -218,7 +223,12 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		// a timer's duration runs on the monotonic clock
 		f.timer = time.AfterFunc(d, func() { a.guarded(func() { a.endCheckoutForce(f, checkout.ForceExpired, "controller") }) })
 		a.co.ck.mu.Unlock()
-		go a.watchCheckoutForce(f)
+		watched := make(chan struct{})
+		f.watched = watched
+		go func() {
+			defer close(watched)
+			a.watchCheckoutForce(f)
+		}()
 		slog.Warn("checkout: forcing an output", "tag", pt.Tag, "point", pt.ID, "by", by, "seconds", rec.Seconds, "run", run.ID)
 		return rec, http.StatusCreated, nil
 	})
@@ -349,8 +359,8 @@ func (a *checkoutAPI) guarded(fn func()) {
 // it, and it would block abandon and seal for good. It is for the controller
 // that runs the program, and returns how many it ended.
 func (co *CheckoutOptions) ReconcileForces() (int, error) {
-	if co.Store == nil {
-		return 0, nil
+	if co.Store == nil || co.Store.Halted() != "" {
+		return 0, nil // a halted store's standing force is stale: nothing is ended from it
 	}
 	rec, ok := co.Store.Standing()
 	if !ok {
@@ -371,4 +381,76 @@ func (co *CheckoutOptions) ReconcileForces() (int, error) {
 		return 0, err
 	}
 	return 1, nil
+}
+
+// Stop ends a standing checkout force and waits for its goroutines: the
+// controller's shutdown (the force is let go and recorded as interrupted, as a
+// restart would have found it), and a test's cleanup, so no timer or watch
+// outlives the server it belongs to. It is safe with nothing standing, and to
+// call more than once.
+func (co *CheckoutOptions) Stop() {
+	co.ck.mu.Lock()
+	f, a := co.ck.force, co.api
+	co.ck.mu.Unlock()
+	if f == nil || a == nil || co.Store == nil {
+		return
+	}
+	a.endCheckoutForce(f, checkout.ForceInterrupted, "controller")
+	co.ck.mu.Lock()
+	w := f.watched
+	co.ck.mu.Unlock()
+	if w != nil {
+		select {
+		case <-w:
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+// Demoted is what a controller does the moment it stops leading without exiting:
+// the force it was driving is let go here at once (unforced in its runtime, its
+// timer stopped, its watch closed) and nothing is proposed, since it no longer
+// leads. Its outputs are fenced anyway, but a force must not linger in this
+// controller's table to come back when it leads again. The record still says it
+// stands; the controller that runs the program now ends it (ReconcileForces).
+func (co *CheckoutOptions) Demoted() {
+	co.ck.mu.Lock()
+	f, a := co.ck.force, co.api
+	co.ck.mu.Unlock()
+	if f == nil || a == nil {
+		return
+	}
+	a.dropForceLocally(f)
+}
+
+// dropForceLocally is endCheckoutForce without the record and the journal: the
+// local half only.
+func (a *checkoutAPI) dropForceLocally(f *ckForce) {
+	a.co.ck.mu.Lock()
+	if a.co.ck.force != f || f.ending {
+		a.co.ck.mu.Unlock()
+		return
+	}
+	f.ending = true
+	if f.timer != nil {
+		f.timer.Stop()
+	}
+	close(f.done)
+	w := f.watched
+	a.co.ck.mu.Unlock()
+	if f.ready {
+		a.s.rt.Tags().UnforceIf(f.tag, f.gen)
+	}
+	a.co.ck.mu.Lock()
+	if a.co.ck.force == f {
+		a.co.ck.force = nil
+	}
+	a.co.ck.mu.Unlock()
+	if w != nil {
+		select {
+		case <-w:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	slog.Warn("checkout: force let go here (this controller no longer leads)", "tag", f.tag, "point", f.point)
 }
