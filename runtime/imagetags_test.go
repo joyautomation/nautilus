@@ -109,8 +109,8 @@ func TestImageCarriesEveryTagTheFieldDoesNotProvide(t *testing.T) {
 	if l := got[ir.NameKey("Latch")]; len(l) != 1 || !l[0].Value().B {
 		t.Errorf("Latch %v, want TRUE", l)
 	}
-	if l := got[ir.NameKey("Count")]; len(l) != 1 || l[0].Value().I != 5 {
-		t.Errorf("Count %v, want its actual 5 (the program's), not the forced 99", l)
+	if l := got[ir.NameKey("Count")]; len(l) != 1 || l[0].Value().I != 6 {
+		t.Errorf("Count %v, want its actual 6 (the program's), not the forced 99", l)
 	}
 	// Where each went: Count and Latch with the main task's frame, Seen with
 	// aux's, Mode from the store. SP, retained, goes in the retain section
@@ -137,7 +137,7 @@ func TestImageCarriesEveryTagTheFieldDoesNotProvide(t *testing.T) {
 	}
 	st := sh.tagsOf()
 	// Seen is 99: aux read the forced Count, as the logic sees a force.
-	if st[ir.NameKey("Mode")].I != 3 || st[ir.NameKey("Count")].I != 5 || !st[ir.NameKey("Latch")].B || st[ir.NameKey("Seen")].I != 99 {
+	if st[ir.NameKey("Mode")].I != 3 || st[ir.NameKey("Count")].I != 6 || !st[ir.NameKey("Latch")].B || st[ir.NameKey("Seen")].I != 99 {
 		t.Fatalf("shadow tags %v", st)
 	}
 }
@@ -159,6 +159,11 @@ func TestImageTagsOfOneInstantWithTheFrame(t *testing.T) {
 		t.Fatal(err)
 	}
 	var img Image
+	if lead.TakeImage(&img) {
+		t.Fatal("an image before main copied again")
+	}
+	lead.Scan() // main's second copy, after aux's: n = Count = 7
+	lead.Scan() // runs on: n = Count = 8, no copy
 	if !lead.TakeImage(&img) {
 		t.Fatal("no image")
 	}
@@ -169,8 +174,8 @@ func TestImageTagsOfOneInstantWithTheFrame(t *testing.T) {
 	}
 	f, _ := sh.frameOf(MainTaskName)
 	n := slotOf(t, lead.prog, "n")
-	if count := sh.tagsOf()[ir.NameKey("Count")].I; f.Slots[n].I != 4 || count != 4 {
-		t.Fatalf("frame n %d, tag Count %d: want both 4, the copy's scan", f.Slots[n].I, count)
+	if count := sh.tagsOf()[ir.NameKey("Count")].I; f.Slots[n].I != 7 || count != 7 {
+		t.Fatalf("frame n %d, tag Count %d: want both 7, the copy's scan", f.Slots[n].I, count)
 	}
 }
 
@@ -317,7 +322,7 @@ END_PROGRAM`
 	asked := testing.AllocsPerRun(50, func() {
 		rt.RequestImage()
 		rt.Scan()
-		rt.prog.takeImage(MainTaskName, &img.Tasks[0])
+		rt.prog.takeImage(MainTaskName, &img.Tasks[0], imageStamp(rt.imgRound, 0))
 	})
 	if asked > plain {
 		t.Fatalf("a scan that copies its frame and tags allocates %v, a plain scan %v", asked, plain)

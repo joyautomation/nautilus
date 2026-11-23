@@ -336,6 +336,14 @@ type Runtime struct {
 	edges uint64
 	// imageSeq numbers the state images (image.go).
 	imageSeq imageSeqs
+	// imgMu guards the round the state image is in (RequestImage,
+	// TakeImage): its number, its phase (0 first copies, 1 the re-copy of
+	// the faster tasks, 2 taken) and the task that copied last.
+	imgMu      sync.Mutex
+	imgRound   uint64
+	imgPhase   int
+	imgSlowest int
+	imgStamps  []uint64
 	// carried is the tags a state image carries (imagetags.go), fixed in New.
 	carried *carrySet
 	// ready is the driver as an io.InputsReadier (nil when it is not one),

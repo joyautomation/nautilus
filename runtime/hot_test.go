@@ -259,7 +259,7 @@ func TestHotTakeoverGoesOnFromTheImage(t *testing.T) {
 		}
 	}
 	mp.mu.Unlock()
-	r.stream(t, 29) // 30 scans after the first: the image's timer has run 3 s
+	r.stream(t, 28) // 30 scans after the first: the image's timer has run 3 s
 	leadET := fbSlot(t, mp, "tmr", "ET").I
 	leadCV := fbSlot(t, mp, "cnt", "CV").I
 	leadN := local(t, mp, "n").I
@@ -292,8 +292,8 @@ func TestHotTakeoverGoesOnFromTheImage(t *testing.T) {
 	if f := local(t, sp, "firsts").I; f != 2 {
 		t.Errorf("FIRST_SCAN count %d, want 2: the image's 1, and TRUE again on the first hot scan", f)
 	}
-	if k := local(t, r.stby.TaskProgram("aux"), "k").I; k != 32 {
-		t.Errorf("aux's k %d, want the image's 31 plus one scan", k)
+	if k := local(t, r.stby.TaskProgram("aux"), "k").I; k != 31 {
+		t.Errorf("aux's k %d, want the image's 30 plus one scan", k)
 	}
 	if v := globalI(t, r.stby, "Latch"); v != 7 {
 		t.Errorf("Latch %d, want the 7 the old leader's program latched", v)
@@ -452,8 +452,8 @@ END_PROGRAM`
 	if v, _ := r.stby.Tags().ReadGlobal("Out"); v.F != 4.5*3 {
 		t.Fatalf("Out %v after the hot takeover, want %v: the edited FB body runs", v.F, 4.5*3)
 	}
-	if c := fbSlot(t, r.stby.TaskProgram(MainTaskName), "g", "calls").I; c != 5 {
-		t.Fatalf("g.calls %d after the hot takeover, want the image's 4 plus one scan", c)
+	if c := fbSlot(t, r.stby.TaskProgram(MainTaskName), "g", "calls").I; c != 6 {
+		t.Fatalf("g.calls %d after the hot takeover, want the image's 5 plus one scan", c)
 	}
 }
 
@@ -529,11 +529,13 @@ func TestHotTakeoverOverAnUnreadableStoreGoesColdOnAFailedCheck(t *testing.T) {
 	}
 }
 
-// A multi-rate image (Fable, #1342): main copied its frame, then ran on
-// for 5 s on the leader before the slow aux task scanned and the image
-// was taken. Main's timer counts those 5 s as elapsed too: every task is
-// carried from the image's one leader reference, not its own copy time.
-// The report gives the oldest task state installed (naut-lead's ruling).
+// A multi-rate image (Fable, #1342, #710 S2c): main copied its frame, then
+// ran on for 5 s on the leader before the slow aux task scanned. The image
+// is not taken yet: main copies again, after aux's copy (a task's state is
+// at most one of its own periods older than the image). Every task is
+// carried from the image's one leader reference, not its own copy time, so
+// main's timer counts the time since its second copy, and the oldest task
+// state installed is aux's (naut-lead's ruling).
 func TestHotTakeoverOfAMultiRateImage(t *testing.T) {
 	r := newHotRig(t, hotMain, hotMain)
 	scanBoth(t, r.lead, r.lc, 30)
@@ -541,11 +543,16 @@ func TestHotTakeoverOfAMultiRateImage(t *testing.T) {
 	r.lead.RequestImage()
 	r.lc.step(100 * time.Millisecond)
 	r.lead.Scan() // main copies its frame
-	copyET := fbSlot(t, mp, "tmr", "ET").I
 	r.lc.step(5 * time.Second)
 	if err := r.lead.ScanTask("aux"); err != nil { // the slow task, 5 s on
 		t.Fatal(err)
 	}
+	if r.lead.TakeImage(&Image{}) {
+		t.Fatal("an image from main's copy 5 s before aux's")
+	}
+	r.lc.step(100 * time.Millisecond)
+	r.lead.Scan() // main copies again, after aux's copy
+	copyET := fbSlot(t, mp, "tmr", "ET").I
 	r.lc.step(7 * time.Millisecond) // the image is taken a moment after the last copy
 	img := &Image{}
 	if !r.lead.TakeImage(img) {
@@ -565,10 +572,10 @@ func TestHotTakeoverOfAMultiRateImage(t *testing.T) {
 	if !rep.Hot {
 		t.Fatalf("takeover: %+v, want hot", rep)
 	}
-	if et := fbSlot(t, r.stby.TaskProgram(MainTaskName), "tmr", "ET").I; et != copyET+5307 {
-		t.Errorf("main's TON ET %d on the first hot scan, want %d: its copy's %d, plus the 5.007 s it ran on the leader before the image was taken, plus the image's 300 ms age", et, copyET+5307, copyET)
+	if et := fbSlot(t, r.stby.TaskProgram(MainTaskName), "tmr", "ET").I; et != copyET+307 {
+		t.Errorf("main's TON ET %d on the first hot scan, want %d: its copy's %d, plus the 7 ms before the image was taken, plus the image's 300 ms age", et, copyET+307, copyET)
 	}
-	if rep.OldestFrameAge != 5307*time.Millisecond {
-		t.Errorf("oldest task state %v at the install, want 5.307s", rep.OldestFrameAge)
+	if rep.OldestFrameAge != 407*time.Millisecond {
+		t.Errorf("oldest task state %v at the install, want 407ms: aux's copy, 107 ms before the image was taken, plus its 300 ms age", rep.OldestFrameAge)
 	}
 }

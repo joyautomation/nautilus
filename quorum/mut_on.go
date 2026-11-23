@@ -436,6 +436,8 @@ var Mutations = []string{
 	"image_tags_written_only",           // runtime: an image carries only the tags a program writes, not an operator's (#710 S2a)
 	"image_tag_forced_value",            // runtime: an image carries a forced tag's forced value, not its actual one (#710 S2a)
 	"image_tags_at_take",                // runtime: a task's tags are copied when the image is taken, not at the end of the scan its frame was copied at (#710 S2a)
+	"copy_first_scan_only",              // runtime: an image is taken from the first copies, with no second round for the faster tasks (#710 S2c)
+	"copy_from_older_round",             // runtime: an image takes a copy made for an earlier, untaken round (#710 S2c)
 	"image_source_unhashed",             // runtime: a task's image names no running source (#710 S2a)
 	"shadow_tags_layout_unchecked",      // runtime: the shadow applies the tags of a leader that carries another set (#710 S2a)
 	"image_tags_retained_twice",         // runtime: an image's store section carries the retained tags the retain section already carries (#710 S2a)
