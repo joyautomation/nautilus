@@ -283,7 +283,9 @@ func dupWriteWait(share time.Duration) time.Duration {
 // dupDurable waits, after a clear or a fence, until v's duplicate records
 // are on disk, for up to d: the answer says "cleared" or "fenced" only of
 // a record a crash can't lose (#1164 review, S1). It returns why not, ""
-// once durable. mu guards v; failing says the writer's last error.
+// once durable. mu guards v; failing says the writer's last error. It
+// waits the whole of d even while the writer fails, since the writer
+// retries: a member whose disk refuses every write answers after d.
 func dupDurable(mu *sync.Mutex, v *quorum.Voter, d time.Duration, failing func() string) string {
 	if mut("dup_answered_before_write") {
 		return ""
@@ -386,12 +388,16 @@ func (w *Witness) serveDup(rw http.ResponseWriter, r *http.Request) {
 	writeDupAnswer(rw, a)
 }
 
-// dupRemote asks the member at base (the peer or the witness). It waits
-// out the member's wait for its write (dupWriteWait), and a lease more.
+// dupRemote asks the member at base (the peer or the witness). A clear or
+// a fence waits a lease more than this pair's wait for the write
+// (dupWriteWait), which covers the peer's, and a witness's (2 s, or a
+// quarter of its own lease) unless that quarter is longer than the
+// call: its answer then may come too late, and the command ends
+// incomplete, to be run again. Other ops write nothing: a lease.
 func (e *Elector) dupRemote(ctx context.Context, member, base string, q dupOp) DupAnswer {
 	b, _ := json.Marshal(q)
 	timeout := e.o.Lease
-	if !mut("dup_wait_lease_scaled") {
+	if (q.Op == "clear" || q.Op == "fence") && !mut("dup_wait_lease_scaled") {
 		timeout += dupWriteWait(e.o.Lease / 2)
 	}
 	body, err := e.call.call(ctx, timeout, http.MethodPost, base+Prefix+e.o.Cluster+"/dup", b)
