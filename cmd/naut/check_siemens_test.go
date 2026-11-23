@@ -268,14 +268,19 @@ func TestSiemensWriterInputSeedsAStructTag(t *testing.T) {
 	if err != nil || len(diags) > 0 {
 		t.Fatalf("%v %v", diags, err)
 	}
+	files := map[string]string{}
 	for _, f := range out.Files {
-		if f.Path == "naut_Tags.db" && !strings.Contains(string(f.Data), "      P : Struct\n         Run : BOOL := TRUE;\n         Speed : REAL := 40.0;\n         Starts : DINT := 2;\n      END_STRUCT;\n") {
-			t.Errorf("tags DB:\n%s", f.Data)
-		}
-		// A nested map, as YAML decodes it, reaches the nested member.
-		if f.Path == "naut_Tags.db" && !strings.Contains(string(f.Data), "      S : Struct\n         Pump : Struct\n            Run : BOOL;\n            Speed : REAL := 12.5;\n            Starts : DINT := 2;\n         END_STRUCT;\n         Level : REAL := 70.0;\n") {
-			t.Errorf("nested start value:\n%s", f.Data)
-		}
+		files[f.Path] = string(f.Data)
+	}
+	// Each STRUCT is a PLC data type carrying the TYPE's initial values;
+	// the tag's init: map is its start values in the tags DB's BEGIN, a
+	// nested map (as YAML decodes it) reaching the nested member (#1301 D1b).
+	if !strings.Contains(files["naut_Motor.udt"], "      Starts : DINT := 2;\n") {
+		t.Errorf("Motor:\n%s", files["naut_Motor.udt"])
+	}
+	if db := files["naut_Tags.db"]; !strings.Contains(db, "      P : \"naut_Motor\";\n      S : \"naut_Skid\";\n") ||
+		!strings.Contains(db, "BEGIN\n   P.Run := TRUE;\n   P.Speed := 40.0;\n   S.Pump.Speed := 12.5;\n   S.Level := 70.0;\n") {
+		t.Errorf("tags DB:\n%s", db)
 	}
 }
 

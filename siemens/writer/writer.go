@@ -467,14 +467,23 @@ func Write(in Input) (Output, []Diag, error) {
 		}
 	}
 
+	// The PLC data types of the STRUCTs everything above named, last:
+	// the tags DB, the scan DBs, the programs and the project's blocks
+	// each reach some.
+	typeOrder := w.writeTypes(&out, claim)
+
 	if len(w.diags) > 0 {
 		return Output{Warnings: w.warnings}, w.diags, nil
 	}
 	out.Warnings = w.warnings
 	// tiad generates the sources in the order given, and TIA generates a
-	// block only once what it calls exists: the guarded division FCs
-	// first, then the project's blocks callees first, then the rest.
+	// block only once what it calls exists: the data types first (each
+	// after the types it holds), then the guarded division FCs, then the
+	// project's blocks callees first, then the rest.
 	rank := map[string]int{}
+	for i, f := range typeOrder {
+		rank[f] = i - len(typeOrder)
+	}
 	for _, fn := range fns {
 		rank[prefix+fn+".scl"] = 1
 	}
@@ -519,6 +528,9 @@ type writer struct {
 	// it is first used, and queue those still to write (pous.go).
 	needed map[string]site
 	queue  []string
+	// types are the STRUCTs the written SCL names (lower-cased), each
+	// with the first nautilus file that names it (structs.go).
+	types map[string]string
 }
 
 func (w *writer) useGuarded(fn, path string) {
@@ -557,14 +569,18 @@ func (w *writer) globalDB() ([]byte, bool) {
 		names = append(names, k)
 	}
 	sort.Strings(names)
-	var plain, retained []string
+	// begin are a struct tag's start values from its init: map, as
+	// assignments in the DB's BEGIN section (TIA keeps them: measured on
+	// V21, #1301 D1b); the members it does not name start at the data
+	// type's own start values.
+	var plain, retained, begin []string
 	ok := true
 	// A type that cannot be written is reported once, at its first tag,
 	// not once per tag of the type.
 	refused := map[string]bool{}
 	for _, k := range names {
 		g := w.globals[k]
-		if w.structOf(g.Type) != nil {
+		if sd := w.structOf(g.Type); sd != nil {
 			if g.Init != "" {
 				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: init %s is not a struct's start value", g.Name, g.Init))
 				ok = false
@@ -579,18 +595,21 @@ func (w *writer) globalDB() ([]byte, bool) {
 				}
 				continue
 			}
-			if why := w.seedCheck(g.Type, g.Start); why != "" {
-				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: nautilus refuses the start value: %s", g.Name, why))
-				ok = false
-				continue
+			if g.Start != nil {
+				if why := w.seedCheck(g.Type, g.Start); why != "" {
+					w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: nautilus refuses the start value: %s", g.Name, why))
+					ok = false
+					continue
+				}
+				ls, why := w.overrides(g.Type, sclName(g.Name), g.Start)
+				if why != "" {
+					w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
+					ok = false
+					continue
+				}
+				begin = append(begin, ls...)
 			}
-			typ, why := w.declType(g.Type, "      ", g.Start, true)
-			if why != "" {
-				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
-				ok = false
-				continue
-			}
-			line := fmt.Sprintf("      %s : %s;", sclName(g.Name), typ)
+			line := fmt.Sprintf("      %s : %s;", sclName(g.Name), w.typeName(sd, "nautilus.yaml"))
 			if g.Retain {
 				retained = append(retained, line)
 			} else {
@@ -643,7 +662,11 @@ func (w *writer) globalDB() ([]byte, bool) {
 		b.WriteString(strings.Join(retained, "\n") + "\n")
 		b.WriteString("   END_VAR\n")
 	}
-	b.WriteString("\nBEGIN\n\nEND_DATA_BLOCK\n")
+	b.WriteString("\nBEGIN\n")
+	for _, l := range begin {
+		b.WriteString("   " + l + "\n")
+	}
+	b.WriteString("\nEND_DATA_BLOCK\n")
 	return []byte(b.String()), true
 }
 

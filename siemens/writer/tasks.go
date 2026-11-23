@@ -116,9 +116,13 @@ func (pw *progWriter) assignTarget(e st.Expression) (g Global, path, typ string,
 // it records the write and, for a shared tag, sets the flags of what it
 // wrote.
 func (pw *progWriter) assigned(b *strings.Builder, in string, at int, target st.Expression) {
+	pw.fcInputWrite(target, at)
 	g, path, typ, bit, ok := pw.assignTarget(target)
 	if !ok {
 		return
+	}
+	if pw.structTag == "" && pw.w.structOf(g.Type) != nil {
+		pw.structTag = g.Name
 	}
 	u := pw.use(g)
 	u.written = true
@@ -152,6 +156,33 @@ func (pw *progWriter) assigned(b *strings.Builder, in string, at int, target st.
 	for _, l := range ls {
 		pw.emit(b, at, "%s%s%s := %s;\n", in, flag, l.path, flagAll(su, l))
 	}
+}
+
+// fcInputWrite refuses a write to a FUNCTION's STRUCT input, or to any
+// member of it: TIA hands an FC a STRUCT input by reference, so the write
+// would land in the caller's variable, where nautilus writes the
+// function's own copy (pous.go).
+func (pw *progWriter) fcInputWrite(target st.Expression, at int) {
+	if pw.kind != kindFC {
+		return
+	}
+	root := target
+	for {
+		m, ok := root.(*st.MemberExpr)
+		if !ok {
+			break
+		}
+		root = m.Object
+	}
+	id, ok := root.(*st.IdentExpr)
+	if !ok {
+		return
+	}
+	pn, ok := pw.pou.pins()[strings.ToUpper(id.Name)]
+	if !ok || pn.kind != "VAR_INPUT" || pw.w.structOf(pn.typ) == nil {
+		return
+	}
+	pw.gap("siemens/var", at, gapStructured, "writing "+exprShort(target)+", a STRUCT input of "+pw.what(), "TIA hands a function its STRUCT input by reference, so the write would reach the caller's variable; nautilus writes the function's own copy")
 }
 
 // flagAll is the value that marks leaf l of a shared tag wholly assigned:
@@ -239,7 +270,7 @@ func (w *writer) scanDB(sh *share) ([]byte, string) {
 		if w.typeRefusal(g.Type, map[string]bool{}) != "" {
 			continue // the tags DB refuses the tag's type, once
 		}
-		t, why := w.declType(g.Type, "         ", nil, false)
+		t, why := w.declType(g.Type, "nautilus.yaml")
 		if why != "" {
 			return nil, fmt.Sprintf("tag %s: %s", g.Name, why)
 		}

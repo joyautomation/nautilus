@@ -270,11 +270,7 @@ func TestLibraryBlockDiagnostics(t *testing.T) {
 // TestBlockRefusals: what the writer refuses of the project's blocks, each
 // with its reason, a STRUCT pin once per block.
 func TestBlockRefusals(t *testing.T) {
-	types := "TYPE S : STRUCT a : INT; END_STRUCT; END_TYPE\n"
 	for _, c := range []struct{ name, lib, prog, want string }{
-		{"struct pins", types + "FUNCTION_BLOCK H\nVAR_INPUT x : S; END_VAR\nVAR_IN_OUT y : S; END_VAR\nEND_FUNCTION_BLOCK\n",
-			"PROGRAM P\nVAR h : H; s : S; END_VAR\nh(x := s, y := s);\nEND_PROGRAM\n",
-			"a STRUCT as a pin of FUNCTION_BLOCK H (x : S, y : S) yet (#1299): it needs a named PLC data type"},
 		{"retain", "FUNCTION_BLOCK H\nVAR RETAIN n : INT; END_VAR\nn := n + 1;\nEND_FUNCTION_BLOCK\n",
 			"PROGRAM P\nVAR h : H; END_VAR\nh();\nEND_PROGRAM\n", "VAR RETAIN in FUNCTION_BLOCK H yet (#1305)"},
 		{"function as statement", "FUNCTION F : INT\nVAR_INPUT x : INT; END_VAR\nF := x;\nEND_FUNCTION\n",
@@ -286,26 +282,6 @@ func TestBlockRefusals(t *testing.T) {
 		if len(diags) == 0 || !strings.Contains(diags[0].Message, c.want) {
 			t.Errorf("%s: %v", c.name, diags)
 		}
-		n := 0
-		for _, d := range diags {
-			if strings.Contains(d.Message, "STRUCT as a pin") {
-				n++
-			}
-		}
-		if n > 1 {
-			t.Errorf("%s: struct pins refused %d times: %v", c.name, n, diags)
-		}
-	}
-}
-
-// TestFunctionReturningAStruct: an FC returns a STRUCT only as a named PLC
-// data type (#1299). (nautilus's own lowering and the struct assignment
-// refuse most calls of one first, so the block is written directly.)
-func TestFunctionReturningAStruct(t *testing.T) {
-	lib := "TYPE S : STRUCT a : INT; END_STRUCT; END_TYPE\nFUNCTION F : S\nVAR_INPUT x : INT; END_VAR\nF.a := x;\nEND_FUNCTION\n"
-	w := &writer{globals: map[string]Global{}, lib: loadLibrary([]string{lib}, nil), prefix: "naut_"}
-	if pf := w.writePOU("f"); pf != nil || len(w.diags) != 1 || !strings.Contains(w.diags[0].Message, "a FUNCTION returning a STRUCT (F : S) yet (#1299)") {
-		t.Errorf("struct return: %v %v", pf, w.diags)
 	}
 }
 

@@ -59,6 +59,9 @@ type deployRig struct {
 	// oldSoftware answers a software import that carries prunePrefix as
 	// an agent older than D1b does: 400, unknown field.
 	oldSoftware bool
+	// oldTypes answers a software import with a data type source as an
+	// agent before D1b's types does (TypesRefused).
+	oldTypes bool
 }
 
 // downloads are the downloads since the CPU ran its own project (cpuRuns).
@@ -168,6 +171,11 @@ func newDeployRig(t *testing.T) *deployRig {
 		if r.oldSoftware && strings.HasSuffix(q.URL.Path, "/software") && strings.Contains(string(body), `"prunePrefix"`) {
 			w.WriteHeader(http.StatusBadRequest)
 			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"body: json: unknown field \"prunePrefix\"","fatal":false},"events":[]}`)
+			return
+		}
+		if r.oldTypes && strings.HasSuffix(q.URL.Path, "/software") && strings.Contains(string(body), `.udt"`) {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"src/naut_M.udt declares data type \"naut_M\": data types are not imported yet (TIA puts them beside the project's own, so tiad cannot keep a customer's apart). Nothing was imported","fatal":false},"events":[]}`)
 			return
 		}
 		if r.mangleDownload && strings.HasSuffix(q.URL.Path, "/download") && !strings.Contains(string(body), `"dryRun":true`) {
@@ -334,7 +342,7 @@ func TestSiemensDeployAsksBeforeItLoads(t *testing.T) {
 			"after your yes: a dry run first (--dry-run)",
 			"announced: you have told everyone who shares this CPU",
 			"user management: not answered",
-			"stop the CPU if TIA needs to: yes (--allow-stop)",
+			"stop the CPU if TIA needs to: yes (--allow-stop). A load in STOP returns every data block of the program to its start values, retained ones included; TIA does not ask (#1341)",
 			"reinitialize a DB: no. If TIA asks, the download is cancelled there: before the CPU was stopped that loads nothing, but after a stop it ends IN DOUBT",
 			"start the CPU after the load: yes (--start), also a CPU that was in STOP before",
 		} {
@@ -429,6 +437,38 @@ func TestSiemensDeployPrunesOnlyItsOwn(t *testing.T) {
 	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
 	if code != 1 || !strings.Contains(out, "the agent is older than this naut (it does not know prunePrefix") || !strings.Contains(out, "reinstall tiad") || len(r.downloads()) != 0 {
 		t.Fatalf("an agent older than prunePrefix: exit %d:\n%s", code, out)
+	}
+}
+
+// TestSiemensDeployDataTypes (#1301 D1b): a project with a STRUCT sends
+// its PLC data type ahead of the blocks and loads; the type is no block,
+// so naut's own check of the blocks the compare saw does not ask for it
+// (the agent's compare gate requires it by name). An agent that does not
+// import data types yet is told to be reinstalled.
+func TestSiemensDeployDataTypes(t *testing.T) {
+	prog := "TYPE M : STRUCT run : BOOL; speed : REAL := 50.0; END_STRUCT; END_TYPE\nPROGRAM main\nVAR m : M; END_VAR\nm.speed := Level;\nEND_PROGRAM\n"
+	r := newDeployRig(t)
+	if err := os.WriteFile(filepath.Join(r.dir, "main.st"), []byte(prog), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.adopt()
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	if code != 0 || len(r.downloads()) != 1 || strings.Contains(out, "VERIFY") {
+		t.Fatalf("a deploy with a data type: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+	}
+	if !strings.Contains(out, "naut_M [UDT]") {
+		t.Errorf("the group's listing lacks the type:\n%s", out)
+	}
+
+	r = newDeployRig(t)
+	if err := os.WriteFile(filepath.Join(r.dir, "main.st"), []byte(prog), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.adopt()
+	r.oldTypes = true
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
+	if code != 1 || !strings.Contains(out, "or does not import PLC data types): reinstall tiad") || len(r.downloads()) != 0 {
+		t.Fatalf("an agent before data types: exit %d:\n%s", code, out)
 	}
 }
 

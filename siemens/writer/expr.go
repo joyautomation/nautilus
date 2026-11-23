@@ -95,6 +95,13 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 				pw.gap("siemens/member", e.Pos.Line, gapOther, "reading "+exprShort(e)+", a temp or constant of "+p.what()+", from outside it", "")
 				return ""
 			}
+			if pn.kind == "VAR_IN_OUT" {
+				// nautilus keeps the in-out's last value in the
+				// instance; TIA keeps a reference to the caller's
+				// variable there, which the caller names directly.
+				pw.gap("siemens/member", e.Pos.Line, gapOther, exprShort(e)+", an in-out of "+p.what()+", from outside it", "name the variable bound to it instead")
+				return ""
+			}
 			member = pn.name // as the block declares it
 		}
 		return pw.widen(pw.typ(e), pw.expr(e.Object, unaryPrec+1)+"."+sclName(member))

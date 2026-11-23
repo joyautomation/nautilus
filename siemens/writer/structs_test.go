@@ -1,6 +1,7 @@
 package writer
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -19,28 +20,41 @@ func TestStructsGolden(t *testing.T) {
 		files[f.Path] = string(f.Data)
 	}
 	db, fb := files["naut_Tags.db"], files["naut_Main.scl"]
-	for _, want := range []string{
-		// The manifest's map wins, matched as nautilus matches it
-		// (case-insensitively), at any depth.
-		"            Run : BOOL := TRUE;\n",
-		"         Depth : REAL := 0.45;\n",
-		// A member it does not name keeps the TYPE's initial value.
-		"            Speed : REAL := 50.0;\n",
-		"         \"Name\" : DINT := 7;\n",
-		// A retained struct tag sits in the RETAIN section.
-		"   VAR RETAIN\n      WL102 : Struct\n",
+	motor, well := files["naut_Motor.udt"], files["naut_Well.udt"]
+	for _, c := range []struct{ name, got, want string }{
+		// Every STRUCT is its PLC data type, named with the prefix, and
+		// carries the TYPE's initial values (#1301 D1b).
+		{"Motor", motor, "TYPE \"naut_Motor\"\nVERSION : 0.1\n   STRUCT\n      Run : BOOL;\n      Speed : REAL := 50.0;\n      Starts : INT;\n   END_STRUCT;\n\nEND_TYPE\n"},
+		// A struct member names its own type; a reserved member name is
+		// quoted.
+		{"Well", well, "      Pump : \"naut_Motor\";\n"},
+		{"Well", well, "      \"Name\" : DINT := 7;\n"},
+		// A tag is of the type; a retained one sits in the RETAIN section.
+		{"tags DB", db, "   VAR \n      WL101 : \"naut_Well\";\n   END_VAR\n"},
+		{"tags DB", db, "   VAR RETAIN\n      WL102 : \"naut_Well\";\n   END_VAR\n"},
+		// The manifest's map overrides in BEGIN, matched as nautilus
+		// matches it (case-insensitively), at any depth, each member as
+		// the TYPE spells it; what it does not name keeps the type's.
+		{"tags DB", db, "\nBEGIN\n   WL101.Pump.Run := TRUE;\n   WL101.Depth := 0.45;\n\nEND_DATA_BLOCK\n"},
 	} {
-		if !strings.Contains(db, want) {
-			t.Errorf("tags DB lacks %q:\n%s", want, db)
+		if !strings.Contains(c.got, c.want) {
+			t.Errorf("%s lacks %q:\n%s", c.name, c.want, c.got)
 		}
+	}
+	// The types come first, each after the types it holds: TIA
+	// generates a source only once what it names exists.
+	if len(out.Files) < 2 || out.Files[0].Path != "naut_Motor.udt" || out.Files[1].Path != "naut_Well.udt" {
+		t.Errorf("file order: %v", paths(out))
 	}
 	for _, want := range []string{
 		// Member arithmetic is nautilus's 64-bit sum wrapped at the store,
 		// typed from the member's declared INT.
 		`"naut_Tags".WL101.Pump.Starts := LINT_TO_INT((((INT_TO_LINT("naut_Tags".WL101.Pump.Starts) + 1`,
 		`"naut_Tags".WL102."Name" := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".WL101."Name") + 1`,
-		// A whole struct is copied member by member.
-		"\t#last.Run := \"naut_Tags\".WL101.Pump.Run;\n\t#last.Speed := \"naut_Tags\".WL101.Pump.Speed;\n\t#last.Starts := \"naut_Tags\".WL101.Pump.Starts;\n",
+		// Variables are of the type, a whole struct copied whole.
+		"      spare : \"naut_Motor\";\n",
+		"      t : \"naut_Motor\";\n",
+		"\t#last := \"naut_Tags\".WL101.Pump;\n",
 		// A struct temp starts every scan at its type's initial values.
 		"BEGIN\n\t#t.Run := FALSE;\n\t#t.Speed := 50.0;\n\t#t.Starts := 0;\n",
 		// A reserved member name is quoted.
@@ -104,7 +118,7 @@ func TestStructFromLibrary(t *testing.T) {
 	if !strings.Contains(fb, `"naut_Tags".P1.Count := LINT_TO_UINT(((UINT_TO_LINT("naut_Tags".P1.Count) - 1) MOD LINT#65536 + LINT#65536) MOD LINT#65536);`) {
 		t.Errorf("FB:\n%s", fb)
 	}
-	if !strings.Contains(db, "Count : UINT := 5;") {
+	if !strings.Contains(db, "   P1.Count := 5;\n") {
 		t.Errorf("DB:\n%s", db)
 	}
 }
@@ -174,10 +188,10 @@ func TestReservedNamesQuotedEverywhere(t *testing.T) {
 // seeding did not run first.
 func TestDeclTypeNeverDropsAStartValue(t *testing.T) {
 	w := &writer{lib: loadLibrary([]string{motorLib}, nil)}
-	if _, why := w.declType("Pump", "", map[string]any{"Run": true, "Spin": true}, true); !strings.Contains(why, "names a member Pump does not have") {
+	if _, why := w.overrides("Pump", "P1", map[string]any{"Run": true, "Spin": true}); !strings.Contains(why, "names a member Pump does not have") {
 		t.Errorf("unknown key: %q", why)
 	}
-	if _, why := w.declType("Pump", "", true, true); !strings.Contains(why, "not a mapping") {
+	if _, why := w.overrides("Pump", "P1", true); !strings.Contains(why, "not a mapping") {
 		t.Errorf("not a map: %q", why)
 	}
 	w.lib.types = nil
@@ -223,7 +237,7 @@ func TestStartValueEdges(t *testing.T) {
 		return "", diags
 	}
 	got, diags := db([]Global{{Name: "k", Type: "INT", Init: "-5"}, {Name: "m", Type: "M", Start: map[string]any{"i": -5.0, "r": 1e20, "d": "5s"}}})
-	for _, want := range []string{"k : INT := -5;", "i : INT := -5;", "s : SINT := -3;", "r : REAL := 1.0e+20;", "d : TIME := T#5s;"} {
+	for _, want := range []string{"k : INT := -5;", "m.i := -5;", "m.r := 1.0e+20;", "m.d := T#5s;"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("lacks %q: %v\n%s", want, diags, got)
 		}
@@ -251,7 +265,7 @@ func TestStartValueEdges(t *testing.T) {
 	_, diags, _ = Write(Input{Programs: []Program{
 		{Path: "a.st", Source: "TYPE N : STRUCT a : INT := 5; END_STRUCT; END_TYPE\nPROGRAM A\nVAR s : N; END_VAR\nEND_PROGRAM\n"},
 		{Path: "b.st", Source: "TYPE N : STRUCT\n  a : INT := 5;\nEND_STRUCT; END_TYPE\nPROGRAM B\nVAR s : N; END_VAR\nEND_PROGRAM\n"},
-	}})
+	}, BlockPrefix: "naut_"})
 	if len(diags) != 0 {
 		t.Errorf("one TYPE declared twice alike: %v", diags)
 	}
@@ -269,5 +283,277 @@ func TestStartValueEdges(t *testing.T) {
 	_, diags = writeStructs(strings.Replace(src, "m : M", "m : Q", 1), []Global{{Name: "k", Type: "INT"}, {Name: "m", Type: "Q"}}, "TYPE Q : STRUCT d : TIME := T#30d; END_STRUCT; END_TYPE\n")
 	if len(diags) != 1 || !strings.Contains(diags[0].Message, "member d: its initial value: the Siemens writer doesn't translate the time literal 30d yet (#1304): it is beyond TIA") {
 		t.Errorf("TIME beyond range: %v", diags)
+	}
+}
+
+// paths are the generated files' paths, in order.
+func paths(out Output) []string {
+	var p []string
+	for _, f := range out.Files {
+		p = append(p, f.Path)
+	}
+	return p
+}
+
+// d1bLib declares two STRUCTs (one holding the other), a block with a
+// STRUCT pin of each direction and a function returning a STRUCT (#1301
+// D1b).
+const d1bLib = `TYPE
+  M : STRUCT run : BOOL; speed : REAL := 50.0; END_STRUCT;
+  W : STRUCT pump : M; depth : REAL; END_STRUCT;
+  Unused : STRUCT label : STRING; END_STRUCT;
+END_TYPE
+FUNCTION_BLOCK H
+VAR_INPUT i : M; END_VAR
+VAR_OUTPUT o : M; END_VAR
+VAR_IN_OUT io : W; END_VAR
+o := i;
+io.pump.run := i.run;
+END_FUNCTION_BLOCK
+FUNCTION F : M
+VAR_INPUT x : REAL; m : M; END_VAR
+F := m;
+F.speed := x;
+END_FUNCTION
+`
+
+func fileMap(out Output) map[string]string {
+	f := map[string]string{}
+	for _, x := range out.Files {
+		f[x.Path] = string(x.Data)
+	}
+	return f
+}
+
+// TestStructPinsAndResults: a STRUCT pin of the project's block, in, out
+// and in-out, is its PLC data type, as is a function's STRUCT result;
+// the call binds them, and a STRUCT result is assigned whole (#1301 D1b).
+func TestStructPinsAndResults(t *testing.T) {
+	src := "PROGRAM P\nVAR h : H; a, b : M; w : W; END_VAR\nh(i := a, io := w, o => b);\na := F(x := 2.0, m := b);\nEND_PROGRAM\n"
+	out, diags := writeStructs(src, nil, d1bLib)
+	if len(diags) > 0 {
+		t.Fatal(diags)
+	}
+	f := fileMap(out)
+	for _, c := range []struct{ file, want string }{
+		{"naut_H.scl", "   VAR_INPUT \n      i : \"naut_M\";\n   END_VAR\n   VAR_OUTPUT \n      o : \"naut_M\";\n   END_VAR\n   VAR_IN_OUT \n      io : \"naut_W\";\n   END_VAR\n"},
+		{"naut_H.scl", "\t#o := #i;\n"},
+		{"naut_F.scl", "FUNCTION \"naut_F\" : \"naut_M\"\n"},
+		// The result's temp starts at the type's values, member by member,
+		// and is handed back whole.
+		{"naut_F.scl", "   VAR_TEMP \n      F : \"naut_M\";\n   END_VAR\n"},
+		{"naut_F.scl", "BEGIN\n\t#F.run := FALSE;\n\t#F.speed := 50.0;\n\t#F := #m;\n"},
+		{"naut_F.scl", "\t#naut_F := #F;\nEND_FUNCTION\n"},
+		{"naut_P.scl", "\t#h(i := #a, io := #w);\n\t#b := #h.o;\n"},
+		{"naut_P.scl", "\t#a := \"naut_F\"(x := 2.0, m := #b);\n"},
+		{"naut_W.udt", "      pump : \"naut_M\";\n"},
+	} {
+		if !strings.Contains(f[c.file], c.want) {
+			t.Errorf("%s lacks %q:\n%s", c.file, c.want, f[c.file])
+		}
+	}
+	got := paths(out)
+	if len(got) < 2 || got[0] != "naut_M.udt" || got[1] != "naut_W.udt" {
+		t.Errorf("types first, each after what it holds: %v", got)
+	}
+	// Held before holder even where the names sort the other way.
+	out2, diags := writeStructs("PROGRAM P\nVAR a : A; END_VAR\na.z.n := 1;\nEND_PROGRAM\n", nil, "TYPE A : STRUCT z : Zed; END_STRUCT; Zed : STRUCT n : INT; END_STRUCT; END_TYPE\n")
+	if got := paths(out2); len(diags) > 0 || len(got) < 2 || got[0] != "naut_Zed.udt" || got[1] != "naut_A.udt" {
+		t.Errorf("Zed before A: %v %v", got, diags)
+	}
+	// A STRUCT output's member reads through the instance.
+	if sym, ok := out.Symbol("P.h.o.run"); !ok || sym != `"naut_P_DB".h.o.run` {
+		t.Errorf("Symbol(P.h.o.run) = %s %v", sym, ok)
+	}
+}
+
+// TestOnlyReachedTypesWritten: a TYPE nothing reaches is not written, so
+// a library STRUCT the writer could not write (a STRING member) refuses
+// nothing; a type reached only as another's member is written.
+func TestOnlyReachedTypesWritten(t *testing.T) {
+	out, diags := writeStructs("PROGRAM P\nVAR w : W; END_VAR\nw.depth := 1.0;\nEND_PROGRAM\n", nil, d1bLib)
+	if len(diags) > 0 {
+		t.Fatal(diags)
+	}
+	f := fileMap(out)
+	if _, ok := f["naut_Unused.udt"]; ok {
+		t.Error("an unreached TYPE was written")
+	}
+	if _, ok := f["naut_M.udt"]; !ok {
+		t.Errorf("W's member type M was not written: %v", paths(out))
+	}
+	if _, ok := f["naut_H.scl"]; ok {
+		t.Error("an unreached block was written")
+	}
+}
+
+// TestTypeNameClaims: a PLC data type shares TIA's one name space with
+// the blocks, so a TYPE named like any generated block is refused by
+// name, whichever kind of block it meets.
+func TestTypeNameClaims(t *testing.T) {
+	for _, c := range []struct{ typ, prog, want string }{
+		{"P", "", "collides with program P"},
+		{"P_DB", "", "collides with the instance DB of P"},
+		{"Tags", "", "collides with the tags DB"},
+		{"OB_main", "", "collides with the OB of task main"},
+		{"DIV_LINT", "n := n / k;\n", "collides with the guarded division function DIV_LINT"},
+		{"G", "n := G(1);\n", "collides with the project's function G"},
+	} {
+		lib := "TYPE " + c.typ + " : STRUCT a : INT; END_STRUCT; END_TYPE\nFUNCTION G : INT\nVAR_INPUT x : INT; END_VAR\nG := x;\nEND_FUNCTION\n"
+		src := "PROGRAM P\nVAR_EXTERNAL k : DINT; END_VAR\nVAR s : " + c.typ + "; n : DINT; END_VAR\ns.a := 1;\n" + c.prog + "END_PROGRAM\n"
+		_, diags := writeStructs(src, []Global{{Name: "k", Type: "DINT"}}, lib)
+		want := `block "naut_` + c.typ + `" (the PLC data type of TYPE ` + c.typ + `) ` + c.want
+		if !strings.Contains(fmt.Sprint(diags), want) {
+			t.Errorf("TYPE %s: %v, want %q", c.typ, diags, want)
+		}
+	}
+	// A task's scan DB and the clock DB too.
+	_, diags, _ := Write(Input{
+		Programs: []Program{
+			{Path: "a.st", Source: "TYPE Scan_main : STRUCT a : INT; END_STRUCT; END_TYPE\nPROGRAM A\nVAR_EXTERNAL L : REAL; END_VAR\nVAR s : Scan_main; END_VAR\nL := 1.0;\nEND_PROGRAM\n"},
+			{Path: "b.st", Source: "TYPE Clock : STRUCT a : INT; END_STRUCT; END_TYPE\nPROGRAM B\nVAR_EXTERNAL L : REAL; END_VAR\nVAR s : Clock; END_VAR\nL := 2.0;\nEND_PROGRAM\n"},
+		},
+		Globals:     []Global{{Name: "L", Type: "REAL"}, {Name: "D", Type: "REAL"}},
+		Tasks:       []Task{{Name: "main", Program: "A", Interval: time.Second, DtTag: "D"}, {Name: "b", Program: "B", Interval: time.Second}},
+		BlockPrefix: "naut_",
+	})
+	for _, want := range []string{
+		`block "naut_Scan_main" (the PLC data type of TYPE Scan_main) collides with the scan DB of task main`,
+		`block "naut_Clock" (the PLC data type of TYPE Clock) collides with the clock DB`,
+	} {
+		if !strings.Contains(fmt.Sprint(diags), want) {
+			t.Errorf("%v, want %q", diags, want)
+		}
+	}
+}
+
+// TestTypeNeedsPrefix: with no block prefix a STRUCT is refused, never
+// written as a bare-named data type beside a customer's (Fable on #1340).
+func TestTypeNeedsPrefix(t *testing.T) {
+	_, diags, _ := Write(Input{
+		Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR s : M; END_VAR\ns.run := TRUE;\nEND_PROGRAM\n", Libs: []string{d1bLib}}},
+		Tasks:    []Task{{Name: "main", Program: "P", Interval: time.Second}},
+	})
+	if len(diags) != 1 || !strings.Contains(diags[0].Message, "the TYPE M needs a block prefix") {
+		t.Errorf("%v", diags)
+	}
+}
+
+// TestFunctionStructInputWrites: TIA hands an FC its STRUCT input by
+// reference, so every way an FC can write one (a member, the whole of
+// it, a bit of a member) is refused; reading it is not. (An FC holds no
+// instance, so no in-out or output binding of one reaches it.)
+func TestFunctionStructInputWrites(t *testing.T) {
+	types := "TYPE M : STRUCT run : BOOL; n : INT; END_STRUCT; END_TYPE\n"
+	for name, body := range map[string]string{
+		"member": "m.run := TRUE;\n",
+		"whole":  "m := o;\n",
+		"bit":    "m.n.3 := TRUE;\n",
+	} {
+		lib := types + "FUNCTION G : INT\nVAR_INPUT m : M; END_VAR\nVAR o : M; END_VAR\n" + body + "G := 1;\nEND_FUNCTION\n"
+		_, diags := writeStructs("PROGRAM P\nVAR a : M; n : INT; END_VAR\nn := G(m := a);\nEND_PROGRAM\n", nil, lib)
+		if len(diags) != 1 || !strings.Contains(diags[0].Message, "a STRUCT input of FUNCTION G yet (#1299): TIA hands a function its STRUCT input by reference") {
+			t.Errorf("%s: %v", name, diags)
+		}
+	}
+	// An elementary input is TIA's copy too: writing it is no refusal.
+	lib := types + "FUNCTION K : INT\nVAR_INPUT x : INT; END_VAR\nx := x + 1;\nK := x;\nEND_FUNCTION\n"
+	if _, diags := writeStructs("PROGRAM P\nVAR n : INT; END_VAR\nn := K(x := n);\nEND_PROGRAM\n", nil, lib); len(diags) > 0 {
+		t.Errorf("writing an elementary input: %v", diags)
+	}
+	lib = types + "FUNCTION G : BOOL\nVAR_INPUT m : M; END_VAR\nG := m.run AND m.n > 0;\nEND_FUNCTION\n"
+	if _, diags := writeStructs("PROGRAM P\nVAR a : M; b : BOOL; END_VAR\nb := G(m := a);\nEND_PROGRAM\n", nil, lib); len(diags) > 0 {
+		t.Errorf("reading a STRUCT input: %v", diags)
+	}
+}
+
+// TestInOutFromOutside: an instance's in-out named from outside it is
+// refused: TIA keeps a reference there, nautilus the last value (#1301
+// D1b fold a).
+func TestInOutFromOutside(t *testing.T) {
+	src := "PROGRAM P\nVAR h : H; a, b : M; w : W; END_VAR\nh(i := a, io := w);\nb.run := h.io.pump.run;\nEND_PROGRAM\n"
+	_, diags := writeStructs(src, nil, d1bLib)
+	if len(diags) == 0 || diags[0].Line != 4 || !strings.Contains(diags[0].Message, "h.io, an in-out of FUNCTION_BLOCK H, from outside it yet (#1305)") {
+		t.Errorf("%v", diags)
+	}
+	lib := "FUNCTION_BLOCK K\nVAR_IN_OUT n : INT; END_VAR\nn := n + 1;\nEND_FUNCTION_BLOCK\n"
+	_, diags = writeStructs("PROGRAM P\nVAR k : K; x : INT; END_VAR\nk(n := x);\nk.n := 3;\nEND_PROGRAM\n", nil, lib)
+	if len(diags) == 0 || diags[0].Line != 4 || !strings.Contains(diags[0].Message, "k.n, an in-out of FUNCTION_BLOCK K") {
+		t.Errorf("write: %v", diags)
+	}
+}
+
+// TestProgramTypeGapKeepsChecking: an enumeration the program declares is
+// refused, and the rest of the program is still checked in the same run
+// (#1301 D1b fold b).
+func TestProgramTypeGapKeepsChecking(t *testing.T) {
+	src := "PROGRAM P\nTYPE Mode : (Idle, Run); END_TYPE\nVAR s : STRING; END_VAR\nEND_PROGRAM\n"
+	_, diags := writeStructs(src, nil)
+	got := fmt.Sprint(diags)
+	if !strings.Contains(got, "the type Mode yet (#1299)") || !strings.Contains(got, "STRING yet (#1303)") {
+		t.Errorf("%v", diags)
+	}
+}
+
+// TestInstanceInVarRetain: an instance of the project's block in a
+// program's VAR RETAIN is refused (unused in every example; how TIA
+// retains a multi-instance is unmeasured) (#1301 D1b fold c).
+func TestInstanceInVarRetain(t *testing.T) {
+	src := "PROGRAM P\nVAR RETAIN h : H; END_VAR\nVAR w : W; END_VAR\nh(io := w);\nEND_PROGRAM\n"
+	_, diags := writeStructs(src, nil, d1bLib)
+	if len(diags) == 0 || diags[0].Line != 2 || !strings.Contains(diags[0].Message, "an instance of FUNCTION_BLOCK H in VAR RETAIN (h) yet (#1301)") {
+		t.Errorf("%v", diags)
+	}
+}
+
+// TestStartValueOverridesQuoted: a start value of a member SCL reserves
+// is written quoted in BEGIN, at any depth, and a retained tag's too.
+func TestStartValueOverridesQuoted(t *testing.T) {
+	lib := "TYPE In : STRUCT Name : INT; END_STRUCT; Q : STRUCT Static : In; x : REAL; END_STRUCT; END_TYPE\n"
+	out, diags := writeStructs("PROGRAM P\nVAR_EXTERNAL Title : Q; END_VAR\nTitle.x := 1.0;\nEND_PROGRAM\n",
+		[]Global{{Name: "Title", Type: "Q", Retain: true, Start: map[string]any{"static": map[string]any{"name": 3.0}}}}, lib)
+	if len(diags) > 0 {
+		t.Fatal(diags)
+	}
+	db := fileMap(out)["naut_Tags.db"]
+	if !strings.Contains(db, "   VAR RETAIN\n      \"Title\" : \"naut_Q\";\n") || !strings.Contains(db, "BEGIN\n   \"Title\".\"Static\".\"Name\" := 3;\n") {
+		t.Errorf("%s", db)
+	}
+}
+
+// TestFunctionStructInputAliasesATag: an FC with a STRUCT input that
+// writes a STRUCT manifest tag, itself or through a function it calls,
+// is refused: handed that tag, TIA's by-reference input would read the
+// write, nautilus's copy would not (Sonnet on #1301 D1b). An FC with a
+// STRUCT input writing an elementary tag, or one with no STRUCT input
+// writing a STRUCT tag, is written.
+func TestFunctionStructInputAliasesATag(t *testing.T) {
+	types := "TYPE M : STRUCT run : BOOL; n : INT; END_STRUCT; END_TYPE\n"
+	globals := []Global{{Name: "T", Type: "M"}, {Name: "K", Type: "INT"}}
+	prog := "PROGRAM P\nVAR_EXTERNAL T : M; K : INT; END_VAR\nVAR b : BOOL; END_VAR\nb := F(s := T);\nEND_PROGRAM\n"
+	for name, c := range map[string]struct{ lib, want string }{
+		"direct": {"FUNCTION F : BOOL\nVAR_INPUT s : M; END_VAR\nVAR_EXTERNAL T : M; END_VAR\nT.run := TRUE;\nF := s.run;\nEND_FUNCTION\n",
+			"FUNCTION F, which takes the STRUCT input s and writes the STRUCT tag T yet (#1299)"},
+		"whole": {"FUNCTION F : BOOL\nVAR_INPUT s : M; END_VAR\nVAR o : M; END_VAR\nVAR_EXTERNAL T : M; END_VAR\nT := o;\nF := s.run;\nEND_FUNCTION\n",
+			"writes the STRUCT tag T yet"},
+		"through": {"FUNCTION G : BOOL\nVAR_INPUT x : BOOL; END_VAR\nVAR_EXTERNAL T : M; END_VAR\nT.n := 1;\nG := x;\nEND_FUNCTION\nFUNCTION F : BOOL\nVAR_INPUT s : M; END_VAR\nF := G(x := s.run);\nEND_FUNCTION\n",
+			"writes the STRUCT tag T (through FUNCTION G) yet"},
+	} {
+		_, diags := writeStructs(prog, globals, types+c.lib)
+		if !strings.Contains(fmt.Sprint(diags), c.want) {
+			t.Errorf("%s: %v, want %q", name, diags, c.want)
+		}
+	}
+	for name, lib := range map[string]string{
+		"elementary tag":  "FUNCTION F : BOOL\nVAR_INPUT s : M; END_VAR\nVAR_EXTERNAL K : INT; END_VAR\nK := 1;\nF := s.run;\nEND_FUNCTION\n",
+		"no STRUCT input": "FUNCTION F : BOOL\nVAR_INPUT s : BOOL; END_VAR\nVAR_EXTERNAL T : M; END_VAR\nT.run := s;\nF := s;\nEND_FUNCTION\n",
+	} {
+		p := prog
+		if name == "no STRUCT input" {
+			p = strings.Replace(prog, "F(s := T)", "F(s := T.run)", 1)
+		}
+		if _, diags := writeStructs(p, globals, types+lib); len(diags) > 0 {
+			t.Errorf("%s: %v", name, diags)
+		}
 	}
 }

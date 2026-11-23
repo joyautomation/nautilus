@@ -73,7 +73,10 @@ the nautilus file and line it came from.
 
 Answers are never implied: each acting one has its own flag.
   --allow-stop        TIA may stop the CPU to load (without it, a load that
-                      needs STOP is cancelled, and loads nothing)
+                      needs STOP is cancelled, and loads nothing). A load
+                      in STOP returns every data block of the program to
+                      its start values, retained ones included, and TIA
+                      does not ask (#1341); today every deploy needs STOP
   --reinit DB,...     the DBs TIA may reinitialize (their values go back to
                       start values, retained ones too). Without the DB it
                       asks for, the download is cancelled there: after a
@@ -858,7 +861,10 @@ func (d *siemensDeployer) decisions(st tiad.Station, kept []tiad.KeptDevice) (ti
 	var plan []string
 	if o.allowStop {
 		dec.StopCPU = tiad.Yes()
-		plan = append(plan, "stop the CPU if TIA needs to: yes (--allow-stop)")
+		// Measured on the bench (#1341): a load in STOP brings every DB
+		// back at its start values and TIA asks no reinitialize question,
+		// so the plan says so here rather than under reinitialize.
+		plan = append(plan, "stop the CPU if TIA needs to: yes (--allow-stop). A load in STOP returns every data block of the program to its start values, retained ones included; TIA does not ask (#1341)")
 	} else {
 		dec.StopCPU = tiad.No()
 		plan = append(plan, "stop the CPU: no. If TIA asks, the download is cancelled there and loads nothing (pass --allow-stop to let it stop the CPU)")
@@ -1249,8 +1255,8 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 		d.say("%s: error: TIA did not import %s: %s", at, file, strings.Join(r.Messages, " "))
 	}
 	if err != nil {
-		if tiad.Kind(err) == tiad.KindBadRequest && strings.Contains(err.Error(), `unknown field "prunePrefix"`) {
-			d.fail("the agent is older than this naut (it does not know prunePrefix, which keeps the prune to nautilus's own blocks): reinstall tiad from this nautilus version; nothing was imported")
+		if tiad.Kind(err) == tiad.KindBadRequest && (strings.Contains(err.Error(), `unknown field "prunePrefix"`) || strings.Contains(err.Error(), "data types are not imported yet")) {
+			d.fail("the agent is older than this naut (it does not know prunePrefix, which keeps the prune to nautilus's own blocks, or does not import PLC data types): reinstall tiad from this nautilus version; nothing was imported")
 			return 1
 		}
 		return d.tiadErr("software import", err)
@@ -1448,6 +1454,12 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 	}
 	var missing []string
 	for _, f := range d.out.Files {
+		if path.Ext(f.Path) == ".udt" {
+			// A PLC data type is no block: the agent's compare gate
+			// requires each type in the group by name itself (#1340),
+			// and the result lists only blocks.
+			continue
+		}
 		name := strings.TrimSuffix(f.Path, path.Ext(f.Path))
 		if !slices.ContainsFunc(r.Blocks, func(l string) bool { return strings.EqualFold(strings.SplitN(l, " [", 2)[0], name) }) {
 			missing = append(missing, name)

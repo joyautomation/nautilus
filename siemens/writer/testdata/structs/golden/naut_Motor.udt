@@ -1,0 +1,9 @@
+TYPE "naut_Motor"
+VERSION : 0.1
+   STRUCT
+      Run : BOOL;
+      Speed : REAL := 50.0;
+      Starts : INT;
+   END_STRUCT;
+
+END_TYPE

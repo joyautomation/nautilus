@@ -152,8 +152,8 @@ Answers are never implied. Each acting answer has its own flag:
 
 | Flag | Answer |
 |---|---|
-| `--allow-stop` | TIA may stop the CPU to load. Without it, a load that needs STOP is cancelled and loads nothing |
-| `--reinit DB,...` | the DBs TIA may reinitialize. Their values go back to start values, retained ones too |
+| `--allow-stop` | TIA may stop the CPU to load. Without it, a load that needs STOP is cancelled and loads nothing. **A load in STOP returns every data block of the program to its start values, retained ones included, and TIA does not ask.** Today every deploy needs STOP, so every deploy resets the CPU's data (#1341, measured on an S7-1500 with TIA V21) |
+| `--reinit DB,...` | the DBs TIA may reinitialize if it asks. Their values go back to start values, retained ones too. On the bench TIA has not asked: a load in STOP resets the DBs without the question (see `--allow-stop`) |
 | `--start` or `--no-start` | one of them is required: whether TIA starts the CPU after the load |
 | `--hardware` | load the hardware configuration too. Needs `--attest-hardware "<statement>"`; `--cpu-access-control disabled\|enabled` is your observation of the CPU's access control now |
 | `--turn-on-access-control` | turn on the access control of a CPU whose project has it off (below). With `--download`, needs `--hardware` and `--cpu-access-control disabled` |
@@ -258,7 +258,7 @@ refused at check time, with one exception, the table below.
 | Each task | a cyclic interrupt OB at its cycle, 1 ms to 60 s: OB30 to OB38, then from OB123 |
 | A tag two or more tasks use | a copy per task, as nautilus keeps one: the task's OB copies the tag in before its program runs and writes back only what the scan assigned (see [More than one task](#more-than-one-task)) |
 | Manifest tags | one global DB, `naut_Tags`, with each tag's `init:` as its start value (I/O tags as a PLC tag table come later) |
-| STRUCT types, in a library file or the program | written inline where they are used, with the TYPE's initial values and a tag's `init:` map as start values; a whole struct is copied member by member |
+| STRUCT types, in a library file or the program | a PLC data type each (`naut_Motor`), in the PLC data types group named like the block group, written only when something uses it (declared but unused types are not written). The type carries the TYPE's initial values; a tag's `init:` map is written as start values in `naut_Tags`. Your blocks can take a STRUCT as an input, output or in-out, and a function can return one. A whole struct is copied whole |
 | TON, TOF, TP, R_TRIG, F_TRIG, CTU, CTD, CTUD | the IEC instructions as multi-instances; counters are 64-bit |
 | SR, RS | written inline on a static |
 | bitwise AND/OR/XOR/NOT, bit access `.3`, shifts and rotates | written on the bit string of the operand's width |
@@ -324,12 +324,13 @@ that closes it.
 
 | Issue | Not translated yet |
 |---|---|
-| #1299 | enums, arrays, a STRUCT as a pin of your own block or a function's result |
+| #1299 | enums, arrays, a function writing its own STRUCT input (TIA hands a function a STRUCT input by reference, so the write would reach the caller's variable) |
 | #1301 | nautilus's `PID` |
 | #1302 | SFC. It will be written as an SCL state machine first |
 | #1303 | STRING and the string functions |
 | #1304 | TIME arithmetic, LTIME, dates |
-| #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, a manifest tag named inside a block when the project has several tasks, and more |
+| #1301 | (also) an instance of your own block in a program's `VAR RETAIN` |
+| #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, reading or writing an instance's in-out from outside it, a manifest tag named inside a block when the project has several tasks, and more |
 
 Real limits keep their own words, such as a task interval over 60 s or a
 block name collision.

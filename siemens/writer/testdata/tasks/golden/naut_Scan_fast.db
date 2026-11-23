@@ -6,10 +6,7 @@ VERSION : 0.1
          Alarm : BOOL;
          Done : BOOL;
          Level : REAL;
-         Pump : Struct
-            Run : BOOL;
-            Speed : REAL;
-         END_STRUCT;
+         Pump : "naut_Motor";
       END_STRUCT;
       assigned : Struct
          Level : BOOL;
