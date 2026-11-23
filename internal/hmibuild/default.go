@@ -193,7 +193,7 @@ func defaultApp(project, title string, extra, areas []json.RawMessage, checkout 
 	// the I/O checkout (#719) is the project's own choice: no checkout:
 	// section, no route, no module, no screen entry, no banner
 	if checkout {
-		pages = append(pages, struct{ slug, label, text, needs string }{"checkout", "Checkout", defaultCheckout, "checkout"})
+		pages = append(pages, struct{ slug, label, text, needs string }{"checkout", "Checkout", defaultCheckout, "checkout|signoff"})
 	}
 	for _, pg := range pages {
 		if takenSlug[pg.slug] {
@@ -376,7 +376,8 @@ const defaultLayout = `<script>
 	const screens = [%s];
 	const alarmsHref = %s;
 	// a screen with needs: is listed only to a session that holds it
-	const visible = $derived(screens.filter((s) => !s.needs || auth.holds(s.needs)));
+	// a screen's needs: is one permission, or several joined with | (any holds it)
+	const visible = $derived(screens.filter((s) => !s.needs || s.needs.split('|').some((p) => auth.holds(p))));
 </script>
 
 <ConfirmDialog />

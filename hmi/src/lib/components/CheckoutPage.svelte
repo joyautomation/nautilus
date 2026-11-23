@@ -43,6 +43,8 @@
 
 	const me = $derived(currentAuth()?.me ?? null);
 	const mayCheck = (pt: CheckoutPoint) => canIn(me, 'checkout', pt.area);
+	// beginning and abandoning a run need checkout for the whole controller
+	const mayRun = $derived(canIn(me, 'checkout', undefined));
 
 	async function load() {
 		const a = await client.view();
@@ -80,11 +82,26 @@
 	}
 
 	const begin = (rehearsal: boolean) => act(client.begin(rehearsal));
+	// abandoning says why, in a dialog of the page's own (a native prompt can be
+	// blocked or hidden, and then nothing happens)
+	let abandoning = $state(false);
+	let abandonWhy = $state('');
+	let abandonProblem = $state('');
 	const abandon = () => {
-		if (!run) return;
-		const why = prompt('Why is this run abandoned?')?.trim();
-		if (why) void act(client.abandon(run.id, why));
+		abandonWhy = '';
+		abandonProblem = '';
+		abandoning = true;
 	};
+	async function doAbandon() {
+		if (!run) return;
+		if (!abandonWhy.trim()) {
+			abandonProblem = 'say why: an abandoned run keeps its results and its reason';
+			return;
+		}
+		const a = await act(client.abandon(run.id, abandonWhy.trim()));
+		if (a.ok) abandoning = false;
+		else abandonProblem = a.message;
+	}
 
 	function mark(pt: CheckoutPoint, outcome: 'pass' | 'fail' | 'note') {
 		if (!run) return;
@@ -182,13 +199,15 @@
 				<span class="badge" class:rehearsal={run.rehearsal}>{run.rehearsal ? 'Rehearsal: can never be signed' : 'Live run'}</span>
 				<a class="exp" href={`/api/checkout/runs/${encodeURIComponent(run.id)}/export?format=csv`} download>CSV</a>
 				<a class="exp" href={`/api/checkout/runs/${encodeURIComponent(run.id)}/export?format=json`} download>JSON</a>
-				<Button size="sm" variant="ghost" disabled={busy} onclick={abandon}>Abandon run</Button>
+				{#if mayRun}<Button size="sm" variant="ghost" disabled={busy} onclick={abandon}>Abandon run</Button>{/if}
 				{#if offersSeal(me, run)}
 					<Button size="sm" variant="primary" disabled={busy || !!force} title={force ? 'let the force go first' : undefined} onclick={() => { sealing = true; sealNote = ''; sealProblem = ''; }}>Sign off…</Button>
 				{/if}
 			{:else}
-				<Button size="sm" disabled={busy} onclick={() => begin(false)}>Begin run</Button>
-				<Button size="sm" variant="secondary" disabled={busy} onclick={() => begin(true)}>Begin rehearsal</Button>
+				{#if mayRun}
+					<Button size="sm" disabled={busy} onclick={() => begin(false)}>Begin run</Button>
+					<Button size="sm" variant="secondary" disabled={busy} onclick={() => begin(true)}>Begin rehearsal</Button>
+				{/if}
 			{/if}
 		</header>
 
@@ -274,10 +293,10 @@
 
 <Modal open={sealing} title="Sign off this run" size="sm" onclose={() => (sealing = false)}>
 	{#snippet children()}
+		{#if sealProblem}<p class="problem" role="alert">{sealProblem}</p>{/if}
 		<p class="warn">{SEAL_NOTICE}</p>
 		<p class="warn">The controller signs off only a live run on its current sheet with every point checked and none failing, and (by default) only for someone who recorded none of its results. Your password is asked next.</p>
 		<label class="field"><span>Note (optional)</span><input type="text" bind:value={sealNote} maxlength="500" /></label>
-		{#if sealProblem}<p class="problem" role="alert">{sealProblem}</p>{/if}
 	{/snippet}
 	{#snippet footer()}
 		<Button variant="ghost" onclick={() => (sealing = false)}>Cancel</Button>
@@ -285,10 +304,22 @@
 	{/snippet}
 </Modal>
 
+<Modal open={abandoning} title="Abandon this run" size="sm" onclose={() => (abandoning = false)}>
+	{#snippet children()}
+		{#if abandonProblem}<p class="problem" role="alert">{abandonProblem}</p>{/if}
+		<p class="warn">An abandoned run takes no more results and can never be signed off. Its results stay, with your reason.</p>
+		<label class="field"><span>Why (required)</span><input type="text" bind:value={abandonWhy} maxlength="200" /></label>
+	{/snippet}
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (abandoning = false)}>Cancel</Button>
+		<Button variant="primary" disabled={busy} onclick={doAbandon}>Abandon run</Button>
+	{/snippet}
+</Modal>
+
 <Modal open={!!noteFor} title={noteFor ? `${noteFor.outcome === 'fail' ? 'Fail' : 'Note'}: ${noteFor.id}` : ''} size="sm" onclose={() => (noteFor = null)}>
 	{#snippet children()}
-		<label class="field"><span>Why (required)</span><input type="text" bind:value={noteText} /></label>
 		{#if noteProblem}<p class="problem" role="alert">{noteProblem}</p>{/if}
+		<label class="field"><span>Why (required)</span><input type="text" bind:value={noteText} /></label>
 	{/snippet}
 	{#snippet footer()}
 		<Button variant="ghost" onclick={() => (noteFor = null)}>Cancel</Button>
@@ -299,6 +330,7 @@
 <Modal open={!!forcing} title={forcing ? `Force ${forcing.id}` : ''} size="sm" onclose={() => (forcing = null)}>
 	{#snippet children()}
 		{#if forcing}
+			{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
 			<p class="warn">
 				This drives {forcing.tag} from the controller, bypassing the program's interlocks. Its equipment ({forcing.equipment || 'none named'}) must be out of service. The
 				controller lets go of it when the time is up.
@@ -313,7 +345,6 @@
 			</label>
 			<label class="field"><span>Type {forcing.id} to confirm</span><input type="text" bind:value={typed} autocomplete="off" /></label>
 			<p class="warn">Your password is asked next.</p>
-			{#if problem}<p class="problem" role="alert">{problem}</p>{/if}
 		{/if}
 	{/snippet}
 	{#snippet footer()}
