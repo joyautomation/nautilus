@@ -34,7 +34,7 @@ Flags:
                 newest record that may have loaded it, loaded or in doubt)
   --agent URL   tiad URL (default: $NAUTILUS_TIAD_URL, then
                 target.siemens.agent, then ` + tiad.DefaultURL + `)
-
+` + deviceAttestUsage + `
 Secrets come from the environment (or NAME_FILE), never flags:
   NAUTILUS_TIAD_TOKEN                      the agent's token
   NAUTILUS_SIEMENS_FULL_ACCESS_PASSWORD    the CPU user "nautilus", when the
@@ -46,8 +46,10 @@ compare could not say), 2 a usage or configuration error.
 
 type siemensVerifyOptions struct {
 	dir, deploy, agentFlag string
-	getenv                 func(string) string
-	stdout, stderr         io.Writer
+	// attest is the operator's device attestation (#1325), nil without.
+	attest         *tiad.DeviceAttestation
+	getenv         func(string) string
+	stdout, stderr io.Writer
 }
 
 func runSiemensVerify(args []string) int {
@@ -67,6 +69,8 @@ func parseSiemensVerifyFlags(o *siemensVerifyOptions, args []string, stderr io.W
 	fs.Usage = func() { fmt.Fprint(stderr, siemensVerifyUsage) }
 	fs.StringVar(&o.deploy, "deploy", "", "the deploy record to compare with")
 	fs.StringVar(&o.agentFlag, "agent", "", "tiad URL")
+	var dev deviceAttestFlags
+	dev.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -78,6 +82,12 @@ func parseSiemensVerifyFlags(o *siemensVerifyOptions, args []string, stderr io.W
 	if fs.NArg() == 1 {
 		o.dir = fs.Arg(0)
 	}
+	a, err := dev.attestation(operatorName())
+	if err != nil {
+		fmt.Fprintf(stderr, "naut siemens verify: %v\n", err)
+		return err
+	}
+	o.attest = a
 	return nil
 }
 
@@ -143,7 +153,7 @@ func siemensVerify(ctx context.Context, o siemensVerifyOptions) int {
 
 	say("verifying the CPU at %s against deploy %s (%s, %s, project %s)", address, rec.ID, rec.Status, rec.At, rec.Project)
 	say("  TIA Portal's own online compare, through Openness on the agent: read-only")
-	r, err := client.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: rec.ID, Secrets: online})
+	r, err := client.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: rec.ID, Secrets: online, DeviceAttestation: o.attest})
 	if err != nil {
 		if rp, pp, ok := tiad.VerifyMismatchOf(err); ok {
 			fail("deploy %s's archived project has its CPU at %s, and the record says %s: refused, nothing compared", rec.ID, pp, rp)

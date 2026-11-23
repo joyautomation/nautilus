@@ -42,6 +42,7 @@ namespace Tiad
                 var r = c.Json();
                 bool online = r.Bool("online");
                 string password = OnlinePassword(r);
+                DeviceAttestation att = ReadDeviceAttestation(r);
                 r.Done();
                 var o = new Obj();
                 if (!online)
@@ -69,7 +70,7 @@ namespace Tiad
                     if (address == "") throw TiadException.BadRequest("the project has no station spec, and its CPU no address to go online to");
                 }
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
-                CheckDevicePin(s, address, "online");
+                CheckDevicePin(s, address, "online", att);
                 string state = OnSession(s, delegate(ITia t)
                 {
                     if (s.HeldOnline == address) return "Online";

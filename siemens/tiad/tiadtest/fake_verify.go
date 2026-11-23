@@ -89,6 +89,12 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
+	if req.Fingerprint != nil && req.Fingerprint.DeviceAttestation != nil {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "body: json: unknown field %q", "fingerprint.deviceAttestation")
+	}
+	if fl := checkDeviceAttestation(req.DeviceAttestation); fl != nil {
+		return nil, fl
+	}
 	if req.Deploy == "" {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "verify: deploy is required")
 	}
@@ -165,7 +171,7 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 				d.ID, address, at),
 			data: map[string]any{"recordAddress": address, "projectAddress": held.address}}
 	}
-	if fl := f.checkDevicePin(address, "verify"); fl != nil {
+	if _, fl := f.checkDevicePin(address, "verify", req.DeviceAttestation); fl != nil {
 		return nil, fl
 	}
 	password := onlinePassword(req.Secrets)

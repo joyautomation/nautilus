@@ -87,6 +87,13 @@ type Fake struct {
 	// identity online, as tiad.Openness cannot yet: online calls to a
 	// pinned CPU then fail with device_unverified.
 	NoIdentify bool
+	// OtherBlocks are program blocks every project holds outside any
+	// group nautilus imports into, besides Main at the root (a
+	// customer's group, a probe): a software import reports them with
+	// Main in its foreign list (#1326). OmitForeign makes the import
+	// report no foreign list at all, as an agent older than #1326.
+	OtherBlocks []tiad.ForeignBlock
+	OmitForeign bool
 
 	// policy is the projects' password policy for local users (nil:
 	// TIA's default), uploadAccess the access control an upload brings
@@ -166,7 +173,10 @@ type Fake struct {
 }
 
 type session struct {
-	id, project string
+	// deviceAttested is the device attestation the session's latest
+	// download (or dry run) check rested on, for its response and record.
+	deviceAttested *tiad.DeviceAttestationRecord
+	id, project    string
 	// heldOnline is the address an online call holds the project online
 	// to, "" when offline (the agent's Session.HeldOnline).
 	heldOnline string
@@ -1476,6 +1486,9 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 			res.Blocks = append(res.Blocks, b)
 		}
 	}
+	if !f.OmitForeign {
+		res.Foreign = foreignBlocks(s.projectBlocks(), f.OtherBlocks, req.Group)
+	}
 	return res, nil
 }
 
@@ -1641,9 +1654,11 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			msg:  why + "; nothing was sent to the CPU",
 			data: map[string]any{"questions": []tiad.Question{tiad.BlindTrustQuestion(*f.blindTrust)}, "keptDevices": keptList(s.kept), "blindTrust": f.blindTrust}}
 	}
-	if fl := f.checkDevicePin(req.Address, call); fl != nil {
+	attestedDevice, fl := f.checkDevicePin(req.Address, call, req.DeviceAttestation)
+	if fl != nil {
 		return nil, fl
 	}
+	s.deviceAttested = attestedDevice
 	// One project per CPU: the first download claims the CPU for its
 	// session, dry runs included, until that session is closed.
 	if holder, ok := f.claims[req.Address]; ok && holder != s.id {
@@ -1878,6 +1893,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		res.Warning = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading"
 		res.Attestation = attested
 	}
+	res.DeviceAttestation = s.deviceAttested
 	res.UserManagementReset = given
 	return res, nil
 }
@@ -1951,6 +1967,9 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
+	if fl := checkDeviceAttestation(req.DeviceAttestation); fl != nil {
+		return nil, fl
+	}
 	if f.CompareResult != nil {
 		return *f.CompareResult, nil
 	}
@@ -1967,7 +1986,7 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if !contains(f.Targets, addr) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", addr)
 	}
-	if fl := f.checkDevicePin(addr, "compare"); fl != nil {
+	if _, fl := f.checkDevicePin(addr, "compare", req.DeviceAttestation); fl != nil {
 		return nil, fl
 	}
 	why, loggedOn := f.login(addr, onlinePassword(req.Secrets), f.blindTrust)
@@ -2192,6 +2211,9 @@ func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
+	if fl := checkDeviceAttestation(req.DeviceAttestation); fl != nil {
+		return nil, fl
+	}
 	if s.station == nil {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "the project has no station spec")
 	}
@@ -2199,7 +2221,7 @@ func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
 	if !contains(f.Targets, address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", address)
 	}
-	if fl := f.checkDevicePin(address, "fingerprint read"); fl != nil {
+	if _, fl := f.checkDevicePin(address, "fingerprint read", req.DeviceAttestation); fl != nil {
 		return nil, fl
 	}
 	return f.fingerprintOf(s, address, req.TrustUnverifiedCertificate, onlinePassword(req.Secrets), fingerprintTrustFix)
@@ -2315,19 +2337,60 @@ func deviceChanged(address string, pinned, now tiad.DeviceIdentity, diff, what s
 }
 
 // checkDevicePin is the agent's CheckDevicePin: with a device pin, the
-// CPU's identity read online must match it.
-func (f *Fake) checkDevicePin(address, call string) *failure {
+// CPU's identity read online must match it; one it cannot read fails
+// closed unless att, the operator's reading of it, matches the pin at the
+// pin's precision. It returns the attestation it rested on, nil when none,
+// and never adds or changes a pin.
+func (f *Fake) checkDevicePin(address, call string, att *tiad.DeviceAttestation) (*tiad.DeviceAttestationRecord, *failure) {
 	pinned, ok := f.pins[address]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if f.NoIdentify {
-		return fail(http.StatusConflict, tiad.KindDeviceUnverified,
-			"%s has a device pin, but its identity could not be read (this agent's TIA side cannot read a CPU's identity online yet), so the pin cannot be checked; the %s was refused before it began; it lifts only once tiad can read a CPU's identity online (#789): a re-pin (POST /v1/pins/%s, audited) records a new identity but cannot lift this", address, call, address)
+		const why = "this agent's TIA side cannot read a CPU's identity online yet"
+		if att == nil {
+			return nil, fail(http.StatusConflict, tiad.KindDeviceUnverified,
+				"%s has a device pin, but its identity could not be read (%s), so the pin cannot be checked; the %s was refused before it began%s", address, why, call, unverifiable(address))
+		}
+		if gap := tiad.DeviceAttestationGap(pinned, *att); gap != "" {
+			return nil, fail(http.StatusConflict, tiad.KindDeviceUnverified,
+				"%s has a device pin, but its identity could not be read (%s), and the attestation cannot stand in for it: %s; the %s was refused before it began", address, why, gap, call)
+		}
+		if diff := tiad.DeviceAttestationMismatch(pinned, *att); diff != "" {
+			return nil, deviceChanged(address, pinned, tiad.DeviceIdentity{Order: att.Order, Firmware: att.Firmware}, diff,
+				"The "+call+" was refused before it began (the identity is the attestation by "+strconv.Quote(att.By)+").")
+		}
+		return &tiad.DeviceAttestationRecord{By: att.By, Order: att.Order, Firmware: att.Firmware, Pinned: pinned, At: fakeNow()}, nil
 	}
 	now := f.device()
+	// An identity read but unusable is a read: no attestation stands in.
+	if err := now.Validate(); err != nil {
+		return nil, fail(http.StatusConflict, tiad.KindDeviceUnverified,
+			"%s has a device pin, but its identity could not be read (%v), so the pin cannot be checked; the %s was refused before it began; an attestation does not stand in for an identity tiad read and could not use", address, err, call)
+	}
 	if diff := tiad.DeviceMismatch(pinned, now); diff != "" {
-		return deviceChanged(address, pinned, now, diff, "The "+call+" was refused before it began.")
+		return nil, deviceChanged(address, pinned, now, diff, "The "+call+" was refused before it began.")
+	}
+	return nil, nil
+}
+
+// unverifiable is the agent's Unverifiable: what lifts a
+// device_unverified refusal, and what does not.
+func unverifiable(address string) string {
+	return "; to go ahead, read the CPU's order number and firmware off the device itself (its label or display) and attest them " +
+		"(deviceAttestation: {by, order, firmware}; naut: --attest-order and --attest-firmware): tiad compares them with the pin, audited. " +
+		"It lifts for good once tiad can read a CPU's identity online (#789); a re-pin (POST /v1/pins/" + address +
+		", audited) records a new identity but cannot lift this"
+}
+
+// checkDeviceAttestation is the agent's ReadDeviceAttestation check: a
+// malformed attestation is a bad request.
+func checkDeviceAttestation(a *tiad.DeviceAttestation) *failure {
+	if a == nil {
+		return nil
+	}
+	if err := a.Validate(); err != nil {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "%v", err)
 	}
 	return nil
 }

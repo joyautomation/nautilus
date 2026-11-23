@@ -212,6 +212,10 @@ type DownloadRequest struct {
 	// TIA instance then keeps (Decisions.AcceptBlindTrust) until every
 	// session is closed. Close the session after a deploy.
 	Fingerprint *FingerprintRequest `json:"fingerprint,omitempty"`
+	// DeviceAttestation is the operator's reading of the CPU's order
+	// number and firmware off the device, for a pinned CPU the agent
+	// cannot identify online (DeviceAttestation, #1325); unused otherwise.
+	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
 }
 
 // Attestation is the operator's statement that the CPU's hardware
@@ -345,6 +349,10 @@ type DownloadResult struct {
 	// attestation that stood in for the check, as tiad journalled it:
 	// keep it in the deploy record.
 	Attestation *AttestationRecord `json:"attestation,omitempty"`
+	// DeviceAttestation is the operator's reading of the CPU's identity
+	// that stood in for the online read of a pinned CPU, as the agent
+	// accepted it: keep it in the deploy record. Nil when none was used.
+	DeviceAttestation *DeviceAttestationRecord `json:"deviceAttestation,omitempty"`
 	// UserManagementReset is set when tiad answered TIA's user-management
 	// check by resetting it to the project's: the route that let it,
 	// ResetRouteUpload, ResetRouteAttestation, ResetRouteLogon or
@@ -501,6 +509,9 @@ func (r DownloadRequest) Validate() error {
 	if r.Fingerprint != nil && r.Fingerprint.Secrets != nil {
 		return fmt.Errorf("download: the Full access password goes in secrets.fullAccessPassword, not in the fingerprint's secrets")
 	}
+	if r.Fingerprint != nil && r.Fingerprint.DeviceAttestation != nil {
+		return fmt.Errorf("download: the device attestation goes in deviceAttestation, not in the fingerprint's")
+	}
 	if !r.Announced {
 		return fmt.Errorf("download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing")
 	}
@@ -513,6 +524,11 @@ func (r DownloadRequest) Validate() error {
 		}
 		if !validCPUAccess(a.CPUAccessControl) {
 			return fmt.Errorf("download: attestation.cpuAccessControl is not one of disabled, enabled")
+		}
+	}
+	if a := r.DeviceAttestation; a != nil {
+		if err := a.Validate(); err != nil {
+			return fmt.Errorf("download: %v", err)
 		}
 	}
 	if isYes(r.Decisions.UserManagementKeepOnline) && isYes(r.Decisions.UserManagementResetToProject) {

@@ -340,6 +340,64 @@ func TestSiemensDeployAsksBeforeItLoads(t *testing.T) {
 	}
 }
 
+// TestSiemensDeployPlanListsForeignBlocks (#1326): the plan names every
+// program block outside nautilus's group, which the download loads too,
+// grouped and counted, the root first; whether they are on the CPU only
+// when a compare in this deploy covered them; and an agent that does not
+// report them says so, never an empty list.
+func TestSiemensDeployPlanListsForeignBlocks(t *testing.T) {
+	plan := func(r *deployRig) string {
+		t.Helper()
+		out, code := r.run("", false, "--download")
+		if code != 1 || !strings.Contains(out, "PLAN") || len(r.downloads()) != 0 {
+			t.Fatalf("exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+		}
+		return out[strings.Index(out, "PLAN"):]
+	}
+	r := newDeployRig(t)
+	r.adopt()
+	r.fake.OtherBlocks = []tiad.ForeignBlock{
+		{Name: "probe_OB", Kind: "OB", Number: 35, Group: "probe"},
+		{Name: "probe_FB", Kind: "FB", Number: 7, Group: "probe"},
+		{Name: "probe_DB", Kind: "DB", Number: 8, Group: "probe"},
+		{Name: "Pump", Kind: "FB", Number: 3, Group: "plant/pumps"},
+		{Name: "naut_Inner", Kind: "FB", Number: 9, Group: "nautilus/inner"},
+	}
+	p := plan(r)
+	for _, want := range []string{
+		"  also loads, not nautilus's: the program blocks' root (1 block: Main [OB1])\n" +
+			"  also loads, not nautilus's: group plant/pumps (1 block: Pump [FB3])\n" +
+			"  also loads, not nautilus's: group probe (3 blocks: probe_DB [DB8], probe_FB [FB7], probe_OB [OB35])\n" +
+			"    on the CPU as they are: the adopted project compared equal with it before the import, which changes no block outside group nautilus\n",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the plan lacks %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "naut_Inner") {
+		t.Errorf("a block in a user group under nautilus's is listed as not nautilus's:\n%s", p)
+	}
+
+	// No adopt compare in this deploy: the plan does not say where they are.
+	r = newDeployRig(t)
+	r.adopt()
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+		t.Fatalf("first download: exit %d:\n%s", code, out)
+	}
+	r.base = len(r.fake.Downloads())
+	p = plan(r)
+	if !strings.Contains(p, "  also loads, not nautilus's: the program blocks' root (1 block: Main [OB1])\n    not compared with the CPU before this download") {
+		t.Errorf("a deploy with no compare before the import:\n%s", p)
+	}
+
+	r.fake.OmitForeign = true
+	p = plan(r)
+	if !strings.Contains(p, "other program blocks: this agent does not report the blocks outside group nautilus, which the download loads too (an agent older than #1326)") ||
+		strings.Contains(p, "also loads") {
+		t.Errorf("an agent that reports no foreign list:\n%s", p)
+	}
+}
+
 // TestSiemensDeployRefusesAStopItWasNotAllowed: when the dry run shows TIA
 // stops the CPU, a deploy without --allow-stop refuses before asking,
 // and a reinitialize of a DB not named in --reinit too.
@@ -683,6 +741,24 @@ func TestSiemensDeployInDoubtOnAnUnreadableReply(t *testing.T) {
 	}
 }
 
+// TestSiemensDeployInDoubtComparesAPinnedCPU (#1325): the compare after
+// a download in doubt is an online call to the pinned CPU too, and carries
+// the operator's attestation, so it can still say what the CPU runs.
+func TestSiemensDeployInDoubtComparesAPinnedCPU(t *testing.T) {
+	r := newDeployRig(t)
+	r.adopt()
+	r.fake.SetDevice(tiadtest.BenchDevice(), true)
+	bench := tiadtest.BenchDevice()
+	if _, err := tiad.New(r.url, r.token).SetPin(context.Background(), deployCPU, tiad.PinRequest{Device: &bench, Announced: true}); err != nil {
+		t.Fatal(err)
+	}
+	r.mangleDownload = true
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--attest-order", "6ES7 510-1DK03-0AB0", "--attest-firmware", "3.1.3")
+	if code != 1 || !strings.Contains(out, "download: OUTCOME UNKNOWN") || !strings.Contains(out, "the compare after it is EQUAL") || len(r.downloads()) != 1 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+}
+
 // TestSiemensDeployRefusesABrokenRecord: the last deploy's archive is not
 // the one its record names, so nothing says what the CPU runs: refused
 // without --accept-outside-changes.
@@ -963,6 +1039,103 @@ func TestSiemensDeployAdoptsAnUpload(t *testing.T) {
 	}
 	if a := r.adoption(); a == nil || a.Source != adoptUpload || !a.Complete || !a.Downloaded {
 		t.Fatalf("the adoption record: %+v", a)
+	}
+}
+
+// TestSiemensDeployAfterAnAdoptedUploadOfAPinnedCPU (#1325): the upload
+// of --adopt upload pins the CPU, and the agent cannot read a CPU's
+// identity online, so the download after it is refused, naming the way
+// on; with the operator's attestation of the order number and firmware it
+// loads, and the deploy record keeps the attestation. An attestation that
+// differs from the pin is refused as a changed device, and nothing loads.
+func TestSiemensDeployAfterAnAdoptedUploadOfAPinnedCPU(t *testing.T) {
+	for _, oneRun := range []bool{false, true} {
+		t.Run(map[bool]string{false: "build then download", true: "one run"}[oneRun], func(t *testing.T) {
+			r := newDeployRig(t)
+			r.cpuRuns(false)
+			r.setStation(", access-control: keep, configuration-protection: keep")
+			r.fake.SetDevice(tiadtest.BenchDevice(), true)
+			dl := []string{"--download", "--yes", "--allow-stop"}
+			if oneRun {
+				dl = append(dl, "--adopt", "upload")
+			} else {
+				out, code := r.run("", false, "--adopt", "upload")
+				if code != 0 || !strings.Contains(out, "(device pin: first-trust)") ||
+					!strings.Contains(out, "while the agent cannot read a CPU's identity online (#789) that takes --attest-order and --attest-firmware, read off the CPU itself") {
+					t.Fatalf("--adopt upload: exit %d:\n%s", code, out)
+				}
+			}
+			out, code := r.run("", false, dl...)
+			if code != 1 || !strings.Contains(out, "device_unverified") || !strings.Contains(out, "naut: --attest-order and --attest-firmware") ||
+				!strings.Contains(out, "off the device itself") || len(r.downloads()) != 0 {
+				t.Fatalf("download to the pinned CPU with no attestation: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
+			if oneRun {
+				// The upload pinned the CPU; the next --adopt upload matches it.
+				dl = append(dl[:3:3], "--adopt", "upload")
+			}
+			bad := append(append([]string{}, dl...), "--attest-order", "6ES7 510-1DK03-0AB0", "--attest-firmware", "V3.2.0")
+			out, code = r.run("", false, bad...)
+			if code != 1 || !strings.Contains(out, "device_changed") || !strings.Contains(out, `firmware "V3.1" is attested as "V3.2.0"`) || len(r.downloads()) != 0 {
+				t.Fatalf("download attested as another firmware: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
+			good := append(append([]string{}, dl...), "--attest-order", "6ES7510-1DK03-0AB0", "--attest-firmware", "3.1.3")
+			out, code = r.run("", false, good...)
+			if code != 0 || len(r.downloads()) != 1 ||
+				!strings.Contains(out, `device: you attest order "6ES7510-1DK03-0AB0", firmware "3.1.3", read off the CPU by test operator`) ||
+				!strings.Contains(out, `device pin: checked against your attestation, not read online (#789): test operator read order "6ES7510-1DK03-0AB0", firmware "3.1.3" off the CPU; the pin holds order "6ES7 510-1DK03-0AB0", firmware "V3.1"`) {
+				t.Fatalf("attested download: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
+			if a := r.downloads()[0].Request.DeviceAttestation; a == nil || a.By != "test operator" || a.Firmware != "3.1.3" {
+				t.Fatalf("the download carried %+v", a)
+			}
+			l, err := tiad.New(r.url, r.token).Deploys(context.Background(), deployCPU)
+			if err != nil || len(l.Deploys) == 0 || l.Deploys[0].DeviceAttestation == nil || l.Deploys[0].DeviceAttestation.Order != "6ES7510-1DK03-0AB0" {
+				t.Fatalf("the deploy record does not keep the attestation: %+v %v", l.Deploys, err)
+			}
+			// The next deploy verifies the CPU against that record first: an
+			// online call to the pinned CPU too.
+			next := []string{"--download", "--yes", "--allow-stop"}
+			out, code = r.run("", false, next...)
+			if code != 1 || !strings.Contains(out, "verify of the last deploy") || !strings.Contains(out, "device_unverified") || len(r.downloads()) != 1 {
+				t.Fatalf("the next deploy with no attestation: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
+			out, code = r.run("", false, append(next, "--attest-order", "6ES7 510-1DK03-0AB0", "--attest-firmware", "V3.1.3")...)
+			if code != 0 || len(r.downloads()) != 2 {
+				t.Fatalf("the next deploy, attested: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
+		})
+	}
+}
+
+// TestSiemensAttestFlags: --attest-order and --attest-firmware go
+// together, and are checked before anything is read.
+func TestSiemensAttestFlags(t *testing.T) {
+	for _, x := range []struct {
+		f    deviceAttestFlags
+		by   string
+		want string
+	}{
+		{deviceAttestFlags{order: "6ES7 510-1DK03-0AB0"}, "op", "--attest-order and --attest-firmware go together"},
+		{deviceAttestFlags{firmware: "V3.1.3"}, "op", "--attest-order and --attest-firmware go together"},
+		{deviceAttestFlags{order: "x", firmware: "V3.1"}, "", "must name who gives it"},
+		{deviceAttestFlags{order: "x", firmware: "three"}, "op", `deviceAttestation.firmware "three" is not a firmware version`},
+	} {
+		if _, err := x.f.attestation(x.by); err == nil || !strings.Contains(err.Error(), x.want) {
+			t.Errorf("%+v by %q: %v, want %q", x.f, x.by, err, x.want)
+		}
+		o := siemensDeployOptions{device: x.f, by: x.by}
+		if err := o.flagsError(); err == nil || !strings.Contains(err.Error(), x.want) {
+			t.Errorf("deploy %+v by %q: %v, want %q", x.f, x.by, err, x.want)
+		}
+	}
+	if a, err := (deviceAttestFlags{}).attestation("op"); a != nil || err != nil {
+		t.Fatalf("no flags: %+v %v", a, err)
+	}
+	var out bytes.Buffer
+	if err := parseSiemensShowFlags(&siemensShowOptions{}, []string{"--attest-order", "x", "--attest-firmware", "V3.1", "Main"}, &out); err == nil ||
+		!strings.Contains(out.String(), "go with --online") {
+		t.Fatalf("show without --online: %v %s", err, out.String())
 	}
 }
 

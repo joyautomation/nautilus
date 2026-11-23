@@ -22,6 +22,12 @@ func contractPins(t *testing.T, start Starter) {
 	t.Run("SetPin", func(t *testing.T) { contractSetPin(t, start) })
 	t.Run("NotReadFailsClosed", func(t *testing.T) { contractPinNotRead(t, start) })
 	t.Run("UnreadableUpload", func(t *testing.T) { contractPinUnreadableUpload(t, start) })
+	t.Run("Attested", func(t *testing.T) { contractPinAttested(t, start) })
+	t.Run("AttestedRefusals", func(t *testing.T) { contractPinAttestedRefusals(t, start) })
+	t.Run("AttestationNeverPins", func(t *testing.T) { contractPinAttestationNeverPins(t, start) })
+	t.Run("AttestedVerify", func(t *testing.T) { contractPinAttestedVerify(t, start) })
+	t.Run("AttestedOnline", func(t *testing.T) { contractPinAttestedOnline(t, start) })
+	t.Run("AttestationBadRequest", func(t *testing.T) { contractPinAttestationBadRequest(t, start) })
 }
 
 // contractPinUnreadableUpload: an upload that reads no usable identity
@@ -155,7 +161,7 @@ func contractPinUnverified(t *testing.T, start Starter) {
 		t.Fatalf("compare to a pinned CPU it cannot identify: %v", err)
 	}
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindDeviceUnverified || !strings.Contains(err.Error(), "cannot be checked") ||
-		!strings.Contains(err.Error(), "lifts only once tiad can read a CPU's identity online") || !strings.Contains(err.Error(), "cannot lift this") {
+		!strings.Contains(err.Error(), "lifts for good once tiad can read a CPU's identity online") || !strings.Contains(err.Error(), "cannot lift this") {
 		t.Fatalf("download to a pinned CPU it cannot identify: %v", err)
 	}
 	if l := a.Loaded(t); len(l) != 0 {
@@ -240,5 +246,289 @@ func contractSetPin(t *testing.T, start Starter) {
 	status, b := rawJSON(t, c, "POST", "/v1/pins/"+benchCPU, map[string]any{"device": dev, "announced": true})
 	if status != http.StatusBadRequest || !strings.Contains(errMessage(b), "pinned already") || !strings.Contains(errMessage(b), "replace: true") {
 		t.Fatalf("a second pin without replace: HTTP %d %s", status, b)
+	}
+}
+
+// benchAttestation is the bench CPU's identity as an operator reads it off
+// the device: the order number without its space, and the firmware's full
+// version, where the pin holds the station's "V3.1" (#1325).
+var benchAttestation = &tiad.DeviceAttestation{By: "test operator", Order: "6es7510-1DK03-0AB0", Firmware: "3.1.3"}
+
+// contractPinAttested (#1325): a pinned CPU the agent cannot identify
+// online goes ahead on the operator's attestation of its order number and
+// firmware, compared with the pin at the pin's precision: every online
+// call, and the download's record keeps the attestation. The refusal
+// without one names the route. The pin stands as it was.
+func contractPinAttested(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	a.SetDevice(t, BenchDevice(), true)
+	if _, err := c.SetPin(ctx, benchCPU, benchPinRequest); err != nil {
+		t.Fatal(err)
+	}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	_, err := s.Download(ctx, dl)
+	if tiad.Kind(err) != tiad.KindDeviceUnverified || !strings.Contains(err.Error(), "--attest-order and --attest-firmware") ||
+		!strings.Contains(err.Error(), "deviceAttestation: {by, order, firmware}") || !strings.Contains(err.Error(), "off the device itself") {
+		t.Fatalf("download to a pinned CPU it cannot identify, no attestation: %v, want device_unverified naming the attestation route", err)
+	}
+	cmp := BenchCompare
+	cmp.DeviceAttestation = benchAttestation
+	if _, err := s.CompareWith(ctx, cmp); err != nil {
+		t.Fatalf("attested compare: %v", err)
+	}
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, DeviceAttestation: benchAttestation}); err != nil {
+		t.Fatalf("attested fingerprint read: %v", err)
+	}
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin}); tiad.Kind(err) != tiad.KindDeviceUnverified {
+		t.Fatalf("fingerprint read with no attestation: %v", err)
+	}
+	dry := dl
+	dry.DryRun = true
+	dry.DeviceAttestation = benchAttestation
+	if _, err := s.Download(ctx, dry); tiad.Kind(err) == tiad.KindDeviceUnverified || tiad.Kind(err) == tiad.KindDeviceChanged {
+		t.Fatalf("attested dry run refused on the pin: %v", err)
+	}
+	dl.DeviceAttestation = benchAttestation
+	r, err := s.Download(ctx, dl)
+	if err != nil {
+		t.Fatalf("attested download: %v", err)
+	}
+	want := tiad.DeviceAttestationRecord{By: "test operator", Order: "6es7510-1DK03-0AB0", Firmware: "3.1.3", Pinned: BenchDevice()}
+	got := r.DeviceAttestation
+	if got == nil || got.At == "" {
+		t.Fatalf("the download's response does not keep the attestation it rested on: %+v", got)
+	}
+	got2 := *got
+	got2.At = ""
+	if !reflect.DeepEqual(got2, want) {
+		t.Fatalf("the response's attestation = %+v, want %+v", got2, want)
+	}
+	l := deploys(t, c, benchCPU)
+	if len(l.Deploys) != 1 || l.Deploys[0].DeviceAttestation == nil || l.Deploys[0].DeviceAttestation.By != "test operator" ||
+		l.Deploys[0].DeviceAttestation.Pinned != BenchDevice() {
+		t.Fatalf("the deploy record does not journal the attestation: %+v", l.Deploys)
+	}
+	want0 := []tiad.Pin{{Address: benchCPU, Device: BenchDevice(), Holds: []string{"order", "firmware"}}}
+	if !reflect.DeepEqual(pinsOf(t, c), want0) {
+		t.Fatalf("an attested call changed the pin: %+v", pinsOf(t, c))
+	}
+}
+
+// contractPinAttestedRefusals: an attestation that differs from the pin
+// is device_changed, as a read identity is; one that cannot stand in for
+// the pin (less precise firmware, a pin holding a serial) fails closed;
+// an identity the agent can read wins over any attestation. Nothing loads.
+func contractPinAttestedRefusals(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	a.SetDevice(t, BenchDevice(), true)
+	if _, err := c.SetPin(ctx, benchCPU, benchPinRequest); err != nil {
+		t.Fatal(err)
+	}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	for _, x := range []struct {
+		name, order, firmware, kind, want string
+	}{
+		{"other firmware", "6ES7 510-1DK03-0AB0", "V3.2.0", tiad.KindDeviceChanged, `firmware "V3.1" is attested as "V3.2.0"`},
+		{"other minor on a longer read", "6ES7 510-1DK03-0AB0", "3.10.1", tiad.KindDeviceChanged, `firmware "V3.1" is attested as "3.10.1"`},
+		{"other order", "6ES7 510-1DJ01-0AB0", "V3.1.3", tiad.KindDeviceChanged, `order "6ES7 510-1DK03-0AB0" is attested as "6ES7 510-1DJ01-0AB0"`},
+		{"less precise", "6ES7 510-1DK03-0AB0", "V3", tiad.KindDeviceUnverified, `the attested firmware "V3" is less precise than the pin's "V3.1"`},
+	} {
+		d := dl
+		d.DeviceAttestation = &tiad.DeviceAttestation{By: "test operator", Order: x.order, Firmware: x.firmware}
+		_, err := s.Download(ctx, d)
+		if tiad.Kind(err) != x.kind || !strings.Contains(err.Error(), x.want) || !strings.Contains(err.Error(), "refused before it began") {
+			t.Errorf("%s: %v, want %s with %q", x.name, err, x.kind, x.want)
+		}
+		if x.kind == tiad.KindDeviceChanged && !strings.Contains(err.Error(), `the attestation by "test operator"`) {
+			t.Errorf("%s: %v, want the refusal to say the identity is the attestation", x.name, err)
+		}
+	}
+	// The firmware compares at the pin's precision: "3.1" and "V3.01.0"
+	// are the pin's "V3.1".
+	for _, fw := range []string{"3.1", "V3.01.0"} {
+		cmp := BenchCompare
+		cmp.DeviceAttestation = &tiad.DeviceAttestation{By: "test operator", Order: "6ES7 510-1DK03-0AB0", Firmware: fw}
+		if _, err := s.CompareWith(ctx, cmp); err != nil {
+			t.Errorf("attested firmware %q against the pin's V3.1: %v", fw, err)
+		}
+	}
+	if l := a.Loaded(t); len(l) != 0 {
+		t.Fatalf("a refused attestation loaded: %+v", l)
+	}
+	// A pin holding a serial: an attestation states none, so it fails
+	// closed however it reads.
+	withSerial := tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1", Serial: str("S-TEST-0001")}
+	if _, err := c.SetPin(ctx, benchCPU, tiad.PinRequest{Device: &withSerial, Replace: true, Announced: true}); err != nil {
+		t.Fatal(err)
+	}
+	cmp := BenchCompare
+	cmp.DeviceAttestation = benchAttestation
+	if _, err := s.CompareWith(ctx, cmp); tiad.Kind(err) != tiad.KindDeviceUnverified || !strings.Contains(err.Error(), "the pin holds a serial number, which an attestation does not state") {
+		t.Fatalf("attested compare against a pin holding a serial: %v", err)
+	}
+	// An identity the agent reads online wins: an attestation that says
+	// the pinned firmware does not let a CPU read as another through.
+	if _, err := c.SetPin(ctx, benchCPU, tiad.PinRequest{Device: &tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1"}, Replace: true, Announced: true}); err != nil {
+		t.Fatal(err)
+	}
+	a.SetDevice(t, tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.2"}, false)
+	if _, err := s.CompareWith(ctx, cmp); tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), `firmware "V3.1" is now "V3.2"`) {
+		t.Fatalf("attested compare to a CPU read online as changed: %v", err)
+	}
+	// An identity read but unusable (no firmware) is a read too: the
+	// attestation does not stand in for it.
+	a.SetDevice(t, tiad.DeviceIdentity{Order: "6ES7 511-1AK02-0AB0"}, false)
+	if _, err := s.CompareWith(ctx, cmp); tiad.Kind(err) != tiad.KindDeviceUnverified ||
+		!strings.Contains(err.Error(), "an attestation does not stand in for an identity tiad read and could not use") {
+		t.Fatalf("attested compare to a CPU whose read identity is unusable: %v", err)
+	}
+	// A pin whose firmware is no version cannot be compared with any
+	// attestation: unverified, never "changed".
+	a.SetDevice(t, BenchDevice(), true)
+	if _, err := c.SetPin(ctx, benchCPU, tiad.PinRequest{Device: &tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1.3 HF1"}, Replace: true, Announced: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompareWith(ctx, cmp); tiad.Kind(err) != tiad.KindDeviceUnverified ||
+		!strings.Contains(err.Error(), `the pin's firmware "V3.1.3 HF1" is not a version an attestation can be compared with`) {
+		t.Fatalf("attested compare against a pin whose firmware is no version: %v", err)
+	}
+}
+
+// contractPinAttestationNeverPins: an attestation is never a pin: one to
+// an unpinned CPU is not used, and the upload, which pins on first trust,
+// takes none.
+func contractPinAttestationNeverPins(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	a.SetDevice(t, BenchDevice(), true)
+	cmp := BenchCompare
+	cmp.DeviceAttestation = &tiad.DeviceAttestation{By: "test operator", Order: "6ES7 999-9XX99-9XX9", Firmware: "V9.9"}
+	if _, err := s.CompareWith(ctx, cmp); err != nil {
+		t.Fatalf("attested compare to an unpinned CPU: %v", err)
+	}
+	if ps := pinsOf(t, c); len(ps) != 0 {
+		t.Fatalf("an attestation pinned: %+v", ps)
+	}
+	status, b := rawJSON(t, c, "POST", "/v1/sessions/"+s.ID+"/upload",
+		map[string]any{"secrets": map[string]any{"fullAccessPassword": BenchFullAccessPassword}, "deviceAttestation": map[string]any{"by": "x", "order": "y", "firmware": "1.0"}})
+	if status != http.StatusBadRequest || !strings.Contains(errMessage(b), "deviceAttestation") {
+		t.Fatalf("an upload carrying an attestation: HTTP %d %s, want 400 naming the unknown field", status, b)
+	}
+	if ps := pinsOf(t, c); len(ps) != 0 {
+		t.Fatalf("a refused upload pinned: %+v", ps)
+	}
+	if r, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil || r.Pin != tiad.PinFirstTrust || !reflect.DeepEqual(r.Device, BenchDevice()) {
+		t.Fatalf("first upload after an attested compare: %+v %v (the pin is the upload's read, never an attestation)", r, err)
+	}
+}
+
+// contractPinAttestedVerify: a verify is an online call too: refused
+// without an attestation, through with one.
+func contractPinAttestedVerify(t *testing.T, start Starter) {
+	a, d := deployed(t, start)
+	c := a.Client()
+	a.SetDevice(t, BenchDevice(), true)
+	if _, err := c.SetPin(ctx, benchCPU, benchPinRequest); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID}); tiad.Kind(err) != tiad.KindDeviceUnverified {
+		t.Fatalf("verify of a pinned CPU with no attestation: %v", err)
+	}
+	noSession(t, c)
+	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID, DeviceAttestation: benchAttestation}); err != nil {
+		t.Fatalf("attested verify: %v", err)
+	}
+	noSession(t, c)
+}
+
+// contractPinAttestedOnline: holding a project online in TIA's window
+// (an agent with its UI) is an online call too.
+func contractPinAttestedOnline(t *testing.T, start Starter) {
+	a, s := compiledBenchWith(t, start, Config{UI: true})
+	c := a.Client()
+	a.SetDevice(t, BenchDevice(), true)
+	if _, err := c.SetPin(ctx, benchCPU, benchPinRequest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Online(ctx, tiad.OnlineRequest{Online: true, Secrets: BenchLogin}); tiad.Kind(err) != tiad.KindDeviceUnverified {
+		t.Fatalf("online to a pinned CPU with no attestation: %v", err)
+	}
+	if _, err := s.Online(ctx, tiad.OnlineRequest{Online: true, Secrets: BenchLogin, DeviceAttestation: benchAttestation}); err != nil {
+		t.Fatalf("attested online: %v", err)
+	}
+	if _, err := s.Online(ctx, tiad.OnlineRequest{Online: false}); err != nil {
+		t.Fatalf("offline: %v", err)
+	}
+}
+
+// contractPinAttestationBadRequest: a malformed attestation is a bad
+// request on every call that takes one, before anything else.
+func contractPinAttestationBadRequest(t *testing.T, start Starter) {
+	a, s := compiledBenchWith(t, start, Config{UI: true})
+	c := a.Client()
+	good := map[string]any{"by": "test operator", "order": "6ES7 510-1DK03-0AB0", "firmware": "V3.1.3"}
+	with := func(k string, v any) map[string]any {
+		d := map[string]any{}
+		for k0, v0 := range good {
+			d[k0] = v0
+		}
+		d[k] = v
+		return d
+	}
+	for _, x := range []struct {
+		name string
+		att  map[string]any
+		want string
+	}{
+		{"no by", with("by", " "), "deviceAttestation.by is empty"},
+		{"no order", with("order", ""), "deviceAttestation.order is empty"},
+		{"no firmware", with("firmware", ""), "deviceAttestation.firmware is empty"},
+		{"not a version", with("firmware", "three"), `deviceAttestation.firmware "three" is not a firmware version`},
+		{"empty part", with("firmware", "V3..1"), "is not a firmware version"},
+		{"control character", with("order", "6ES7\n510"), "deviceAttestation.order has a control character"},
+		{"too long", with("order", strings.Repeat("6", 129)), "deviceAttestation.order is longer than 128"},
+		{"unknown field", with("serial", "x"), "serial"},
+		{"not ASCII", with("order", "6ES7 510-1DK03-0ABØ"), "deviceAttestation.order is not printable ASCII"},
+		{"two prefixes", with("firmware", "Vv3.1"), `deviceAttestation.firmware "Vv3.1" is not a firmware version`},
+		{"tab is no space", with("firmware", "\t"), "deviceAttestation.firmware has a control character"},
+	} {
+		for _, call := range []string{"compare", "online", "fingerprint"} {
+			body := map[string]any{"deviceAttestation": x.att}
+			if call == "online" {
+				body["online"] = true
+			}
+			status, b := rawJSON(t, c, "POST", "/v1/sessions/"+s.ID+"/"+call, body)
+			if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest || !strings.Contains(errMessage(b), x.want) {
+				t.Errorf("%s on %s: HTTP %d %s, want 400 with %q", x.name, call, status, b, x.want)
+			}
+		}
+		// The download and the verify read it too, before anything else.
+		for _, call := range []struct {
+			path string
+			body map[string]any
+		}{
+			{"/v1/sessions/" + s.ID + "/download", map[string]any{"address": benchCPU, "software": true, "announced": true, "deviceAttestation": x.att}},
+			{"/v1/deploys/verify", map[string]any{"deploy": "d-20261123T000000000Z-00000000", "deviceAttestation": x.att}},
+		} {
+			status, b := rawJSON(t, c, "POST", call.path, call.body)
+			if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest || !strings.Contains(errMessage(b), x.want) {
+				t.Errorf("%s on %s: HTTP %d %s, want 400 with %q", x.name, call.path, status, b, x.want)
+			}
+		}
+	}
+	// Never inside a fingerprint request of a verify or a download.
+	for _, call := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"/v1/sessions/" + s.ID + "/download", map[string]any{"address": benchCPU, "software": true, "announced": true, "fingerprint": map[string]any{"deviceAttestation": good}}},
+		{"/v1/deploys/verify", map[string]any{"deploy": "d-20261123T000000000Z-00000000", "fingerprint": map[string]any{"deviceAttestation": good}}},
+	} {
+		status, b := rawJSON(t, c, "POST", call.path, call.body)
+		if status != http.StatusBadRequest || !strings.Contains(errMessage(b), "deviceAttestation") {
+			t.Errorf("an attestation inside %s's fingerprint: HTTP %d %s, want 400 naming it", call.path, status, b)
+		}
 	}
 }

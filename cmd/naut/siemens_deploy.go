@@ -119,6 +119,10 @@ to keep from. Name where it comes from; it is never guessed:
 project, later deploys build on it, and --adopt is refused. Foreign blocks
 and devices stay as found.
 
+A CPU the agent holds a device pin for (an --adopt upload pins it) is
+checked against the pin before every online call. The agent cannot read a
+CPU's identity online yet (#789), so until it can, those calls need:
+` + deviceAttestUsage + `
 Other flags:
   --agent URL   tiad URL (default: $NAUTILUS_TIAD_URL, then
                 target.siemens.agent, then ` + tiad.DefaultURL + `)
@@ -157,6 +161,7 @@ type siemensDeployOptions struct {
 	acceptOutside         bool
 	adopt                 string // "", last-deploy, upload or a .zap21 path
 	trustUnverified       bool   // the upload's TLS question, trusted blindly
+	device                deviceAttestFlags
 	keep                  string
 	getenv                func(string) string
 	stdout, stderr        io.Writer
@@ -207,6 +212,7 @@ func parseSiemensDeployFlags(o *siemensDeployOptions, args []string, stderr io.W
 	fs.StringVar(&o.keep, "keep", "", "directory to keep the generated sources in")
 	fs.StringVar(&o.adopt, "adopt", "", "a first deploy builds on the CPU's project: a project archive (.zap21), last-deploy or upload")
 	fs.BoolVar(&o.trustUnverified, "trust-unverified-certificate", false, "with --adopt upload: answer the upload's TLS question trusted, blindly")
+	o.device.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -224,6 +230,13 @@ func parseSiemensDeployFlags(o *siemensDeployOptions, args []string, stderr io.W
 		}
 	}
 	return nil
+}
+
+// deviceAttestation is the operator's device attestation, nil without
+// --attest-order and --attest-firmware (flagsError checked them).
+func (o siemensDeployOptions) deviceAttestation() *tiad.DeviceAttestation {
+	a, _ := o.device.attestation(o.by)
+	return a
 }
 
 // operatorName is who the CLI says attests: the local user, as tiad
@@ -256,6 +269,9 @@ func gitHead(dir string) string {
 
 // siemensDeployFlagsError refuses flag combinations before anything is read.
 func (o siemensDeployOptions) flagsError() error {
+	if _, err := o.device.attestation(o.by); err != nil {
+		return err
+	}
 	acting := o.yes || o.dryRun || o.allowStop || o.start || o.noStart || len(o.reinit) > 0 || o.hardware || o.attest != "" ||
 		o.cpuAccess != "" || o.trustCertificate != "" || o.acceptOutside
 	switch {
@@ -458,6 +474,11 @@ type siemensDeployer struct {
 	// adoption is the record of the project this deploy builds on when
 	// it was adopted (this deploy or an earlier one), nil otherwise.
 	adoption *siemensAdoption
+	// adoptedEqual is set when this deploy compared the adopted project
+	// equal with the CPU before the import (compareAdopted).
+	adoptedEqual bool
+	// group is the block group nautilus imports into.
+	group string
 }
 
 // siemensStationRecord is where a successful deploy leaves the station
@@ -537,7 +558,7 @@ func (d *siemensDeployer) checkLastDeploy(ctx context.Context, address string, o
 		return lastDeploy{why: why}, nil
 	}
 	ld := lastDeploy{id: latest.ID, status: latest.Status, project: latest.Project}
-	r, err := d.client.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: latest.ID, Secrets: online})
+	r, err := d.client.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: latest.ID, Secrets: online, DeviceAttestation: d.o.deviceAttestation()})
 	if err != nil {
 		return ld, fmt.Errorf("verify of the last deploy %s: %w", latest.ID, err)
 	}
@@ -720,6 +741,9 @@ func (d *siemensDeployer) adopt(ctx context.Context, name string, st tiad.Statio
 			d.say("  trusted blindly (--trust-unverified-certificate): %s", q)
 		}
 		d.say("  CPU %s %s %s (device pin: %s)", ur.CPU.Name, ur.Device.Order, ur.Device.Firmware, ur.Pin)
+		if ur.Pin == tiad.PinFirstTrust {
+			d.say("  the agent pinned this CPU's identity: every later online call to it checks the pin, and while the agent cannot read a CPU's identity online (#789) that takes --attest-order and --attest-firmware, read off the CPU itself")
+		}
 		cpu := ur.CPU
 		res = tiad.AdoptResult{Project: "projects/" + name + "/" + name + ".ap21", CPU: &cpu, CPUError: ur.CPUError, CPUAddress: st.CPU.Address}
 	default:
@@ -761,7 +785,7 @@ func (d *siemensDeployer) adopt(ctx context.Context, name string, st tiad.Statio
 func (d *siemensDeployer) compareAdopted(ctx context.Context, s *tiad.Session, address string, online *tiad.OnlineSecrets) int {
 	if a := d.adoption; a != nil {
 		d.say("comparing the adopted project with the CPU before anything is imported...")
-		c, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: online})
+		c, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: online, DeviceAttestation: d.o.deviceAttestation()})
 		if err != nil {
 			return d.tiadErr("compare the adopted project with the CPU", err)
 		}
@@ -780,6 +804,7 @@ func (d *siemensDeployer) compareAdopted(ctx context.Context, s *tiad.Session, a
 			return 1
 		}
 		d.say("  equal: the adopted project is what the CPU runs")
+		d.adoptedEqual = true
 	}
 	return 0
 }
@@ -1159,6 +1184,7 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 	if group == "" {
 		group = project.DefaultSiemensGroup
 	}
+	d.group = group
 	req := tiad.SoftwareRequest{Group: group, Prune: true, TagTables: []string{}}
 	byWork := map[string]string{}
 	for _, f := range out.Files {
@@ -1260,7 +1286,7 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 	o := d.o
 	address := st.CPU.Address
 	dec, plan := d.decisions(st, kept)
-	req := tiad.DownloadRequest{Address: address, Hardware: o.hardware, Software: true, Decisions: dec, Announced: true}
+	req := tiad.DownloadRequest{Address: address, Hardware: o.hardware, Software: true, Decisions: dec, Announced: true, DeviceAttestation: o.deviceAttestation()}
 	if sec.Protection != "" || sec.ConfigurationPassword != "" {
 		req.Secrets = &tiad.Secrets{Protection: sec.Protection, ConfigurationPassword: sec.ConfigurationPassword, FullAccessPassword: sec.FullAccessPassword}
 	} else if sec.FullAccessPassword != "" {
@@ -1378,6 +1404,9 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 	if r.UserManagementReset != "" {
 		d.say("user management reset to the project's (route %s)", r.UserManagementReset)
 	}
+	if r.DeviceAttestation != nil {
+		d.say("device pin: %s (the deploy record keeps it)", describeDeviceAttestation(r.DeviceAttestation))
+	}
 	var missing []string
 	for _, f := range d.out.Files {
 		name := strings.TrimSuffix(f.Path, path.Ext(f.Path))
@@ -1483,15 +1512,59 @@ func (d *siemensDeployer) printPlan(address string, last lastDeploy, sw tiad.Sof
 	for _, ob := range sw.OBs {
 		d.say("  cyclic interrupt OB %s", describeOB(ob))
 	}
+	d.sayForeign(sw.Foreign)
 	if d.o.dryRun {
 		d.say("  after your yes: a dry run first (--dry-run). It reaches the CPU, and a TIA that asks no check LOADS during it; what it shows the answers below refuse stops the deploy there")
 	} else {
 		d.say("  no dry run (--dry-run asks TIA's first check after your yes; it reaches the CPU too)")
 	}
+	if a := d.o.deviceAttestation(); a != nil {
+		d.say("  device: you attest order %q, firmware %q, read off the CPU by %s; the agent uses it only for a pinned CPU it cannot identify online, and refuses any difference from the pin", a.Order, a.Firmware, a.By)
+	}
 	d.say("  announced: you have told everyone who shares this CPU (the download records announced: true)")
 	d.say("  the download answers:")
 	for _, p := range plan {
 		d.say("    - %s", p)
+	}
+}
+
+// sayForeign is the plan's lines for the program blocks outside
+// nautilus's group, which the download loads too (#1326), one line per
+// group, the root first. Whether they are on the CPU already is said only
+// when a compare in this deploy covered them.
+func (d *siemensDeployer) sayForeign(foreign []tiad.ForeignBlock) {
+	switch {
+	case foreign == nil:
+		d.say("  other program blocks: this agent does not report the blocks outside group %s, which the download loads too (an agent older than #1326): check the TIA project for them", d.group)
+		return
+	case len(foreign) == 0:
+		d.say("  other program blocks: none outside group %s", d.group)
+		return
+	}
+	var groups []string
+	byGroup := map[string][]string{}
+	for _, b := range foreign {
+		if _, ok := byGroup[b.Group]; !ok {
+			groups = append(groups, b.Group)
+		}
+		byGroup[b.Group] = append(byGroup[b.Group], b.Label())
+	}
+	for _, g := range groups {
+		where := "group " + g
+		if g == "" {
+			where = "the program blocks' root"
+		}
+		n := len(byGroup[g])
+		noun := "blocks"
+		if n == 1 {
+			noun = "block"
+		}
+		d.say("  also loads, not nautilus's: %s (%d %s: %s)", where, n, noun, strings.Join(byGroup[g], ", "))
+	}
+	if d.adoptedEqual {
+		d.say("    on the CPU as they are: the adopted project compared equal with it before the import, which changes no block outside group %s", d.group)
+	} else {
+		d.say("    not compared with the CPU before this download, so new or changed ones are not shown (the compare after it covers every block)")
 	}
 }
 
@@ -1526,7 +1599,7 @@ func (d *siemensDeployer) outcomeUnknown(ctx context.Context, s *tiad.Session, s
 	// The compare gets its own time: ctx may be what ended the download.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 	defer cancel()
-	var cr tiad.CompareRequest
+	cr := tiad.CompareRequest{DeviceAttestation: d.o.deviceAttestation()}
 	if sec.FullAccessPassword != "" {
 		cr.Secrets = &tiad.OnlineSecrets{FullAccessPassword: sec.FullAccessPassword}
 	}

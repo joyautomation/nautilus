@@ -136,8 +136,10 @@ It reaches the CPU, so tell everyone who shares it first. In order:
 1. The CPU is compared with its last deploy record. A CPU that was changed
    outside nautilus is refused unless you pass `--accept-outside-changes`.
 2. The plan is printed: the verdict, the station changes, whether
-   hardware is loaded, what happens to each OB, and every answer the
-   download will give TIA, in words.
+   hardware is loaded, what happens to each OB, the program blocks
+   outside nautilus's group that the download loads too (a customer's,
+   `Main` at the root), and every answer the download will give TIA, in
+   words.
 3. You type `yes`, or pass `--yes`, which answers exactly what was printed.
 4. The download runs. It counts as done only when an online compare right
    after it is equal. The deploy record is printed and the TIA project is
@@ -162,7 +164,15 @@ project comes from. It is never guessed:
   usually what you have.
 - `--adopt last-deploy`: the archive of the CPU's last deploy record.
 - `--adopt upload`: an upload of the CPU's program. It is read-only, but it
-  reaches the CPU even without `--download`.
+  reaches the CPU even without `--download`. The first upload from a CPU
+  pins its identity (order number and firmware), and every later online
+  call to it is checked against that pin. tiad cannot read a CPU's
+  identity online yet, so until it can, those calls (`--download`,
+  `naut siemens verify`, `show --online`) need
+  `--attest-order "<order number>" --attest-firmware <version>`, both read
+  off the CPU itself (its label or display). tiad compares them with the
+  pin, refuses any difference, and audits every use; the deploy record
+  keeps it.
 
 `--adopt` is for a first deploy. Once a download took the adopted
 project, later deploys build on it and `--adopt` is refused. Blocks,

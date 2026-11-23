@@ -241,3 +241,49 @@ func TestAgentAuditsAnUploadWhoseIdentityCannotBeRead(t *testing.T) {
 		t.Fatalf("pins: %+v %v", ps, err)
 	}
 }
+
+// TestAgentAuditsADeviceAttestation (#1325): an attested call to a pinned
+// CPU the agent cannot identify is audited with the operator's statement,
+// the pin it was compared with and why the read was missing; a refused
+// one too; the pin file is as it was, byte for byte, afterwards.
+func TestAgentAuditsADeviceAttestation(t *testing.T) {
+	dir := t.TempDir()
+	p, s := downloadReady(t, "TIAD_PINS_DIR="+dir)
+	bench := tiadtest.BenchDevice()
+	if _, err := p.Client().SetPin(ctx, "192.0.2.10", tiad.PinRequest{Device: &bench, Announced: true}); err != nil {
+		t.Fatal(err)
+	}
+	pin := filepath.Join(dir, "192.0.2.10.device")
+	before, err := os.ReadFile(pin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetDevice(t, tiadtest.BenchDevice(), true)
+	att := &tiad.DeviceAttestation{By: "test operator", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1.3"}
+	dl := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
+		Decisions: tiad.Decisions{StartAfter: tiad.No()}, DeviceAttestation: att}
+	if _, err := s.Download(ctx, dl); err != nil {
+		t.Fatalf("attested download: %v", err)
+	}
+	for _, want := range []string{
+		`audit pin attested call=download`, `address="192.0.2.10"`, `why="this agent's TIA side cannot read a CPU's identity online yet"`,
+		`pinned={"order":"6ES7 510-1DK03-0AB0","firmware":"V3.1","serial":null,"mac":null}`,
+		`attestation={by="test operator" order="6ES7 510-1DK03-0AB0" firmware="V3.1.3"}`,
+		`deviceAttestation={by="test operator"`,
+	} {
+		if !strings.Contains(p.Log(), want) {
+			t.Fatalf("the agent's log lacks %q:\n%s", want, p.Log())
+		}
+	}
+	dl.DeviceAttestation = &tiad.DeviceAttestation{By: "test operator", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.2"}
+	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindDeviceChanged {
+		t.Fatalf("download attested as another firmware: %v", err)
+	}
+	if !strings.Contains(p.Log(), `audit pin device-changed call=download`) || !strings.Contains(p.Log(), `firmware="V3.2"}`) {
+		t.Fatalf("a refused attestation is not audited:\n%s", p.Log())
+	}
+	after, err := os.ReadFile(pin)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("an attested call changed the pin file:\nbefore %q\nafter  %q (%v)", before, after, err)
+	}
+}

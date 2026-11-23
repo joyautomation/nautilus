@@ -822,6 +822,7 @@ namespace Tiad
                     if (bad.Count > 0) throw CyclicObs.VerifyFailed(bad);
                     s.ForeignChanged = false;
                     sr.Obs = steps;
+                    sr.Foreign = Ownership.Foreign(after, group);
                     return sr;
                 });
                 return res.ToJson();

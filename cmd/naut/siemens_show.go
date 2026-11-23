@@ -49,6 +49,7 @@ Flags:
   --close       take the project offline and close it in TIA
   --agent URL   tiad URL (default: $NAUTILUS_TIAD_URL, then
                 target.siemens.agent, then ` + tiad.DefaultURL + `)
+` + deviceAttestUsage + `                (with --online)
 
 The agent's token comes from NAUTILUS_TIAD_TOKEN (or NAUTILUS_TIAD_TOKEN_FILE),
 never a flag.
@@ -57,8 +58,10 @@ never a flag.
 type siemensShowOptions struct {
 	dir, block, agentFlag string
 	close, online         bool
-	getenv                func(string) string
-	stdout, stderr        io.Writer
+	// attest is the operator's device attestation (#1325), nil without.
+	attest         *tiad.DeviceAttestation
+	getenv         func(string) string
+	stdout, stderr io.Writer
 }
 
 func runSiemensShow(args []string) int {
@@ -80,9 +83,20 @@ func parseSiemensShowFlags(o *siemensShowOptions, args []string, stderr io.Write
 	fs.BoolVar(&o.close, "close", false, "take the project offline and close it in TIA")
 	fs.BoolVar(&o.online, "online", false, "go online to the CPU in TIA's window too")
 	fs.StringVar(&o.agentFlag, "agent", "", "tiad URL")
+	var dev deviceAttestFlags
+	dev.register(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	a, err := dev.attestation(operatorName())
+	if err == nil && a != nil && !o.online {
+		err = errors.New("--attest-order and --attest-firmware go with --online: only going online checks the CPU's device pin")
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "naut siemens show: %v\n", err)
+		return err
+	}
+	o.attest = a
 	rest := fs.Args()
 	if !o.close {
 		if len(rest) == 0 {
@@ -192,7 +206,7 @@ func siemensShow(ctx context.Context, o siemensShowOptions) int {
 		if pw != "" {
 			sec = &tiad.OnlineSecrets{FullAccessPassword: pw}
 		}
-		on, err := open.Online(ctx, tiad.OnlineRequest{Online: true, Secrets: sec})
+		on, err := open.Online(ctx, tiad.OnlineRequest{Online: true, Secrets: sec, DeviceAttestation: o.attest})
 		if err != nil {
 			fail("going online: %s", tiadMessage(err))
 			if opened {

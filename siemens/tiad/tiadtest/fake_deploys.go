@@ -76,7 +76,7 @@ func (f *Fake) recordIntent(s *session, req tiad.DownloadRequest, attested *tiad
 		Hardware: req.Hardware, Software: req.Software,
 		TIA:         tiad.DeployTIA{Version: "V21", Openness: "V21", Agent: "fake"},
 		Archive:     tiad.DeployArchive{File: "archives/" + sha + ".zap21", SHA256: sha, Bytes: int64(len(b))},
-		Attestation: attested, KeptDevices: keptList(s.kept), BlindTrust: f.blindTrust,
+		Attestation: attested, DeviceAttestation: s.deviceAttested, KeptDevices: keptList(s.kept), BlindTrust: f.blindTrust,
 		Status: tiad.DeployInDoubt,
 	}
 	if req.Source != nil {
