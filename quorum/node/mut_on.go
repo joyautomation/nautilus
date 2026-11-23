@@ -35,6 +35,9 @@ var mutations = []string{
 	"state_owner_unchecked",         // a controller starts over a state file another member (or another pair) wrote
 	"config_differs_campaigns",      // a controller campaigns while its peer's hello names another configuration of the pair
 	"hello_duplicate_unseen",        // two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing
+	"hello_retry_slow",              // a hello with no verified answer is tried again only a whole interval later (#1120)
+	"hello_not_asked_again",         // a peer's restart or a link coming up asks for no hello: the backed-off retry waits (#1120)
+	"hello_asks_unspaced",           // asks for a hello send one after another: a storm with a flapping link or two processes behind one name (#1120 review)
 	"box_unchecked",                 // a controller votes from a state file written on another box (a cloned disk, #1029)
 	"box_wait_skipped",              // a controller whose box can't be read yet votes on the stored identity (#1034 review)
 	"campaign_ignores_sync",         // an unsynced standby campaigns over a synced peer that may (#710 3b-4b)

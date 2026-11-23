@@ -131,6 +131,9 @@ var table = []mutation{
 	{"no_term_cap", []string{"TestReviewWitnessTermJumpRefused"}},
 	{"controller_no_term_cap", []string{"TestReviewControllerTermJumpRefused"}},
 	{"hello_unbound", []string{"TestReviewHelloReflectedAnswerFails"}},
+	{"hello_retry_slow", []string{"TestAHelloWithNoAnswerIsRetriedSoon"}},
+	{"hello_not_asked_again", []string{"TestAPeersRestartAsksForAHelloAtOnce"}},
+	{"hello_asks_unspaced", []string{"TestAsksForAHelloAreSpaced"}},
 	// The #1021 re-review.
 	{"lease_raise_volatile", []string{"TestVoterLongerLeaseDurableBeforeAnyGrant", "TestReviewLengthenThenShorten"}},
 	{"term_cap_narrow", []string{"TestReviewIsolatedControllerRejoins"}},

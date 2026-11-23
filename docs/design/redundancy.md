@@ -284,7 +284,12 @@ redundancy:
   never this controller's port on the peer's host, since the two ports may differ (#710 demo
   finding 1). Until a verified answer names it, or when it names this controller's own API (a
   standby would proxy to itself), or from a build that announces none, the standby knows no
-  leader address: it serves reads and refuses writes, rather than guess. A forward has
+  leader address: it serves reads and refuses writes, rather than guess. A hello with no
+  verified answer is retried after `max(lease, 1 s)`, doubling up to the hello interval
+  (`max(16·lease, 5 s)`), and at once when the peer's votes carry a new boot nonce or a vote
+  call to it is answered after one that failed, at least one retry after the hello before
+  (#1120: with the interval alone, a standby that started before its peer refused writes for up
+  to 16 leases). A forward has
   deadlines: dial 2 s (a dial failure is replayed to the next leader), TLS handshake 2 s,
   response headers 2 min (a 502, never replayed). The header deadline stays above the leader's
   own waits (10-15 s per handler; an I/O apply that fails adds up its put-backs), so a write
