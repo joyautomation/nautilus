@@ -16,7 +16,6 @@ const (
 	gapString                // STRING and the string functions
 	gapTime                  // TIME arithmetic, LTIME, dates
 	gapOther                 // the rest
-	gapDtTag                 // a task's dt-tag
 )
 
 // gapIssue is the tracking issue of each kind of gap.
@@ -27,7 +26,6 @@ var gapIssue = map[gap]int{
 	gapString:     1303,
 	gapTime:       1304,
 	gapOther:      1305,
-	gapDtTag:      1310,
 }
 
 // gapMessage words a gap: "the Siemens writer doesn't translate <what>

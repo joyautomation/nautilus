@@ -467,6 +467,14 @@ var sclKeywords = map[string]bool{
 	"DATA_BLOCK": true, "ORGANIZATION_BLOCK": true, "NON_RETAIN": true, "GOTO": true,
 	"REGION": true, "END_REGION": true, "LABEL": true, "CONST": true, "VARIANT": true,
 	"POINTER": true, "ANY": true, "REF": true, "DATA": true, "VOID": true, "NULL": true,
+	// Data type names nautilus takes as names (#1310: a tag named Dt
+	// failed the import of the tags DB, "The specified value "Dt" is
+	// invalid", as did a temp named dt).
+	"DT": true, "TOD": true, "DATE": true, "TIME": true, "LDT": true, "LTOD": true,
+	"LDATE": true, "LTIME": true, "DATE_AND_TIME": true, "TIME_OF_DAY": true,
+	"BYTE": true, "WORD": true, "DWORD": true, "LWORD": true, "SINT": true, "LINT": true,
+	"USINT": true, "UINT": true, "UDINT": true, "ULINT": true, "WSTRING": true,
+	"CHAR": true, "WCHAR": true, "S5TIME": true, "DTL": true,
 }
 
 // sclName writes a name, quoted when SCL reserves it.

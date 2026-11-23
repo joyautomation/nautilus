@@ -73,10 +73,10 @@ func TestCheckSiemensTargetRunsTheWritersRules(t *testing.T) {
 }
 
 // TestCheckSiemensTargetReportsProjectRules: a rule with no source line
-// (a task's dt-tag, which nothing on the CPU writes yet) is reported
-// against the manifest check reads, here one named with -m.
+// (a task interval longer than an S7-1500 cyclic interrupt allows) is
+// reported against the manifest check reads, here one named with -m.
 func TestCheckSiemensTargetReportsProjectRules(t *testing.T) {
-	m := strings.Replace(goodSiemensManifest, "    scan: 100ms\n", "    scan: 100ms\n  - program: other.st\n    scan: 50ms\n    dt-tag: OtherDtS\n", 1)
+	m := strings.Replace(goodSiemensManifest, "    scan: 100ms\n", "    scan: 100ms\n  - name: other\n    program: other.st\n    scan: 90s\n", 1)
 	dir := writeProject(t, map[string]string{
 		"s7.yaml":  m,
 		"main.st":  siemensCheckProgram,
@@ -86,7 +86,7 @@ func TestCheckSiemensTargetReportsProjectRules(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1:\n%s", code, out)
 	}
-	if !strings.Contains(out, "s7.yaml: siemens target: the Siemens writer doesn't translate task other's dt-tag OtherDtS yet (#1310)") || !strings.Contains(out, "[siemens/dt-tag]") {
+	if !strings.Contains(out, "s7.yaml: siemens target: task other: interval 1m30s is over the 60 s an S7-1500 cyclic interrupt allows") || !strings.Contains(out, "[siemens/task]") {
 		t.Fatalf("no task diagnostic against s7.yaml:\n%s", out)
 	}
 }
@@ -279,19 +279,30 @@ func TestSiemensWriterInputSeedsAStructTag(t *testing.T) {
 	}
 }
 
-// TestSiemensWriterInputRefusesADtTag: a task's dt-tag reaches the writer,
-// which refuses it (#1310): check never passes a project whose integrators
-// would read 0 on the CPU.
-func TestSiemensWriterInputRefusesADtTag(t *testing.T) {
+// TestSiemensWriterInputWritesADtTag: a task's dt-tag reaches the writer
+// typed, whether a program declares it or not (then the REAL nautilus
+// seeds it as), and the task's OB writes it (#1310).
+func TestSiemensWriterInputWritesADtTag(t *testing.T) {
 	prog := "PROGRAM Main\nVAR_EXTERNAL DtS : REAL; Hours : REAL; END_VAR\nHours := Hours + DtS;\nEND_PROGRAM\n"
-	m := "name: s7\ntasks:\n  - program: main.st\n    dt-tag: DtS\ntags:\n  - {name: Hours, role: state, type: REAL}\n"
-	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": prog})
+	m := "name: s7\ntasks:\n  - program: main.st\n    dt-tag: DtS\n  - name: other\n    program: other.st\n    scan: 50ms\n    dt-tag: OtherDt\ntags:\n  - {name: Hours, role: state, type: REAL}\n"
+	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": prog, "other.st": "PROGRAM other\nVAR y : REAL; END_VAR\ny := Hours;\nEND_PROGRAM\n"})
 	in, err := siemensWriterInput(dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, diags, err := swriter.Write(in); err != nil || len(diags) != 1 || !strings.Contains(diags[0].Message, "dt-tag DtS yet (#1310)") {
-		t.Errorf("%v %v", diags, err)
+	out, diags, err := swriter.Write(in)
+	if err != nil || len(diags) != 0 {
+		t.Fatalf("%v %v", diags, err)
+	}
+	obs := map[string]string{}
+	for _, f := range out.Files {
+		obs[f.Path] = string(f.Data)
+	}
+	if ob := obs["naut_OB_main.scl"]; !strings.Contains(ob, "#elapsed := RUNTIME(MEM := \"naut_Clock\".\"main\".mem);") || !strings.Contains(ob, "\"naut_Tags\".DtS := LREAL_TO_REAL(#elapsed);") {
+		t.Errorf("main:\n%s", ob)
+	}
+	if ob := obs["naut_OB_other.scl"]; !strings.Contains(ob, "\t\t#elapsed := 0.05;\n") || !strings.Contains(ob, "\"naut_Tags\".OtherDt := LREAL_TO_REAL(#elapsed);") {
+		t.Errorf("other:\n%s", ob)
 	}
 }
 

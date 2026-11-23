@@ -377,14 +377,24 @@ func Write(in Input) (Output, []Diag, error) {
 		out.Sources[name+".scl"] = Source{Path: w.guarded[fn]}
 	}
 
-	// nautilus writes a task's dt-tag every scan; nothing on the CPU
-	// would, so the tag would stay 0 and every integrator built on it
-	// would stop (#1310). RUNTIME() is the translation, once its first
-	// scan is measured against nautilus's.
+	// nautilus writes a task's dt-tag every scan; the task's OB does it
+	// here with RUNTIME() (dt.go), the start times kept in a clock DB.
+	clock := prefix + "Clock"
+	dts := map[string]*dtOf{}
 	for _, t := range in.Tasks {
-		if t.DtTag != "" {
-			w.diag("siemens/dt-tag", "nautilus.yaml", 0, gapMessage(gapDtTag, fmt.Sprintf("task %s's dt-tag %s", t.Name, t.DtTag), "nothing on the CPU writes it, so integrators and PI loops built on it would read 0"))
+		if t.DtTag == "" {
+			continue
 		}
+		d, why := w.dtFor(t, clock)
+		if why != "" {
+			w.diag("siemens/dt-tag", "nautilus.yaml", 0, fmt.Sprintf("task %s's dt-tag %s: %s", t.Name, t.DtTag, why))
+			continue
+		}
+		dts[t.Name] = d
+	}
+	if len(dts) > 0 && claim(clock, "the clock DB of the tasks' dt-tags") {
+		out.Files = append(out.Files, File{Path: clock + ".db", Data: clockDB(clock, in.Tasks, dts)})
+		out.Sources[clock+".db"] = Source{Path: "nautilus.yaml"}
 	}
 	// One cyclic interrupt OB per task: OB30 to OB38, then from 123, the
 	// numbers an S7-1500 gives cyclic interrupts.
@@ -432,7 +442,7 @@ func Write(in Input) (Output, []Diag, error) {
 			out.Files = append(out.Files, File{Path: sh.db + ".db", Data: db})
 			out.Sources[sh.db+".db"] = Source{Path: "nautilus.yaml"}
 		}
-		src, why := w.obSource(ob, prefix+t.Program+"_DB", sh)
+		src, why := w.obSource(ob, prefix+t.Program+"_DB", sh, dts[t.Name])
 		if why != "" {
 			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: %s", t.Name, why))
 			continue

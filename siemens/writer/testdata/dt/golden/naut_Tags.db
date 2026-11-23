@@ -1,0 +1,14 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      FastDt : LREAL;
+      Hours : REAL;
+      MainDtS : REAL;
+      Ramp : LREAL;
+      Seen : LREAL;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

@@ -1,0 +1,7 @@
+FUNCTION_BLOCK "naut_Fast"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	"naut_Tags".Ramp := "naut_Tags".Ramp + 2.0 * "naut_Scan_fast".tags.FastDt;
+END_FUNCTION_BLOCK
