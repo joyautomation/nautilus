@@ -279,7 +279,13 @@ func (a *cameraAPI) stream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	who := a.s.principalOf(r)
-	release, err := a.co.limit.Acquire(c, who)
+	// without sign-in everyone is "anonymous": the per-person cap then counts the
+	// browser's address, or two live streams would be every viewer's total
+	holder := who
+	if who == "anonymous" {
+		holder = who + "@" + a.s.clientAddr(r)
+	}
+	release, err := a.co.limit.Acquire(c, holder)
 	if err != nil {
 		code := http.StatusServiceUnavailable
 		if errors.Is(err, camera.ErrBusy) {
