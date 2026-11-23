@@ -1,0 +1,28 @@
+ORGANIZATION_BLOCK "naut_OB_slow"
+TITLE = "Cyclic interrupt, 1s"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	// The tags this task shares with others, copied in: the program works on the copy.
+	"naut_Scan_slow".tags.Level := "naut_Tags".Level;
+	"naut_Scan_slow".tags.Start := "naut_Tags".Start;
+	"naut_Scan_slow".tags.Status := "naut_Tags".Status;
+	"naut_Scan_slow".tags.Stop := "naut_Tags".Stop;
+	"naut_Slow_DB"();
+	// What the scan assigned, back into the tags DB, member by member and bit by bit.
+	IF "naut_Scan_slow".assigned.Status = WORD#16#FFFF THEN
+		"naut_Tags".Status := "naut_Scan_slow".tags.Status;
+	ELSE
+		IF "naut_Scan_slow".assigned.Status.%X0 THEN
+			"naut_Tags".Status.%X0 := "naut_Scan_slow".tags.Status.%X0;
+		END_IF;
+		IF "naut_Scan_slow".assigned.Status.%X3 THEN
+			"naut_Tags".Status.%X3 := "naut_Scan_slow".tags.Status.%X3;
+		END_IF;
+		IF "naut_Scan_slow".assigned.Status.%X7 THEN
+			"naut_Tags".Status.%X7 := "naut_Scan_slow".tags.Status.%X7;
+		END_IF;
+	END_IF;
+	"naut_Scan_slow".assigned.Status := WORD#16#0;
+END_ORGANIZATION_BLOCK

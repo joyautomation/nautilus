@@ -29,6 +29,10 @@ type progWriter struct {
 	// lines is the source line (of the parsed ST) of each line written
 	// after BEGIN, in order.
 	lines []int
+	// uses are the manifest tags the program names, lower-cased, and
+	// share what it shares with other tasks (nil: nothing) (tasks.go).
+	uses  map[string]*tagUse
+	share *share
 }
 
 // elementary maps the IEC elementary types the subset writes. SCL spells
@@ -78,7 +82,7 @@ func sclType(t string) (string, string) {
 }
 
 func (w *writer) program(path string, libs []string, src string, prog *st.Program) *progWriter {
-	pw := &progWriter{w: w, path: path, libs: libs, locals: map[string]local{}, statics: map[string]*shape{}}
+	pw := &progWriter{w: w, path: path, libs: libs, locals: map[string]local{}, statics: map[string]*shape{}, uses: map[string]*tagUse{}, share: w.shares[strings.ToLower(prog.Name)]}
 	before := len(w.diags)
 
 	// nautilus's own lowering first: what nautilus cannot run is not
@@ -319,11 +323,16 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 			tt = pw.typ(&st.IdentExpr{Name: s.Target, Pos: s.Pos})
 			target = pw.ident(target, s.Pos.Line)
 		}
+		te := s.TargetExpr
+		if te == nil {
+			te = &st.IdentExpr{Name: s.Target, Pos: s.Pos}
+		}
 		if pw.w.structOf(tt) != nil {
 			pw.assignStruct(b, target, tt, s.Value, in, at)
-			break
+		} else {
+			pw.emit(b, at, "%s%s := %s;\n", in, target, pw.store(s.Value, tt, s.Pos.Line))
 		}
-		pw.emit(b, at, "%s%s := %s;\n", in, target, pw.store(s.Value, tt, s.Pos.Line))
+		pw.assigned(b, in, at, te)
 	case *st.IfStmt:
 		pw.emit(b, at, "%sIF %s THEN\n", in, pw.expr(s.Condition, 0))
 		pw.stmts(b, s.Then, d+1)
@@ -378,6 +387,9 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 			}
 		}
 		pw.emit(b, at, "%s%s;\n", in, pw.call(s.Call, true))
+		for _, o := range s.Call.OutputBindings {
+			pw.assigned(b, in, at, o.Target)
+		}
 	case *st.ExitStmt:
 		pw.emit(b, at, "%sEXIT;\n", in)
 	case *st.ContinueStmt:
@@ -444,6 +456,10 @@ func (pw *progWriter) ident(name string, line int) string {
 		return "#" + sclName(l.name)
 	}
 	if g, ok := pw.w.globals[strings.ToLower(name)]; ok {
+		pw.use(g)
+		if sh := pw.share; sh != nil && sh.tags[strings.ToLower(g.Name)] != nil {
+			return quote(sh.db) + ".tags." + sclName(g.Name)
+		}
 		return quote(pw.w.tagsDB) + "." + sclName(g.Name)
 	}
 	if e, ok := pw.w.lib.enumMembers[strings.ToLower(name)]; ok {

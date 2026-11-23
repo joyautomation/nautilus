@@ -1,0 +1,18 @@
+DATA_BLOCK "naut_Scan_slow"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      tags : Struct
+         Level : REAL;
+         Start : BOOL;
+         Status : WORD;
+         Stop : BOOL;
+      END_STRUCT;
+      assigned : Struct
+         Status : WORD;
+      END_STRUCT;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

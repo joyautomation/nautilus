@@ -304,6 +304,7 @@ func (pw *progWriter) latch(b *strings.Builder, c *st.CallExpr, l local, def lat
 			return
 		}
 		pw.emit(b, at, "%s%s := %s;\n", in, pw.expr(o.Target, 0), q)
+		pw.assigned(b, in, at, o.Target)
 	}
 }
 
