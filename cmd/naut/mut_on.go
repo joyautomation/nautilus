@@ -70,6 +70,8 @@ import "os"
 //   - hot_voters_unchecked: a takeover goes hot without the voters' check (#710 S2c-1);
 //   - ack_old_epoch_counts: a leader takes its standby's acknowledgement of another epoch (#710 S2c-1);
 //   - current_time_based: a standby counts as current by the time since its last acknowledgement, not by sequence (#710 S2c-1);
+//   - current_without_fresh_send: a standby in step with the last image sent stays current however long ago it was sent (#710 S2c-1);
+//   - interval_across_reconnect: the send-to-send time is measured across a reconnect's gap (#710 S2c-1);
 //   - hot_cold_condition_never_clears: the cold-takeover warning stays after a standby follows again (#710 S2b);
 var mutOn = os.Getenv("QUORUM_MUT")
 

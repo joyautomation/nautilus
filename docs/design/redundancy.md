@@ -1607,15 +1607,31 @@ voters vouch too:
   epoch and the mark (wire version 8); a voter keeps the mark of a renewal it granted, once
   the grant is durable, in memory only (unknown after a restart until the next granted renewal).
 - **The rule** (`quorum.HotCheck.Verdict`), on the replies of the round that won, never an
-  earlier round's: the replies that cover the image's epoch must be a majority; the highest
-  epoch they granted the old leader must be the image's; this controller led in no epoch after
-  it but the current one, and no reply records one for it that this boot did not campaign in;
-  the newest mark (by epoch, then seq; of two at one position, the one not current) must be of
-  the image's epoch, current, and not ahead of the image. Each failure is a named cold reason.
+  earlier round's: the replies that cover the image's epoch must be a majority, and at least
+  two of them must hold a mark of the old leader (a restarted voter has none, and one voter's
+  word may be stale: the old leader's last lease rested on a renewal a majority granted, so two
+  always include one that heard it); this controller led in no epoch after the image's but the
+  current one (`LedBefore`; a granting voter's record for this controller is always the winning
+  term, so the per-reply own-record check only fires from a refusing voter); then, from every
+  winning reply, covering or not: the highest epoch granted the old leader must be the image's,
+  and the newest mark (by epoch, then seq; of two at one position, the one not current) must be
+  of the image's epoch, current, and not ahead of the image. Each failure is a named cold
+  reason. The leader judges Current on its own sends: in step with the last image only while
+  that went out within 3 send-to-send times (a stream that stopped is not current), and the
+  send-to-send time is never measured across a reconnect. A delayed older renewal never
+  replaces a newer mark from the same boot.
 - **Checked by** a simulator oracle (a hot verdict never skips an epoch someone led in between)
   and the pair test of the ruling-B sequence.
-- **Cold cases left:** a takeover within about `lease/4` of a takeover or of a voter's restart
-  (no mark yet), a voter on an older release, a rebuilt witness until it grants a campaign.
+- **Cold cases left:** a takeover within about `lease/4` of a takeover, or within about a lease
+  and a quarter of a voter's restart (no mark yet), a voter on an older release, a rebuilt
+  witness until it grants a campaign.
+- **Residuals (Fable, #1345).** The floor-derived `RecordsFrom` inherits the adoption's own
+  residuals: an operator's `Recommission` with a floor set too low, and
+  `EventReadoptOverSwitch`. A rebuilt witness's first campaign grant may reach it before the
+  adoption that raises the controllers' floors, setting its `RecordsFrom` at or below a
+  leadership its old incarnation granted; a wrong hot from it needs that compound history and
+  stays within `hot-max-age`. The simulator's oracle checks epochs only: it sets every mark
+  current.
 
 **The new leader, in order:**
 

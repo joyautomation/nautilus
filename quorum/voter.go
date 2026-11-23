@@ -129,11 +129,13 @@ type Voter struct {
 	// later count in the same Handle can overwrite.
 	marks      uint64
 	lastMarked NodeID
-	// pushedTo, pushedNonce: the promise RelayChanged last reported.
-	// marks: per name, the in-sync mark of its last granted renewal, in
-	// memory only (epochs.go).
-	syncMarks map[NodeID]Mark
+	// syncMarks: per name, the in-sync mark of its last granted renewal,
+	// in memory only (epochs.go); syncMarkFrom: the boot nonce and Seq of
+	// the renewal each came from (setMark).
+	syncMarks    map[NodeID]Mark
+	syncMarkFrom map[NodeID][2]uint64
 
+	// pushedTo, pushedNonce: the promise RelayChanged last reported.
 	pushedTo    NodeID
 	pushedNonce uint64
 }

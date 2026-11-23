@@ -147,3 +147,28 @@ func TestAMarkComesOnlyFromAGrantedRenewal(t *testing.T) {
 		t.Fatalf("a restarted voter knows a mark: %+v", m)
 	}
 }
+
+// A renewal delayed past a later one from the same boot never brings back
+// its older word: the standby fell behind, and a late "current" must not
+// undo it (Fable, #1345 S1). mark_from_older_renewal turns it red.
+func TestAnOlderRenewalNeverReplacesANewerMark(t *testing.T) {
+	v := ready("W")
+	now := at(lease)
+	if !grant(t, v, now, Request{From: "A", Term: 5, Nonce: 0xA, ID: 1, Seq: 1}) {
+		t.Fatal("A's campaign refused")
+	}
+	newer := Request{From: "A", Term: 5, Nonce: 0xA, ID: 3, Seq: 3, Renewal: true, Epoch: 5, MarkSeq: 40}
+	older := Request{From: "A", Term: 5, Nonce: 0xA, ID: 2, Seq: 2, Renewal: true, Epoch: 5, MarkSeq: 40, MarkCurrent: true}
+	if !grant(t, v, now.Add(time.Millisecond), newer) || !grant(t, v, now.Add(2*time.Millisecond), older) {
+		t.Fatal("a renewal refused")
+	}
+	if m := v.Marks("A"); m.Current {
+		t.Fatalf("the delayed older renewal's mark replaced the newer one: %+v", m)
+	}
+	// Another boot of A starts its own sequence.
+	again := Request{From: "A", Term: 5, Nonce: 0xA2, ID: 1, Seq: 1, Renewal: true, Epoch: 5, MarkSeq: 41, MarkCurrent: true}
+	v.setMark(again)
+	if m := v.Marks("A"); !m.Current || m.Scan != 41 {
+		t.Fatalf("a new boot's first mark not taken: %+v", m)
+	}
+}

@@ -18,8 +18,8 @@ func won(from NodeID, recFrom, be uint64, m Mark, ae uint64) WonReply {
 }
 
 // Each rule, and a cold reason for each way it fails.
-// unknown_counts_toward_majority, own_record_ignored and
-// mark_tie_current_wins turn it red.
+// unknown_counts_toward_majority, own_record_ignored, mark_tie_current_wins,
+// one_mark_enough and evidence_from_covering_only turn it red.
 func TestHotVerdict(t *testing.T) {
 	check := func(ws ...WonReply) HotCheck {
 		return HotCheck{Self: "A", Peer: "B", Epoch: 9, Won: ws, Campaigns: []uint64{7, 9}}
@@ -39,7 +39,14 @@ func TestHotVerdict(t *testing.T) {
 		{"B led again after the image", check(won("A", 3, 5, cur(40), 9), won("W", 1, 8, cur(40), 9)), ColdLaterLeader},
 		{"no voter granted the image's epoch", check(won("A", 3, 4, cur(40), 9), won("W", 1, 4, cur(40), 9)), ColdImageUnseen},
 		{"no mark", check(won("A", 3, 5, Mark{}, 9), won("W", 1, 5, Mark{}, 9)), ColdNoMark},
-		{"a mark of another epoch", check(won("A", 3, 5, Mark{Known: true, Current: true, Term: 4, Scan: 40}, 9), won("W", 1, 5, Mark{}, 9)), ColdMarkOtherEpoch},
+		{"a mark of another epoch", check(won("A", 3, 5, Mark{Known: true, Current: true, Term: 4, Scan: 40}, 9), won("W", 1, 5, Mark{Known: true, Current: true, Term: 4, Scan: 40}, 9)), ColdMarkOtherEpoch},
+		// W restarted (no mark) after A's last word to it was "behind": A's
+		// own voter's older "current" is not enough (Fable, #1345 M2).
+		{"one voter has no mark", check(won("A", 3, 5, cur(40), 9), won("W", 1, 5, Mark{}, 9)), ColdNoMark},
+		// Evidence against hot counts from a reply that doesn't cover the
+		// image's epoch too (Fable, #1345 S2).
+		{"a later epoch from a non-covering reply", check(won("A", 3, 5, cur(40), 9), won("W", 1, 5, cur(40), 9), won("B", 9, 7, Mark{}, 9)), ColdLaterLeader},
+		{"a newer word, behind, from a non-covering reply", check(won("A", 3, 5, cur(40), 9), won("W", 1, 5, cur(40), 9), won("B", 9, 5, past(41), 9)), ColdNotCurrent},
 		{"the standby was behind", check(won("A", 3, 5, past(40), 9), won("W", 1, 5, past(40), 9)), ColdNotCurrent},
 		{"the image behind the mark", check(won("A", 3, 5, cur(41), 9), won("W", 1, 5, cur(41), 9)), ColdBehindMark},
 		// The old leader died between its two renewal sends: one voter has the later word.

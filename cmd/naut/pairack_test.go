@@ -17,8 +17,8 @@ import (
 func TestAckOfAnotherEpochOrAnUnsentImageRefused(t *testing.T) {
 	s := &pairStream{}
 	now := time.Now()
-	s.noteSent(7, 1, now.Add(-200*time.Millisecond))
-	s.noteSent(7, 2, now.Add(-100*time.Millisecond))
+	s.noteSent(7, 1, now.Add(-200*time.Millisecond), false)
+	s.noteSent(7, 2, now.Add(-100*time.Millisecond), false)
 	if ok, why := s.takeAck(7, streamAck{Epoch: 6, Seq: 2}, now); ok || !strings.Contains(why, "epoch 6") {
 		t.Fatalf("an acknowledgement of another epoch: %v %q", ok, why)
 	}
@@ -41,7 +41,7 @@ func TestAckOfAnotherEpochOrAnUnsentImageRefused(t *testing.T) {
 		t.Fatalf("a mark asked for another epoch: %d", seq)
 	}
 	// A new epoch starts the acknowledgements over.
-	s.noteSent(8, 1, now)
+	s.noteSent(8, 1, now, false)
 	if seq, cur := s.syncMark(8); seq != 0 || cur {
 		t.Fatalf("a new epoch's mark %d %v; want none", seq, cur)
 	}
@@ -55,24 +55,24 @@ func TestAckOfAnotherEpochOrAnUnsentImageRefused(t *testing.T) {
 func TestCurrentIsJudgedOnSequences(t *testing.T) {
 	now := time.Now()
 	s := &pairStream{}
-	s.noteSent(3, 1, now.Add(-1200*time.Millisecond))
-	s.noteSent(3, 2, now.Add(-600*time.Millisecond))
-	s.noteSent(3, 3, now)
+	s.noteSent(3, 1, now.Add(-1200*time.Millisecond), false)
+	s.noteSent(3, 2, now.Add(-600*time.Millisecond), false)
+	s.noteSent(3, 3, now, false)
 	s.takeAck(3, streamAck{Epoch: 3, Seq: 2}, now.Add(-700*time.Millisecond))
 	if seq, cur := s.syncMark(3); seq != 2 || !cur {
 		t.Fatalf("one image behind, the next just sent: %d %v; want 2, current", seq, cur)
 	}
 	s = &pairStream{}
-	s.noteSent(3, 1, now.Add(-1200*time.Millisecond))
-	s.noteSent(3, 2, now.Add(-600*time.Millisecond))
-	s.noteSent(3, 3, now)
+	s.noteSent(3, 1, now.Add(-1200*time.Millisecond), false)
+	s.noteSent(3, 2, now.Add(-600*time.Millisecond), false)
+	s.noteSent(3, 3, now, false)
 	s.takeAck(3, streamAck{Epoch: 3, Seq: 1}, now)
 	if _, cur := s.syncMark(3); cur {
 		t.Fatal("two images behind counted current")
 	}
 	s = &pairStream{}
-	s.noteSent(3, 1, now.Add(-5*time.Second))
-	s.noteSent(3, 2, now.Add(-4400*time.Millisecond))
+	s.noteSent(3, 1, now.Add(-5*time.Second), false)
+	s.noteSent(3, 2, now.Add(-4400*time.Millisecond), false)
 	s.takeAck(3, streamAck{Epoch: 3, Seq: 1}, now)
 	if _, cur := s.syncMark(3); cur {
 		t.Fatal("an image out 4.4 s unacknowledged (cap 3 × 600 ms) counted current")
@@ -161,5 +161,30 @@ func TestPairLaterLeadershipGoesCold(t *testing.T) {
 	s := r.streamStatus(stand)
 	if s.Takeover != "cold" || !strings.Contains(s.TakeoverCold, coldWhy(quorum.ColdLaterLeader)) {
 		t.Fatalf("takeover %q (%s); want cold: %s", s.Takeover, s.TakeoverCold, coldWhy(quorum.ColdLaterLeader))
+	}
+}
+
+// A stream that stopped sending (closed, an image over the size limit, a
+// capture that timed out) leaves the standby behind while the leader runs
+// on: in step with the last image it is current only while that image is
+// recent (Fable, #1345 M1). A reconnect's gap is no send-to-send time.
+// current_without_fresh_send and interval_across_reconnect turn it red.
+func TestAStoppedStreamIsNotCurrent(t *testing.T) {
+	now := time.Now()
+	s := &pairStream{}
+	s.noteSent(7, 1, now.Add(-10*time.Minute), true)
+	s.noteSent(7, 2, now.Add(-10*time.Minute+100*time.Millisecond), false)
+	s.takeAck(7, streamAck{Epoch: 7, Seq: 2}, now.Add(-10*time.Minute))
+	if seq, cur := s.syncMark(7); seq != 2 || cur {
+		t.Fatalf("acknowledged the last image, sent 10 min ago: %d %v; want 2, not current", seq, cur)
+	}
+	// A reconnect after a minute's gap: the next image's cap is from the
+	// send-to-send time on the new connection, not the gap.
+	s = &pairStream{}
+	s.noteSent(7, 1, now.Add(-62*time.Second), true)
+	s.noteSent(7, 2, now.Add(-2*time.Second), true) // a new connection
+	s.takeAck(7, streamAck{Epoch: 7, Seq: 1}, now)
+	if _, cur := s.syncMark(7); cur {
+		t.Fatal("an image out 2 s unacknowledged counted current: the cap took the reconnect's 60 s gap as the send-to-send time")
 	}
 }

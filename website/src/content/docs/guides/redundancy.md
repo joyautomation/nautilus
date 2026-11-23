@@ -455,9 +455,10 @@ elected it show no leadership after its image's, and say it was in sync.
 Otherwise the takeover is cold, and the warning names why: a later
 leadership, a voter that lost its state (a rebuilt witness) or runs an
 older release, a standby that was behind, or no word from the old leader
-at all. After a voter restarts, the next renewal (within a quarter of a
-lease) gives it the standby's position again; a takeover before that
-goes cold.
+at all. Both voters that elect the standby must know its position. A
+restarted voter learns it again only once its restart wait is over and
+it grants the leader's next renewal, about a lease and a quarter after
+it starts; a takeover before that goes cold.
 
 hot-max-age is judged on the image; a fast task's state can be older by
 up to the slowest task's period. The journal entry and `GET /api/cluster`

@@ -312,6 +312,7 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 	bw := bufio.NewWriterSize(w, 64<<10)
 	var img runtime.Image
 	var buf []byte
+	sentHere := false // an image went out on this connection (noteSent)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	if !mutNaut("stream_outlives_close") {
@@ -392,7 +393,8 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 		s.intervalMs, s.total = interval.Milliseconds(), s.total+uint64(len(buf))+9
 		if kind == streamImage {
 			s.sentTerm, s.sentSeq, s.sentAt, s.bytes = img.Term, img.Seq, time.Now(), len(buf)
-			s.noteSent(img.Term, img.Seq, s.sentAt) // markMu inside s.mu: markMu is a leaf
+			s.noteSent(img.Term, img.Seq, s.sentAt, !sentHere) // markMu inside s.mu: markMu is a leaf
+			sentHere = true
 			if format >= runtime.ImageFormats[len(runtime.ImageFormats)-1] && !mutNaut("hot_cold_condition_never_clears") {
 				s.coldWhy = "" // a standby follows a stream it could take over hot from
 			}

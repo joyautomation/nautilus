@@ -108,15 +108,21 @@ func markOf(r Request) Mark {
 }
 
 // setMark keeps r's mark as its sender's, when r is a renewal that carries
-// one.
+// one, unless it is older than the one kept: a renewal delayed past a
+// later one from the same boot (Request.Seq) never brings back an older
+// word (Fable, #1345 S1).
 func (v *Voter) setMark(r Request) {
 	if !r.Renewal || r.Epoch == 0 {
 		return
 	}
 	if v.syncMarks == nil {
-		v.syncMarks = map[NodeID]Mark{}
+		v.syncMarks, v.syncMarkFrom = map[NodeID]Mark{}, map[NodeID][2]uint64{}
+	}
+	if from, ok := v.syncMarkFrom[r.From]; ok && from[0] == r.Nonce && r.Seq < from[1] && !mut("mark_from_older_renewal") {
+		return
 	}
 	v.syncMarks[r.From] = markOf(r)
+	v.syncMarkFrom[r.From] = [2]uint64{r.Nonce, r.Seq}
 }
 
 // Marks is the mark of name's last renewal this voter granted (unknown

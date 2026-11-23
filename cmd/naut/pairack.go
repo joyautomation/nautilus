@@ -73,13 +73,15 @@ func (a *ackState) reset(epoch uint64) {
 	}
 }
 
-// noteSent records an image of epoch sent at now.
-func (s *pairStream) noteSent(epoch, seq uint64, now time.Time) {
+// noteSent records an image of epoch sent at now. first: the first image
+// on its connection, whose gap from the last send is a reconnect, not the
+// send-to-send time (Fable, #1345 M1).
+func (s *pairStream) noteSent(epoch, seq uint64, now time.Time, first bool) {
 	s.markMu.Lock()
 	defer s.markMu.Unlock()
 	a := &s.acks
 	a.reset(epoch)
-	if n := len(a.sends); n > 0 {
+	if n := len(a.sends); n > 0 && (!first || mutNaut("interval_across_reconnect")) {
 		a.interval = now.Sub(a.sends[n-1].at)
 	}
 	a.sends = append(a.sends, sentImage{seq: seq, at: now})
@@ -127,12 +129,16 @@ func (s *pairStream) syncMark(epoch uint64) (uint64, bool) {
 	if a.acked+1 < last {
 		return a.acked, false // more than one image behind
 	}
+	limit := streamAckCap * max(a.interval, streamMinInterval)
 	if a.acked == last {
-		return a.acked, true
+		// In step with the last image sent, if that was lately: a stream
+		// that stopped (closed, an image over the size limit, a capture
+		// that timed out) leaves a standby that falls behind while the
+		// leader runs on (Fable, #1345 M1).
+		return a.acked, now.Sub(a.sends[n-1].at) <= limit || mutNaut("current_without_fresh_send")
 	}
 	// One image out unacknowledged: within the cap of the measured
 	// send-to-send time.
-	limit := streamAckCap * max(a.interval, streamMinInterval)
 	for _, x := range a.sends {
 		if x.seq == a.acked+1 {
 			return a.acked, now.Sub(x.at) <= limit

@@ -87,7 +87,8 @@ const (
 // peer's state at (imgEpoch, imgSeq), and if not, why (a Cold reason).
 //
 //   - The winning replies whose records cover every grant above the
-//     image's epoch (Covers) must be a majority: a voter that lost
+//     image's epoch (Covers) must be a majority, and at least two of them
+//     must hold a mark of the peer: a voter that lost
 //     its state (a rebuilt witness) may be the only one that saw a
 //     leadership after the image.
 //   - Among them, the highest epoch granted to the peer must be the
@@ -101,28 +102,35 @@ const (
 //     not current wins: for one acknowledgement, current only ever turns
 //     false (the standby stalled), so it is the later word.
 func (h HotCheck) Verdict(imgEpoch, imgSeq uint64) (hot bool, why string) {
-	var known []WonReply
-	for _, w := range h.Won {
-		if Covers(w.RecordsFrom, imgEpoch) || mut("unknown_counts_toward_majority") {
-			known = append(known, w)
-		}
-	}
-	if len(known) < 2 {
-		return false, ColdRecordsUnknown
-	}
+	// Coverage decides only who counts toward the majority. Evidence
+	// against hot (a later epoch, a mark not current) counts from every
+	// winning reply, covering or not (Fable, #1345 S2).
+	covering, marked := 0, 0
 	var peerMax uint64
 	var mark Mark
-	for _, w := range known {
-		if r, ok := w.Recs.Of(h.Peer); ok {
+	for _, w := range h.Won {
+		cov := Covers(w.RecordsFrom, imgEpoch) || mut("unknown_counts_toward_majority")
+		if cov {
+			covering++
+		}
+		if r, ok := w.Recs.Of(h.Peer); ok && (cov || !mut("evidence_from_covering_only")) {
 			peerMax = max(peerMax, r.Epoch)
-			if m := r.Mark; m.Known && newerMark(m, mark) {
-				mark = m
+			if m := r.Mark; m.Known {
+				if cov {
+					marked++
+				}
+				if newerMark(m, mark) {
+					mark = m
+				}
 			}
 		}
 		if r, ok := w.Recs.Of(h.Self); ok && r.Epoch > imgEpoch && r.Epoch != h.Epoch &&
 			!slices.Contains(h.Campaigns, r.Epoch) && !mut("own_record_ignored") {
 			return false, ColdOwnLeadership
 		}
+	}
+	if covering < 2 {
+		return false, ColdRecordsUnknown
 	}
 	if h.LedBefore > imgEpoch && !mut("own_record_ignored") {
 		return false, ColdOwnLeadership
@@ -132,6 +140,12 @@ func (h HotCheck) Verdict(imgEpoch, imgSeq uint64) (hot bool, why string) {
 		return false, ColdLaterLeader
 	case peerMax < imgEpoch && !mut("later_leader_ignored"):
 		return false, ColdImageUnseen
+	case marked < 2 && !mut("one_mark_enough"):
+		// A voter that restarted has no mark: one other voter's word may
+		// be stale (Fable, #1345 M2). The old leader's last lease rested
+		// on a renewal a majority granted, so two covering voters with a
+		// mark always include one that heard it.
+		return false, ColdNoMark
 	case !mark.Known:
 		return false, ColdNoMark
 	case mark.Term != imgEpoch:
