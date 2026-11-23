@@ -487,12 +487,13 @@ claims:
 
   - id: CAM-027
     claim: >-
-      In the playground only a kind: virtual camera is shown, listed with the
-      row's id, label and asset and marked local, with no address of any other
-      row, and the page draws it as a simulated test pattern on a canvas
-      (bars, a sweeping line, the name, SIMULATED and a clock) without asking
-      for a still or a stream; a project with no virtual camera has no camera
-      route.
+      In the playground only a kind: virtual camera is listed, with the row's id,
+      label and asset marked local and no address of any other row, and a project
+      with no virtual camera has no camera route; the kit draws a local camera as a
+      simulated test pattern on a canvas (bars, a sweeping line, the name, SIMULATED
+      and a clock) without asking for a still or a stream. No playground page shows
+      the camera yet: the camera panel is on the plant model's asset pages, which the
+      playground does not build.
     source: "#in-the-playground"
     tests:
       - go ./cmd/naut-wasm TestThePlaygroundListsOnlyVirtualCamerasAndMarksThemLocal
@@ -500,4 +501,7 @@ claims:
       The pattern is tested in hmi/tests/testpattern.test.ts (which this inventory
       does not run). The canvas component itself (VirtualCamera.svelte) was looked at once in
       Chrome through a real controller's built screen; the wasm list route is
-      tested under Node, and the whole playground tab was not run.
+      tested under Node. The whole playground tab was not run, and by reading
+      the code (cmd/naut-wasm startHMI builds only hmi apps and mimics) no playground
+      page renders the panel: showing it needs the asset pages in the playground,
+      which is follow-up work tracked on #714.

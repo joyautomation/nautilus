@@ -257,12 +257,15 @@ about four seconds on a desktop); build the controller on a faster machine
 
 ### In the playground
 
-A `kind: virtual` camera in a playground project shows on its asset's page as a
-simulated camera: colour bars, a line sweeping down, the camera's name, the word
-SIMULATED and a clock, drawn on a canvas by the page itself. Nothing is fetched, no
-stream or still exists, and there is no Watch live button. The same row on a real
-controller serves a generated picture from the controller instead. Cameras of any
-other kind are not shown in the playground.
+The playground has the pieces of a simulated camera but **no page that shows it yet**.
+A `kind: virtual` camera in a playground project is listed to the page (its id, label and
+asset, marked as the page's own), and the kit can draw it as a simulated camera: colour
+bars, a line sweeping down, the camera's name, the word SIMULATED and a clock, on a
+canvas, with nothing fetched. But the camera panel lives on the plant model's asset pages,
+and the playground builds only a project's own screens (an `hmi:` app or mimics), not those
+pages, so nothing in the playground draws it today. The same row on a real controller
+serves a generated picture from the controller instead. Cameras of any other kind are not
+listed in the playground.
 
 ## ONVIF cameras
 
@@ -436,5 +439,6 @@ token always counts as fresh), and is journalled as `camera.snapshot-purge`.
 - `hls` cameras: live video of that kind is a later step. An `hls` camera shows a still
   if a `snapshot-url` is given.
 - The playground has no camera relay (it is controller-only code and none of it is in
-  the browser build): only a `kind: virtual` camera shows there, as a test pattern the
-  page draws itself (see above). Every other kind needs a controller.
+  the browser build) and no asset pages, so it shows no camera at all today; a
+  `kind: virtual` camera is listed there for a page that will show it (see above).
+  Every other kind needs a controller.
