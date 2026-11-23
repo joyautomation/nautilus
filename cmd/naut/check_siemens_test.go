@@ -237,13 +237,27 @@ func TestSiemensWriterInputTypesUntypedTagsAsTheLogicBindsThem(t *testing.T) {
 	}
 }
 
-// TestSiemensWriterInputNamesTheStructuredInitGap: a structured tag's
-// start value is the writer's gap, named with its issue.
-func TestSiemensWriterInputNamesTheStructuredInitGap(t *testing.T) {
-	m := "name: s7\ntasks:\n  - program: main.st\ntags:\n  - {name: Level, role: input, type: REAL}\n  - {name: P, role: state, type: REAL, init: {a: 1}}\n"
-	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": siemensCheckProgram})
-	if _, err := siemensWriterInput(dir, ""); err == nil || !strings.Contains(err.Error(), "tag P: the Siemens writer doesn't translate the structured start value") || !strings.Contains(err.Error(), "yet (#1299)") {
-		t.Errorf("err %v", err)
+// TestSiemensWriterInputSeedsAStructTag: a tag of a STRUCT the project's
+// library declares hands its init: map to the writer as it is, and the
+// writer types each member from the struct, as nautilus seeds it
+// (#1299): the library is in scope for the program and the tag alike.
+func TestSiemensWriterInputSeedsAStructTag(t *testing.T) {
+	types := "TYPE\n  Motor : STRUCT\n    Run : BOOL;\n    Speed : REAL;\n    Starts : DINT := 2;\n  END_STRUCT;\nEND_TYPE\n"
+	prog := "PROGRAM Main\nVAR_EXTERNAL P : Motor; END_VAR\nP.Starts := P.Starts + 1;\nEND_PROGRAM\n"
+	m := "name: s7\ntasks:\n  - program: main.st\ntags:\n  - {name: P, role: state, type: Motor, init: {Speed: 40, Run: true}}\n"
+	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": prog, "types.st": types})
+	in, err := siemensWriterInput(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, diags, err := swriter.Write(in)
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("%v %v", diags, err)
+	}
+	for _, f := range out.Files {
+		if f.Path == "naut_Tags.db" && !strings.Contains(string(f.Data), "      P : Struct\n         Run : BOOL := TRUE;\n         Speed : REAL := 40.0;\n         Starts : DINT := 2;\n      END_STRUCT;\n") {
+			t.Errorf("tags DB:\n%s", f.Data)
+		}
 	}
 }
 

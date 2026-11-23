@@ -77,7 +77,7 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 			pw.gap("siemens/partial", e.Pos.Line, gapOther, "the partial access ."+e.Member, "bit access (.3, .%X3) is written")
 			return ""
 		}
-		return pw.widen(pw.typ(e), pw.expr(e.Object, unaryPrec+1)+"."+e.Member)
+		return pw.widen(pw.typ(e), pw.expr(e.Object, unaryPrec+1)+"."+sclName(e.Member))
 	case *st.IndexExpr:
 		pw.gap("siemens/type", e.Pos.Line, gapStructured, "arrays", "")
 		return ""
@@ -279,6 +279,10 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		return "#" + l.name + "(" + strings.Join(parts, ", ") + ")"
 	}
 
+	if f, ok := pw.w.lib.funcs[strings.ToLower(c.Name)]; ok {
+		pw.gap("siemens/library", line, gapPOUs, "the project's function "+f, "")
+		return ""
+	}
 	if stmt {
 		pw.gap("siemens/call", line, gapOther, c.Name+"(…) as a statement", "only function block instances are called that way so far")
 		return ""

@@ -137,6 +137,12 @@ func (pw *progWriter) typ(e st.Expression) string {
 				}
 			}
 		}
+		// A struct's member: its declared type (#1299).
+		if sd := pw.w.structOf(pw.typ(e.Object)); sd != nil {
+			if f, ok := sd.fieldOf(e.Member); ok {
+				return strings.ToUpper(strings.TrimSpace(f.Datatype))
+			}
+		}
 	case *st.UnaryExpr:
 		t := pw.typ(e.Operand)
 		if strings.EqualFold(e.Op, "NOT") {
