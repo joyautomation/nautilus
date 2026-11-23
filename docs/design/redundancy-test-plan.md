@@ -201,6 +201,11 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a standby's gated ticks don't count as on schedule | design §3.2, starvation | 3 |
 | the in-sync mark is not persisted | design §3.3 | 4 |
 | a stream frame of an older term is applied | I5 | 4 |
+| the standby's shadow applies an image of an older (term, seq) (`shadow_older_image_applied`), or keeps its frames and position after this controller led (`shadow_kept_after_leading`); images are numbered by a scan count an online edit resets (`image_seq_from_scans`) | I5, design §4.1 | S1a (#710) |
+| a frame is applied to a program of another layout (`shadow_layout_unchecked`); a task an image did not apply keeps offering the older frame (`shadow_stale_frame_kept`) | I5, design §4.1 | S1a (#710) |
+| an image's checksum is neither written nor checked (`image_crc_unchecked`); images over the size limits are made and read (`image_size_unbounded`) | F31, design §4.1 | S1a (#710) |
+| the scan's frame copy does more than copy values (`image_copy_in_scan_encodes`) | design §4.1, guard (a) | S1a (#710) |
+| the standby takes the leader's acks, shelves, flood or substitutes from an image (`stream_carries_log_intent`) | design §1 (the log owns them), §4.1 | S1a (#710) |
 | hot takeover with no image-age check | I5 | 4 |
 | hot takeover on an image with a different build hash | I5 | 4 |
 | the gate is checked once per batch, not before each send (as `hw/base.go` did) | design §3.4 | 3b-3a (`gate_per_batch`) |
