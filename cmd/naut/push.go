@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/alarm/oncall"
@@ -107,7 +109,13 @@ type pushPayload struct {
 	AtMs     int64  `json:"atMs,omitempty"`
 	Level    int    `json:"level,omitempty"`
 	Ack      string `json:"ack,omitempty"`
+	// Path is the HMI screen a tap opens (#1249): the alarm, or a flood's
+	// focus view. Same origin; the worker accepts only /alarms paths.
+	Path string `json:"path,omitempty"`
 }
+
+// pagePathMax is the longest path the worker opens (its PATH pattern).
+const pagePathMax = len("/alarms?") + 512
 
 // pageFieldMax bounds a shown field in bytes: the worker shows 120
 // characters of it, and the page must fit one push with its link.
@@ -118,6 +126,21 @@ func pageBody(m escalate.Message) []byte {
 	p := pushPayload{
 		Alarm: r.ID, Name: cutUTF8(r.Name, pageFieldMax), State: string(r.State), Priority: fmt.Sprint(r.Priority),
 		Area: cutUTF8(r.Area, pageFieldMax), AtMs: r.ActiveMs, Level: m.Level, Ack: m.AckURL,
+	}
+	switch {
+	case m.Group != nil:
+		// A grouped page: the flood and how many wait, never an ack link.
+		g := m.Group
+		p = pushPayload{Alarm: alarm.FloodJournalID, Priority: "flood",
+			Name:  fmt.Sprintf("Alarm flood: %d waiting (%d in the window, limit %d)", len(g.Alarms), g.Flood.Count, g.Flood.Threshold),
+			State: "flood", AtMs: g.Flood.SinceMs, Level: m.Level, Path: "/alarms?focus=1"}
+	case m.Chatter != nil:
+		p.Ack = ""
+		p.State = fmt.Sprintf("chattering %d times", m.Chatter.Activations)
+		p.Path = "/alarms?alarm=" + url.QueryEscape(r.ID)
+		if len(p.Path) > pagePathMax {
+			p.Path = "/alarms" // the worker takes no longer one
+		}
 	}
 	b := pageJSON(p)
 	// What a push cannot carry is dropped, least useful first: the words,

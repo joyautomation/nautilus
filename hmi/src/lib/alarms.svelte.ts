@@ -292,7 +292,9 @@ export interface AlarmEvent {
 	by?: string;
 	/** Notify rows only (#715): the escalation level (1 first), who was
 	 * paged (a principal, never an address), the channel kind, the result
-	 * (`sent`, `failed`, `nobody-on-call`) and why when there is more to say. */
+	 * (`sent`, `failed`, `nobody-on-call`, and for #1249 `held` (a chattering
+	 * alarm's pages held, one notice per level) and `grouped` (listed on a
+	 * flood's grouped page)) and why when there is more to say. */
 	level?: number;
 	to?: string;
 	via?: string;
