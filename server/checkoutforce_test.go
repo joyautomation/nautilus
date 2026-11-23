@@ -719,18 +719,41 @@ func TestDemotionLetsAForceGoAndARePromotionFindsNoneStanding(t *testing.T) {
 }
 
 // A force still starting when its controller loses the lead is let go by the
-// start itself: Demoted finds nothing applied yet, and the start must not then
-// arm a timer and leave the output forced here with nothing watching it.
+// start itself. Held in the gap that matters: Demoted has marked the force
+// ending but not yet freed the slot, and the start, past ForceIfFree, takes the
+// lock in that gap. Without the ending check the start would arm a timer and
+// leave the output forced here with nothing watching it.
 func TestDemotionDuringAStartLetsTheForceGo(t *testing.T) {
 	r := newCkForceRig(t)
 	r.oos(t)
-	reached, release := holdAt(t, "applied")
+	startAt, dropAt := make(chan struct{}, 1), make(chan struct{}, 1)
+	goStart, goDrop := make(chan struct{}), make(chan struct{})
+	old := ckHook
+	ckHook = func(s string) {
+		switch s {
+		case "applied":
+			startAt <- struct{}{}
+			<-goStart
+		case "dropping":
+			dropAt <- struct{}{}
+			<-goDrop
+		}
+	}
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(goStart); close(goDrop) }); ckHook = old })
+
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- r.force(t, goodForce) }()
-	<-reached
-	ckOf(r.srv).Demoted()
-	release()
-	if rec := <-done; rec.Code != http.StatusConflict {
+	<-startAt // the output is forced in the table, the start has not taken the lock
+	dem := make(chan struct{})
+	go func() { ckOf(r.srv).Demoted(); close(dem) }()
+	<-dropAt // ending is set, the slot is still taken
+	close(goStart)
+	rec := <-done
+	close(goDrop)
+	<-dem
+	once.Do(func() {})
+	if rec.Code != http.StatusConflict {
 		t.Errorf("a start on a controller that lost the lead: %d %s, want 409", rec.Code, rec.Body)
 	}
 	if r.forced("Out") {

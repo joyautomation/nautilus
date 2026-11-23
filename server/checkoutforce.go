@@ -449,6 +449,7 @@ func (a *checkoutAPI) dropForceLocally(f *ckForce) {
 	// start still between ForceIfFree and its lock sees ending and lets go itself
 	ready, tag, gen, w := f.ready, f.tag, f.gen, f.watched
 	a.co.ck.mu.Unlock()
+	ckHook("dropping")
 	if ready {
 		a.s.rt.Tags().UnforceIf(tag, gen)
 	}
