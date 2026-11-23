@@ -292,7 +292,7 @@ claims:
       ends the stream with a reason; the window never holds more than 16 MB; what
       every stream holds (finished segments, the segment being built, the
       picture waiting, a fixed 5 MB reserve) is counted against one budget shared by
-      all live streams (64 MB by default, camera-streams: memory-mb), and a stream
+      all live streams (64 MB by default, camera-streams: memory-mb, 16 to 4096), and a stream
       that would pass it ends with "camera stream too large for this controller";
       a camera that changes its picture settings after the first picture ends the
       stream, one whose in-band sets differ from its description's before it begins
@@ -305,6 +305,7 @@ claims:
       - go ./camera TestPicturesBeforeTheFirstKeyframeAreDroppedAndAGroupThatDoesNotFitEndsTheStream
       - go ./camera TestAFloodOfTinyPicturesIsBoundedInCountAndTime
       - go ./camera TestTheLiveStreamsShareOneMemoryBudget
+      - go ./camera TestTheBudgetCountsWhatTheHeapHolds
       - go ./camera TestStreamPolicyBounds
       - go ./camera TestTheWindowAndItsBytesAreBounded
       - go ./camera TestWaitReturnsWhenTheFirstSegmentsAreReadyOrTheStreamEnds

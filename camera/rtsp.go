@@ -284,10 +284,16 @@ func (c *rtspClient) describe(ctx context.Context) (Media, error) {
 	// base on another host would have every later request, with its credentials,
 	// name that host
 	if b := resp.Header["content-base"]; b != "" {
-		if u, err := url.Parse(b); err == nil {
-			if o, err := url.Parse(c.base); err == nil && u.Host == o.Host && (u.Scheme == o.Scheme) {
-				u.User = nil
-				c.base = u.String()
+		if u, err := url.Parse(b); err == nil && u.Host != "" {
+			if o, err := url.Parse(c.base); err == nil {
+				// the camera's path on the address the controller dialled: a camera that says
+				// its own IP when it was dialled by name (or by host:554) is taken at its
+				// path, never at its host
+				o.Path, o.RawQuery = u.Path, u.RawQuery
+				if o.Path == "" {
+					o.Path = "/"
+				}
+				c.base = o.String()
 			}
 		}
 	}

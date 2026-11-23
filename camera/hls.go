@@ -48,9 +48,11 @@ const (
 // frames read before PLAY.
 const StreamFixedBytes = maxAUBytes + maxNALBytes + preplayFrames*65536
 
-// StreamMemoryBound is the most memory one stream holds at the very most: the
-// fixed buffers, the window, the segment being built and the picture waiting for
-// its duration.
+// StreamMemoryBound is the most memory one stream is counted as holding at the very
+// most: the fixed buffers, the window, the segment being built and the picture
+// waiting for its duration. At the moment a segment is cut its fragment is copied
+// once more (up to hlsMaxSegBytes that the count does not include), and the garbage
+// collector's slack comes on top.
 const StreamMemoryBound = StreamFixedBytes + hlsMaxWindowBytes + hlsMaxSegBytes + maxAUBytes
 
 // DefaultLiveBudget is the memory all live streams of a controller may hold
@@ -105,6 +107,9 @@ func (b *MemBudget) release(n int64) {
 
 // Used is what the streams hold now.
 func (b *MemBudget) Used() int64 {
+	if b == nil {
+		return 0
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.used
@@ -256,7 +261,7 @@ func (s *HLSStream) addSample(au AccessUnit, dur uint32) {
 	if len(data) == 0 {
 		return
 	}
-	cost := int64(len(data) + sampleOverhead)
+	cost := int64(cap(data) + sampleOverhead) // what is held, not what was meant
 	over := s.curBytes+int(cost) > hlsMaxSegBytes || len(s.cur) >= hlsMaxSegSamples ||
 		time.Duration(s.curTicks+uint64(dur))*time.Second/VideoTimescale > hlsMaxSegDur
 	if over {
@@ -294,19 +299,21 @@ func (s *HLSStream) cut() {
 	}
 	s.fragSeq++
 	data := Fragment(s.fragSeq, s.decodeTime, s.cur)
-	// the segment's bytes replace the pictures' (the fragment is built once, so for a
-	// moment both exist: that is the transient the fixed reservation does not cover,
-	// and is at most hlsMaxSegBytes)
+	// the segment's bytes replace the pictures': for the moment of the copy both exist
+	// (at most hlsMaxSegBytes more than is counted), and the pictures are given back
+	// first so that moment is not counted twice
+	s.decodeTime += s.curTicks
+	dur := float64(s.curTicks) / VideoTimescale
+	s.dropRunLocked()
 	if !s.reserveLocked(int64(len(data))) {
 		s.closeLocked(ErrStreamTooLarge)
 		return
 	}
-	s.decodeTime += s.curTicks
-	seg := hlsSeg{seq: s.nextSeq, data: data, dur: float64(s.curTicks) / VideoTimescale}
+	seg := hlsSeg{seq: s.nextSeq, data: data, dur: dur}
 	s.nextSeq++
 	s.segs = append(s.segs, seg)
 	s.bytes += len(data)
-	s.dropRunLocked()
+	s.overflows = 0 // only back-to-back groups that do not fit end a stream
 	for len(s.segs) > hlsWindow || (s.bytes > hlsMaxWindowBytes && len(s.segs) > 2) {
 		old := s.segs[0]
 		s.bytes -= len(old.data)

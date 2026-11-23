@@ -3,7 +3,6 @@
 package camera
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 )
@@ -27,8 +26,14 @@ type Sample struct {
 // AVCC turns an access unit's NAL units into a sample's data. Parameter sets and
 // access unit delimiters are left out: they are in the init segment.
 func AVCC(nals [][]byte) []byte {
+	// sized over the NAL units kept: a buffer sized over all of them would keep the
+	// capacity of the ones left out (a hostile camera's megabyte delimiters)
 	n := 0
 	for _, x := range nals {
+		switch nalType(x[0]) {
+		case nalSPS, nalPPS, nalAUD:
+			continue
+		}
 		n += 4 + len(x)
 	}
 	out := make([]byte, 0, n)
@@ -119,24 +124,24 @@ const (
 // Fragment is a moof and an mdat holding samples, the first at decode time
 // baseTime. seq numbers the fragment from 1.
 func Fragment(seq uint32, baseTime uint64, samples []Sample) []byte {
-	var data bytes.Buffer
-	trun := bytes.Buffer{}
-	trun.Write(u32(uint32(len(samples))))
-	trun.Write(u32(0)) // data offset: filled in below
+	dataLen := 0
+	trun := make([]byte, 0, 8+12*len(samples))
+	trun = binary.BigEndian.AppendUint32(trun, uint32(len(samples)))
+	trun = binary.BigEndian.AppendUint32(trun, 0) // data offset: filled in below
 	for _, s := range samples {
 		fl := uint32(sampleNonKey)
 		if s.Key {
 			fl = sampleKey
 		}
-		trun.Write(u32(s.Duration))
-		trun.Write(u32(uint32(len(s.Data))))
-		trun.Write(u32(fl))
-		data.Write(s.Data)
+		trun = binary.BigEndian.AppendUint32(trun, s.Duration)
+		trun = binary.BigEndian.AppendUint32(trun, uint32(len(s.Data)))
+		trun = binary.BigEndian.AppendUint32(trun, fl)
+		dataLen += len(s.Data)
 	}
 	// moof = mfhd + traf(tfhd + tfdt + trun); the data offset is moof's size + 8
 	// (the mdat header), because tfhd says the base is the moof
 	build := func(off uint32) []byte {
-		t := append([]byte(nil), trun.Bytes()...)
+		t := append([]byte(nil), trun...)
 		binary.BigEndian.PutUint32(t[4:], off)
 		tfhd := fullbox("tfhd", 0, 0x020000, u32(1))
 		tfdt := fullbox("tfdt", 1, 0, u64(baseTime))
@@ -145,5 +150,13 @@ func Fragment(seq uint32, baseTime uint64, samples []Sample) []byte {
 	}
 	m := build(0)
 	m = build(uint32(len(m)) + 8)
-	return append(m, box("mdat", data.Bytes())...)
+	// one allocation for the whole fragment: the samples are copied once, into place
+	out := make([]byte, 0, len(m)+8+dataLen)
+	out = append(out, m...)
+	out = binary.BigEndian.AppendUint32(out, uint32(8+dataLen))
+	out = append(out, "mdat"...)
+	for _, s := range samples {
+		out = append(out, s.Data...)
+	}
+	return out
 }

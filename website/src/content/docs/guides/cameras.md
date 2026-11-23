@@ -182,8 +182,11 @@ most:
 | The picture waiting for its duration | 2 MB |
 | An RTSP line, header block or body | 8 KB a line, 64 headers, 64 KB of body |
 
-That is **27 MB at the very most for one camera's stream**, and in practice the
-window of six two-second segments (about 3 MB at 2 Mbit/s) plus the 5 MB reserve.
+That is **27 MB counted at the very most for one camera's stream**, and in practice the
+window of six two-second segments (about 3 MB at 2 Mbit/s) plus the 5 MB reserve. The
+count is what the stream holds; for the moment a segment is cut its fragment is
+copied once more (up to 4 MB), so the heap can pass the count by that much, and the
+garbage collector's slack comes on top.
 The 4 MB segment is a whole group of pictures, so it allows 16 Mbit/s at a two-second
 keyframe interval, 8 Mbit/s at four seconds and 3 Mbit/s at ten: more than 1080p
 needs in H.264. A camera whose groups of pictures do not fit twice in a row ends
@@ -197,7 +200,7 @@ stream too large for this controller". Change it in the manifest:
 
 ```yaml
 camera-streams:
-  memory-mb: 64     # 8 to 4096
+  memory-mb: 64     # 16 to 4096
 ```
 
 At most four cameras' streams are open at once (a stream stays open 30 seconds

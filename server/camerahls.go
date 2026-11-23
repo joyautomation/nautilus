@@ -94,15 +94,29 @@ func (a *cameraAPI) leaseFor(w http.ResponseWriter, r *http.Request, c camera.Ca
 // begin journals the start of a view once its first playlist has been served: a
 // camera that cannot be opened is one error row, not a start and a stop for every
 // retry of the player.
-func (a *cameraAPI) begin(l *hlsLease) {
+func (a *cameraAPI) begin(l *hlsLease, key string) {
 	a.co.leaseMu.Lock()
-	first := !l.begun
-	l.begun = true
+	// a lease already ended by a concurrent request or the reaper is not begun: its
+	// start would never get a stop
+	first := !l.begun && a.co.leases[key] == l
+	if first {
+		l.begun = true
+	}
 	a.co.leaseMu.Unlock()
 	if first {
 		a.s.audit.record(audit.Entry{Action: "camera.view", Target: l.camera.ID, User: l.who, Source: audit.SourceHMI, Result: audit.ResultOK, From: l.from, Session: l.session,
 			Detail: map[string]any{"event": "start", "asset": l.camera.Asset, "protocol": "hls"}})
 	}
+}
+
+// leaseKey is the key a person's lease on c is kept under.
+func (a *cameraAPI) leaseKey(r *http.Request, c camera.Camera) string {
+	who := a.s.principalOf(r)
+	holder := who
+	if who == "anonymous" {
+		holder = who + "@" + a.s.clientAddr(r)
+	}
+	return holder + "|" + c.ID
 }
 
 // dropLease gives a lease back at once (the camera could not be opened).
@@ -207,7 +221,7 @@ func (a *cameraAPI) hls(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the camera's stream ended"})
 			return
 		}
-		a.begin(l)
+		a.begin(l, a.leaseKey(r, c))
 		a.hlsReply(w, l, "application/vnd.apple.mpegurl", []byte(pl))
 		return
 	}

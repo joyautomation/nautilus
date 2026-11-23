@@ -720,7 +720,7 @@
       "description": "The memory all live video streams of the controller may hold together (#724). A stream that would pass it ends with 'camera stream too large for this controller'.",
       "additionalProperties": false,
       "properties": {
-        "memory-mb": { "type": "integer", "minimum": 8, "maximum": 4096, "description": "Megabytes (default 64). A stream reserves up to 5 MB before it has a picture." }
+        "memory-mb": { "type": "integer", "minimum": 16, "maximum": 4096, "description": "Megabytes (default 64). A stream reserves 5 MB before it has a picture and a 2 Mbit/s one holds about 5 MB more." }
       }
     },
     "pwa": {

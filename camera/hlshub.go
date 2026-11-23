@@ -45,7 +45,7 @@ var HLSRetry = 5 * time.Second
 
 // ErrTooManyStreams says the controller already has as many camera sessions open as
 // it will.
-var ErrTooManyStreams = errors.New("this controller already has as many camera streams open as it will: try again in a moment")
+var ErrTooManyStreams = errors.New("this controller already has as many camera streams open as it will (a stream stays open 30 seconds after its last viewer leaves): try again shortly")
 
 // NewHLSHub makes a hub that opens cameras through f (its credentials). Their
 // streams' memory is counted in budget (DefaultLiveBudget when nil).
@@ -101,7 +101,11 @@ func (h *HLSHub) Session(c Camera) (*HLSSession, error) {
 		defer func() {
 			if r := recover(); r != nil {
 				slog.Error("camera: an RTSP session panicked", "camera", c.ID, "panic", r)
-				s.Stream.Close(errors.New("the camera sent something the controller could not relay"))
+				err := errors.New("the camera sent something the controller could not relay")
+				s.Stream.Close(err)
+				h.mu.Lock()
+				h.failed[c.ID] = hlsFailure{err: err, until: time.Now().Add(HLSRetry)}
+				h.mu.Unlock()
 			}
 		}()
 		err := runRTSPHLS(ctx, c.URL, user, pass, s.Stream)
@@ -167,6 +171,10 @@ func (h *HLSHub) Active() int {
 // ctx ends, the camera stops or something it sends cannot be relayed. What it
 // returns names neither the camera nor a credential.
 func runRTSPHLS(ctx context.Context, raw, user, pass string, st *HLSStream) error {
+	// a stream refused its memory at birth never dials the camera
+	if err := st.Err(); err != nil {
+		return err
+	}
 	dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	c, err := dialRTSP(dctx, raw, user, pass)
 	if err != nil {

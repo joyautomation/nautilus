@@ -88,8 +88,8 @@ func (p *StreamPolicy) Validate() error {
 	if p == nil {
 		return nil
 	}
-	if p.MemoryMB < 0 || (p.MemoryMB > 0 && p.MemoryMB < 8) || p.MemoryMB > 4096 {
-		return fmt.Errorf("camera-streams.memory-mb is %d: between 8 and 4096 (a stream reserves up to 5 MB before it has a picture)", p.MemoryMB)
+	if p.MemoryMB < 0 || (p.MemoryMB > 0 && p.MemoryMB < 16) || p.MemoryMB > 4096 {
+		return fmt.Errorf("camera-streams.memory-mb is %d: between 16 and 4096 (a stream reserves 5 MB before it has a picture, and a 2 Mbit/s one holds about 5 MB more)", p.MemoryMB)
 	}
 	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -336,5 +337,43 @@ func TestParameterSetsFromTheStreamReplaceTheDescriptionsBeforeAnyPicture(t *tes
 	s.SetParams(sps, pps) // changed after pictures were taken
 	if s.Err() == nil || !strings.Contains(s.Err().Error(), "changed its picture settings") {
 		t.Errorf("a change after the first pictures: %v", s.Err())
+	}
+}
+
+// What the budget counts is what the heap holds: pictures made of megabyte
+// delimiters (which the segment leaves out) and one byte of slice must not keep the
+// delimiters' capacity alive behind a count of 70 bytes a picture.
+func TestTheBudgetCountsWhatTheHeapHolds(t *testing.T) {
+	s, aus := clipStream(t)
+	b := NewMemBudget(DefaultLiveBudget)
+	s.budget = b
+	d := &Depacketizer{}
+	_ = aus
+	var ms0, ms1 runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&ms0)
+	aud := append([]byte{nalAUD | 0x60}, make([]byte, 1<<20-2)...)
+	seq := uint16(1)
+	for i := 0; i < 400 && s.Err() == nil; i++ {
+		ts := uint32(i) * 9000
+		d.Push(RTPPacket{Seq: seq, TS: ts, Payload: aud}, func(AccessUnit) {})
+		seq++
+		d.Push(RTPPacket{Seq: seq, TS: ts, Payload: aud}, func(AccessUnit) {})
+		seq++
+		slice := []byte{nalSlice | 0x60, 0x88}
+		if i%10 == 0 {
+			slice = []byte{nalIDR | 0x60, 0x88}
+		}
+		d.Push(RTPPacket{Seq: seq, TS: ts, Marker: true, Payload: slice}, s.Feed)
+		seq++
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&ms1)
+	grew := int64(ms1.HeapAlloc) - int64(ms0.HeapAlloc)
+	if grew > b.Used()+StreamMemoryBound+8<<20 {
+		t.Errorf("the heap grew %d MB while the budget counts %d MB", grew>>20, b.Used()>>20)
+	}
+	if s.Err() == nil && grew > 80<<20 {
+		t.Errorf("the heap grew %d MB with the stream healthy", grew>>20)
 	}
 }
