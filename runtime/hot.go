@@ -45,6 +45,7 @@ type HotImage struct {
 	Cold string
 
 	arrived time.Time // on the runtime's clock, monotonic in production
+	refMs   int64     // the latest leader time in the image (Shadow.refMs)
 	tasks   map[string]hotTask
 	tags    *shadowTags
 }
@@ -68,8 +69,14 @@ type TakeoverReport struct {
 	Hot    bool
 	Reason string
 	Image  bool
-	// ImageAge is the image's age at the election, -1 without one.
-	ImageAge time.Duration
+	// ImageAge is the image's age at the election, -1 without one: what
+	// hot-max-age judged. OldestFrameAge is, on a hot takeover, how old
+	// the oldest task's frame was at the install, on the leader's clock
+	// carried over (a fast task copies its frame before a slow one has
+	// scanned): hot-max-age is judged on the image, and a fast task's
+	// state can be older by up to the slowest task's period.
+	ImageAge       time.Duration
+	OldestFrameAge time.Duration
 	// RetainFromImage: this controller's own retain store could not be
 	// read, so its retained values are the image's, held only in memory
 	// until a save succeeds (RetainOnlyInMemory).

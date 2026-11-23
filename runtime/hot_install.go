@@ -25,8 +25,8 @@ import (
 // by takeover under leadMu, after the retain load, before any frame
 // reset: false means takeover resets them (cold).
 func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
-	rep := TakeoverReport{At: time.Now(), ImageAge: -1}
-	if t, ok := r.coord.(Termed); ok {
+	rep := TakeoverReport{At: time.Now(), ImageAge: -1, OldestFrameAge: -1, Term: r.strm.doneTerm}
+	if t, ok := r.coord.(Termed); ok && rep.Term == 0 {
 		rep.Term = t.Term()
 	}
 	defer func() { r.noteTakeover(rep) }()
@@ -69,7 +69,7 @@ func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 				return cold(bad)
 			}
 		}
-		if err := r.applyRetained(retain.Carry(retain.State{}, lead)); err != nil {
+		if err := r.applyRetainedCarried(retain.Carry(retain.State{}, lead)); err != nil {
 			r.noteRetainError(err)
 		}
 		r.strm.loadFailed.Store(false)
@@ -126,11 +126,22 @@ func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 			if err := ir.ApplyLeaves(f, t.leaves); err != nil {
 				bad = fmt.Sprintf("task %s: %v", np.name, err)
 			} else {
-				// The image's NowMs, carried to now on this clock: the
-				// time since it arrived (age at the election plus the
-				// inputs wait) counts as elapsed (design §4.2 step 4).
+				// The image's leader time, carried to now on this clock:
+				// the time since it arrived (age at the election plus the
+				// inputs wait) counts as elapsed (design §4.2 step 4). One
+				// leader reference for every task, the image's latest: a
+				// task that copied its frame earlier ran on until then on
+				// the leader (a fast task beside a slow one), and that
+				// gap counts as elapsed too (Fable, #1342).
+				ref := h.refMs
+				if mutRuntime("hot_rebase_per_task") || ref == 0 {
+					ref = t.nowMs
+				}
+				if age := time.Duration(ref-t.nowMs+since) * time.Millisecond; age > rep.OldestFrameAge {
+					rep.OldestFrameAge = age
+				}
 				if !mutRuntime("hot_timer_not_rebased") {
-					ir.RebaseFrame(f, nowMs-(t.nowMs+since))
+					ir.RebaseFrame(f, nowMs-(ref+since))
 				}
 				if !mutRuntime("hot_ticket_carried") {
 					ir.ForgetHost(f)
@@ -194,13 +205,42 @@ func (r *Runtime) hotPrecheck(h *HotImage, lead retain.State) string {
 		if !ok {
 			return "the image has no frame of task " + np.name
 		}
+		// What will run once the retain load is done, as applyRetained
+		// decides it: an edit made on this build swaps in, unless the
+		// build already holds it or this process already runs it.
 		run, build := np.prog.Hash(), np.prog.BootHash()
-		if src, ok := lead.Programs[np.name]; ok && lead.ProgramBases[np.name] == build {
-			run = sourceHash(src) // loadRetained swaps it in (or already runs it)
+		src, edited := lead.Programs[np.name]
+		swaps := edited && lead.ProgramBases[np.name] == build && sourceHash(src) != build && sourceHash(src) != run
+		if swaps {
+			run = sourceHash(src)
 		}
 		if run != t.source && !mutRuntime("hot_source_unchecked") {
 			return "task " + np.name + " runs another source than the image's (an online edit not streamed yet?)"
 		}
+		if swaps {
+			// It must compile here to the image's layout, or the swap
+			// (or the install after it) would fail once the image's
+			// values are in.
+			layout, err := np.prog.layoutOf(src)
+			switch {
+			case err != nil:
+				return "task " + np.name + ": the image's online edit does not compile here: " + err.Error()
+			case layout != t.layout:
+				return "task " + np.name + ": the image's online edit compiles here to another layout than the image's"
+			}
+		}
 	}
 	return ""
+}
+
+// layoutOf is the layout src compiles to in this program's context.
+func (p *Program) layoutOf(src string) (string, error) {
+	p.mu.Lock()
+	opts := p.opts
+	p.mu.Unlock()
+	prog, err := lowerSource(src, opts)
+	if err != nil {
+		return "", err
+	}
+	return prog.Layout(), nil
 }

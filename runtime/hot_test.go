@@ -528,3 +528,46 @@ func TestHotTakeoverOverAnUnreadableStoreGoesColdOnAFailedCheck(t *testing.T) {
 		t.Error("RetainOnlyInMemory set on a cold takeover that loaded nothing of the image's")
 	}
 }
+
+// A multi-rate image (Fable, #1342): main copied its frame, then ran on
+// for 5 s on the leader before the slow aux task scanned and the image
+// was taken. Main's timer counts those 5 s as elapsed too: every task is
+// carried from the image's one leader reference, not its own copy time.
+// The report gives the oldest task state installed (naut-lead's ruling).
+func TestHotTakeoverOfAMultiRateImage(t *testing.T) {
+	r := newHotRig(t, hotMain, hotMain)
+	scanBoth(t, r.lead, r.lc, 30)
+	mp := r.lead.TaskProgram(MainTaskName)
+	r.lead.RequestImage()
+	r.lc.step(100 * time.Millisecond)
+	r.lead.Scan() // main copies its frame
+	copyET := fbSlot(t, mp, "tmr", "ET").I
+	r.lc.step(5 * time.Second)
+	if err := r.lead.ScanTask("aux"); err != nil { // the slow task, 5 s on
+		t.Fatal(err)
+	}
+	img := &Image{}
+	if !r.lead.TakeImage(img) {
+		t.Fatal("no image")
+	}
+	img.Term, img.Build = 4, "b"
+	ret, err := r.lead.RetainImage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	img.Retain, r.img = ret, img
+	if rep, err := r.sh.Apply(img); err != nil || !rep.InSync() {
+		t.Fatalf("apply: %+v, %v", rep, err)
+	}
+	r.sc.step(300 * time.Millisecond)
+	rep := r.takeOver(t)
+	if !rep.Hot {
+		t.Fatalf("takeover: %+v, want hot", rep)
+	}
+	if et := fbSlot(t, r.stby.TaskProgram(MainTaskName), "tmr", "ET").I; et != copyET+5300 {
+		t.Errorf("main's TON ET %d on the first hot scan, want %d: its copy's %d, plus the 5 s it ran on the leader before the image was taken, plus the image's 300 ms age", et, copyET+5300, copyET)
+	}
+	if rep.OldestFrameAge != 5300*time.Millisecond {
+		t.Errorf("oldest task state %v at the install, want 5.3s", rep.OldestFrameAge)
+	}
+}

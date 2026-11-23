@@ -452,6 +452,7 @@ var Mutations = []string{
 	"hot_ticket_carried",                // runtime: a hot takeover keeps a READ/WRITE ticket of the old controller (#710 S2b)
 	"retain_memory_only_forgotten",      // runtime: a hot takeover over an unreadable own store does not say its retained values are only in memory, or a failed save clears it (#710 S2b)
 	"hot_retain_before_checks",          // runtime: a takeover over an unreadable own store loads the image's retained values before its checks, and keeps them when one fails (#710 S2b)
+	"hot_rebase_per_task",               // runtime: a hot takeover rebases each task from its own copy time, not the image's one leader reference, so a fast task beside a slow one loses the gap (#710 S2b, Fable)
 	"hot_build_unchecked",               // naut: a takeover goes hot on an image of another build (#710 S2b)
 	"hot_cold_condition_never_clears",   // naut: the cold-takeover warning stays after a standby follows again (#710 S2b)
 }

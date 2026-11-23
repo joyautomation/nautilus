@@ -214,7 +214,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | hot takeover on an image with a different build hash (`hot_build_unchecked`) | I5 | S2b (#710) |
 | hot takeover with a task running another source than the image's (`hot_source_unchecked`), or some tasks installed and the rest reset (`hot_partial_tasks`) | I5, design §4.2 | S2b (#710) |
 | a hot takeover installs the frames but not the carried tags (`hot_globals_not_carried`) | design §4.1, the carried tags | S2b (#710) |
-| the timers stay on the old leader's clock (`hot_timer_not_rebased`), or do not count the image's age and the inputs wait (`hot_age_not_elapsed`) | design §4.2 step 4 | S2b (#710) |
+| the timers stay on the old leader's clock (`hot_timer_not_rebased`), do not count the image's age and the inputs wait (`hot_age_not_elapsed`), or a fast task's are carried from its own copy, losing the time it ran on before a slow task's (`hot_rebase_per_task`) | design §4.2 step 4 | S2b (#710) |
 | a hot takeover leaves FIRST_SCAN() FALSE on a box that led before (`hot_keeps_first_scan_false`) | #1273, until S2 (b) | S2b (#710) |
 | a flush that ends late (`hot_late_flush_installs`) or fails on anything but an unreadable own store (`hot_failed_flush_installs`) still goes hot | design §4.2 | S2b (#710) |
 | a READ/WRITE ticket of the old controller survives a hot takeover (`hot_ticket_carried`) | design §4.2 | S2b (#710) |

@@ -476,7 +476,7 @@ func streamLine(s *leader.StreamStatus) string {
 	}
 	switch {
 	case s.Takeover == "hot":
-		line += "; last takeover hot"
+		line += fmt.Sprintf("; last takeover hot (oldest task state %s old)", ms(s.TakeoverOldestFrameMs))
 	case s.Takeover != "":
 		line += "; last takeover cold (" + s.TakeoverCold + ")"
 	}

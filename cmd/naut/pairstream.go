@@ -3,12 +3,15 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -122,6 +125,11 @@ type pairStream struct {
 	// existed: its condition, until a standby follows a hot-capable
 	// stream again (an image of the newest format sent).
 	coldWhy string
+	// lastReport is the newest takeover report taken (they come on their
+	// own goroutines: an older one is dropped).
+	lastReport time.Time
+	// flushMu serializes takeover flushes.
+	flushMu sync.Mutex
 	// flushTook: a flush of the pending takeover edge took the shadow's
 	// image (the next flush of the same edge, for a moved term, finds the
 	// shadow empty), until the takeover reports.
@@ -175,17 +183,54 @@ func askedFormat(h string) byte {
 func streamPath(cluster string) string { return node.Prefix + cluster + "/stream" }
 
 // streamBuild names this nautilus build in an image (Image.Build): the
-// release, and the commit where the binary records one.
+// release, and the commit where the binary records one. A build from a
+// modified tree (or with no commit recorded) also names its executable's
+// hash: two such builds of one commit are not the same build, and a hot
+// takeover needs the same (Fable, #1342).
 func streamBuild() string {
-	b := lsp.Version
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		for _, s := range bi.Settings {
-			if s.Key == "vcs.revision" && len(s.Value) >= 12 {
-				b += "+" + s.Value[:12]
+	buildOnce.Do(func() {
+		b, commit, modified := lsp.Version, false, false
+		if bi, ok := debug.ReadBuildInfo(); ok {
+			for _, s := range bi.Settings {
+				switch {
+				case s.Key == "vcs.revision" && len(s.Value) >= 12:
+					b += "+" + s.Value[:12]
+					commit = true
+				case s.Key == "vcs.modified" && s.Value == "true":
+					modified = true
+				}
 			}
 		}
+		if !commit || modified {
+			b += "+exe:" + exeHash()
+		}
+		buildName = b
+	})
+	return buildName
+}
+
+var (
+	buildOnce sync.Once
+	buildName string
+)
+
+// exeHash is a short hash of this process's executable, "unknown" when
+// it cannot be read.
+func exeHash() string {
+	p, err := os.Executable()
+	if err != nil {
+		return "unknown"
 	}
-	return b
+	f, err := os.Open(p)
+	if err != nil {
+		return "unknown"
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "unknown"
+	}
+	return hex.EncodeToString(h.Sum(nil)[:6])
 }
 
 // streamBuildFor is the build a member names in its images and checks a
@@ -423,6 +468,9 @@ func (s *pairStream) startFollower(ctx context.Context) {
 	fctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	s.followStop, s.followDone = cancel, done
+	s.mu.Lock()
+	s.flushTook = false // a standby spell: a new edge's flushes start clean
+	s.mu.Unlock()
 	go func() {
 		defer close(done)
 		s.follow(fctx)
@@ -679,6 +727,11 @@ func (s *pairStream) persist(ctx context.Context) (time.Duration, error) {
 // shadow. The runtime loads the store after it returns, then installs the
 // candidate or goes cold.
 func (s *pairStream) takeoverFlush() (*runtime.HotImage, error) {
+	// One flush at a time: one the runtime gave up on (late, or its edge
+	// abandoned) runs on, and must not empty the shadow or the pending
+	// image under the next edge's (Fable, #1342).
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	start := time.Now()
 	if !mutNaut("stream_flush_keeps_follower") {
 		s.stopFollower()
@@ -706,9 +759,12 @@ func (s *pairStream) takeoverFlush() (*runtime.HotImage, error) {
 	if !mutNaut("stream_flush_keeps_shadow") {
 		s.shadow.Reset()
 	}
+	_, done := s.rt.LeadingTerm()
 	s.mu.Lock()
 	switch {
-	case hot != nil:
+	case hot != nil && !done:
+		// (A flush that ends after its takeover was taken records
+		// nothing: the edge is over.)
 		s.flushTook = true
 	case s.flushTook:
 		// An earlier flush of this same edge took the image and emptied
@@ -772,6 +828,11 @@ func (s *pairStream) takeoverFlush() (*runtime.HotImage, error) {
 // follows again.
 func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
 	s.mu.Lock()
+	if rep.At.Before(s.lastReport) {
+		s.mu.Unlock()
+		return // a newer takeover reported already
+	}
+	s.lastReport = rep.At
 	s.flushTook = false // the edge is taken
 	s.coldWhy = ""
 	if !rep.Hot && rep.Image {
@@ -788,6 +849,9 @@ func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
 	}
 	if rep.ImageAge >= 0 {
 		detail["imageAgeMs"] = rep.ImageAge.Milliseconds()
+	}
+	if rep.Hot && rep.OldestFrameAge >= 0 {
+		detail["oldestFrameAgeMs"] = rep.OldestFrameAge.Milliseconds()
 	}
 	if rep.RetainFromImage {
 		detail["retainFromImage"] = true
@@ -814,7 +878,7 @@ func (s *pairStream) status() *leader.StreamStatus {
 	if tr := s.rt.LastTakeover(); !tr.At.IsZero() {
 		st.Takeover, st.TakeoverCold = "cold", tr.Reason
 		if tr.Hot {
-			st.Takeover, st.TakeoverCold = "hot", ""
+			st.Takeover, st.TakeoverCold, st.TakeoverOldestFrameMs = "hot", "", tr.OldestFrameAge.Milliseconds()
 		}
 	}
 	st.RetainInMemory = rtLead && s.rt.RetainOnlyInMemory()

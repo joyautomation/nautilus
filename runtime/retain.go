@@ -381,7 +381,16 @@ func (r *Runtime) loadRetained() error {
 
 // applyRetained is loadRetained's application of a state: the store's,
 // or a hot takeover's image's when the store could not be read (hot.go).
-func (r *Runtime) applyRetained(st retain.State) error {
+func (r *Runtime) applyRetained(st retain.State) error { return r.applyRetainedFrom(st, true) }
+
+// applyRetainedCarried is applyRetained of a hot takeover's image over an
+// unreadable own store (hot_install.go): the values the image carries,
+// not the alarm and substitute steps, which the pair's log owns and the
+// takeover already ran (a nil section would clear the substitute load
+// fault the failed store read raised).
+func (r *Runtime) applyRetainedCarried(st retain.State) error { return r.applyRetainedFrom(st, false) }
+
+func (r *Runtime) applyRetainedFrom(st retain.State, full bool) error {
 	allowed := make(map[string]bool, len(r.retainTags))
 	for _, n := range r.retainTags {
 		allowed[n] = true
@@ -456,7 +465,7 @@ func (r *Runtime) applyRetained(st retain.State) error {
 	// here rather than at construction is what makes a standby takeover
 	// correct: takeover() re-reads the store on the standby→leader edge, so
 	// a failover cannot resurrect hundreds of acked alarms as unacked.
-	if a := r.alarmRetainer(); a != nil {
+	if a := r.alarmRetainer(); a != nil && full {
 		if sa, ok := a.(SyncedAlarmRestorer); ok && r.intentLog() != nil {
 			// A pair: its operator-intent log holds the alarm state, and
 			// says whether this takeover's catch-up succeeded (#710).
@@ -519,7 +528,9 @@ func (r *Runtime) applyRetained(st retain.State) error {
 	// it resets the frames (restoreLocals).
 	r.pendingLocals = st.Locals
 	// Substitutes (substitute_retain.go): their own block, last.
-	r.loadSubstitutes(st.Substitutes)
+	if full {
+		r.loadSubstitutes(st.Substitutes)
+	}
 	return errors.Join(errs...)
 }
 

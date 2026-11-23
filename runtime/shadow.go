@@ -33,6 +33,11 @@ type Shadow struct {
 	build   string
 	arrived time.Time
 	last    ShadowReport
+	// refMs is the latest leader time in the newest image: when it was
+	// taken (TagsNowMs), or its latest task copy. Every task's timers are
+	// carried from it (hot_install.go): a fast task copied its frame
+	// earlier, and kept running on the leader until then.
+	refMs int64
 }
 
 type shadowTask struct {
@@ -152,6 +157,10 @@ func (s *Shadow) Apply(img *Image) (ShadowReport, error) {
 	// was the newest, and its other tasks are applied.
 	s.term, s.seq = img.Term, img.Seq
 	s.build, s.arrived, s.last = img.Build, s.r.now(time.Now()), rep
+	s.refMs = img.TagsNowMs
+	for i := range img.Tasks {
+		s.refMs = max(s.refMs, img.Tasks[i].NowMs)
+	}
 	return rep, firstErr
 }
 
@@ -238,7 +247,7 @@ func (s *Shadow) Reset() {
 	s.term, s.seq = 0, 0
 	s.tasks = map[string]*shadowTask{}
 	s.tags = nil
-	s.build, s.arrived, s.last = "", time.Time{}, ShadowReport{}
+	s.build, s.arrived, s.last, s.refMs = "", time.Time{}, ShadowReport{}, 0
 }
 
 // frameOf is a task's shadow frame, nil when none was applied (tests).
@@ -266,7 +275,7 @@ func (s *Shadow) Take() *HotImage {
 	if s.term == 0 && s.seq == 0 {
 		return nil
 	}
-	h := &HotImage{Term: s.term, Seq: s.seq, Build: s.build, Age: s.r.now(time.Now()).Sub(s.arrived), arrived: s.arrived, tasks: map[string]hotTask{}}
+	h := &HotImage{Term: s.term, Seq: s.seq, Build: s.build, Age: s.r.now(time.Now()).Sub(s.arrived), arrived: s.arrived, refMs: s.refMs, tasks: map[string]hotTask{}}
 	rep := s.last
 	switch {
 	case len(rep.LayoutDiffers) > 0:
