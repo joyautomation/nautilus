@@ -29,8 +29,9 @@ type Program struct {
 	compiledAt time.Time
 	scans      uint64
 	lastErr    string
-	// ran: the program has scanned since its last cold start (Compile or
-	// Swap, which reset its state). FIRST_SCAN() is its negation. A warm
+	// ran: the program has scanned since its last cold start (Compile,
+	// Swap or a takeover's ResetFrame, which reset its state). FIRST_SCAN()
+	// is its negation. A warm
 	// swap and a rollback keep it, as Logix's S:FS does across an online
 	// edit: the state carried over is not a start.
 	ran bool
@@ -331,11 +332,16 @@ func sourceHash(src string) string {
 }
 
 // ResetFrame discards retained state — call on a redundancy takeover so the
-// program warm-starts against live field values.
+// program warm-starts against live field values. A reset frame is a start:
+// the next scan's FIRST_SCAN() is TRUE, on every takeover, also by a box
+// that led before (#710).
 func (p *Program) ResetFrame() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.frame = ir.NewFrame(p.prog)
+	if !mutRuntime("takeover_keeps_first_scan") {
+		p.ran = false
+	}
 }
 
 // Locals returns the current values of the program's retained VAR slots.

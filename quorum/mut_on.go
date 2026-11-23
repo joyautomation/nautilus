@@ -270,6 +270,7 @@ var Mutations = []string{
 	"spend_failure_keeps_alone",         // oplog: a vouch's one-shot whose spend can't be written stays armed in memory (#1177 CI)
 	"accept_survives_reboot",            // oplog: a vouch's one-shot and acceptance survive a restart (#1177, naut-lead)
 	"stale_retained_alarms_kept",        // runtime: a start after a superseded log keeps the retain store's acks and shelves (#1177 review)
+	"takeover_keeps_first_scan",         // runtime: a takeover resets the frames but not FIRST_SCAN (#710)
 	"noop_digest_unchecked",             // oplog: #1177 review
 	"vouch_again_noop",                  // oplog: #1177 review
 	"lower_history_peer_synced",         // node: a peer's log at a lower or forked history is one to defer and yield to
