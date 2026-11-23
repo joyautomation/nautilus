@@ -79,12 +79,21 @@ claims:
 
   - id: CAM-006
     claim: >-
-      Viewing a camera needs read: a person who may not read, or is not signed
-      in, is refused before the camera is named, and the list tells no address,
-      URL or credential.
+      Viewing a camera needs read and the `camera` permission, held by every
+      built-in role that reads and removable per custom role (`deny: [camera]`):
+      a person with read and not camera is listed the cameras with view false,
+      is refused a still or stream with 403 "no permission to view cameras" and
+      the camera is never contacted for them; a refused live view is journalled;
+      a person who may not read, or is not signed in, is refused before the camera
+      is named; the list tells no address, URL or credential; /api/me lists the
+      permission only on a project with cameras. The permission is
+      whole-controller, not area-scoped, and not elevated.
     source: "#who-may-view"
     tests:
       - go ./server TestCamerasAreForReadersAndNeverTellAnAddress
+      - go ./server TestAPersonWithoutThePermissionToViewCamerasIsToldAndTheCameraIsNeverAsked
+      - go ./auth TestCameraIsItsOwnWholeControllerPermission
+      - go ./auth TestBuiltInRoles
     note: >-
       Read is whole-controller in the auth model, so a camera is not scoped to
       an area; that is stated on the page, not hidden.
