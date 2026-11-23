@@ -189,6 +189,13 @@ namespace Tiad
         // OpenProject opens a project or project archive.
         object OpenProject(string fullPath);
 
+        // AdoptProject retrieves the archive at archiveFull into
+        // retrieveDir, which must not exist, saves the project as
+        // targetDir (TIA's SaveAs: the project is named after targetDir
+        // from then on, at targetDir/<name>.ap21) and returns it opened
+        // there. targetDir must not exist, or be empty.
+        object AdoptProject(string archiveFull, string retrieveDir, string targetDir);
+
         void CloseProject(object project);
 
         // ApplyStation makes the project's CPU match next, as the agent

@@ -82,7 +82,9 @@ func contractReuse(t *testing.T, start Starter) {
 		t.Fatalf("the uploaded CPU, named: %v", err)
 	}
 	kept := []tiad.KeptDevice{UploadedIODevice()}
-	if !reflect.DeepEqual(r.Changes, []string{"cpu PLC_1 taken over from the project"}) || !reflect.DeepEqual(r.KeptDevices, kept) {
+	// The spec names the station as the upload brought it: the first apply
+	// changes nothing in it (#1272: "no change", never "taken over").
+	if len(r.Changes) != 0 || !reflect.DeepEqual(r.KeptDevices, kept) {
 		t.Fatalf("taken over: %+v", r)
 	}
 	if len(r.Notes) != 1 || !strings.Contains(r.Notes[0], "kept as found") || !strings.Contains(r.Notes[0], `"io-device-up"`) {
@@ -188,7 +190,8 @@ func contractReuse(t *testing.T, start Starter) {
 	if _, err := o.ApplyStation(ctx, other, BenchSecrets); tiad.Kind(err) != tiad.KindCPUMismatch {
 		t.Fatalf("another CPU on an opened project: %v", err)
 	}
-	if r, err := o.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil || !reflect.DeepEqual(r.Changes, []string{"cpu PLC_1 taken over from the project"}) {
+	// The saved station comes back as saved: no change.
+	if r, err := o.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil || len(r.Changes) != 0 {
 		t.Fatalf("the saved CPU on an opened project: %+v %v", r, err)
 	}
 	if _, err := o.Compile(ctx, true, true); err != nil {

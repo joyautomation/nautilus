@@ -898,6 +898,13 @@ namespace Tiad.Fake
         // CpuAddress is the CPU node's address while Cpu is set: the spec's
         // after an apply, the CPU's after an upload.
         public string CpuAddress = "";
+        // SubnetMask, Router and ProfinetName are the rest of the CPU's
+        // interface node, as an apply leaves it (an upload: the bench
+        // CPU's); NodeKnown is false for a project whose node the fake
+        // never set (ReadCpu then reports it not read, as the agent's
+        // NodeRead).
+        public string SubnetMask = "", Router = "", ProfinetName = "";
+        public bool NodeKnown;
         public List<KeptDevice> Others = new List<KeptDevice>();
         // ArchiveKey names the project as its last deploy archive holds it
         // (FakeTia.Archive), "" before one; RestoredKey is the key of the
@@ -1240,6 +1247,7 @@ namespace Tiad.Fake
         {
             p.Cpu = null;
             p.CpuAddress = "";
+            p.NodeKnown = false;
             p.Protection = ConfigProtection.Absent;
             p.ProtectedWith = "";
             p.AccessControl = AccessRule.Absent;
@@ -1392,6 +1400,21 @@ namespace Tiad.Fake
                 p.Others = new List<KeptDevice>(sp.Others);
                 p.Protection = sp.Protection;
                 p.ProtectedWith = sp.ProtectedWith;
+                p.CpuAddress = sp.CpuAddress;
+                p.SubnetMask = sp.SubnetMask;
+                p.Router = sp.Router;
+                p.ProfinetName = sp.ProfinetName;
+                p.NodeKnown = sp.NodeKnown;
+                p.WebServer = sp.WebServer;
+                p.WebInterface = sp.WebInterface;
+                p.WebHttpsOnly = sp.WebHttpsOnly;
+                // A project saved unchanged since a load is what that load
+                // put on the CPU.
+                if (sp.RestoredKey != "")
+                {
+                    p.RestoredKey = sp.RestoredKey;
+                    p.Changed = false;
+                }
                 p.CopyAccess(sp);
                 string how = script.AccessRecords;
                 if (how == "strip-users") foreach (var u in p.Users.Values) u.Comment = "";
@@ -1413,6 +1436,30 @@ namespace Tiad.Fake
         {
             script.Enter("CloseProject");
             openProjects--;
+        }
+
+        // AdoptProject is tiad.Openness's: retrieve the archive in
+        // retrieveDir, SaveAs targetDir (the project named after it), open
+        // there. An archive the fake did not write is none TIA retrieves.
+        public object AdoptProject(string archiveFull, string retrieveDir, string targetDir)
+        {
+            script.Enter("AdoptProject");
+            string want = Path.Combine(targetDir, Path.GetFileName(targetDir) + ".ap21");
+            OneOpen(want);
+            if (Directory.Exists(retrieveDir) || File.Exists(retrieveDir)) throw new TiaException(retrieveDir + " exists: retrieve the archive elsewhere");
+            FakeProject r = Restore(archiveFull, want);
+            if (r == null) throw new TiaException("The file " + Path.GetFileName(archiveFull) + " is not a project archive that can be retrieved.");
+            Directory.CreateDirectory(retrieveDir);
+            if (Directory.Exists(targetDir) && Directory.GetFileSystemEntries(targetDir).Length > 0)
+            {
+                throw new TiaException("The project directory " + targetDir + " is not empty");
+            }
+            Directory.CreateDirectory(targetDir);
+            File.WriteAllText(want, "fake TIA project");
+            // SaveAs saved it there: the next open finds it as adopted.
+            saved[want] = SavedCopy(r);
+            openProjects++;
+            return r;
         }
 
         public const string NotConfigured = "Password for confidential PLC configuration data is not configured in the PLC.";
@@ -1440,7 +1487,18 @@ namespace Tiad.Fake
             {
                 throw new TiaException("the project's CPU went missing between the agent's read and the apply");
             }
+            // The project as found, for the first apply on an opened or
+            // uploaded project (CpuReuse.Found), read before any write.
+            ProjectCpu found = decision == CpuReuse.Reuse ? ReadCpu(p) : null;
+            string protection = decision == CpuReuse.Reuse
+                ? ConfigProtection.Plan(p.Protection, next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword != "")
+                : ConfigProtection.Nothing;
+            int writes = made.Writes;
             p.CpuAddress = next.Cpu.Address;
+            p.SubnetMask = next.Cpu.SubnetMask;
+            p.Router = next.Cpu.Router;
+            p.ProfinetName = next.Cpu.ProfinetName;
+            p.NodeKnown = true;
             // A failure part-way counts as a change.
             bool was = p.Changed;
             p.Changed = true;
@@ -1450,7 +1508,10 @@ namespace Tiad.Fake
             AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
             WebSteps.Run(new FakeWeb(p), access, next.WebServer, secrets, decision == CpuReuse.Create, made, notes);
             p.Station = next;
-            p.Changed = was || CpuReuse.Changes(decision, prev, next).Count > 0;
+            List<string> ch = decision == CpuReuse.Reuse && prev == null
+                ? CpuReuse.Found(found, next, protection, made.Writes != writes)
+                : CpuReuse.Changes(decision, prev, next);
+            p.Changed = was || ch.Count > 0;
         }
 
         public PasswordPolicy ReadPolicy(object project)
@@ -1738,6 +1799,8 @@ namespace Tiad.Fake
                     // The archive this load was archived as, once: a later
                     // load without one (a dry run TIA ran) holds none.
                     loadedKey[address] = p.ArchiveKey;
+                    // The project now is what that load put on the CPU.
+                    p.RestoredKey = p.ArchiveKey;
                     p.ArchiveKey = "";
                     p.Changed = false;
                     return new DownloadCall { State = resultState, MessageList = said, Messages = string.Join("; ", said.ToArray()), Cpu = cpu };
@@ -1833,7 +1896,7 @@ namespace Tiad.Fake
             string key;
             bool equal = !script.CompareDiffers &&
                 ((loaded.TryGetValue(address, out there) && there == p && !p.Changed) ||
-                 (p.RestoredKey != "" && loadedKey.TryGetValue(address, out key) && key == p.RestoredKey));
+                 (p.RestoredKey != "" && !p.Changed && loadedKey.TryGetValue(address, out key) && key == p.RestoredKey));
             var kids = new List<CompareNode>
             {
                 Program(leaves),
@@ -2016,7 +2079,17 @@ namespace Tiad.Fake
             DeviceIdentity d = script.Device;
             up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };
             up.CpuAddress = address;
+            up.SubnetMask = UploadedSubnetMask;
+            up.Router = "";
+            up.ProfinetName = UploadedProfinetName;
+            up.NodeKnown = true;
+            up.RestoredKey = "";
             up.Others = new List<KeptDevice> { UploadedIoDevice() };
+            // The project is what the CPU runs now: it compares equal
+            // while that load stands.
+            string now;
+            up.RestoredKey = loadedKey.TryGetValue(address, out now) ? now : "";
+            up.Changed = false;
             return trusted;
         }
 
@@ -2030,6 +2103,10 @@ namespace Tiad.Fake
         // besides the CPU's identity: the Go fake's UploadedCPUName and
         // UploadedIODevice.
         public const string UploadedCpuName = "PLC_1";
+
+        // UploadedSubnetMask and UploadedProfinetName are the rest of the
+        // interface an upload brings (the Go fake's constants).
+        public const string UploadedSubnetMask = "255.255.255.0", UploadedProfinetName = "plc-1";
 
         public static KeptDevice UploadedIoDevice()
         {
@@ -2052,6 +2129,7 @@ namespace Tiad.Fake
             {
                 Name = p.Cpu.Name, Order = p.Cpu.Order, Firmware = p.Cpu.Firmware,
                 Protection = p.Protection, AccessControl = p.AccessControl, Others = new List<KeptDevice>(p.Others),
+                Address = p.CpuAddress, SubnetMask = p.SubnetMask, Router = p.Router, ProfinetName = p.ProfinetName, NodeRead = p.NodeKnown,
             };
         }
 
@@ -2196,10 +2274,27 @@ namespace Tiad.Fake
             // in any process, after an agent restart too; each archive's
             // bytes differ, as a real one's do (time stamps).
             p.ArchiveKey = Guid.NewGuid().ToString("N");
+            WriteArchive(p, f, p.ArchiveKey, n);
+            return f;
+        }
+
+        // Scramble turns a password into the form an archive keeps it in,
+        // and back: each character's code point XOR 0x5A (its own inverse).
+        static string Scramble(string pw)
+        {
+            var b = new System.Text.StringBuilder(pw.Length);
+            foreach (char ch in pw) b.Append((char)(ch ^ 0x5A));
+            return b.ToString();
+        }
+
+        // WriteArchive writes p as an archive the fake retrieves (Restore),
+        // under key: a deploy's (Archive) or a save's.
+        static void WriteArchive(FakeProject p, string f, string key, int n)
+        {
             var o = new Obj();
             o["fakeArchive"] = n;
             o["of"] = p.Full;
-            o["key"] = p.ArchiveKey;
+            o["key"] = key;
             if (p.Cpu != null)
             {
                 var cpu = new Obj();
@@ -2207,8 +2302,15 @@ namespace Tiad.Fake
                 cpu["order"] = p.Cpu.Order;
                 cpu["firmware"] = p.Cpu.Firmware;
                 cpu["address"] = p.CpuAddress;
+                if (p.NodeKnown)
+                {
+                    cpu["subnetMask"] = p.SubnetMask;
+                    cpu["router"] = p.Router;
+                    cpu["profinetName"] = p.ProfinetName;
+                }
                 o["cpu"] = cpu;
             }
+            o["others"] = KeptDevice.ToJson(p.Others);
             var blocks = new List<object>();
             foreach (var b in p.Blocks)
             {
@@ -2230,8 +2332,38 @@ namespace Tiad.Fake
             o["accessControl"] = p.AccessControl;
             o["webServer"] = p.WebServer;
             o["webInterface"] = p.WebInterface;
+            o["webHttpsOnly"] = p.WebHttpsOnly;
+            // The project's users and roles, as a real archive keeps them.
+            var users = new Obj();
+            foreach (var kv in p.Users)
+            {
+                var u = new Obj();
+                // TIA keeps a password protected, never as text: the fake
+                // keeps it reversibly scrambled, so no archive file holds
+                // it as written.
+                u["password"] = Scramble(kv.Value.Password);
+                u["comment"] = kv.Value.Comment;
+                u["history"] = new List<object>(kv.Value.History.ConvertAll(delegate(string x) { return (object)Scramble(x); }));
+                var ur = new List<object>();
+                foreach (string r in kv.Value.Roles) ur.Add(r);
+                u["roles"] = ur;
+                u["active"] = kv.Value.Active;
+                users[kv.Key] = u;
+            }
+            o["users"] = users;
+            var roles = new Obj();
+            foreach (var kv in p.Roles)
+            {
+                var rights = new List<object>();
+                foreach (string r in kv.Value) rights.Add(r);
+                roles[kv.Key] = rights;
+            }
+            o["roles"] = roles;
+            var rc = new Obj();
+            foreach (var kv in p.RoleComments) rc[kv.Key] = kv.Value;
+            o["roleComments"] = rc;
+            o["anonymousActive"] = p.AnonymousActive;
             File.WriteAllText(f, Json.Write(o));
-            return f;
         }
 
         // LoadOutside is POST /fake/load {address, archive}: the CPU at
@@ -2281,6 +2413,23 @@ namespace Tiad.Fake
                 var cpu = (IDictionary<string, object>)v;
                 p.Cpu = new ProjectCpu { Name = (string)cpu["name"], Order = (string)cpu["order"], Firmware = (string)cpu["firmware"] };
                 p.CpuAddress = (string)cpu["address"];
+                object sm;
+                if (cpu.TryGetValue("subnetMask", out sm))
+                {
+                    p.SubnetMask = (string)sm;
+                    p.Router = (string)cpu["router"];
+                    p.ProfinetName = (string)cpu["profinetName"];
+                    p.NodeKnown = true;
+                }
+            }
+            object others;
+            if (o.TryGetValue("others", out others) && others != null)
+            {
+                foreach (object x in (System.Collections.IList)others)
+                {
+                    var k = (IDictionary<string, object>)x;
+                    p.Others.Add(new KeptDevice { Name = (string)k["name"], ProfinetName = (string)k["profinetName"], Address = (string)k["address"] });
+                }
             }
             foreach (object x in (System.Collections.IList)o["blocks"])
             {
@@ -2304,6 +2453,27 @@ namespace Tiad.Fake
             // none: off.
             p.WebServer = o.ContainsKey("webServer") && (bool)o["webServer"];
             p.WebInterface = o.ContainsKey("webInterface") && (bool)o["webInterface"];
+            p.WebHttpsOnly = o.ContainsKey("webHttpsOnly") && (bool)o["webHttpsOnly"];
+            object uv;
+            if (o.TryGetValue("users", out uv) && uv != null)
+            {
+                foreach (var kv in (IDictionary<string, object>)uv)
+                {
+                    var u = (IDictionary<string, object>)kv.Value;
+                    var fu = new FakeUser { Password = Scramble((string)u["password"]), Comment = (string)u["comment"], Active = (bool)u["active"] };
+                    foreach (object h in (System.Collections.IList)u["history"]) fu.History.Add(Scramble((string)h));
+                    foreach (object r in (System.Collections.IList)u["roles"]) fu.Roles.Add((string)r);
+                    p.Users[kv.Key] = fu;
+                }
+                foreach (var kv in (IDictionary<string, object>)o["roles"])
+                {
+                    var rights = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (object r in (System.Collections.IList)kv.Value) rights.Add((string)r);
+                    p.Roles[kv.Key] = rights;
+                }
+                foreach (var kv in (IDictionary<string, object>)o["roleComments"]) p.RoleComments[kv.Key] = (string)kv.Value;
+                p.AnonymousActive = (bool)o["anonymousActive"];
+            }
             return p;
         }
 
@@ -2312,16 +2482,30 @@ namespace Tiad.Fake
             script.Enter("Save");
             var p = (FakeProject)project;
             string f = archive ? Path.ChangeExtension(p.Full, ".zap21") : p.Full;
-            File.WriteAllText(f, "fake TIA project");
-            saved[f] = new FakeProject
+            // An archive holds the project wherever it is copied (an adopt
+            // retrieves it), and its bytes differ each time, as a real one's.
+            if (archive) WriteArchive(p, f, p.Changed ? Guid.NewGuid().ToString("N") : p.RestoredKey == "" ? Guid.NewGuid().ToString("N") : p.RestoredKey, System.Threading.Interlocked.Increment(ref archives));
+            else File.WriteAllText(f, "fake TIA project");
+            saved[f] = SavedCopy(p);
+            return f;
+        }
+
+        // SavedCopy is what a saved project file holds of p, restored when
+        // it is opened (OpenProject).
+        static FakeProject SavedCopy(FakeProject p)
+        {
+            var c = new FakeProject
             {
                 Cpu = p.Cpu == null ? null : new ProjectCpu { Name = p.Cpu.Name, Order = p.Cpu.Order, Firmware = p.Cpu.Firmware },
                 Others = new List<KeptDevice>(p.Others),
                 Protection = p.Protection,
                 ProtectedWith = p.ProtectedWith,
+                CpuAddress = p.CpuAddress, SubnetMask = p.SubnetMask, Router = p.Router, ProfinetName = p.ProfinetName, NodeKnown = p.NodeKnown,
+                WebServer = p.WebServer, WebInterface = p.WebInterface, WebHttpsOnly = p.WebHttpsOnly,
+                RestoredKey = p.Changed ? "" : p.RestoredKey,
             };
-            saved[f].CopyAccess(p);
-            return f;
+            c.CopyAccess(p);
+            return c;
         }
 
         static readonly string[] Heads = { "ORGANIZATION_BLOCK", "FUNCTION_BLOCK", "FUNCTION", "DATA_BLOCK", "TYPE" };

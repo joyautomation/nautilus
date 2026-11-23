@@ -242,7 +242,7 @@ namespace Tiad
                 System.IO.File.Delete(probe);
                 // Only what NewId and a verify (VerifyStage) name: a
                 // mis-set TIAD_DEPLOYS_DIR loses nothing else.
-                foreach (string pattern in new[] { "d-*", VerifyPrefix + "*" })
+                foreach (string pattern in new[] { "d-*", VerifyPrefix + "*", AdoptPrefix + "*" })
                 {
                     foreach (string d in Directory.GetDirectories(st.staging, pattern))
                     {
@@ -303,8 +303,9 @@ namespace Tiad
             }
         }
 
-        // VerifyPrefix starts a verify's staging directory.
-        public const string VerifyPrefix = "v-";
+        // VerifyPrefix starts a verify's staging directory, AdoptPrefix an
+        // adopt's (Agent.AdoptProject).
+        public const string VerifyPrefix = "v-", AdoptPrefix = "a-";
 
         // VerifyCopy is the name of a verify's copy of an archive: short,
         // since TIA retrieves the project into a directory named after it
@@ -363,6 +364,54 @@ namespace Tiad
             dir = d;
             copy = c;
             return null;
+        }
+
+        // AdoptStage copies an archive into a fresh staging directory of
+        // its own (dir), for an adopt to retrieve, and returns the copy's
+        // sha256: what TIA retrieves is what was hashed. The adopt removes
+        // dir (RemoveStaging); a start removes one an agent that died left.
+        public string AdoptStage(string src, out string dir, out string copy, out long bytes)
+        {
+            dir = "";
+            copy = "";
+            bytes = 0;
+            var b = new byte[4];
+            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(b);
+            string d = Path.Combine(staging, AdoptPrefix + Hex(b));
+            if (Directory.Exists(d)) throw new IOException("the staging directory " + Path.GetFileName(d) + " is in use");
+            Directory.CreateDirectory(d);
+            string c = Path.Combine(d, VerifyCopy);
+            string sha;
+            try
+            {
+                System.IO.File.Copy(src, c);
+                using (var fs = new FileStream(c, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var hs = SHA256.Create())
+                {
+                    sha = Hex(hs.ComputeHash(fs));
+                    bytes = fs.Length;
+                }
+            }
+            catch
+            {
+                RemoveStaging(d);
+                throw;
+            }
+            dir = d;
+            copy = c;
+            return sha;
+        }
+
+        // ArchivePath is where the archive a deploy record names lives, or
+        // null when the record's entry is not one tiad writes.
+        public string ArchivePath(object archive, out string sha)
+        {
+            var a = archive as IDictionary<string, object>;
+            object f, h;
+            string file = a != null && a.TryGetValue("file", out f) ? f as string : null;
+            sha = a != null && a.TryGetValue("sha256", out h) ? h as string : null;
+            if (file == null || sha == null || sha.Length != 64 || !LowerHex(sha) || file != "archives/" + sha + ".zap21") return null;
+            return Path.Combine(archives, sha + ".zap21");
         }
 
         static bool LowerHex(string s)

@@ -534,6 +534,33 @@ namespace Tiad.Openness
             });
         }
 
+        public object AdoptProject(string archiveFull, string retrieveDir, string targetDir)
+        {
+            return Tia(delegate
+            {
+                if (Directory.Exists(retrieveDir) || File.Exists(retrieveDir)) throw new TiaException(retrieveDir + " exists: retrieve the archive elsewhere");
+                Project r = portal.Projects.Retrieve(new FileInfo(archiveFull), new DirectoryInfo(retrieveDir));
+                string want = Path.Combine(targetDir, Path.GetFileName(targetDir) + ".ap21");
+                try
+                {
+                    // Seen on V21 (#1272 probe): SaveAs(<dir>\<name>) writes
+                    // <dir>\<name>\<name>.ap21, renames the project to <name>
+                    // and leaves it open there.
+                    r.SaveAs(new DirectoryInfo(targetDir));
+                    if (!string.Equals(r.Path.FullName, want, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new TiaException("TIA saved the adopted project at " + r.Path.FullName + ", not " + want);
+                    }
+                }
+                catch
+                {
+                    r.Close();
+                    throw;
+                }
+                return (object)new OpenProject { Project = r, Full = want };
+            });
+        }
+
         public void CloseProject(object project)
         {
             Tia(delegate { Of(project).Project.Close(); });
@@ -1855,6 +1882,7 @@ namespace Tiad.Openness
                     Protection = new MasterSecret(d, cpu).State(),
                     AccessControl = new Access(p, d, cpu).State(),
                 };
+                ReadNode(cpu, pc);
                 var cpus = new List<string>();
                 foreach (HwDevice o in AllDevices(p))
                 {
@@ -1881,6 +1909,30 @@ namespace Tiad.Openness
                 if (d == null) return "";
                 return CpuNodeAddress(CpuOf(d));
             });
+        }
+
+        // ReadNode reads what an apply writes on the CPU's interface node
+        // (ApplyStation), for CpuReuse.Found to compare with the spec. A
+        // read that fails leaves NodeRead false, which Found reports as a
+        // change: never a "no change" it cannot back.
+        static void ReadNode(DeviceItem cpu, ProjectCpu pc)
+        {
+            try
+            {
+                Node n = CpuNode(cpu);
+                pc.Address = OptionalAttribute(n, "Address");
+                pc.SubnetMask = OptionalAttribute(n, "SubnetMask");
+                bool router = Convert.ToBoolean(n.GetAttribute("UseRouter"), System.Globalization.CultureInfo.InvariantCulture);
+                pc.Router = router ? OptionalAttribute(n, "RouterAddress") : "";
+                pc.ProfinetNameAuto = Convert.ToBoolean(n.GetAttribute("PnDeviceNameAutoGeneration"), System.Globalization.CultureInfo.InvariantCulture);
+                pc.ProfinetName = OptionalAttribute(n, "PnDeviceName");
+                pc.NodeRead = true;
+            }
+            catch (Exception e)
+            {
+                pc.NodeRead = false;
+                Log.Line("reading the CPU's interface node failed: {0}", Json.Quote(TiaNames.Message(e)));
+            }
         }
 
         static string CpuNodeAddress(DeviceItem cpu)

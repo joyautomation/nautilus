@@ -610,6 +610,68 @@ func (c *Client) CreateProject(ctx context.Context, name string, st Station, sec
 	return &s, nil
 }
 
+// AdoptRequest makes a project archive the saved project of a deploy named
+// Name, projects/<Name>/<Name>.ap21 (#1272): exactly one source, Archive (a
+// .zap21 in the work dir) or Deploy (a deploy record's archive, checked
+// against the record's sha256). A projects/<Name>/ that holds anything
+// refuses unless Replace.
+type AdoptRequest struct {
+	Name    string `json:"name"`
+	Archive string `json:"archive,omitempty"`
+	Deploy  string `json:"deploy,omitempty"`
+	// Replace replaces a project already at projects/<Name>/, as a create
+	// does, once the new source is staged and hashed. naut sets it only
+	// for an adoption it made and never downloaded.
+	Replace bool `json:"replace,omitempty"`
+	// Address is where the deploy's CPU is: an archive whose project has
+	// its CPU elsewhere (another CPU's, or one from before the address
+	// changed) is refused (KindCPUMismatch).
+	Address string `json:"address,omitempty"`
+}
+
+// AdoptSource is the archive an adopt took: its sha256 and size, and the
+// work-dir path or the deploy id it came from.
+type AdoptSource struct {
+	Archive string `json:"archive,omitempty"`
+	Deploy  string `json:"deploy,omitempty"`
+	SHA256  string `json:"sha256"`
+	Bytes   int64  `json:"bytes"`
+}
+
+// AdoptResult is what an adopt placed: the saved project's path, its CPU
+// (nil when it could not be read, CPUError says why) and the devices
+// besides it, and for a deploy source the record's CPU address.
+type AdoptResult struct {
+	Project     string       `json:"project"`
+	Source      AdoptSource  `json:"source"`
+	CPU         *ProjectCPU  `json:"cpu"`
+	CPUError    string       `json:"cpuError,omitempty"`
+	KeptDevices []KeptDevice `json:"keptDevices"`
+	// CPUAddress is where the adopted project has its CPU; Address the
+	// record's CPU, for a deploy source.
+	CPUAddress string `json:"cpuAddress"`
+	Address    string `json:"address,omitempty"`
+}
+
+// AdoptProject places an archive as a deploy's saved project; nothing
+// stays open. Open the returned Project to work on it.
+func (c *Client) AdoptProject(ctx context.Context, req AdoptRequest) (AdoptResult, error) {
+	if err := CheckProjectName(req.Name); err != nil {
+		return AdoptResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}
+	}
+	if (req.Archive == "") == (req.Deploy == "") {
+		return AdoptResult{}, &Error{Kind: KindBadRequest, Message: "adopt: name exactly one source, archive or deploy"}
+	}
+	if req.Archive != "" {
+		if err := checkPaths(req.Archive); err != nil {
+			return AdoptResult{}, err
+		}
+	}
+	var r AdoptResult
+	_, err := c.doJSON(ctx, http.MethodPost, "/v1/projects/adopt", req, &r)
+	return r, err
+}
+
 // Open opens a project or project archive in the work dir.
 func (c *Client) Open(ctx context.Context, path string) (*Session, error) {
 	if err := checkPaths(path); err != nil {
@@ -896,6 +958,9 @@ type CompareResult struct {
 	// BlindTrust is the agent's TIA instance's blind trust, or nil: a
 	// compare asks no TLS question of its own, so it may ride on it.
 	BlindTrust *BlindTrust `json:"blindTrust"`
+	// Address is the CPU compared with: the spec's, or for a project
+	// opened as found (no spec applied yet), the project's own.
+	Address string `json:"address,omitempty"`
 }
 
 // Compare compares the project with the CPU it was downloaded to.

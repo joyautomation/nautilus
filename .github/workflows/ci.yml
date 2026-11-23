@@ -391,6 +391,11 @@ jobs:
         env:
           NAUTILUS_REQUIRE_TIAD: '1'
         run: TIAD_FAKE_BIN="$PWD/tools/tiad/out/tiad-fake.exe" go test -count=1 -v ./siemens/tiad/...
+      # naut siemens deploy end to end against the same agent core (#1272).
+      - name: naut siemens deploy against tiad-fake (must run, not skip)
+        env:
+          NAUTILUS_REQUIRE_TIAD: '1'
+        run: TIAD_FAKE_BIN="$PWD/tools/tiad/out/tiad-fake.exe" go test -count=1 -v -run 'CSharpAgent' ./cmd/naut/
   # The race detector over the module (#752): a data race in runtime (#870)
   # went unnoticed because no job ran -race on it. Every package runs here
   # except the three slowest under -race (about 680 s of the module's 1300 s
