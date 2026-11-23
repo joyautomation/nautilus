@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -30,21 +32,43 @@ const MaxSnapshotBytes = 4 << 20
 type Fetcher struct {
 	// Secret returns a named secret of the secrets file ("user:password").
 	Secret func(name string) (string, bool)
-	// Client is the HTTP client; nil is one with a short connect timeout and no
-	// redirect to another host.
+	// Client is the HTTP client; nil is one with a short connect timeout, a
+	// bound on waiting for the camera's headers, and no redirect to another
+	// host or scheme.
 	Client *http.Client
+
+	learned sync.Map // camera id -> "basic" or "digest": what its camera asked for
 }
+
+// Bounds on a camera that does not answer or stops sending: a place is never
+// held by one.
+const (
+	dialTimeout   = 5 * time.Second
+	headerTimeout = 10 * time.Second
+	_streamIdle   = 15 * time.Second
+)
+
+// StreamIdle is how long a relayed stream may send nothing before it ends (a
+// variable so a test need not wait for it).
+var StreamIdle = _streamIdle
 
 func (f *Fetcher) client() *http.Client {
 	if f.Client != nil {
 		return f.Client
 	}
 	return &http.Client{
+		Transport: &http.Transport{
+			DialContext:           (&net.Dialer{Timeout: dialTimeout}).DialContext,
+			ResponseHeaderTimeout: headerTimeout,
+			MaxIdleConnsPerHost:   2,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return errors.New("too many redirects")
 			}
-			if req.URL.Host != via[0].URL.Host {
+			// the credentials ride the redirect, so it stays on the same host, port
+			// and scheme (https to http would send them in the clear)
+			if req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme {
 				return errors.New("a camera's URL redirected to another host")
 			}
 			return nil
@@ -80,7 +104,7 @@ func (f *Fetcher) Snapshot(ctx context.Context, c Camera) ([]byte, error) {
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, MaxSnapshotBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("reading the snapshot: %w", err)
+		return nil, readErr(err)
 	}
 	if len(b) > MaxSnapshotBytes {
 		return nil, fmt.Errorf("the camera's snapshot is larger than %d bytes", MaxSnapshotBytes)
@@ -118,8 +142,6 @@ func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, 
 		}
 		if authz != "" {
 			req.Header.Set("Authorization", authz)
-		} else if user != "" {
-			req.SetBasicAuth(user, pass)
 		}
 		resp, err := f.client().Do(req)
 		if err != nil {
@@ -127,18 +149,46 @@ func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, 
 		}
 		return resp, nil
 	}
-	resp, err := do("")
+	// No credential goes out before the camera asks for one, and then only in
+	// the scheme it asked for: a digest camera is never sent the password in
+	// basic. A camera that asked for basic once is sent it straight away after.
+	first := ""
+	if user != "" {
+		if v, _ := f.learned.Load(c.ID); v == "basic" {
+			first = basic(user, pass)
+		}
+	}
+	resp, err := do(first)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode == http.StatusUnauthorized && user != "" {
-		if ch := resp.Header.Get("Www-Authenticate"); strings.HasPrefix(strings.ToLower(ch), "digest ") {
-			resp.Body.Close()
-			pu, _ := url.Parse(u)
-			resp, err = do(digest(ch, user, pass, http.MethodGet, pu.RequestURI()))
-			if err != nil {
+		ch := resp.Header.Values("Www-Authenticate")
+		resp.Body.Close()
+		var authz string
+		for _, h := range ch {
+			switch lh := strings.ToLower(h); {
+			case strings.HasPrefix(lh, "digest "):
+				d, err := digest(h, user, pass, http.MethodGet, requestURI(u))
+				if err != nil {
+					return nil, err
+				}
+				authz = d
+				f.learned.Store(c.ID, "digest")
+			case strings.HasPrefix(lh, "basic") && authz == "":
+				authz = basic(user, pass)
+				f.learned.Store(c.ID, "basic")
+			}
+			if strings.HasPrefix(authz, "Digest ") {
+				break
+			}
+		}
+		if authz != "" {
+			if resp, err = do(authz); err != nil {
 				return nil, err
 			}
+		} else {
+			return nil, errors.New("the camera refused the controller's credentials")
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -175,14 +225,42 @@ func scrub(err error, _ string) error {
 	return errors.New("the camera did not answer")
 }
 
+func basic(user, pass string) string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+pass))
+}
+
+func requestURI(u string) string {
+	pu, err := url.Parse(u)
+	if err != nil {
+		return "/"
+	}
+	return pu.RequestURI()
+}
+
+// readErr says a picture could not be read, without the camera's address (a
+// transport error carries it).
+func readErr(err error) error {
+	var ne net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()) {
+		return errors.New("the camera stopped sending")
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	return errors.New("the camera's picture could not be read")
+}
+
 // digest answers an RFC 7616 digest challenge with MD5 (what cameras speak).
-func digest(challenge, user, pass, method, uri string) string {
+func digest(challenge, user, pass, method, uri string) (string, error) {
 	p := map[string]string{}
 	for _, part := range splitParams(challenge[len("digest "):]) {
 		k, v, ok := strings.Cut(part, "=")
 		if ok {
 			p[strings.ToLower(strings.TrimSpace(k))] = strings.Trim(strings.TrimSpace(v), `"`)
 		}
+	}
+	if alg := strings.ToLower(p["algorithm"]); alg != "" && alg != "md5" {
+		return "", errors.New("the camera asks for a digest algorithm the controller does not speak (MD5 only)")
 	}
 	h := func(s string) string { x := md5.Sum([]byte(s)); return hex.EncodeToString(x[:]) }
 	ha1 := h(user + ":" + p["realm"] + ":" + pass)
@@ -202,7 +280,7 @@ func digest(challenge, user, pass, method, uri string) string {
 	if o := p["opaque"]; o != "" {
 		out += fmt.Sprintf(`, opaque="%s"`, o)
 	}
-	return out
+	return out, nil
 }
 
 func splitParams(s string) []string {

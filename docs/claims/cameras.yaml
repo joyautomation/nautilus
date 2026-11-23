@@ -43,14 +43,23 @@ claims:
   - id: CAM-004
     claim: >-
       The controller fetches a still with the camera's credentials by basic or
-      digest authentication, refuses a snapshot that is larger than 4 MB or is
-      not a JPEG, refuses a redirect to another host, and says why a camera did
-      not answer without its address or a credential.
+      digest authentication, sending nothing until the camera asks and then only
+      in the scheme it asked for (a digest camera never sees the password in
+      basic), refuses a snapshot that is larger than 4 MB or is not a JPEG,
+      refuses a redirect to another host, port or scheme, refuses a digest
+      algorithm it does not speak, and says why a camera did not answer without
+      its address, its own bytes or a credential, whichever error the connection
+      or the stream parser raised; `naut check` warns on credentials over http.
     source: "#what-the-controller-does"
     tests:
       - go ./camera TestSnapshotFetchesWithBasicAndDigestCredentials
       - go ./camera TestSnapshotRefusesWhatIsNotAStillAndNeverRepeatsCredentialsOrAddress
+      - go ./camera TestErrorsFromABrokenCameraCarryNeitherItsAddressNorItsBytes
+      - go ./camera TestCredentialsAreSentOnlyAfterTheChallengeAndInItsScheme
+      - go ./camera TestARedirectKeepsHostPortAndScheme
+      - go ./camera TestACredentialInAURLsQueryIsRefused
       - go ./server TestCameraSnapshotsAreStillsFetchedWithTheControllersCredentials
+      - go ./internal/project TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant
 
   - id: CAM-005
     claim: >-
@@ -58,37 +67,54 @@ claims:
       ends the stream without reaching the browser, and a camera that is not a
       motion-JPEG stream is said so; a virtual camera is drawn by the controller
       and runs until the viewer leaves. A camera that refuses the controller is
-      a 502 with a reason, not an empty stream.
+      a 502 with a reason, not an empty stream, and one that stops sending ends
+      the stream instead of holding its place.
     source: "#what-the-controller-does"
     tests:
       - go ./camera TestRelayCarriesFramesAndEndsOnAPartThatIsNotAJPEG
       - go ./camera TestRelayOfAVirtualCameraRunsUntilTheViewerLeaves
+      - go ./camera TestAStreamThatGoesQuietEnds
       - go ./camera TestVirtualFrameIsAJPEGThatMoves
       - go ./server TestACameraThatRefusesTheControllerIsA502NotAnEmptyStream
 
   - id: CAM-006
     claim: >-
-      Viewing a camera needs read: a person who may not read, or is not signed
-      in, is refused before the camera is named, and the list tells no address,
-      URL or credential.
+      Viewing a camera needs read and the `camera` permission, held by every
+      built-in role that reads and removable per custom role (`deny: [camera]`):
+      a person with read and not camera is listed the cameras with view false,
+      is refused a still or stream with 403 "no permission to view cameras" and
+      the camera is never contacted for them; a refused live view is journalled;
+      a person who may not read, or is not signed in, is refused before the camera
+      is named; the list tells no address, URL or credential; /api/me lists the
+      permission only on a project with cameras. The permission is
+      whole-controller, not area-scoped, and not elevated.
     source: "#who-may-view"
     tests:
       - go ./server TestCamerasAreForReadersAndNeverTellAnAddress
+      - go ./server TestAPersonWithoutThePermissionToViewCamerasIsToldAndTheCameraIsNeverAsked
+      - go ./auth TestCameraIsItsOwnWholeControllerPermission
+      - go ./auth TestBuiltInRoles
     note: >-
       Read is whole-controller in the auth model, so a camera is not scoped to
       an area; that is stated on the page, not hidden.
 
   - id: CAM-007
     claim: >-
-      A live view is journalled when it starts and when it ends (with the
-      seconds and bytes), and a view that could not start is journalled as an
-      error. One camera's viewers are capped by `max-viewers` and the
-      controller's live streams by four, each refusal saying which cap, and a
-      place is given back when the viewer leaves.
+      A live view of a real camera is journalled when it starts and when it ends
+      (with the seconds, the bytes and why it ended), and a view that could not
+      start is journalled as an error. One camera's viewers are capped by
+      `max-viewers`, one person's streams by two and the controller's by four,
+      each refusal saying which cap, and a place is given back when the viewer
+      leaves. A view ends after its time limit and when the person signs out or
+      may no longer read; a still is fetched from a camera at most once a second
+      however many ask; a picture is answered never cached, never sniffed and
+      sandboxed; a HEAD is not a view.
     source: "#who-may-view"
     tests:
       - go ./server TestACameraStreamIsLiveJournalledAndCapped
-      - go ./camera TestLimiterHoldsTheCameraCapAndTheControllersCap
+      - go ./server TestALiveViewEndsWhenThePersonSignsOutOrTimeRunsOut
+      - go ./server TestStillsAreFetchedAtMostOnceASecondPerCamera
+      - go ./camera TestLimiterHoldsTheCameraCapTheControllersCapAndEachPersons
       - go ./camera TestMeterIsTheAverageSinceTheFirstByte
 
   - id: CAM-008

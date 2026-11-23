@@ -3,10 +3,12 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/audit"
@@ -50,6 +52,7 @@ type CameraOptions struct {
 	limit *camera.Limiter
 	mu    sync.Mutex
 	meter map[string]*camera.Meter
+	snaps map[string]*snapCache
 }
 
 // Install adds the cameras to the server's options: its routes.
@@ -71,6 +74,9 @@ func (co *CameraOptions) mount(s *Server, mux *http.ServeMux) {
 	}
 	if co.meter == nil {
 		co.meter = map[string]*camera.Meter{}
+	}
+	if co.snaps == nil {
+		co.snaps = map[string]*snapCache{}
 	}
 	co.mu.Unlock()
 	if co.Fetcher == nil {
@@ -114,11 +120,13 @@ const noView = "no permission to view cameras"
 
 // mayView reports whether the request's principal holds the camera permission;
 // always without an auth: block.
-func (a *cameraAPI) mayView(r *http.Request) bool {
+func (a *cameraAPI) mayView(r *http.Request) bool { return a.mayViewActor(a.s.actorOf(r)) }
+
+func (a *cameraAPI) mayViewActor(act actor) bool {
 	if a.s.policy == nil {
 		return true
 	}
-	return a.s.policy.Can(a.s.actorOf(r).pr, auth.Camera, auth.All).Allowed
+	return a.s.policy.Can(act.pr, auth.Camera, auth.All).Allowed
 }
 
 func (a *cameraAPI) list(w http.ResponseWriter, r *http.Request) {
@@ -169,6 +177,46 @@ func (a *cameraAPI) camera(w http.ResponseWriter, r *http.Request) (camera.Camer
 	return c, true
 }
 
+// A still is fetched at most once a second per camera, whoever asks: the page
+// asks every few seconds, and a reader who polls in a loop must not turn the
+// camera into live video the caps do not see, nor open a session at the camera
+// for each request. A camera that did not answer is not asked again for two.
+const (
+	snapshotTTL    = time.Second
+	snapshotErrTTL = 2 * time.Second
+)
+
+type snapCache struct {
+	mu  sync.Mutex
+	at  time.Time
+	b   []byte
+	err error
+}
+
+func (a *cameraAPI) cached(c camera.Camera) ([]byte, error) {
+	a.co.mu.Lock()
+	sc := a.co.snaps[c.ID]
+	if sc == nil {
+		sc = &snapCache{}
+		a.co.snaps[c.ID] = sc
+	}
+	a.co.mu.Unlock()
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	ttl := snapshotTTL
+	if sc.err != nil {
+		ttl = snapshotErrTTL
+	}
+	if !sc.at.IsZero() && time.Since(sc.at) < ttl {
+		return sc.b, sc.err
+	}
+	// not the request's context: the person who asked first leaving must not
+	// fail the ones waiting on the same fetch (the fetch has its own timeout)
+	sc.b, sc.err = a.co.Fetcher.Snapshot(context.Background(), c)
+	sc.at = time.Now()
+	return sc.b, sc.err
+}
+
 func (a *cameraAPI) snapshot(w http.ResponseWriter, r *http.Request) {
 	c, ok := a.camera(w, r)
 	if !ok {
@@ -178,37 +226,60 @@ func (a *cameraAPI) snapshot(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "this camera has no snapshot source: name a snapshot-url in its row"})
 		return
 	}
-	var lines []string
-	if c.Kind == camera.KindVirtual && a.co.Lines != nil {
-		lines = a.co.Lines(c)
-	}
 	var b []byte
 	var err error
 	if c.Kind == camera.KindVirtual {
+		var lines []string
+		if a.co.Lines != nil {
+			lines = a.co.Lines(c)
+		}
 		b = camera.VirtualFrame(c.Label, lines, time.Now())
 	} else {
-		b, err = a.co.Fetcher.Snapshot(r.Context(), c)
+		b, err = a.cached(c)
 	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
+	pictureHeaders(w, "image/jpeg")
 	w.Write(b)
 }
+
+// pictureHeaders are what a picture from a camera is answered with: never
+// cached, never sniffed, and sandboxed should a browser be made to render it.
+func pictureHeaders(w http.ResponseWriter, contentType string) {
+	h := w.Header()
+	h.Set("Content-Type", contentType)
+	h.Set("Cache-Control", "no-store")
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("Content-Security-Policy", "sandbox; default-src 'none'")
+}
+
+// maxLiveView is how long one live view runs: the page asks again if the person
+// is still watching, and a stalled or forgotten tab does not hold a place for
+// ever (a variable so a test need not wait).
+var maxLiveView = 15 * time.Minute
+
+// liveWriteTimeout bounds one write to the browser: a client that stops reading
+// does not hold its place.
+const liveWriteTimeout = 10 * time.Second
 
 func (a *cameraAPI) stream(w http.ResponseWriter, r *http.Request) {
 	c, ok := a.camera(w, r)
 	if !ok {
 		return
 	}
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "a live stream is a GET"})
+		return
+	}
 	if !c.Live() {
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "live video of a " + c.Kind + " camera is not built in yet: its snapshots work"})
 		return
 	}
-	release, err := a.co.limit.Acquire(c)
+	who := a.s.principalOf(r)
+	release, err := a.co.limit.Acquire(c, who)
 	if err != nil {
 		code := http.StatusServiceUnavailable
 		if errors.Is(err, camera.ErrBusy) {
@@ -222,40 +293,78 @@ func (a *cameraAPI) stream(w http.ResponseWriter, r *http.Request) {
 	if a.co.limit.Watching(c.ID) == 1 {
 		m.Reset() // the first viewer: the rate is this stream's
 	}
-	fl, _ := w.(http.Flusher)
-	flush := func() {
-		if fl != nil {
-			fl.Flush()
+	// The view ends when its time is up, when the viewer leaves, and when the
+	// person may no longer read or view cameras (signed out, disabled, a role
+	// changed): checked every second, as /api/stream is.
+	ctx, cancel := context.WithTimeout(r.Context(), maxLiveView)
+	defer cancel()
+	var revoked atomic.Bool
+	go func() {
+		t := time.NewTicker(streamRecheck)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if !a.stillMay(r) {
+					revoked.Store(true)
+					cancel()
+					return
+				}
+			}
 		}
-	}
-	who, from, sess := a.s.principalOf(r), r.RemoteAddr, a.s.sessionOfEntry(r)
+	}()
+	rc := http.NewResponseController(w)
+	flush := func() { _ = rc.Flush() }
+	// A virtual camera shows nothing of the plant, so its views are not journalled
+	// (a demo opened and closed in a loop would otherwise fill the journal).
+	journal := c.Kind != camera.KindVirtual
+	from, sess := a.s.clientAddr(r), a.s.sessionOfEntry(r)
 	started := time.Now()
 	// the answer begins with the first frame, so a camera that refuses the
 	// controller is a 502 with a reason, not an empty stream
-	out := &streamWriter{w: w, begin: func() {
-		w.Header().Set("Content-Type", camera.MJPEGContentType)
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
+	out := &streamWriter{w: w, rc: rc, begin: func() {
+		pictureHeaders(w, camera.MJPEGContentType)
 		w.WriteHeader(http.StatusOK)
-		a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: who, Source: audit.SourceHMI, Result: audit.ResultOK, From: from, Session: sess,
-			Detail: map[string]any{"event": "start", "asset": c.Asset}})
+		if journal {
+			a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: who, Source: audit.SourceHMI, Result: audit.ResultOK, From: from, Session: sess,
+				Detail: map[string]any{"event": "start", "asset": c.Asset}})
+		}
 	}}
 	var lines func() []string
 	if c.Kind == camera.KindVirtual && a.co.Lines != nil {
 		lines = func() []string { return a.co.Lines(c) }
 	}
-	rerr := a.co.Fetcher.Relay(r.Context(), c, lines, out, flush, m)
+	rerr := a.co.Fetcher.Relay(ctx, c, lines, out, flush, m)
 	if !out.began {
-		a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: who, Source: audit.SourceHMI, Result: audit.ResultError, From: from, Session: sess,
-			Detail: map[string]any{"event": "start", "asset": c.Asset, "error": errText(rerr)}})
+		if journal {
+			a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: who, Source: audit.SourceHMI, Result: audit.ResultError, From: from, Session: sess,
+				Detail: map[string]any{"event": "start", "asset": c.Asset, "error": errText(rerr)}})
+		}
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": errText(rerr)})
 		return
 	}
+	if !journal {
+		return
+	}
 	d := map[string]any{"event": "stop", "asset": c.Asset, "seconds": int(time.Since(started).Seconds()), "bytes": out.n}
-	if rerr != nil {
+	switch {
+	case revoked.Load():
+		d["ended"] = "the person may no longer view this camera"
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		d["ended"] = "the live view reached its time limit"
+	case rerr != nil:
 		d["ended"] = rerr.Error()
 	}
 	a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: who, Source: audit.SourceHMI, Result: audit.ResultOK, From: from, Session: sess, Detail: d})
+}
+
+// stillMay reports whether the request's person may still read and view
+// cameras, resolved afresh: a session's expiry, a revoked or disabled user, a
+// role changed to one without the camera permission.
+func (a *cameraAPI) stillMay(r *http.Request) bool {
+	return a.s.streamMayRead(r) && a.mayViewActor(a.s.resolveActor(r))
 }
 
 func errText(err error) string {
@@ -265,9 +374,11 @@ func errText(err error) string {
 	return err.Error()
 }
 
-// streamWriter starts the response at the first byte and counts what it carries.
+// streamWriter starts the response at the first byte, counts what it carries and
+// bounds each write.
 type streamWriter struct {
 	w     http.ResponseWriter
+	rc    *http.ResponseController
 	begin func()
 	began bool
 	n     int64
@@ -278,6 +389,7 @@ func (s *streamWriter) Write(p []byte) (int, error) {
 		s.began = true
 		s.begin()
 	}
+	_ = s.rc.SetWriteDeadline(time.Now().Add(liveWriteTimeout))
 	n, err := s.w.Write(p)
 	s.n += int64(n)
 	return n, err

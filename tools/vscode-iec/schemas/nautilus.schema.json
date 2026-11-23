@@ -246,7 +246,8 @@
                     "override",
                     "redundancy",
                     "checkout",
-                    "signoff"
+                    "signoff",
+                    "camera"
                   ]
                 }
               },
@@ -273,7 +274,8 @@
                     "override",
                     "redundancy",
                     "checkout",
-                    "signoff"
+                    "signoff",
+                    "camera"
                   ]
                 }
               }

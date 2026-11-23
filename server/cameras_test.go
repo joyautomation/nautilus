@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -78,6 +79,7 @@ func TestCameraSnapshotsAreStillsFetchedWithTheControllersCredentials(t *testing
 	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u, p, ok := r.BasicAuth()
 		if !ok || p != "hunter2" {
+			w.Header().Set("Www-Authenticate", `Basic realm="cam"`)
 			w.WriteHeader(401)
 			return
 		}
@@ -121,6 +123,27 @@ func TestCameraSnapshotsAreStillsFetchedWithTheControllersCredentials(t *testing
 	}
 }
 
+// mjpegBackend is a camera that streams a frame every 50 ms until the controller
+// hangs up.
+func mjpegBackend(t *testing.T) *httptest.Server {
+	t.Helper()
+	jb := camJPEG(t)
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=cam")
+		for {
+			fmt.Fprintf(w, "--cam\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(jb))
+			w.Write(jb)
+			io.WriteString(w, "\r\n")
+			w.(http.Flusher).Flush()
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	}))
+}
+
 // open starts a live stream and returns a reader of its frames and a stop.
 func camOpen(t *testing.T, ts *httptest.Server, id, tok string) (*http.Response, context.CancelFunc) {
 	t.Helper()
@@ -136,8 +159,10 @@ func camOpen(t *testing.T, ts *httptest.Server, id, tok string) (*http.Response,
 }
 
 func TestACameraStreamIsLiveJournalledAndCapped(t *testing.T) {
+	back := mjpegBackend(t)
+	defer back.Close()
 	srv, toks := camServer(t, []camera.Camera{
-		{ID: "one", Asset: "A1", Kind: camera.KindVirtual, MaxViewers: 1},
+		{ID: "one", Asset: "A1", Kind: camera.KindMJPEG, URL: back.URL, MaxViewers: 1},
 		{ID: "two", Asset: "A1", Kind: camera.KindVirtual},
 	}, nil)
 	ts := httptest.NewServer(srv.Handler())
@@ -301,5 +326,111 @@ func TestAPersonWithoutThePermissionToViewCamerasIsToldAndTheCameraIsNeverAsked(
 	}
 	if me := call(t, srv, "GET", "/api/me", "", blind).Body.String(); strings.Contains(me, `"camera"`) {
 		t.Errorf("/api/me lists a permission the person does not hold: %s", me)
+	}
+}
+
+// A still is fetched from the camera at most once a second, however many ask,
+// and a camera that did not answer is not asked again at once: polling the
+// still in a loop is not live video that the caps cannot see.
+func TestStillsAreFetchedAtMostOnceASecondPerCamera(t *testing.T) {
+	var hits, fail atomic.Int64
+	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Write(camJPEG(t))
+	}))
+	defer back.Close()
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fail.Add(1); w.WriteHeader(500) }))
+	defer down.Close()
+	srv, toks := camServer(t, []camera.Camera{
+		{ID: "ok", Asset: "A", Kind: camera.KindSnapshot, URL: back.URL},
+		{ID: "bad", Asset: "A", Kind: camera.KindSnapshot, URL: down.URL},
+	}, nil)
+	eng := bearer(toks["akhan"])
+	for i := 0; i < 20; i++ {
+		if rec := call(t, srv, "GET", "/api/cameras/ok/snapshot", "", eng); rec.Code != 200 {
+			t.Fatalf("still %d: %d", i, rec.Code)
+		}
+		if rec := call(t, srv, "GET", "/api/cameras/bad/snapshot", "", eng); rec.Code != 502 {
+			t.Fatalf("a failing camera: %d", rec.Code)
+		}
+	}
+	if hits.Load() != 1 || fail.Load() != 1 {
+		t.Errorf("20 requests each reached the cameras %d and %d times, want 1 and 1", hits.Load(), fail.Load())
+	}
+}
+
+// A live view ends when its person signs out, and when it has run for its time
+// limit; a picture is never cached, sniffed or rendered by a browser, and a HEAD
+// does not take a place.
+func TestALiveViewEndsWhenThePersonSignsOutOrTimeRunsOut(t *testing.T) {
+	oldRe, oldMax := streamRecheck, maxLiveView
+	streamRecheck = 20 * time.Millisecond
+	t.Cleanup(func() { streamRecheck, maxLiveView = oldRe, oldMax })
+	back := mjpegBackend(t)
+	defer back.Close()
+	srv, toks := camServer(t, []camera.Camera{{ID: "m", Asset: "A", Kind: camera.KindMJPEG, URL: back.URL}}, nil)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// signed in by a cookie; signing out ends the stream
+	c := signIn(t, srv, "akhan")
+	req, _ := http.NewRequest("GET", ts.URL+"/api/cameras/m/stream", nil)
+	cookieFrom(c)(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("a signed-in stream: %v %v", err, resp)
+	}
+	if h := resp.Header.Get("Content-Security-Policy"); !strings.Contains(h, "sandbox") || resp.Header.Get("X-Content-Type-Options") != "nosniff" || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Errorf("a picture's headers: %v", resp.Header)
+	}
+	ended := make(chan struct{})
+	go func() { io.Copy(io.Discard, resp.Body); close(ended) }()
+	select {
+	case <-ended:
+		t.Fatal("the stream ended on its own")
+	case <-time.After(150 * time.Millisecond):
+	}
+	call(t, srv, "POST", "/api/signout", "", withCookie(c.Value), ownOrigin, fromLoopback)
+	select {
+	case <-ended:
+	case <-time.After(3 * time.Second):
+		resp.Body.Close()
+		t.Fatal("a signed-out person kept watching")
+	}
+	waitStop := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			for _, e := range srv.audit.ring.Recent() {
+				if e.Action == "camera.view" && e.Detail["event"] == "stop" && strings.Contains(fmt.Sprint(e.Detail["ended"]), want) {
+					return
+				}
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		t.Errorf("no stop entry says %q", want)
+	}
+	waitStop("may no longer view")
+
+	// the time limit
+	maxLiveView = 200 * time.Millisecond
+	r2, stop := camOpen(t, ts, "m", toks["akhan"])
+	defer stop()
+	done := make(chan struct{})
+	go func() { io.Copy(io.Discard, r2.Body); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		stop()
+		t.Fatal("a live view outlived its time limit")
+	}
+	waitStop("time limit")
+
+	// HEAD is not a view
+	hreq, _ := http.NewRequest("HEAD", ts.URL+"/api/cameras/m/stream", nil)
+	hreq.Header.Set("Authorization", "Bearer "+toks["akhan"])
+	hr, err := http.DefaultClient.Do(hreq)
+	if err != nil || hr.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("HEAD on a stream: %v %v", err, hr)
 	}
 }

@@ -51,7 +51,11 @@ func TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant(t *testing.T) {
 	if len(errs) != 1 || !strings.Contains(errs[0], `camera "belt": asset Nowhere: plant.yaml has no equipment with that id`) {
 		t.Errorf("errors: %v", errs)
 	}
-	if len(warns) != 1 || !strings.Contains(warns[0], `camera "gate" (rtsp)`) || !strings.Contains(warns[0], "no snapshot-url") {
+	if len(warns) != 2 {
+		t.Errorf("warnings: %v", warns)
+	}
+	all := strings.Join(warns, "\n")
+	if !strings.Contains(all, `camera "gate" (rtsp)`) || !strings.Contains(all, "no snapshot-url") || !strings.Contains(all, `camera "dock": credentials: true over http://`) {
 		t.Errorf("warnings: %v", warns)
 	}
 }

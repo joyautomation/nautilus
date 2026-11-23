@@ -50,7 +50,12 @@ naut alarms secrets set camera.bin-top
 
 `naut check` says which cameras need credentials the file does not hold. The
 controller reads the file when a picture is asked for, so a changed password
-needs no restart. It speaks basic and digest authentication to the camera.
+needs no restart. It speaks basic and digest authentication to the camera, and
+sends nothing until the camera asks for credentials, then only in the scheme it
+asked for. Over plain `http://` that is the password in the clear (basic) or
+hashed (digest) on the plant network: `naut check` warns, and a camera that has
+`https://` should use it. A URL with a user name, password or token in its query
+(`?user=`, `?pwd=`, `?token=`) is refused like one with them in its authority.
 
 ## What the controller does
 
@@ -59,10 +64,16 @@ controller fetches only the URLs of the manifest's rows, with the camera's
 credentials. Nothing in an answer, an error or a log carries the camera's
 address or a credential: a camera that cannot be reached is "the camera did not
 answer", with the reason in one word (connection refused, timed out, its host
-name does not resolve). A camera that redirects to another host is refused. A
-snapshot larger than 4 MB, or one that is not a JPEG, is refused. A motion-JPEG
-stream that sends a part that is not a JPEG, or a frame larger than 4 MB, is
-ended.
+name does not resolve). A camera that redirects to another host, port or scheme (https to http) is
+refused. A snapshot larger than 4 MB, or one that is not a JPEG, is refused. A
+motion-JPEG stream that sends a part that is not a JPEG, a malformed part or a
+frame larger than 4 MB is ended, and one that sends nothing for 15 seconds is
+ended: a camera never holds a place. Errors from the camera's connection are
+replaced by fixed words, so a reset connection never tells the browser or the
+journal where the camera is.
+
+A still is fetched from the camera at most once a second per camera, however many
+people ask, and a camera that did not answer is not asked again for two seconds.
 
 | Route | Answers |
 |---|---|
@@ -72,18 +83,39 @@ ended.
 
 ## Who may view
 
-Viewing a camera needs the `read` permission, as the live values it sits beside
-do. `read` is whole-controller: it is not scoped to an area, so neither is a
-camera. A person with no `read` (or no sign-in, on a project with an `auth:`
-block) is refused by the same gate that refuses every API read, before the
-camera is named. A permission to view cameras per area is a decision for the
-plant's owner, not made here.
+Video of a plant floor shows people, which is more sensitive than a tag value,
+and a site often gives a contractor or a remote viewer `read` without wanting
+them to watch the floor. So viewing a camera needs the `camera` permission as
+well as `read`. Every built-in role that reads holds it (so a project with no
+`auth:` block, and every existing role setup, keeps working), and a custom role
+takes it away:
 
-A live view is journalled twice: `camera.view` with `event: start` when the
-first frame is sent, and with `event: stop` when it ends, with the seconds and
-the bytes it carried. A view that could not start (the camera refused the
-controller) is journalled as an error. Stills are not journalled: the asset page
-asks for one every few seconds.
+```yaml
+auth:
+  roles:
+    contractor:
+      inherits: viewer
+      deny: [camera]
+```
+
+`camera` is **whole-controller**: it is not scoped to an area, so a person
+fenced to one area's tags who holds it may view every camera. Neither is `read`
+scoped to an area in the auth model; per-area viewing is a separate, bigger
+question that is not answered here. A person with `read` and no `camera` sees the
+asset's cameras listed with "no permission to view cameras" in place of a
+picture, and the controller never contacts the camera for them. A refused live
+view is journalled (`camera.view`, refused). A person with no `read`, or no
+sign-in on a project with an `auth:` block, is refused by the same gate that
+refuses every API read, before the camera is named. `/api/me` lists the
+permission only on a project that has cameras.
+
+A live view of a real camera is journalled twice: `camera.view` with `event:
+start` when the first frame is sent, and with `event: stop` when it ends, with the
+seconds, the bytes it carried and why it ended if it was not the viewer leaving.
+A view that could not start (the camera refused the controller) is journalled as
+an error. Stills are not journalled (the asset page asks for one every few
+seconds, and they are fetched at most once a second), and neither are views of a
+virtual camera, which shows nothing of the plant.
 
 ## On the asset page
 
@@ -101,9 +133,12 @@ second. One live stream can use all of it and starve the tag values. That is why
 the page starts with a still and why live video is an explicit click with its
 bitrate on screen: it is the operator's choice, at a cost.
 
-Two caps bound it. `max-viewers` limits one camera, and a controller relays at
-most **four live streams at once** across every camera. A person over the cap is
-told which one it is.
+Three caps bound it: `max-viewers` limits one camera, one person (or token)
+may hold at most **two** live streams, and a controller relays at most **four
+at once** across every camera. A person over a cap is told which one it is.
+A live view also ends after **15 minutes** (the picture stops: click Watch live again), when
+the person signs out or may no longer read, and when the browser stops reading
+(each write to it has a 10-second limit).
 
 ## What is not here yet
 

@@ -5,7 +5,7 @@
 	// away. The still pauses while the tab is hidden and refreshes the moment
 	// it is visible again. A failure shows the controller's own words.
 	import { onMount } from 'svelte';
-	import { CameraClient, formatBps, nextState, watchingText, isLive, INITIAL, LIVE_CAPTION, type Camera, type CameraEvent, type CameraState } from '../camera.js';
+	import { CameraClient, formatBps, nextState, watchingText, isLive, INITIAL, LIVE_CAPTION, type Camera, type CameraEvent, type CameraState, NO_VIEW } from '../camera.js';
 
 	let { camera, client }: { camera: Camera; client: CameraClient } = $props();
 
@@ -84,6 +84,9 @@
 		<span class="name">{camera.label}</span>
 		<span class="mode">{live ? 'Live video' : 'Still image, refreshes every ' + camera.interval + ' s'}</span>
 	</figcaption>
+	{#if !camera.view}
+		<p class="msg bad" role="status">{NO_VIEW}</p>
+	{:else}
 	{#key live}
 		<img {src} {alt} onerror={failed} onload={loaded} />
 	{/key}
@@ -99,6 +102,7 @@
 	<p class="msg" class:bad={st.message !== ''} role="status" aria-live="polite">
 		{#if st.message}{st.mode === 'busy' ? 'Live video is not available right now: ' : 'Camera: '}{st.message}{/if}
 	</p>
+	{/if}
 </figure>
 
 <style>

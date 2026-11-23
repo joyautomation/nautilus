@@ -5,6 +5,7 @@ package project
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/joyautomation/nautilus/camera"
 )
@@ -33,6 +34,14 @@ func (p *Project) CheckCameras() (errs, warns []string) {
 		default:
 			if _, ok := p.Plant.Find(c.Asset); !ok {
 				errs = append(errs, fmt.Sprintf("camera %q: asset %s: plant.yaml has no equipment with that id", c.ID, c.Asset))
+			}
+		}
+		if c.Credentials {
+			for _, u := range []string{c.URL, c.SnapshotURL} {
+				if strings.HasPrefix(strings.ToLower(u), "http://") {
+					warns = append(warns, fmt.Sprintf("camera %q: credentials: true over http://: the controller sends the camera's password in the clear (basic) or hashed (digest) on the plant network; use https:// if the camera has it", c.ID))
+					break
+				}
 			}
 		}
 		switch c.Kind {
