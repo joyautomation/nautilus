@@ -137,15 +137,12 @@ func (pw *progWriter) assigned(b *strings.Builder, in string, at int, target st.
 	if !isShared {
 		return
 	}
-	if pw.w.typeRefusal(g.Type, map[string]bool{}) != "" {
-		return // the tags DB refuses the tag's type, once
-	}
 	flag := quote(sh.db) + ".assigned." + sclName(g.Name)
 	if bit >= 0 {
 		pw.emit(b, at, "%s%s%s.%%X%d := TRUE;\n", in, flag, path, bit)
 		return
 	}
-	ls, why := pw.w.leaves(typ, path)
+	ls, why := pw.w.paths(typ, path)
 	if why != "" {
 		pw.diag("siemens/task", at, why)
 		return
@@ -324,7 +321,7 @@ func (w *writer) obSource(ob OB, instDB string, sh *share) ([]byte, string) {
 		if w.typeRefusal(g.Type, map[string]bool{}) != "" {
 			continue // the tags DB refuses the tag's type, once
 		}
-		ls, why := w.leaves(g.Type, "")
+		ls, why := w.paths(g.Type, "")
 		if why != "" {
 			return nil, fmt.Sprintf("tag %s: %s", g.Name, why)
 		}
@@ -365,4 +362,25 @@ func (w *writer) obSource(ob OB, instDB string, sh *share) ([]byte, string) {
 	}
 	b.WriteString("END_ORGANIZATION_BLOCK\n")
 	return []byte(b.String()), ""
+}
+
+// paths are the elementary members of a declared type at any depth (the
+// type itself when it is not a struct), spelt as leaves() spells them:
+// what a copy and its flags walk. Unlike leaves() it needs no zero value
+// (a shared TOD or LWORD is copied all the same); a type the tags DB
+// refuses never gets here.
+func (w *writer) paths(typ, path string) ([]leaf, string) {
+	sd := w.structOf(typ)
+	if sd == nil {
+		return []leaf{{path: path, typ: strings.ToUpper(strings.TrimSpace(typ))}}, ""
+	}
+	var out []leaf
+	for _, f := range sd.fields {
+		ls, why := w.paths(f.Datatype, path+"."+sclName(f.Name))
+		if why != "" {
+			return nil, why
+		}
+		out = append(out, ls...)
+	}
+	return out, ""
 }

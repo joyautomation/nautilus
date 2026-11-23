@@ -199,3 +199,42 @@ func TestSharedTagOfARefusedTypeIsReportedOnce(t *testing.T) {
 		t.Errorf("STRING reported %d times: %v", n, diags)
 	}
 }
+
+// TestSharedTagsOfEveryElementaryType: a shared tag is copied and
+// written back whatever its type, also one with no zero value for a
+// temp's reset (LWORD, CHAR).
+func TestSharedTagsOfEveryElementaryType(t *testing.T) {
+	types := []string{"BOOL", "BYTE", "WORD", "DWORD", "LWORD", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "REAL", "LREAL", "TIME", "CHAR"}
+	var globals []Global
+	var ext, body strings.Builder
+	for i, typ := range types {
+		name := fmt.Sprintf("T%d", i)
+		globals = append(globals, Global{Name: name, Type: typ})
+		fmt.Fprintf(&ext, "%s : %s; ", name, typ)
+		fmt.Fprintf(&body, "%s := %s;\n", name, name)
+	}
+	prog := func(name string) Program {
+		return Program{Path: name + ".st", Source: "PROGRAM " + name + "\nVAR_EXTERNAL " + ext.String() + "END_VAR\n" + body.String() + "END_PROGRAM\n"}
+	}
+	out, diags, err := Write(Input{
+		Programs: []Program{prog("A"), prog("B")},
+		Globals:  globals,
+		Tasks:    []Task{{Name: "main", Program: "A", Interval: time.Second}, {Name: "b", Program: "B", Interval: time.Second}},
+	})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	for _, f := range out.Files {
+		if f.Path != "OB_b.scl" {
+			continue
+		}
+		for i := range types {
+			want := fmt.Sprintf("\tIF \"Scan_b\".assigned.T%d THEN\n\t\t\"Tags\".T%d := \"Scan_b\".tags.T%d;\n", i, i, i)
+			if !strings.Contains(string(f.Data), want) {
+				t.Errorf("OB_b lacks the write-back of %s:\n%s", types[i], f.Data)
+			}
+		}
+		return
+	}
+	t.Fatalf("no OB_b.scl in %v", out.Files)
+}
