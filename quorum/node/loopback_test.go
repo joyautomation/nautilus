@@ -135,6 +135,16 @@ func newClusterHere(t *testing.T) *cluster {
 		c.ctl[id] = &member{id: id, state: fmt.Sprintf("%s/%s.state", dir, id)}
 	}
 	t.Cleanup(c.shutdown)
+	// Any failure, not only steady()'s, says what each controller's votes
+	// did in its last two leases: a /dup or a wait that timed out on a
+	// stalled process shows as a gap in the sends (#1120).
+	t.Cleanup(func() {
+		if t.Failed() {
+			for _, id := range []quorum.NodeID{"a", "b"} {
+				t.Logf("%s", c.voteTrail(id, leases(2)))
+			}
+		}
+	})
 	go c.monitor()
 	return c
 }
