@@ -594,9 +594,16 @@ const defaultLog = `<script>
 // defaultAlarms is the alarms page the bar's alarm banner opens: the
 // active ones, to acknowledge and shelve.
 const defaultAlarms = `<script>
-	import { AlarmTable, OutOfServicePanel, FloodBanner } from '@joyautomation/nautilus-hmi';
+	import { AlarmTable, AlarmTuning, OutOfServicePanel, FloodBanner } from '@joyautomation/nautilus-hmi';
 	import { alarms } from 'nx:default/client';
 	let focus = $state(false);
+	// what would stop each chattering alarm: read when the number chattering
+	// changes (a derived, so a frame that changes nothing does not refetch)
+	const chattering = $derived(alarms.summary?.chattering ?? 0);
+	$effect(() => {
+		if (chattering) void alarms.loadAdvice();
+		else alarms.advice = null;
+	});
 	let now = $state(Date.now());
 	$effect(() => {
 		const id = setInterval(() => (now = Date.now()), 1000);
@@ -621,6 +628,9 @@ const defaultAlarms = `<script>
 			onshelve={(id, until, by) => alarms.shelve(id, Math.max(1, Math.round((until - Date.now()) / 1000)), by)}
 			onunshelve={(id, by) => alarms.unshelve(id, by)}
 		/>
+		{#if alarms.advice?.alarms.length}
+			<AlarmTuning advice={alarms.advice} onrefresh={() => alarms.loadAdvice()} />
+		{/if}
 		<OutOfServicePanel
 			alarms={alarms.instances}
 			equipmentList={alarms.equipment}

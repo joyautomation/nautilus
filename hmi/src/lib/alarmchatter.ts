@@ -128,3 +128,16 @@ export function reasonProblem(reason: string): string {
 
 /** The default shelve length of the chatter dialog, in seconds (`shelve-suggest`, 15 min). */
 export const SHELVE_SUGGEST_S = 15 * 60;
+
+/** "on-delay 5 s, off-delay 0 s": the delays an alarm runs with, for a line of text. */
+export function delaysText(onMs: number, offMs: number): string {
+	return `on-delay ${spanText(onMs)}, off-delay ${spanText(offMs)}`;
+}
+
+/**
+ * What the suggestion says in one line: "5 s on-delay: 7 bounces in 60 s
+ * become 1" is the controller's own `why`; with none, why there is none.
+ */
+export function adviceLine(a: { suggestion?: { why: string } }): string {
+	return a.suggestion ? a.suggestion.why : 'No longer delay would have stopped it: look at the signal itself.';
+}

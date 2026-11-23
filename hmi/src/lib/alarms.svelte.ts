@@ -202,6 +202,36 @@ export interface AlarmFlood extends AlarmFloodBrief {
 	groups: AlarmFloodGroup[];
 }
 
+/** One chattering alarm and what would have helped it (`GET /api/alarms/chatter`). */
+export interface AlarmAdvice {
+	id: string;
+	name: string;
+	priority: Priority;
+	chatter: AlarmChatter;
+	/** The delays the alarm runs with now, in ms. */
+	onDelayMs: number;
+	offDelayMs: number;
+	/** Absent when no longer delay on the ladder would have stopped it. */
+	suggestion?: {
+		onDelayMs: number;
+		offDelayMs: number;
+		/** The most activations in one window, before and with the suggestion. */
+		before: number;
+		after: number;
+		bounces: number;
+		sinceMs: number;
+		why: string;
+	};
+	/** The suggestion as a tuning overlay row, ready to paste. */
+	row?: string;
+}
+
+export interface AlarmAdviceAnswer {
+	alarms: AlarmAdvice[];
+	/** The limits of the replay, in words. */
+	note: string;
+}
+
 /** The newest unacknowledged alarm, carried on the summary for the banner
  * (`alarm.Brief` in Go). */
 export interface AlarmBrief {
@@ -369,6 +399,8 @@ export class AlarmClient {
 	equipment = $state<string[]>([]);
 	/** The flood in progress, with first-out and groups; null when there is none. */
 	flood = $state<AlarmFlood | null>(null);
+	/** Delay suggestions for the alarms chattering now; null until asked for. */
+	advice = $state<AlarmAdviceAnswer | null>(null);
 	/** True while a fetch of the full list is in flight. */
 	loading = $state(false);
 	/** Last fetch/ack/shelve error message, if any. Cleared on the next
@@ -442,6 +474,21 @@ export class AlarmClient {
 			this.error = 'fetch failed — controller unreachable';
 		} finally {
 			this.loading = false;
+		}
+	}
+
+	/** `GET /api/alarms/chatter`: what would have stopped each chattering alarm.
+	 * Advisory and read-only; a failed read keeps the last answer. */
+	async loadAdvice(): Promise<void> {
+		try {
+			const res = await kitFetch(`${this.#url}/chatter`, { headers: authHeaders(this.#token, false) });
+			if (!res.ok) {
+				this.error = refusalMessage(res.status, await res.text(), `suggestions failed`);
+				return;
+			}
+			this.advice = (await res.json()) as AlarmAdviceAnswer;
+		} catch {
+			this.error = 'suggestions failed — controller unreachable';
 		}
 	}
 
