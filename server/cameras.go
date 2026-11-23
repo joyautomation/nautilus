@@ -5,10 +5,12 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/camera"
 )
 
@@ -20,10 +22,13 @@ import (
 //
 // The browser names a camera by id and never by address: the controller
 // fetches only the URLs of the manifest's rows, with the camera's credentials,
-// which no response carries. Who may view a camera is the read permission on
-// the whole controller, as for the live values it sits beside: read is not
-// area-scoped in the auth model, so neither is a camera (a permission to view
-// cameras per area is a decision for the plant's owner, #724). A live stream is journalled
+// which no response carries. Viewing needs read (the gate in front of every API
+// read) and the camera permission: video of a plant floor shows people, so a
+// contractor or a remote viewer may be given values and not the floor. Both are
+// whole-controller: read is not area-scoped in the auth model and the camera
+// permission is not either (per-area is a bigger question, #724). The list says
+// which cameras exist and whether the person may view them, so the page can say
+// "no permission" rather than show a broken image. A live stream is journalled
 // (camera.view) when it starts and when it ends, with the bytes it carried; a
 // still is not, since the asset page asks for one every few seconds. Live
 // viewers are capped per camera and across the controller (a slow radio link
@@ -50,6 +55,7 @@ type CameraOptions struct {
 // Install adds the cameras to the server's options: its routes.
 func (co *CameraOptions) Install(o *Options) {
 	o.Mounts = append(o.Mounts, co.mount)
+	o.ShownPermissions = append(o.ShownPermissions, auth.Camera)
 }
 
 type cameraAPI struct {
@@ -83,9 +89,12 @@ type cameraView struct {
 	Kind       string `json:"kind"`
 	Interval   int    `json:"interval"`
 	MaxViewers int    `json:"maxViewers"`
-	Live       bool   `json:"live"`
-	Snapshot   bool   `json:"snapshot"`
-	Watching   int    `json:"watching"`
+	// View says whether the person may view cameras: false, and the page says
+	// they have no permission instead of asking for a picture.
+	View     bool `json:"view"`
+	Live     bool `json:"live"`
+	Snapshot bool `json:"snapshot"`
+	Watching int  `json:"watching"`
 	// Bps is what the live relay is carrying now, for the page to show what a
 	// stream costs a slow link; 0 when nobody is watching.
 	Bps int64 `json:"bps"`
@@ -100,12 +109,25 @@ func (a *cameraAPI) find(id string) (camera.Camera, bool) {
 	return camera.Camera{}, false
 }
 
+// noView is what a person without the camera permission is told.
+const noView = "no permission to view cameras"
+
+// mayView reports whether the request's principal holds the camera permission;
+// always without an auth: block.
+func (a *cameraAPI) mayView(r *http.Request) bool {
+	if a.s.policy == nil {
+		return true
+	}
+	return a.s.policy.Can(a.s.actorOf(r).pr, auth.Camera, auth.All).Allowed
+}
+
 func (a *cameraAPI) list(w http.ResponseWriter, r *http.Request) {
 	out := []cameraView{}
+	may := a.mayView(r)
 	for _, c := range a.co.Cameras {
-		v := cameraView{ID: c.ID, Label: c.Label, Asset: c.Asset, Kind: c.Kind, Interval: c.Interval(), MaxViewers: c.Viewers(),
+		v := cameraView{View: may, ID: c.ID, Label: c.Label, Asset: c.Asset, Kind: c.Kind, Interval: c.Interval(), MaxViewers: c.Viewers(),
 			Live: c.Live(), Snapshot: c.HasSnapshot(), Watching: a.co.limit.Watching(c.ID)}
-		if v.Watching > 0 {
+		if may && v.Watching > 0 {
 			v.Bps = a.meterOf(c.ID).BitsPerSecond()
 		}
 		out = append(out, v)
@@ -132,6 +154,16 @@ func (a *cameraAPI) camera(w http.ResponseWriter, r *http.Request) (camera.Camer
 	c, ok := a.find(r.PathValue("id"))
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such camera"})
+		return camera.Camera{}, false
+	}
+	if !a.mayView(r) {
+		// a refused live view is journalled; the still the page asks for every few
+		// seconds is not (a refusal flood is coalesced by the recorder either way)
+		if strings.HasSuffix(r.URL.Path, "/stream") {
+			a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: a.s.principalOf(r), Source: audit.SourceHMI, Result: audit.ResultRefused,
+				From: r.RemoteAddr, Session: a.s.sessionOfEntry(r), Detail: map[string]any{"event": "start", "asset": c.Asset, "reason": noView, "class": audit.ClassAuth}})
+		}
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": noView})
 		return camera.Camera{}, false
 	}
 	return c, true

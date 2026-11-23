@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"image/jpeg"
 	"io"
 	"net/http"
@@ -13,18 +14,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/camera"
 )
 
-// camServer is a server with auth (akhan an engineer; jsmith an operator; ghost
-// holds nothing) and the cameras given.
+// camServer is a server with auth (akhan an engineer; jsmith may read and not
+// view cameras; ghost holds nothing) and the cameras given.
 func camServer(t *testing.T, cams []camera.Camera, secrets map[string]string) (*Server, map[string]string) {
 	t.Helper()
 	co := &CameraOptions{Cameras: cams, Fetcher: &camera.Fetcher{Secret: func(n string) (string, bool) { v, ok := secrets[n]; return v, ok }},
 		Lines: func(c camera.Camera) []string { return []string{"asset " + c.Asset} }}
 	o := Options{}
 	co.Install(&o)
-	srv, toks, _ := patServerWith(t, o)
+	// jsmith's role holds read and not the camera permission: values, not the floor
+	srv, toks, _ := patServerSettings(t, newTestRuntime(t), o, auth.Settings{
+		Roles: map[string]auth.RoleDef{"blind": {Inherits: auth.Operator, Deny: []string{auth.Camera}}},
+		Users: map[string][]auth.Grant{
+			"akhan":  {{Role: auth.Engineer}},
+			"jsmith": {{Role: "blind"}},
+		},
+	})
 	return srv, toks
 }
 
@@ -40,10 +49,10 @@ func TestCamerasAreForReadersAndNeverTellAnAddress(t *testing.T) {
 		{ID: "bin-top", Label: "Bin top", Asset: "A1", Kind: camera.KindVirtual},
 		{ID: "dock", Label: "Dock", Asset: "A2", Kind: camera.KindSnapshot, URL: back.URL + "/s.jpg", Credentials: true},
 	}, map[string]string{"camera.dock": "viewer:hunter2"})
-	for _, who := range []string{"akhan", "jsmith"} {
+	for who, view := range map[string]bool{"akhan": true, "jsmith": false} {
 		body := call(t, srv, "GET", "/api/cameras", "", bearer(toks[who])).Body.String()
-		if !strings.Contains(body, `"bin-top"`) || !strings.Contains(body, `"dock"`) {
-			t.Errorf("%s's list: %s", who, body)
+		if !strings.Contains(body, `"bin-top"`) || !strings.Contains(body, `"dock"`) || strings.Count(body, fmt.Sprintf(`"view":%v`, view)) != 2 {
+			t.Errorf("%s's list (view %v): %s", who, view, body)
 		}
 		for _, secret := range []string{back.URL, "127.0.0.1", "hunter2", "camera.dock", "s.jpg"} {
 			if strings.Contains(body, secret) {
@@ -167,7 +176,7 @@ func TestACameraStreamIsLiveJournalledAndCapped(t *testing.T) {
 		}
 	}
 	// the camera's own cap: a second viewer is told why
-	r2, stop2 := camOpen(t, ts, "one", toks["jsmith"])
+	r2, stop2 := camOpen(t, ts, "one", toks["akhan"])
 	if r2.StatusCode == 200 {
 		stop2()
 		t.Fatal("a second viewer of a one-viewer camera was let in")
@@ -251,3 +260,46 @@ func TestACameraRoutesAreNotMountedWithoutCameras(t *testing.T) {
 }
 
 func jsonDecode(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+// A person who may read and not view cameras is told so, and the controller
+// never reaches the camera for them: the list says view false, a still and a live
+// stream are 403 with the reason, a refused live view is journalled, and the
+// camera was never asked.
+func TestAPersonWithoutThePermissionToViewCamerasIsToldAndTheCameraIsNeverAsked(t *testing.T) {
+	var hits int
+	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; w.Write(camJPEG(t)) }))
+	defer back.Close()
+	srv, toks := camServer(t, []camera.Camera{
+		{ID: "dock", Asset: "A", Kind: camera.KindSnapshot, URL: back.URL},
+		{ID: "v", Asset: "A", Kind: camera.KindVirtual},
+	}, nil)
+	blind, eng := bearer(toks["jsmith"]), bearer(toks["akhan"])
+	for _, p := range []string{"/api/cameras/dock/snapshot", "/api/cameras/v/snapshot", "/api/cameras/v/stream"} {
+		rec := call(t, srv, "GET", p, "", blind)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "no permission to view cameras") {
+			t.Errorf("GET %s without the permission: %d %s", p, rec.Code, rec.Body)
+		}
+	}
+	if hits != 0 {
+		t.Errorf("the camera was asked %d times for a person who may not view it", hits)
+	}
+	refused := false
+	for _, e := range srv.audit.ring.Recent() {
+		if e.Action == "camera.view" && e.Result == "refused" && e.User == "user:jsmith" {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Error("a refused live view is not journalled")
+	}
+	if rec := call(t, srv, "GET", "/api/cameras/dock/snapshot", "", eng); rec.Code != http.StatusOK || hits != 1 {
+		t.Errorf("the engineer's still: %d (camera asked %d times)", rec.Code, hits)
+	}
+	// /api/me names the permission, since this project has cameras
+	if me := call(t, srv, "GET", "/api/me", "", eng).Body.String(); !strings.Contains(me, `"camera"`) {
+		t.Errorf("/api/me does not list the camera permission: %s", me)
+	}
+	if me := call(t, srv, "GET", "/api/me", "", blind).Body.String(); strings.Contains(me, `"camera"`) {
+		t.Errorf("/api/me lists a permission the person does not hold: %s", me)
+	}
+}
