@@ -61,7 +61,7 @@ func (p *Project) CheckCameras() (errs, warns []string) {
 			}
 		}
 		switch c.Kind {
-		case camera.KindHLS, camera.KindONVIF:
+		case camera.KindHLS:
 			if c.SnapshotURL == "" {
 				warns = append(warns, fmt.Sprintf("camera %q (%s): live video of this kind is not built in yet and it has no snapshot-url, so the asset page has no picture to show", c.ID, c.Kind))
 			}

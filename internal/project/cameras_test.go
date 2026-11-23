@@ -39,12 +39,13 @@ func TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant(t *testing.T) {
   - { id: tank-top, label: Tank top, asset: TK101, kind: virtual }
   - { id: dock, asset: TK101, kind: snapshot, url: "http://10.0.0.5/snap.jpg", credentials: true, interval: 10, max-viewers: 1 }
   - { id: belt, asset: Nowhere, kind: virtual }
-  - { id: gate, asset: TK101, kind: onvif, url: "http://10.0.0.7/onvif/device_service" }
+  - { id: gate, asset: TK101, kind: hls, url: "http://10.0.0.7/live.m3u8" }
+  - { id: dome, asset: TK101, kind: onvif, url: "http://10.0.0.8/onvif/device_service" }
 `), ManifestName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(p.Cameras) != 4 || p.Cameras[1].Interval() != 10 || p.Cameras[1].Viewers() != 1 || !p.Cameras[1].Credentials {
+	if len(p.Cameras) != 5 || p.Cameras[1].Interval() != 10 || p.Cameras[1].Viewers() != 1 || !p.Cameras[1].Credentials {
 		t.Fatalf("the cameras: %+v", p.Cameras)
 	}
 	errs, warns := p.CheckCameras()
@@ -55,7 +56,10 @@ func TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant(t *testing.T) {
 		t.Errorf("warnings: %v", warns)
 	}
 	all := strings.Join(warns, "\n")
-	if !strings.Contains(all, `camera "gate" (onvif)`) || !strings.Contains(all, "no snapshot-url") || !strings.Contains(all, `camera "dock": credentials: true over http://`) {
+	if strings.Contains(all, `"dome"`) {
+		t.Errorf("an ONVIF camera finds its own stream and still, so it needs no snapshot-url: %v", warns)
+	}
+	if !strings.Contains(all, `camera "gate" (hls)`) || !strings.Contains(all, "no snapshot-url") || !strings.Contains(all, `camera "dock": credentials: true over http://`) {
 		t.Errorf("warnings: %v", warns)
 	}
 }

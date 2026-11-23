@@ -58,6 +58,9 @@ type Camera struct {
 	SnapshotURL string `yaml:"snapshot-url" json:"-"`
 	// IntervalSeconds is how often the asset panel refreshes the snapshot.
 	IntervalSeconds int `yaml:"interval" json:"interval"`
+	// Profile names the ONVIF media profile (its token or name) to stream; empty
+	// is the device's smallest H.264 picture.
+	Profile string `yaml:"profile" json:"-"`
 	// MaxViewers is how many people may watch this camera live at once.
 	MaxViewers int `yaml:"max-viewers" json:"maxViewers"`
 	// SnapshotOnAlarm keeps a still when an alarm of the asset's equipment
@@ -120,7 +123,7 @@ func (c Camera) Live() bool { return c.Kind == KindMJPEG || c.Kind == KindVirtua
 
 // HLS reports whether live video is relayed as HLS (an RTSP camera, H.264 remuxed
 // by the controller) rather than as motion-JPEG.
-func (c Camera) HLS() bool { return c.Kind == KindRTSP }
+func (c Camera) HLS() bool { return c.Kind == KindRTSP || c.Kind == KindONVIF }
 
 // HasSnapshot reports whether the controller can get a still from it.
 func (c Camera) HasSnapshot() bool {
@@ -129,6 +132,8 @@ func (c Camera) HasSnapshot() bool {
 		return true
 	case KindMJPEG:
 		return true // a frame is cut from the stream
+	case KindONVIF:
+		return true // the device says where its still is (a device with none answers with an error)
 	}
 	return c.SnapshotURL != ""
 }
@@ -206,6 +211,9 @@ func Validate(cams []Camera) []error {
 				bad("%s: a %s camera's %s is %s", f.name, c.Kind, f.name, schemesFor(c.Kind, f.name))
 			}
 		}
+		if c.Profile != "" && (c.Kind != KindONVIF || !validToken(c.Profile)) {
+			bad("profile names an ONVIF media profile (letters, digits, - _ . :) and only an onvif camera has one")
+		}
 		if c.IntervalSeconds != 0 && (c.IntervalSeconds < MinIntervalSeconds || c.IntervalSeconds > MaxIntervalSeconds) {
 			bad("interval is %d seconds: between %d and %d", c.IntervalSeconds, MinIntervalSeconds, MaxIntervalSeconds)
 		}
@@ -282,4 +290,20 @@ func SplitCredentials(secret string) (user, pass string, err error) {
 		return "", "", errors.New("a camera secret's user name may not hold a quote or a line break")
 	}
 	return user, pass, nil
+}
+
+// validToken says a profile token is safe to put in a request: devices use
+// short names, and what a device sends is never spliced into XML unchecked.
+func validToken(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.', r == ':':
+		default:
+			return false
+		}
+	}
+	return true
 }

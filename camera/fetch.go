@@ -3,6 +3,7 @@
 package camera
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"crypto/rand"
@@ -37,7 +38,8 @@ type Fetcher struct {
 	// host or scheme.
 	Client *http.Client
 
-	learned sync.Map // camera id -> "basic" or "digest": what its camera asked for
+	learned sync.Map // camera id and host:port -> "basic" or "digest": what that service asked for
+	onvif   sync.Map // camera id -> *onvifEntry: what an ONVIF device said
 	once    sync.Once
 	made    *http.Client
 }
@@ -91,6 +93,12 @@ var ErrNoSnapshot = errors.New("this camera has no snapshot source")
 
 // Snapshot returns the camera's current JPEG.
 func (f *Fetcher) Snapshot(ctx context.Context, c Camera) ([]byte, error) {
+	if c.Kind == KindONVIF {
+		var err error
+		if c, err = f.Resolve(ctx, c); err != nil {
+			return nil, err
+		}
+	}
 	switch c.Kind {
 	case KindVirtual:
 		return VirtualFrame(c.Label, nil, time.Now()), nil
@@ -130,14 +138,27 @@ func isJPEG(b []byte) bool { return len(b) > 3 && b[0] == 0xFF && b[1] == 0xD8 &
 // get fetches u with the camera's credentials: basic, or digest if the camera
 // asks for it. The credentials are never put in the URL or in an error.
 func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, error) {
+	return f.request(ctx, c, http.MethodGet, u, nil, "")
+}
+
+// request is get for any method: a body (resent whole if the camera asks for
+// credentials first) and its content type ride along.
+func (f *Fetcher) request(ctx context.Context, c Camera, method, u string, body []byte, ctype string) (*http.Response, error) {
 	user, pass, err := f.credentials(c)
 	if err != nil {
 		return nil, err
 	}
 	do := func(authz string) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		var rd io.Reader
+		if body != nil {
+			rd = bytes.NewReader(body)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, u, rd)
 		if err != nil {
 			return nil, scrub(err, u)
+		}
+		if ctype != "" {
+			req.Header.Set("Content-Type", ctype)
 		}
 		if authz != "" {
 			req.Header.Set("Authorization", authz)
@@ -153,7 +174,7 @@ func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, 
 	// basic. A camera that asked for basic once is sent it straight away after.
 	first := ""
 	if user != "" {
-		if v, _ := f.learned.Load(c.ID); v == "basic" {
+		if v, _ := f.learned.Load(learnKey(c.ID, u)); v == "basic" {
 			first = basic(user, pass)
 		}
 	}
@@ -166,22 +187,22 @@ func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, 
 		resp.Body.Close()
 		var authz string
 		dig, basicOK := pickChallenge(ch)
-		learned, _ := f.learned.Load(c.ID)
+		learned, _ := f.learned.Load(learnKey(c.ID, u))
 		switch {
 		case dig != "":
-			d, err := digest(dig, user, pass, http.MethodGet, requestURI(u))
+			d, err := digest(dig, user, pass, method, requestURI(u))
 			if err != nil {
 				return nil, err
 			}
 			authz = d
-			f.learned.Store(c.ID, "digest")
+			f.learned.Store(learnKey(c.ID, u), "digest")
 		case learned == "digest":
 			// a camera that asked for digest is never sent the password in basic,
 			// whoever answers in its place
 			return nil, errors.New("the camera asked for digest before and now asks for basic: not sending the password")
 		case basicOK:
 			authz = basic(user, pass)
-			f.learned.Store(c.ID, "basic")
+			f.learned.Store(learnKey(c.ID, u), "basic")
 		}
 		if authz != "" {
 			if resp, err = do(authz); err != nil {
@@ -190,6 +211,10 @@ func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, 
 		} else {
 			return nil, errors.New("the camera refused the controller's credentials")
 		}
+	}
+	// a SOAP fault travels in a 500 (or a 400): the caller reads its reason
+	if (resp.StatusCode == http.StatusInternalServerError || resp.StatusCode == http.StatusBadRequest) && strings.HasPrefix(ctype, "application/soap+xml") {
+		return resp, nil
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
@@ -223,6 +248,16 @@ func scrub(err error, _ string) error {
 		return errors.New("the camera's URL redirected to another host")
 	}
 	return errors.New("the camera did not answer")
+}
+
+// learnKey is what a service of a camera asked for is remembered under: a device
+// has several (its SOAP service, its snapshot port) and each speaks for itself.
+func learnKey(id, u string) string {
+	pu, err := url.Parse(u)
+	if err != nil {
+		return id
+	}
+	return id + "|" + pu.Scheme + "://" + pu.Host
 }
 
 func basic(user, pass string) string {
