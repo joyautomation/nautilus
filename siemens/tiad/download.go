@@ -74,7 +74,16 @@ type Question struct {
 // Decisions are a download's answers. A nil pointer is "not answered",
 // which is different from "no".
 type Decisions struct {
-	StopCPU   *bool `json:"stopCpu,omitempty"`
+	StopCPU *bool `json:"stopCpu,omitempty"`
+	// ResetData is the caller's consent to what a load in STOP does
+	// (#1341, measured on an S7-1500 with TIA V21): every data block of
+	// the program returns to its start values, retained ones included,
+	// and TIA asks nothing about it. A CPU already in STOP loads the same
+	// way without any stop question, and nothing reads the CPU's mode
+	// first, so the agent refuses every download without it, a dry run
+	// too (one TIA asks nothing of may load), before anything reaches the
+	// CPU (CheckResetData).
+	ResetData *bool `json:"resetData,omitempty"`
 	Overwrite *bool `json:"overwrite,omitempty"`
 	// ConsistentDownload answers QuestionConsistentDownload; only yes
 	// lets the download go on.
@@ -130,6 +139,29 @@ func KeptQuestion(kept []KeptDevice) Question {
 	return Question{ID: QuestionKeptDevices,
 		Message: "load the devices the project keeps as found besides the CPU (name each in decisions.keptDevices)",
 		Objects: keptNames(kept)}
+}
+
+// ResetDataSentence says what a load in STOP does to the CPU's data
+// (#1341): the deploy's plan and every refusal without the consent carry
+// it, with ResetDataInStop.
+const ResetDataSentence = "the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask"
+
+// ResetDataInStop is why every download needs the consent, not only one
+// that answers a stop.
+const ResetDataInStop = "a CPU already in STOP loads the same way, with no stop question"
+
+// CheckResetData is the agent's ResetDataRule.Check: "" when req carries
+// the resetData consent, else why it is refused. A dry run needs it too:
+// one TIA asks nothing of may load.
+func CheckResetData(req DownloadRequest) string {
+	d := req.Decisions
+	switch {
+	case d.ResetData != nil && *d.ResetData:
+		return ""
+	case d.StopCPU != nil && *d.StopCPU:
+		return "decisions.stopCpu yes needs decisions.resetData yes: " + ResetDataSentence + " (#1341); nothing was sent to the CPU"
+	}
+	return "a download needs decisions.resetData yes: " + ResetDataSentence + ", and " + ResetDataInStop + " (#1341); nothing was sent to the CPU"
 }
 
 // CheckKept is the agent's KeptRule.Check: "" when answer names exactly

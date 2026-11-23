@@ -32,7 +32,7 @@ func (r *deployRig) deployed() string {
 	r.t.Helper()
 	r.adopt()
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionStopCPU, Message: "stop the CPU"}})
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		r.t.Fatalf("deploy: exit %d:\n%s", code, out)
 	}
 	list, err := tiad.New(r.url, r.token).Deploys(context.Background(), deployCPU)
@@ -106,7 +106,7 @@ func TestSiemensVerifyNamesItsDeploy(t *testing.T) {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	r.write("50ms")
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		t.Fatalf("second deploy: exit %d:\n%s", code, out)
 	}
 	out, code = r.verify(nil, "--deploy", first)

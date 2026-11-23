@@ -33,7 +33,7 @@ func TestResolve(t *testing.T) {
 	}{
 		{"nothing asked", nil, Decisions{}, false, false, "", ""},
 		{"stop unanswered", []Question{stop}, Decisions{}, false, false, "stop-cpu", ""},
-		{"stop yes", []Question{stop}, Decisions{StopCPU: Yes()}, false, false, "", ""},
+		{"stop yes", []Question{stop}, Decisions{StopCPU: Yes(), ResetData: Yes()}, false, false, "", ""},
 		{"stop no", []Question{stop}, Decisions{StopCPU: No()}, false, false, "", "stop-cpu"},
 		{"start-after no is stay in STOP", []Question{{ID: QuestionStartAfter}}, Decisions{StartAfter: No()}, false, false, "", ""},
 		{"start-after unanswered", []Question{{ID: QuestionStartAfter}}, Decisions{}, false, false, "start-after", ""},
@@ -49,8 +49,8 @@ func TestResolve(t *testing.T) {
 		{"configuration password missing", []Question{cfg}, Decisions{}, false, false, "configuration-password", ""},
 		{"protection password never answers configuration-password", []Question{cfg}, Decisions{}, true, false, "configuration-password", ""},
 		{"configuration password never answers password", []Question{pw}, Decisions{}, false, true, "password", ""},
-		{"other never answered", []Question{other}, Decisions{StopCPU: Yes(), Overwrite: Yes(), StartAfter: Yes()}, true, false, "other", ""},
-		{"unknown id is other", []Question{{ID: "new-in-v22"}}, Decisions{StopCPU: Yes()}, true, false, "new-in-v22", ""},
+		{"other never answered", []Question{other}, Decisions{StopCPU: Yes(), ResetData: Yes(), Overwrite: Yes(), StartAfter: Yes()}, true, false, "other", ""},
+		{"unknown id is other", []Question{{ID: "new-in-v22"}}, Decisions{StopCPU: Yes(), ResetData: Yes()}, true, false, "new-in-v22", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -66,7 +66,7 @@ func TestResolve(t *testing.T) {
 // family is answered only by its own decision, never by another's, and
 // user-management only when the spec keeps access control.
 func TestResolveSoftwareLoadFamily(t *testing.T) {
-	all := Decisions{StopCPU: Yes(), Overwrite: Yes(), ConsistentDownload: Yes(), StartAfter: Yes()}
+	all := Decisions{StopCPU: Yes(), ResetData: Yes(), Overwrite: Yes(), ConsistentDownload: Yes(), StartAfter: Yes()}
 	cases := []struct {
 		name                 string
 		q                    string
@@ -652,6 +652,30 @@ func TestCompileMessageBlock(t *testing.T) {
 		name, line, ok := c.m.Block()
 		if name != c.name || line != c.line || ok != c.ok {
 			t.Errorf("%+v: got %q %d %v, want %q %d %v", c.m, name, line, ok, c.name, c.line, c.ok)
+		}
+	}
+}
+
+// TestCheckResetData (#1341): every download needs the resetData
+// consent, a dry run too (one TIA asks nothing of may load); consent no
+// is none.
+func TestCheckResetData(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		req  DownloadRequest
+		want string
+	}{
+		{"consent", DownloadRequest{Decisions: Decisions{ResetData: Yes(), StopCPU: Yes()}}, ""},
+		{"no consent", DownloadRequest{}, "a download needs decisions.resetData yes"},
+		{"consent no", DownloadRequest{Decisions: Decisions{ResetData: No()}}, "a download needs decisions.resetData yes"},
+		{"stop, no consent", DownloadRequest{Decisions: Decisions{StopCPU: Yes()}}, "decisions.stopCpu yes needs decisions.resetData yes"},
+		{"dry run, stop, no consent", DownloadRequest{DryRun: true, Decisions: Decisions{StopCPU: Yes()}}, "decisions.stopCpu yes needs decisions.resetData yes"},
+		{"dry run, no stop", DownloadRequest{DryRun: true, Decisions: Decisions{StopCPU: No()}}, "a download needs decisions.resetData yes"},
+		{"dry run, consent", DownloadRequest{DryRun: true, Decisions: Decisions{ResetData: Yes()}}, ""},
+	} {
+		got := CheckResetData(c.req)
+		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
 }

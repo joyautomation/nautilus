@@ -506,7 +506,7 @@ func TestAgentDownloadSeesTheDataTypeItSent(t *testing.T) {
 	p, s := typesReady(t)
 	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), Types: &tiadtest.TypesScript{CompareDropsTypes: true}})
 	start := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}}
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.Yes()}}
 	_, err := s.Download(ctx, start)
 	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "the compare right after it differs (naut_Recipe (data type) not compared)") ||
 		strings.Join(tiad.ActingAnswers(err), ",") != "start-after" {

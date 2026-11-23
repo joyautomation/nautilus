@@ -110,7 +110,7 @@ func contractWebUsers(t *testing.T, start Starter) {
 		if tiad.Kind(err) != tiad.KindBadRequest || err.Error() != "tiad: bad_request: "+WebReused("op") {
 			t.Fatalf("op back to one it had: %v, want %q", err, WebReused("op"))
 		}
-		if _, err := s.Download(ctx, tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}); tiad.Kind(err) != tiad.KindNotCompiled {
+		if _, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}); tiad.Kind(err) != tiad.KindNotCompiled {
 			t.Fatalf("a download after a partial password change: %v, want not_compiled", err)
 		}
 		if r, err := s.ApplyStation(ctx, both, webSecrets("naut", "Bench-web-2029", "op", "Op-web-2027")); err != nil || !noteWith(r.Notes, WebUnchangedNote("naut")) {
@@ -124,7 +124,7 @@ func contractWebUsers(t *testing.T, start Starter) {
 		a, s := compiledBench(t, start)
 		a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionStartAfter, Message: "Start the CPU after loading"}})
 		req := AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true,
-			Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}, Secrets: BenchDownloadSecrets()})
+			Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.Yes()}, Secrets: BenchDownloadSecrets()})
 		if res, err := s.Download(ctx, req); err != nil || !res.Downloaded {
 			t.Fatalf("download: %+v %v", res, err)
 		}

@@ -95,6 +95,12 @@ namespace Tiad
     public sealed class Decisions
     {
         public bool? StopCpu, Overwrite, ConsistentDownload, StartAfter;
+        // ResetData is the caller's consent to what a load in STOP does
+        // (#1341): every data block of the program returns to its start
+        // values, retained ones included, and TIA asks nothing about it.
+        // Every download without it is refused, a dry run too
+        // (ResetDataRule).
+        public bool? ResetData;
         public bool? AlarmTexts, AllBlocks, UserManagementKeepOnline, IdentificationDataLoadNothing;
         // UserManagementResetToProject answers UserManagement by resetting
         // the CPU's user management to the project's
@@ -122,6 +128,7 @@ namespace Tiad
             var d = new Decisions();
             if (r == null) return d;
             d.StopCpu = r.OptBool("stopCpu");
+            d.ResetData = r.OptBool("resetData");
             d.Overwrite = r.OptBool("overwrite");
             d.ConsistentDownload = r.OptBool("consistentDownload");
             d.AlarmTexts = r.OptBool("alarmTexts");
@@ -292,6 +299,28 @@ namespace Tiad
             o["text"] = Text;
             if (CpuAccessControl != "") o["cpuAccessControl"] = CpuAccessControl;
             return o;
+        }
+    }
+
+    // ResetDataRule is #1341's gate. Measured on an S7-1500 with TIA V21:
+    // TIA's first check is StopModules, and a load in STOP returns every
+    // data block of the program to its start values, retained ones
+    // included, with no reinitialize question. A CPU already in STOP
+    // loads the same way with no stop question, and tiad reads no mode
+    // first, so every download needs the caller's consent to that,
+    // decisions.resetData yes, a dry run too (one TIA asks nothing of may
+    // load); checked before anything reaches the CPU.
+    public static class ResetDataRule
+    {
+        public const string Sentence = "the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask";
+        public const string InStop = "a CPU already in STOP loads the same way, with no stop question";
+
+        // Check is null, or why the request is refused.
+        public static string Check(Decisions d)
+        {
+            if (d != null && d.ResetData == true) return null;
+            if (d != null && d.StopCpu == true) return "decisions.stopCpu yes needs decisions.resetData yes: " + Sentence + " (#1341); nothing was sent to the CPU";
+            return "a download needs decisions.resetData yes: " + Sentence + ", and " + InStop + " (#1341); nothing was sent to the CPU";
         }
     }
 

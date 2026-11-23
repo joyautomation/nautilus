@@ -39,7 +39,7 @@ func TestSiemensDeployAdoptsOnTheCSharpAgent(t *testing.T) {
 	r.write("100ms")
 	f := r.cpuRuns(false)
 	before := len(p.Loaded(t))
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", f)
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--adopt", f)
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s\nagent:\n%s", code, out, p.Log())
 	}
@@ -65,7 +65,7 @@ func TestSiemensDeployAdoptsOnTheCSharpAgent(t *testing.T) {
 		t.Fatalf("loads: %+v", loads[before:])
 	}
 	r.write("50ms")
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 0 || !strings.Contains(out, "opened projects/s7_demo/s7_demo.ap21 as last saved") || strings.Contains(out, "comparing the adopted project") ||
 		!strings.Contains(out, "project: adopted from the project archive Customer Line 3.zap21") {
 		t.Fatalf("the second deploy: exit %d:\n%s", code, out)
@@ -85,16 +85,16 @@ func TestSiemensDeployRefusesOnTheCSharpAgent(t *testing.T) {
 	r.write("100ms")
 	stale := r.cpuRuns(true)
 	before := len(p.Loaded(t))
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", stale)
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--adopt", stale)
 	if code != 1 || !strings.Contains(out, "is not what the CPU runs") || len(p.Loaded(t)) != before {
 		t.Fatalf("a stale archive: exit %d:\n%s", code, out)
 	}
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", "last-deploy"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--adopt", "last-deploy"); code != 0 {
 		t.Fatalf("--adopt last-deploy: exit %d:\n%s", code, out)
 	}
 	r.cpuRuns(false)
 	before = len(p.Loaded(t))
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "loaded another project (projects/customer/customer.ap21)") || len(p.Loaded(t)) != before {
 		t.Fatalf("the CPU's last deploy is another project: exit %d:\n%s", code, out)
 	}

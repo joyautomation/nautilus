@@ -171,7 +171,7 @@ namespace Tiad
         {
             var reinit = new List<string>();
             foreach (var n in d.Reinitialize) reinit.Add(Json.Quote(n));
-            return "stopCpu=" + YesNo(d.StopCpu) + " overwrite=" + YesNo(d.Overwrite) + " consistentDownload=" + YesNo(d.ConsistentDownload) +
+            return "stopCpu=" + YesNo(d.StopCpu) + " resetData=" + YesNo(d.ResetData) + " overwrite=" + YesNo(d.Overwrite) + " consistentDownload=" + YesNo(d.ConsistentDownload) +
                 " alarmTexts=" + YesNo(d.AlarmTexts) + " allBlocks=" + YesNo(d.AllBlocks) +
                 " userManagementKeepOnline=" + YesNo(d.UserManagementKeepOnline) + " userManagementResetToProject=" + YesNo(d.UserManagementResetToProject) +
                 " identificationDataLoadNothing=" + YesNo(d.IdentificationDataLoadNothing) +
@@ -287,6 +287,9 @@ namespace Tiad
             {
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
             }
+            // A stop without the consent to what it does to the data (#1341).
+            string resetWhy = ResetDataRule.Check(req.Decisions);
+            if (resetWhy != null) throw TiadException.BadRequest("{0}", resetWhy);
             // A kept CPU's access control turned on by an apply on this
             // session loads only by the attestation route (TurnOnRule).
             if (s.AccessTurnOn && !s.AccessTurnOnLoaded)

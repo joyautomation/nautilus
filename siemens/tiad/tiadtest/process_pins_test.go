@@ -52,7 +52,7 @@ func TestAgentKeepsPinsAcrossRestarts(t *testing.T) {
 	if _, err := s2.CompareWith(ctx, tiadtest.BenchCompare); tiad.Kind(err) != tiad.KindDeviceChanged {
 		t.Fatalf("compare to a changed CPU after a restart: %v", err)
 	}
-	dl := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	if _, err := s2.Download(ctx, dl); tiad.Kind(err) != tiad.KindDeviceChanged {
 		t.Fatalf("download to a changed CPU after a restart: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestAgentFailsClosedOnABadPinFile(t *testing.T) {
 			}
 			_, err := s.CompareWith(ctx, tiadtest.BenchCompare)
 			unreadable("compare", err)
-			_, err = s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+			_, err = s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})
 			unreadable("download", err)
 			_, err = s.UploadWith(ctx, tiad.UploadRequest{Secrets: tiadtest.BenchLogin})
 			unreadable("upload", err)
@@ -165,7 +165,7 @@ func TestAgentFailsClosedOnAnUnreadablePin(t *testing.T) {
 			}
 			_, err := s.CompareWith(ctx, tiadtest.BenchCompare)
 			refused("compare", err)
-			_, err = s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+			_, err = s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})
 			refused("download", err)
 			if which == "file" {
 				_, err = c.SetPin(ctx, "192.0.2.10", tiad.PinRequest{Device: &dev, Replace: true, Announced: true})
@@ -261,7 +261,7 @@ func TestAgentAuditsADeviceAttestation(t *testing.T) {
 	p.SetDevice(t, tiadtest.BenchDevice(), true)
 	att := &tiad.DeviceAttestation{By: "test operator", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1.3"}
 	dl := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.No()}, DeviceAttestation: att}
+		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}, DeviceAttestation: att}
 	if _, err := s.Download(ctx, dl); err != nil {
 		t.Fatalf("attested download: %v", err)
 	}
