@@ -16,7 +16,7 @@ function fake(answers: Array<Response | Error>) {
 	}) as unknown as typeof fetch;
 	return { sent, client: new CameraClient({ fetch: f }) };
 }
-const cam = (o: Partial<Camera> = {}): Camera => ({ id: 'c1', label: 'Wet well', asset: 'p1', kind: 'mjpeg', interval: 5, maxViewers: 2, view: true, live: true, hls: false, ptz: false, snapshot: true, watching: 0, bps: 0, ...o });
+const cam = (o: Partial<Camera> = {}): Camera => ({ id: 'c1', label: 'Wet well', asset: 'p1', kind: 'mjpeg', interval: 5, maxViewers: 2, view: true, live: true, hls: false, ptz: false, local: false, snapshot: true, watching: 0, bps: 0, ...o });
 
 describe('formatBps', () => {
 	it('names the unit', () => {
@@ -153,6 +153,10 @@ describe('pan, tilt and zoom', () => {
 		expect(await a.client.ptzPresets('c1')).toEqual([{ token: '1', name: 'Home' }, { token: '2', name: '2' }]);
 		expect(await a.client.ptzPresets('c1')).toEqual([]);
 		expect(await a.client.ptzPresets('c1')).toEqual([]);
+	});
+	it('reads whether a camera is the playground\'s own', async () => {
+		const a = fake([json({ cameras: [{ id: 'a', local: true }, { id: 'b' }] })]);
+		expect((await a.client.list()).map((c) => c.local)).toEqual([true, false]);
 	});
 	it('reads whether a camera pans', async () => {
 		const a = fake([json({ cameras: [{ id: 'a', ptz: true }, { id: 'b' }] })]);

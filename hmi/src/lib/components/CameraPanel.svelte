@@ -6,6 +6,7 @@
 	import { onMount } from 'svelte';
 	import { CameraClient, camerasFor, type Camera } from '../camera.js';
 	import CameraFeed from './CameraFeed.svelte';
+	import VirtualCamera from './VirtualCamera.svelte';
 
 	let { asset, client = new CameraClient() }: { asset: string; client?: CameraClient } = $props();
 
@@ -25,7 +26,11 @@
 {#if mine.length}
 	<div class="cams">
 		{#each mine as c (c.id)}
-			<CameraFeed camera={c} {client} />
+			{#if c.local}
+				<VirtualCamera camera={c} />
+			{:else}
+				<CameraFeed camera={c} {client} />
+			{/if}
 		{/each}
 	</div>
 {/if}

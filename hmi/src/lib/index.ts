@@ -243,6 +243,8 @@ export { default as CheckoutBanner } from './components/CheckoutBanner.svelte';
 export { default as CameraPanel } from './components/CameraPanel.svelte';
 export { CameraClient, formatBps, camerasFor, watchingText, nextState as cameraNext, ptzMove, LIVE_CAPTION, LIVE_LIMIT, PTZ_HOLD_MS, PTZ_NUDGE_MS } from './camera.js';
 export { default as PtzPad } from './components/PtzPad.svelte';
+export { default as VirtualCamera } from './components/VirtualCamera.svelte';
+export { drawTestPattern } from './testpattern.js';
 export { playHls, parsePlaylist, codecFromInit, nextSegments, bufferTrim, liveSeek, BitrateMeter } from './hls.js';
 export type { HlsPlaylist, HlsSegment, HlsHandle, HlsOptions } from './hls.js';
 export type { Camera, CameraMode, CameraState, CameraEvent, PtzPreset, PtzCommand, PtzResult, PtzDirection } from './camera.js';

@@ -467,3 +467,37 @@ claims:
     note: >-
       Run against a loopback responder only (the multicast send is not exercised
       by a test); pending: a real camera answering a real probe on a real network.
+
+  - id: CAM-026
+    claim: >-
+      The guide's CPU and memory figures for relaying RTSP to HLS are a
+      measurement, not a claim: one Verdin AM62 (two Cortex-A53 cores, a
+      PREEMPT_RT Yocto image), 1280x720 at 15 frames a second and about 1.7
+      Mbit/s, one and two streams watched, a 60-second window each.
+    source: "#what-the-cpu-cost-is"
+    tests: []
+    note: >-
+      Taken once by hand (the test harness is scratch: an in-tree fake RTSP
+      server replaying an ffmpeg-encoded test pattern over the LAN, a viewer
+      script fetching the playlist and segments, /proc sampled over ssh). No
+      test in this inventory runs it, and it is not a regression guard. The
+      guide's remark that naut run's screen build was still going at full use of
+      both cores after 90 s on that board (about 4 s on a desktop: 3.7 s wall and
+      48 s of CPU for the same build here) was seen once, by hand.
+
+  - id: CAM-027
+    claim: >-
+      In the playground only a kind: virtual camera is shown, listed with the
+      row's id, label and asset and marked local, with no address of any other
+      row, and the page draws it as a simulated test pattern on a canvas
+      (bars, a sweeping line, the name, SIMULATED and a clock) without asking
+      for a still or a stream; a project with no virtual camera has no camera
+      route.
+    source: "#in-the-playground"
+    tests:
+      - go ./cmd/naut-wasm TestThePlaygroundListsOnlyVirtualCamerasAndMarksThemLocal
+    note: >-
+      The pattern is tested in hmi/tests/testpattern.test.ts (which this inventory
+      does not run). The canvas component itself (VirtualCamera.svelte) was looked at once in
+      Chrome through a real controller's built screen; the wasm list route is
+      tested under Node, and the whole playground tab was not run.
