@@ -124,8 +124,8 @@ func TestCameraSnapshotsAreStillsFetchedWithTheControllersCredentials(t *testing
 			}
 		}
 	}
-	if rec := call(t, srv, "GET", "/api/cameras/r/stream", "", eng); rec.Code != http.StatusNotImplemented {
-		t.Errorf("live video of an rtsp camera in this step: %d, want 501", rec.Code)
+	if rec := call(t, srv, "GET", "/api/cameras/r/stream", "", eng); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "hls/index.m3u8") {
+		t.Errorf("the motion-JPEG route of an RTSP camera: %d %s, want 400 naming the HLS playlist", rec.Code, rec.Body)
 	}
 }
 

@@ -216,3 +216,126 @@ claims:
       The kit's client and helpers are tested in hmi/tests (not run by this
       inventory); the journal's rendering was seen in a browser against a running
       controller, not automated.
+
+  - id: CAM-015
+    claim: >-
+      The controller opens an RTSP camera over TCP (RTP interleaved on the
+      control connection; a camera that will send only UDP is refused), takes
+      its H.264 track from the session description (the parameter sets from the
+      description or, when it has none, from the stream), answers a credential
+      challenge only after the camera asks and in the scheme it asked for
+      (digest preferred; basic never sent to a camera that asked for digest),
+      refuses an absolute control URL on another host, and ends with a reason
+      that names neither the camera's address, its URL nor a credential when it
+      offers another codec or no video, has no such stream, gives no session,
+      answers in something that is not RTSP, sends an endless header block, a
+      line or a body past the bounds, goes quiet, or refuses the credentials.
+    source: "#live-video-of-an-rtsp-camera"
+    tests:
+      - go ./camera TestACameraBecomesAnHLSStreamOverRTSPInterleavedOnTCP
+      - go ./camera TestParameterSetsComeFromTheStreamWhenTheDescriptionHasNone
+      - go ./camera TestDigestAndBasicCredentialsAreAnsweredOnlyAfterTheChallengeAndNeverDowngraded
+      - go ./camera TestWhatACameraOffersThatCannotBeRelayedIsSaidInPlainWords
+      - go ./camera TestAHostileCameraEndsTheSessionWithoutGrowingMemoryOrNamingItself
+      - go ./camera TestACameraThatGoesQuietOrNeverAnswersPlayEndsTheSession
+      - go ./camera TestAControlURLNamingAnotherHostIsNotFollowed
+      - go ./camera TestDialErrorsNameNeitherTheAddressNorTheURL
+    note: >-
+      Tested against a fake camera serving a real H.264 clip (camera/cameratest),
+      not a real camera: the first real camera is the webcam the maintainers will
+      attach, and the numbers a real camera gives are not claimed here.
+
+  - id: CAM-016
+    claim: >-
+      What a camera's bytes reach first is parsed with every length bounded and
+      refuses what it cannot read: the session description (size, lines, track),
+      the sequence parameter set (picture size from 1 to 8192 each way,
+      Exp-Golomb codes of bounded length), RTP packets (version, CSRC list,
+      extension, padding) and the reassembly of FU-A and STAP-A units into
+      pictures: a lost or reordered packet drops the picture it was in, a
+      fragment whose start was lost is never assembled, a NAL unit over 2 MB, a
+      picture over 4 MB or 1,024 NAL units is dropped, and the buffer never holds
+      more than one NAL unit and one picture.
+    source: "#what-a-stream-can-use"
+    tests:
+      - go ./camera TestTheClipIsRealH264
+      - go ./camera TestThePacketsOfARealClipBecomeItsPicturesAgainAtAnyPacketSize
+      - go ./camera TestALostPacketDropsItsPictureAndNoOther
+      - go ./camera TestFragmentsOfANALWhoseStartWasLostAreNeverAssembled
+      - go ./camera TestAStreamWithoutMarkersStillEndsPicturesByTimestamp
+      - go ./camera TestHostilePacketsAreBoundedAndRefused
+    note: >-
+      Each parser also has a Go fuzz target (camera/fuzz_test.go: the session
+      description, the parameter set, RTP, the depacketiser, the RTSP response and
+      the segment name), seeded from the clip and the fake camera; `go test` runs
+      the seeds and any crasher kept in testdata/fuzz as regression tests, and
+      each was explored for a few minutes before review. The inventory cannot
+      name fuzz functions, so they are not listed as tests.
+
+  - id: CAM-017
+    claim: >-
+      The controller repackages the camera's H.264 as fragmented MP4 without
+      decoding it: an init segment (ftyp and moov with the picture size and the
+      parameter sets) and segments of whole pictures cut at keyframes about every
+      two seconds, listed in a sliding HLS playlist of six; pictures before the
+      first keyframe are dropped; a run that cannot be cut is dropped at 8 MB or
+      20 seconds, the window never holds more than 24 MB, and a camera that
+      changes its picture settings ends the stream; segment names are only the
+      ones the playlist makes.
+    source: "#what-a-stream-can-use"
+    tests:
+      - go ./camera TestTheClipBecomesAnHLSPlaylistOfWholeGOPSegments
+      - go ./camera TestFFprobeReadsTheSegmentsWhenItIsThere
+      - go ./camera TestPicturesBeforeTheFirstKeyframeAreDroppedAndAHugeRunIsBounded
+      - go ./camera TestTheWindowAndItsBytesAreBounded
+      - go ./camera TestWaitReturnsWhenTheFirstSegmentsAreReadyOrTheStreamEnds
+      - go ./camera TestSegmentNamesAreOnlyTheOnesThePlaylistMakes
+    note: >-
+      The ffprobe test reads the segments with a real tool when one is on the
+      machine and is skipped otherwise (CI has none); the segments' playback in
+      a browser is the player's claim (CAM-020).
+
+  - id: CAM-018
+    claim: >-
+      A camera's RTSP session starts on the first request for its playlist and
+      stops 30 seconds after the last request, bad RTP packets are losses and not
+      the end of the session, and the next request after a session ended starts a
+      fresh one.
+    source: "#live-video-of-an-rtsp-camera"
+    tests:
+      - go ./camera TestASessionIsStoppedWhenNobodyAsksForIt
+      - go ./camera TestBadRTPPacketsAreLossesNotTheEndOfTheSession
+
+  - id: CAM-019
+    claim: >-
+      An RTSP camera is served as HLS at /api/cameras/{id}/hls/ (playlist, init
+      segment, segments): every request checks read and the camera permission
+      afresh and the camera is never contacted for a person who may not view it;
+      a viewer is a lease kept alive by their requests and dropped after fifteen
+      seconds of silence, counted against the camera's, the person's and the
+      controller's caps; the view is journalled when the lease begins and ends
+      (with the bytes served and why it ended), a camera that cannot be relayed
+      is a 502 with a reason that names nothing of the camera and gives the place
+      back, and a view ends at its time limit.
+    source: "#live-video-of-an-rtsp-camera"
+    tests:
+      - go ./server TestAnRTSPCameraIsPlayedAsHLSAndTheViewIsJournalledForItsLease
+      - go ./server TestHLSNeedsTheCameraPermissionAndNeverContactsTheCameraWithout
+      - go ./server TestAnRTSPCameraThatCannotBeRelayedIsAnErrorInWordsAndGivesBackItsPlace
+      - go ./server TestHLSViewersAreCappedByCameraPersonAndController
+      - go ./server TestAnHLSViewEndsAtItsTimeLimit
+    note: >-
+      The per-camera max-viewers cap is the Limiter's (CAM-007); this inventory
+      exercises the per-person cap on HLS leases. A revoked person is refused at
+      their next request, which the per-request permission check gives; it is not
+      separately tested with a live session.
+
+  - id: CAM-020
+    claim: >-
+      The asset page plays an RTSP camera's HLS stream (natively in Safari, through
+      Media Source Extensions elsewhere), starting only on a click, showing the
+      bitrate and stopping when the tab is hidden.
+    source: "#live-video-of-an-rtsp-camera"
+    tests: []
+    note: >-
+      Not built yet (the next PR); this claim is the gap.

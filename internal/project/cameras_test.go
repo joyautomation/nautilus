@@ -39,7 +39,7 @@ func TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant(t *testing.T) {
   - { id: tank-top, label: Tank top, asset: TK101, kind: virtual }
   - { id: dock, asset: TK101, kind: snapshot, url: "http://10.0.0.5/snap.jpg", credentials: true, interval: 10, max-viewers: 1 }
   - { id: belt, asset: Nowhere, kind: virtual }
-  - { id: gate, asset: TK101, kind: rtsp, url: "rtsp://10.0.0.7/s2" }
+  - { id: gate, asset: TK101, kind: onvif, url: "http://10.0.0.7/onvif/device_service" }
 `), ManifestName)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +55,7 @@ func TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant(t *testing.T) {
 		t.Errorf("warnings: %v", warns)
 	}
 	all := strings.Join(warns, "\n")
-	if !strings.Contains(all, `camera "gate" (rtsp)`) || !strings.Contains(all, "no snapshot-url") || !strings.Contains(all, `camera "dock": credentials: true over http://`) {
+	if !strings.Contains(all, `camera "gate" (onvif)`) || !strings.Contains(all, "no snapshot-url") || !strings.Contains(all, `camera "dock": credentials: true over http://`) {
 		t.Errorf("warnings: %v", warns)
 	}
 }

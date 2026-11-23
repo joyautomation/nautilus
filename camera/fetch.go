@@ -130,20 +130,9 @@ func isJPEG(b []byte) bool { return len(b) > 3 && b[0] == 0xFF && b[1] == 0xD8 &
 // get fetches u with the camera's credentials: basic, or digest if the camera
 // asks for it. The credentials are never put in the URL or in an error.
 func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, error) {
-	user, pass := "", ""
-	if c.Credentials {
-		key := SecretKey(c.ID)
-		if f.Secret == nil {
-			return nil, errors.New("this camera needs credentials and the controller has no secrets file")
-		}
-		s, ok := f.Secret(key)
-		if !ok {
-			return nil, fmt.Errorf("secret %q is not in the secrets file: naut alarms secrets set %s", key, key)
-		}
-		var err error
-		if user, pass, err = SplitCredentials(s); err != nil {
-			return nil, fmt.Errorf("secret %q: %w", key, err)
-		}
+	user, pass, err := f.credentials(c)
+	if err != nil {
+		return nil, err
 	}
 	do := func(authz string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -363,4 +352,24 @@ func digestResponse(user, realm, pass, method, uri, nonce, nc, cnonce string) st
 	ha1 := h(user + ":" + realm + ":" + pass)
 	ha2 := h(method + ":" + uri)
 	return h(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":auth:" + ha2)
+}
+
+// credentials reads the camera's user name and password from the secrets file
+// ("", "" when it needs none). The credentials are never in an error.
+func (f *Fetcher) credentials(c Camera) (user, pass string, err error) {
+	if !c.Credentials {
+		return "", "", nil
+	}
+	key := SecretKey(c.ID)
+	if f.Secret == nil {
+		return "", "", errors.New("this camera needs credentials and the controller has no secrets file")
+	}
+	s, ok := f.Secret(key)
+	if !ok {
+		return "", "", fmt.Errorf("secret %q is not in the secrets file: naut alarms secrets set %s", key, key)
+	}
+	if user, pass, err = SplitCredentials(s); err != nil {
+		return "", "", fmt.Errorf("secret %q: %w", key, err)
+	}
+	return user, pass, nil
 }

@@ -58,7 +58,7 @@ func cameraOptions(proj *project.Project, dir string, rt *runtime.Runtime, leads
 		}
 		return []string{fmt.Sprintf("%s %v", e.ID, v)}
 	}
-	closeFn := func() {}
+	closeFn := func() { co.Stop() }
 	// pictures kept when an alarm activates, if any camera asks for them
 	wantSnaps := false
 	for _, c := range proj.Cameras {
@@ -80,7 +80,7 @@ func cameraOptions(proj *project.Project, dir string, rt *runtime.Runtime, leads
 				fmt.Fprintf(stderr, "naut run: cameras: alarm pictures are off: %v\n", err)
 			} else {
 				co.Snaps, co.Leads = st, leads
-				closeFn = func() { st.Close() }
+				closeFn = func() { co.Stop(); st.Close() }
 				// alarm id -> equipment, read from the project's definitions when
 				// an alarm first needs it and again a minute later (or at once if the
 				// first read failed or found nothing): never fixed by one failure

@@ -99,7 +99,11 @@ func (p *SnapshotPolicy) Validate() error {
 
 // Live reports whether the camera can be watched live (a stream, not only
 // snapshots) in this build.
-func (c Camera) Live() bool { return c.Kind == KindMJPEG || c.Kind == KindVirtual }
+func (c Camera) Live() bool { return c.Kind == KindMJPEG || c.Kind == KindVirtual || c.HLS() }
+
+// HLS reports whether live video is relayed as HLS (an RTSP camera, H.264 remuxed
+// by the controller) rather than as motion-JPEG.
+func (c Camera) HLS() bool { return c.Kind == KindRTSP }
 
 // HasSnapshot reports whether the controller can get a still from it.
 func (c Camera) HasSnapshot() bool {
