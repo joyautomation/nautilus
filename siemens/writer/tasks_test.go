@@ -105,7 +105,9 @@ func TestTasksShareAsNautilusCommits(t *testing.T) {
 	// written back.
 	has("naut_OB_main.scl", "\t\"naut_Scan_main\".tags.Stop := \"naut_Tags\".Stop;\n")
 	lacks("naut_OB_main.scl", `"naut_Tags".Stop :=`)
-	lacks("naut_Scan_main.db", "assigned : Struct\n         Stop")
+	if db := f["naut_Scan_main.db"]; strings.Contains(db[strings.Index(db, "assigned : Struct"):], " Stop : ") {
+		t.Errorf("naut_Scan_main.db flags the read-only Stop:\n%s", db)
+	}
 	// The copy is taken before the call and landed after it.
 	ob := f["naut_OB_main.scl"]
 	in, call, back := strings.Index(ob, ".tags.Stop :="), strings.Index(ob, `"naut_Main_DB"();`), strings.Index(ob, `"naut_Tags".Pump.Run :=`)
@@ -202,9 +204,9 @@ func TestSharedTagOfARefusedTypeIsReportedOnce(t *testing.T) {
 
 // TestSharedTagsOfEveryElementaryType: a shared tag is copied and
 // written back whatever its type, also one with no zero value for a
-// temp's reset (LWORD, CHAR).
+// temp's reset (LWORD, ULINT, CHAR, WCHAR).
 func TestSharedTagsOfEveryElementaryType(t *testing.T) {
-	types := []string{"BOOL", "BYTE", "WORD", "DWORD", "LWORD", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "REAL", "LREAL", "TIME", "CHAR"}
+	types := []string{"BOOL", "BYTE", "WORD", "DWORD", "LWORD", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "REAL", "LREAL", "TIME", "CHAR", "WCHAR"}
 	var globals []Global
 	var ext, body strings.Builder
 	for i, typ := range types {
@@ -237,4 +239,110 @@ func TestSharedTagsOfEveryElementaryType(t *testing.T) {
 		return
 	}
 	t.Fatalf("no OB_b.scl in %v", out.Files)
+}
+
+// structTwoTasks writes two programs over a shared struct tag S (with a
+// nested member and a word leaf) and a shared REAL Level, each task its
+// own; it returns the files by path.
+func structTwoTasks(t *testing.T, a, b string, extra ...Program) map[string]string {
+	t.Helper()
+	lib := []string{"TYPE\n  Inner : STRUCT\n    Flags : WORD;\n    Run : BOOL;\n  END_STRUCT;\n  Outer : STRUCT\n    In : Inner;\n    Speed : REAL;\n  END_STRUCT;\nEND_TYPE\n"}
+	progs := []Program{
+		{Path: "A.st", Source: a, Libs: lib},
+		{Path: "B.st", Source: b, Libs: lib},
+	}
+	for _, p := range extra {
+		p.Libs = lib
+		progs = append(progs, p)
+	}
+	out, diags, err := Write(Input{
+		Programs: progs,
+		Globals:  []Global{{Name: "S", Type: "Outer"}, {Name: "O", Type: "Outer"}, {Name: "Level", Type: "REAL"}, {Name: "X", Type: "REAL"}},
+		Tasks:    []Task{{Name: "main", Program: "A", Interval: time.Second}, {Name: "b", Program: "B", Interval: time.Second}},
+	})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	f := map[string]string{}
+	for _, x := range out.Files {
+		f[x.Path] = string(x.Data)
+	}
+	return f
+}
+
+// TestSharedStructWrites: a whole struct assigned to a shared tag flags
+// every leaf, and a leaf the program also writes bits of takes its mask's
+// every bit, not TRUE (Fable on #1317).
+func TestSharedStructWrites(t *testing.T) {
+	f := structTwoTasks(t,
+		"PROGRAM A\nVAR_EXTERNAL S : Outer; O : Outer; END_VAR\nS.In.Flags.2 := TRUE;\nS := O;\nEND_PROGRAM\n",
+		"PROGRAM B\nVAR_EXTERNAL S : Outer; END_VAR\nS.Speed := S.Speed + 1.0;\nEND_PROGRAM\n")
+	fb := f["A.scl"]
+	for _, want := range []string{
+		"\t\"Scan_main\".assigned.S.In.Flags.%X2 := TRUE;\n",
+		"\t\"Scan_main\".tags.S.In.Flags := \"Tags\".O.In.Flags;\n",
+		"\t\"Scan_main\".assigned.S.In.Flags := WORD#16#FFFF;\n",
+		"\t\"Scan_main\".assigned.S.In.Run := TRUE;\n",
+		"\t\"Scan_main\".assigned.S.Speed := TRUE;\n",
+	} {
+		if !strings.Contains(fb, want) {
+			t.Errorf("A.scl lacks %q:\n%s", want, fb)
+		}
+	}
+	if db := f["Scan_main.db"]; !strings.Contains(db, "            In : Struct\n               Flags : WORD;\n               Run : BOOL;") {
+		t.Errorf("Scan_main.db flags:\n%s", db)
+	}
+	ob := f["OB_main.scl"]
+	for _, want := range []string{
+		"\tIF \"Scan_main\".assigned.S.In.Flags = WORD#16#FFFF THEN\n\t\t\"Tags\".S.In.Flags := \"Scan_main\".tags.S.In.Flags;\n",
+		"\t\tIF \"Scan_main\".assigned.S.In.Flags.%X2 THEN\n",
+		"\tIF \"Scan_main\".assigned.S.In.Run THEN\n",
+	} {
+		if !strings.Contains(ob, want) {
+			t.Errorf("OB_main.scl lacks %q:\n%s", want, ob)
+		}
+	}
+}
+
+// TestLocalShadowsATag: a program's local named like a manifest tag is
+// the local; it neither names the tag nor makes it shared.
+func TestLocalShadowsATag(t *testing.T) {
+	f := structTwoTasks(t,
+		"PROGRAM A\nVAR Level : REAL; END_VAR\nLevel := Level + 1.0;\nEND_PROGRAM\n",
+		"PROGRAM B\nVAR_EXTERNAL Level : REAL; END_VAR\nLevel := 2.0;\nEND_PROGRAM\n")
+	for path, src := range f {
+		if strings.Contains(src, "Scan_") {
+			t.Errorf("%s copies a tag only one task names:\n%s", path, src)
+		}
+	}
+}
+
+// TestAProgramNoTaskRunsSharesNothing: only the tasks' programs count
+// towards a tag's being shared.
+func TestAProgramNoTaskRunsSharesNothing(t *testing.T) {
+	f := structTwoTasks(t,
+		"PROGRAM A\nVAR_EXTERNAL X : REAL; END_VAR\nX := 1.0;\nEND_PROGRAM\n",
+		"PROGRAM B\nVAR_EXTERNAL Level : REAL; END_VAR\nLevel := 2.0;\nEND_PROGRAM\n",
+		Program{Path: "C.st", Source: "PROGRAM C\nVAR_EXTERNAL X : REAL; END_VAR\nX := 3.0;\nEND_PROGRAM\n"})
+	for path, src := range f {
+		if strings.Contains(src, "Scan_") {
+			t.Errorf("%s copies X, which one task names:\n%s", path, src)
+		}
+	}
+}
+
+// TestScanDBNameCollides: a task's scan DB claims its block name like any
+// other generated block.
+func TestScanDBNameCollides(t *testing.T) {
+	prog := func(name string) Program {
+		return Program{Path: name + ".st", Source: "PROGRAM " + name + "\nVAR_EXTERNAL Level : REAL; END_VAR\nLevel := Level + 1.0;\nEND_PROGRAM\n"}
+	}
+	_, diags, err := Write(Input{
+		Programs: []Program{prog("P"), prog("Scan_main")},
+		Globals:  []Global{{Name: "Level", Type: "REAL"}},
+		Tasks:    []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "x", Program: "Scan_main", Interval: time.Second}},
+	})
+	if err != nil || !strings.Contains(fmt.Sprint(diags), `block "Scan_main" (the scan DB of task main) collides with program Scan_main`) {
+		t.Fatalf("want the scan DB collision, got %v %v", diags, err)
+	}
 }
