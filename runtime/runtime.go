@@ -336,6 +336,8 @@ type Runtime struct {
 	edges uint64
 	// imageSeq numbers the state images (image.go).
 	imageSeq imageSeqs
+	// carried is the tags a state image carries (imagetags.go), fixed in New.
+	carried *carrySet
 	// ready is the driver as an io.InputsReadier (nil when it is not one),
 	// readyWait how long a takeover waits for it, and readySince when the
 	// pending takeover began waiting (zero when none is). See inputsReady.
@@ -710,6 +712,19 @@ func New(o Options) (*Runtime, error) {
 	// Flag the output tags in the store so a write to one stamps the
 	// output generation Scan reads (see Tags.markOutputs).
 	tags.markOutputs(o.Outputs)
+	// The tags a pair's state image carries: every one the field does not
+	// provide (imagetags.go).
+	dtTags := []string{o.DtTag}
+	for _, tr := range tasks {
+		dtTags = append(dtTags, tr.dtTag)
+	}
+	r.carried = buildCarrySet(tags, r.inputs, r.outputs, dtTags)
+	for _, np := range r.namedPrograms() {
+		np.prog.mu.Lock()
+		np.prog.carry = r.carried
+		np.prog.carryIdx = r.carried.idxOf(np.prog.writtenKeys())
+		np.prog.mu.Unlock()
+	}
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
 	r.late.thresholdUs = lateThresholdS(o.LateThreshold.Seconds(), o.Scan.Seconds()) * 1e6
 	r.cpus, r.prio = o.CPUs, o.Priority

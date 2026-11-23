@@ -206,6 +206,10 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | an image's checksum is neither written nor checked (`image_crc_unchecked`); images over the size limits are made and read (`image_size_unbounded`) | F31, design §4.1 | S1a (#710) |
 | the scan's frame copy does more than copy values (`image_copy_in_scan_encodes`) | design §4.1, guard (a) | S1a (#710) |
 | the standby takes the leader's acks, shelves, flood or substitutes from an image (`stream_carries_log_intent`) | design §1 (the log owns them), §4.1 | S1a (#710) |
+| an image carries the inputs or outputs (`image_tags_carry_io`), only the tags a program writes and not an operator's (`image_tags_written_only`), a forced tag's forced value (`image_tag_forced_value`), or the retained tags twice (`image_tags_retained_twice`) | design §4.1, the carried tags | S2a (#710) |
+| a task's tags are copied when the image is taken, not with its frame at the end of the same scan (`image_tags_at_take`) | design §4.1, one instant | S2a (#710) |
+| a task's image names no running source (`image_source_unhashed`); the shadow applies the tags of a leader that carries another set (`shadow_tags_layout_unchecked`) | I5, design §4.1 | S2a (#710) |
+| a leader sends its newest image format to a standby that reads only an older one (`stream_format_ignored`) | design §4.1, rolling update | S2a (#710) |
 | hot takeover with no image-age check | I5 | 4 |
 | hot takeover on an image with a different build hash | I5 | 4 |
 | the gate is checked once per batch, not before each send (as `hw/base.go` did) | design §3.4 | 3b-3a (`gate_per_batch`) |

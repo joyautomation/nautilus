@@ -23,6 +23,9 @@ type Shadow struct {
 	term  uint64
 	seq   uint64
 	tasks map[string]*shadowTask
+	// tags is the newest image's carried tags (imagetags.go), nil when
+	// that image's could not be applied (another layout, format 1).
+	tags *shadowTags
 }
 
 type shadowTask struct {
@@ -53,11 +56,19 @@ type ShadowReport struct {
 	// image's tasks this build does not run.
 	Missing []string
 	Extra   []string
+	// TagsDiffer: the leader carries another set of tags (another
+	// manifest, other types), or its tags' leaves did not fit here; the
+	// shadow holds none of its tags. TagsMissing: the image carries no
+	// tags (format 1, a leader of a build before #710 S2). Either way a
+	// takeover would not be hot.
+	TagsDiffer  bool
+	TagsMissing bool
 }
 
-// InSync reports whether every task's frame was applied.
+// InSync reports whether every task's frame and the carried tags were
+// applied.
 func (s ShadowReport) InSync() bool {
-	return len(s.LayoutDiffers) == 0 && len(s.Missing) == 0 && len(s.Extra) == 0
+	return len(s.LayoutDiffers) == 0 && len(s.Missing) == 0 && len(s.Extra) == 0 && !s.TagsDiffer && !s.TagsMissing
 }
 
 // Apply applies the image's frames to the shadow, each to a frame of this
@@ -128,10 +139,55 @@ func (s *Shadow) Apply(img *Image) (ShadowReport, error) {
 			rep.Extra = append(rep.Extra, ti.Task)
 		}
 	}
+	s.applyTagsLocked(img, &rep, &firstErr)
 	// The position moves even when a task's frame did not fit: the image
 	// was the newest, and its other tasks are applied.
 	s.term, s.seq = img.Term, img.Seq
 	return rep, firstErr
+}
+
+// applyTagsLocked applies the image's carried tags when its tags' layout
+// is this controller's, all or none; otherwise the shadow holds no tags
+// (an older image's are not this one's). The caller holds s.mu.
+func (s *Shadow) applyTagsLocked(img *Image, rep *ShadowReport, firstErr *error) {
+	cs := s.r.carried
+	s.tags = nil
+	switch {
+	case cs == nil:
+		return
+	case img.Format < 2:
+		rep.TagsMissing = true
+		return
+	case img.TagsLayout != cs.layout && !mutRuntime("shadow_tags_layout_unchecked"):
+		rep.TagsDiffer = true
+		return
+	}
+	st, err := applyTags(cs, img)
+	if err != nil {
+		rep.TagsDiffer = true
+		if *firstErr == nil {
+			*firstErr = err
+		}
+		return
+	}
+	s.tags = st
+}
+
+// tagsOf is the shadow's carried tags by ir.NameKey, nil when it holds
+// none (tests).
+func (s *Shadow) tagsOf() map[string]ir.Value {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tags == nil {
+		return nil
+	}
+	out := map[string]ir.Value{}
+	for i, ok := range s.tags.have {
+		if ok {
+			out[s.r.carried.keys[i]] = s.tags.vals[i]
+		}
+	}
+	return out
 }
 
 // stale marks a task's frame as not this image's. The caller holds s.mu.
@@ -172,6 +228,7 @@ func (s *Shadow) Reset() {
 	}
 	s.term, s.seq = 0, 0
 	s.tasks = map[string]*shadowTask{}
+	s.tags = nil
 }
 
 // frameOf is a task's shadow frame, nil when none was applied (tests).

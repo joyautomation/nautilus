@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -128,6 +130,35 @@ type pairStream struct {
 // good copy.
 const streamLoadFailed = "the leader's retain store could not be read at its takeover: it runs on initial values and streams nothing, so the standby's retain file keeps the last good values; to run on them, stop this controller so the standby takes over. To keep values set here instead: stop the standby, restart this controller (it takes over from its own file, readable again), then start the standby"
 
+// streamFormatsHeader names, on a standby's stream request, the image
+// formats it reads ("1,2"). The leader sends the newest both read, and
+// format 1 to a standby that names none (a build before #710 S2), so a
+// pair mid rolling update still carries its retained values.
+const streamFormatsHeader = "X-Nautilus-Image-Formats"
+
+// streamFormats is this build's streamFormatsHeader value.
+func streamFormats() string {
+	parts := make([]string, len(runtime.ImageFormats))
+	for i, f := range runtime.ImageFormats {
+		parts[i] = strconv.Itoa(int(f))
+	}
+	return strings.Join(parts, ",")
+}
+
+// askedFormat is the format to send a standby whose request names formats.
+func askedFormat(h string) byte {
+	var fs []byte
+	for _, p := range strings.Split(h, ",") {
+		if n, err := strconv.Atoi(strings.TrimSpace(p)); err == nil && n > 0 && n < 256 {
+			fs = append(fs, byte(n))
+		}
+	}
+	if mutNaut("stream_format_ignored") {
+		return runtime.ImageFormats[len(runtime.ImageFormats)-1]
+	}
+	return runtime.ImageFormatFor(fs)
+}
+
 // streamPath is the stream's path on the peer listener.
 func streamPath(cluster string) string { return node.Prefix + cluster + "/stream" }
 
@@ -193,6 +224,7 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, streamLoadFailed, http.StatusServiceUnavailable)
 		return
 	}
+	format := askedFormat(r.Header.Get(streamFormatsHeader))
 	rc := http.NewResponseController(w)
 	w.Header().Set("Content-Type", "application/x-nautilus-state-stream")
 	w.WriteHeader(http.StatusOK)
@@ -242,7 +274,7 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 		img.Retain = ret
 		var kind byte = streamImage
 		var tb *runtime.ImageTooBigError
-		buf, err = runtime.EncodeImage(buf[:0], &img)
+		buf, err = runtime.EncodeImageFormat(buf[:0], &img, format)
 		switch {
 		case errors.As(err, &tb):
 			kind = streamTooBig
@@ -435,6 +467,7 @@ func (s *pairStream) followOnce(ctx context.Context) error {
 		return err
 	}
 	req.Header.Set(node.TokenHeader, s.m.o.Token)
+	req.Header.Set(streamFormatsHeader, streamFormats())
 	s.mu.Lock()
 	if s.state == "off" || s.state == "" {
 		s.state, s.detail = "connecting", ""
@@ -528,8 +561,13 @@ func (s *pairStream) take(img *runtime.Image, now time.Time, intervalMs int64, n
 	}
 	s.layoutDiffers = append(append(append([]string(nil), rep.LayoutDiffers...), rep.Missing...), rep.Extra...)
 	s.state, s.detail = "in-sync", ""
-	if len(s.layoutDiffers) > 0 {
+	switch {
+	case len(s.layoutDiffers) > 0:
 		s.state, s.detail = "layout-differs", "this build runs another program for these tasks: a takeover would be cold for them"
+	case rep.TagsDiffer:
+		s.state, s.detail = "layout-differs", "the leader carries another set of tags (another manifest, or other tag types): a takeover would not carry its tags"
+	case rep.TagsMissing:
+		s.state, s.detail = "layout-differs", "the leader's build sends no tags (an older nautilus, mid upgrade?): a takeover would not carry its tags"
 	}
 	s.pending = append(s.pending[:0], img.Retain...)
 	s.pendTerm, s.pendSeq = img.Term, img.Seq

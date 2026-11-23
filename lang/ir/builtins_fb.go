@@ -52,6 +52,7 @@ func registerTON() {
 		Inputs:    []FBSlot{{Name: "IN", Type: BoolT}, {Name: "PT", Type: TimeT}},
 		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}, {Name: "ET", Type: TimeT}},
 		Internals: []FBSlot{{Name: "_started", Type: TimeT}},
+		TimeBase:  []TimeBaseSlot{{Index: 4}},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			in := inst.Slots[0].B
 			pt := inst.Slots[1].I
@@ -91,6 +92,7 @@ func registerTOF() {
 		Inputs:    []FBSlot{{Name: "IN", Type: BoolT}, {Name: "PT", Type: TimeT}},
 		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}, {Name: "ET", Type: TimeT}},
 		Internals: []FBSlot{{Name: "_stopped", Type: TimeT}, {Name: "_prevIN", Type: BoolT}},
+		TimeBase:  []TimeBaseSlot{{Index: 4}},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			in := inst.Slots[0].B
 			pt := inst.Slots[1].I
@@ -146,6 +148,7 @@ func registerTP() {
 		Inputs:    []FBSlot{{Name: "IN", Type: BoolT}, {Name: "PT", Type: TimeT}},
 		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}, {Name: "ET", Type: TimeT}},
 		Internals: []FBSlot{{Name: "_started", Type: TimeT}, {Name: "_prevIN", Type: BoolT}},
+		TimeBase:  []TimeBaseSlot{{Index: 4}},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			in := inst.Slots[0].B
 			pt := inst.Slots[1].I

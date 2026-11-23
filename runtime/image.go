@@ -41,6 +41,19 @@ type Image struct {
 	Build  string
 	Retain []byte
 	Tasks  []TaskImage
+	// Format is the wire format the image was decoded from (DecodeImage),
+	// or is to be encoded in (EncodeImageFormat): 1 carries no tags and no
+	// sources, so a standby never takes over hot on it (#710 S2).
+	Format byte
+	// TagsLayout is the leader's carried tags' ir.TagsLayout: a standby
+	// applies the tag sections only when its own is the same.
+	TagsLayout string
+	// Tags are the carried tags no program writes (an operator's, a
+	// client's), copied from the store when the image is taken, at the
+	// store's time base TagsNowMs. The tags a program writes are in its
+	// task's TaskImage.Tags, copied at the end of its scan with its frame.
+	TagsNowMs int64
+	Tags      TagValues
 }
 
 // TaskImage is one task's program frame. Experimental, like Image.
@@ -58,6 +71,13 @@ type TaskImage struct {
 	// ordering, which is Image.Seq's.
 	Scans  uint64
 	Leaves []ir.Leaf
+	// Source is the hash of the program source the task ran at the copy
+	// (Program.Hash's form): the layout leaves bodies out, and a hot
+	// takeover needs the same running source too (#710 S2).
+	Source string
+	// Tags are the carried tags this task's program writes, as the store
+	// held them right after the scan the frame was copied at.
+	Tags TagValues
 }
 
 // imageCap is one program's frame copy: requested by the stream, taken by
@@ -74,10 +94,13 @@ type imageCap struct {
 	prog   *ir.Program
 	nowMs  int64
 	scans  uint64
-	// layout caches layoutOf.Layout(): hashed once per compile, by the
-	// stream, never by the scan.
+	src    string    // the program's source at the copy (hashed by the stream)
+	tags   TagValues // the carried tags the program writes, after its commit
+	// layout and source cache layoutOf.Layout() and the source's hash:
+	// hashed once per compile, by the stream, never by the scan.
 	layoutOf *ir.Program
 	layout   string
+	source   string
 }
 
 // captureLocked copies the frame if the stream asked. The caller (Run)
@@ -89,7 +112,16 @@ func (p *Program) captureLocked(tags *Tags) {
 	c := &p.img
 	c.mu.Lock()
 	c.leaves = ir.FlattenInto(c.leaves, p.frame)
-	c.prog, c.nowMs, c.scans, c.ready = p.prog, tags.NowMs(), p.scans, true
+	c.prog, c.nowMs, c.scans, c.src, c.ready = p.prog, tags.NowMs(), p.scans, p.source, true
+	// The tags the program writes, as its commit just left them: one
+	// instant with the frame, so a latch in the frame and the state tag it
+	// set never come from two different scans.
+	c.tags.reset()
+	if p.carry != nil && !mutRuntime("image_tags_at_take") {
+		tags.mu.RLock()
+		tags.copyTagsLocked(p.carry, p.carryIdx, &c.tags)
+		tags.mu.RUnlock()
+	}
 	c.want.Store(false)
 	c.mu.Unlock()
 }
@@ -113,12 +145,12 @@ func (p *Program) takeImage(task string, dst *TaskImage) bool {
 		c.mu.Unlock()
 		return false
 	}
-	prog := c.prog
+	prog, src := c.prog, c.src
 	known := c.layoutOf == prog
 	c.mu.Unlock()
-	layout := ""
+	layout, source := "", ""
 	if !known {
-		layout = prog.Layout() // outside c.mu: a scan may copy meanwhile
+		layout, source = prog.Layout(), sourceHash(src) // outside c.mu: a scan may copy meanwhile
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -126,10 +158,15 @@ func (p *Program) takeImage(task string, dst *TaskImage) bool {
 		return false // a newer program's copy replaced it; take that one next
 	}
 	if !known {
-		c.layoutOf, c.layout = prog, layout
+		c.layoutOf, c.layout, c.source = prog, layout, source
 	}
-	dst.Task, dst.Layout, dst.NowMs, dst.Scans = task, c.layout, c.nowMs, c.scans
+	dst.Task, dst.Layout, dst.NowMs, dst.Scans, dst.Source = task, c.layout, c.nowMs, c.scans, c.source
+	if mutRuntime("image_source_unhashed") {
+		dst.Source = ""
+	}
 	dst.Leaves, c.leaves = c.leaves, dst.Leaves[:0]
+	dst.Tags, c.tags = c.tags, dst.Tags
+	c.tags.reset()
 	c.ready = false
 	return true
 }
@@ -193,7 +230,37 @@ func (r *Runtime) TakeImage(img *Image) bool {
 	if mutRuntime("image_seq_from_scans") {
 		img.Seq = img.Tasks[0].Scans
 	}
+	r.takeTags(img, progs)
 	return true
+}
+
+// takeTags fills the image's tag sections that are not a scan's: the
+// carried tags no program writes, from the store now. (Under the mutation
+// image_tags_at_take, every task's too, from the store now rather than at
+// its scan's end.)
+func (r *Runtime) takeTags(img *Image, progs []namedProgram) {
+	img.Format, img.TagsLayout, img.TagsNowMs = imageFormat, "", 0
+	img.Tags.reset()
+	if r.carried == nil {
+		return
+	}
+	img.TagsLayout, img.TagsNowMs = r.carried.layout, r.tags.NowMs()
+	rest := r.restIdx()
+	var idxs [][]int // read before the store's lock: a scan takes p.mu, then it
+	if mutRuntime("image_tags_at_take") {
+		for _, np := range progs {
+			np.prog.mu.Lock()
+			idxs = append(idxs, np.prog.carryIdx)
+			np.prog.mu.Unlock()
+		}
+	}
+	r.tags.mu.RLock()
+	defer r.tags.mu.RUnlock()
+	r.tags.copyTagsLocked(r.carried, rest, &img.Tags)
+	for i, idx := range idxs {
+		img.Tasks[i].Tags.reset()
+		r.tags.copyTagsLocked(r.carried, idx, &img.Tasks[i].Tags)
+	}
 }
 
 // RetainImage is the retain section of an Image: the state this
@@ -211,12 +278,18 @@ func (r *Runtime) ImageNow() (*Image, error) {
 	for _, np := range r.namedPrograms() {
 		p := np.prog
 		p.mu.Lock()
-		ti := TaskImage{Task: np.name, Leaves: ir.FlattenInto(nil, p.frame), Scans: p.scans}
-		prog := p.prog
+		ti := TaskImage{Task: np.name, Leaves: ir.FlattenInto(nil, p.frame), Scans: p.scans, Source: sourceHash(p.source)}
+		prog, idx := p.prog, p.carryIdx
 		p.mu.Unlock()
 		ti.Layout = prog.Layout()
+		if r.carried != nil {
+			r.tags.mu.RLock()
+			r.tags.copyTagsLocked(r.carried, idx, &ti.Tags)
+			r.tags.mu.RUnlock()
+		}
 		img.Tasks = append(img.Tasks, ti)
 	}
+	r.takeTags(img, nil)
 	ret, err := r.RetainImage()
 	if err != nil {
 		return nil, err

@@ -60,6 +60,13 @@ type Program struct {
 	// goroutine, and mu is held through every scan's logic.
 	written atomic.Pointer[map[string]bool]
 
+	// carry is the runtime's carried tags (imagetags.go), set by New;
+	// carryIdx their places this program writes (written ∩ carry), kept
+	// with prog under mu: what the end of a scan copies for the state
+	// stream.
+	carry    *carrySet
+	carryIdx []int
+
 	// img is the frame copy a pair's state stream asks for (image.go):
 	// taken at the end of a scan, outside of it encoded.
 	img imageCap
@@ -195,6 +202,7 @@ func (p *Program) Swap(src string) error {
 		p.mu.Lock()
 		p.prog, p.frame = prog, ir.NewFrame(prog)
 		p.written.Store(written)
+		p.carryIdx = p.carry.idxOf(*written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
 		p.ran = false
 		p.mu.Unlock()
@@ -275,6 +283,7 @@ func (p *Program) SwapWarm(src string) (SwapReport, error) {
 		p.prevSource, p.prevProg, p.prevFrame = p.source, p.prog, p.frame
 		p.prog, p.frame = prog, frame
 		p.written.Store(written)
+		p.carryIdx = p.carry.idxOf(*written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
 		p.mu.Unlock()
 		return SwapReport{Hash: sourceHash(src), Resets: resets}, nil
@@ -296,6 +305,7 @@ func (p *Program) Rollback() (SwapReport, error) {
 	}
 	p.source, p.prog, p.frame = p.prevSource, p.prevProg, p.prevFrame
 	p.written.Store(writtenOf(p.prog))
+	p.carryIdx = p.carry.idxOf(p.writtenKeys())
 	p.prevSource, p.prevProg, p.prevFrame = "", nil, nil
 	p.compiledAt, p.scans, p.lastErr = time.Now(), 0, ""
 	return SwapReport{Hash: sourceHash(p.source)}, nil

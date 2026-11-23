@@ -458,6 +458,15 @@ type FBDef struct {
 	// Globals.
 	Uses GlobalUse
 
+	// TimeBase lists the internal slots that hold an absolute time on the
+	// host's clock (FBStepCtx.NowMs), 0 meaning idle: a TON's start, a
+	// TOF's stop, a PID's last call. A pair's hot takeover (#710 S2) moves
+	// a frame from one controller's clock to another's, so it shifts each
+	// of them (RebaseFrame). A built-in that keeps NowMs in a slot must
+	// list it: TestTimeBaseCoversEveryClockSlot runs every registered FB on
+	// two clocks and fails on a slot that differs by the offset unlisted.
+	TimeBase []TimeBaseSlot
+
 	// Body is the lowered body Step runs, nil for a built-in. Introspection
 	// only (the VM runs Step): it is how Program.ReadBeforeWrite follows a
 	// call into the block in scan order, and how GlobalUses reaches the
