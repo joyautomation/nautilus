@@ -28,7 +28,7 @@ type ONVIFOpts struct {
 	Stream     string // the stream URI the device hands out (default rtsp://10.9.9.9:554/live: a host the controller must replace)
 	Snapshot   string // "" none; the device hands it out as given
 	Skew       time.Duration
-	// Misbehave: "fault", "huge", "garbage", "no-media", "bad-scheme", "userinfo", "evil-token", "slow", "doctype"
+	// Misbehave: "fault", "huge", "garbage", "no-media", "bad-media-scheme", "bad-stream-scheme", "https-downgrade", "snapshot-slow", "userinfo", "evil-token", "slow", "doctype"
 	Misbehave string
 }
 
@@ -74,6 +74,9 @@ func (d *ONVIF) Calls() []string {
 	return append([]string(nil), d.calls...)
 }
 
+// Close stops the device, as if it lost power.
+func (d *ONVIF) Close() { d.srv.CloseClientConnections(); d.srv.Close() }
+
 // Rejected is how many requests were refused for credentials.
 func (d *ONVIF) Rejected() int { d.mu.Lock(); defer d.mu.Unlock(); return d.rejected }
 
@@ -99,6 +102,11 @@ func (d *ONVIF) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch d.o.Misbehave {
+	case "snapshot-503":
+		if op == "GetSnapshotUri" {
+			w.WriteHeader(503)
+			return
+		}
 	case "garbage":
 		w.Write([]byte("<html>not soap"))
 		return
@@ -107,7 +115,7 @@ func (d *ONVIF) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	case "fault":
 		w.WriteHeader(500)
-		w.Write([]byte(`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><s:Fault><s:Code><s:Value>s:Sender</s:Value></s:Code><s:Reason><s:Text xml:lang="en">Sender not authorized` + "\n\t" + `</s:Text></s:Reason></s:Fault></s:Body></s:Envelope>`))
+		w.Write([]byte(`<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><s:Fault><s:Code><s:Value>s:Sender</s:Value></s:Code><s:Reason><s:Text xml:lang="en">Sender` + "\t" + `not` + "\n" + `authorized</s:Text></s:Reason></s:Fault></s:Body></s:Envelope>`))
 		return
 	case "doctype":
 		w.Write([]byte(`<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]><s:Envelope xmlns:s="x"><s:Body>&b;</s:Body></s:Envelope>`))
@@ -173,8 +181,11 @@ func (d *ONVIF) answer(op, body string) string {
 		if d.o.Misbehave == "no-media" {
 			return head + `<tds:GetCapabilitiesResponse xmlns:tds="x"><tds:Capabilities></tds:Capabilities></tds:GetCapabilitiesResponse>` + tail
 		}
-		if d.o.Misbehave == "bad-scheme" {
+		if d.o.Misbehave == "bad-media-scheme" {
 			media = "file:///etc/passwd"
+		}
+		if d.o.Misbehave == "https-downgrade" {
+			media = strings.Replace(media, "https://", "http://", 1)
 		}
 		// the device names itself by an address of its own: the controller must use the host of its manifest
 		media = strings.Replace(media, "127.0.0.1", "10.9.9.9", 1)
@@ -193,7 +204,7 @@ func (d *ONVIF) answer(op, body string) string {
 	case "GetStreamUri":
 		uri := d.o.Stream
 		switch d.o.Misbehave {
-		case "bad-scheme":
+		case "bad-stream-scheme":
 			uri = "http://10.9.9.9/x"
 		case "userinfo":
 			uri = "rtsp://admin:secret@10.9.9.9:554/live"

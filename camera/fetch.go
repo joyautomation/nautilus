@@ -38,7 +38,7 @@ type Fetcher struct {
 	// host or scheme.
 	Client *http.Client
 
-	learned sync.Map // camera id -> "basic" or "digest": what its camera asked for
+	learned sync.Map // camera id and host:port -> "basic" or "digest": what that service asked for
 	onvif   sync.Map // camera id -> *onvifEntry: what an ONVIF device said
 	once    sync.Once
 	made    *http.Client
@@ -174,7 +174,7 @@ func (f *Fetcher) request(ctx context.Context, c Camera, method, u string, body 
 	// basic. A camera that asked for basic once is sent it straight away after.
 	first := ""
 	if user != "" {
-		if v, _ := f.learned.Load(c.ID); v == "basic" {
+		if v, _ := f.learned.Load(learnKey(c.ID, u)); v == "basic" {
 			first = basic(user, pass)
 		}
 	}
@@ -187,7 +187,7 @@ func (f *Fetcher) request(ctx context.Context, c Camera, method, u string, body 
 		resp.Body.Close()
 		var authz string
 		dig, basicOK := pickChallenge(ch)
-		learned, _ := f.learned.Load(c.ID)
+		learned, _ := f.learned.Load(learnKey(c.ID, u))
 		switch {
 		case dig != "":
 			d, err := digest(dig, user, pass, method, requestURI(u))
@@ -195,14 +195,14 @@ func (f *Fetcher) request(ctx context.Context, c Camera, method, u string, body 
 				return nil, err
 			}
 			authz = d
-			f.learned.Store(c.ID, "digest")
+			f.learned.Store(learnKey(c.ID, u), "digest")
 		case learned == "digest":
 			// a camera that asked for digest is never sent the password in basic,
 			// whoever answers in its place
 			return nil, errors.New("the camera asked for digest before and now asks for basic: not sending the password")
 		case basicOK:
 			authz = basic(user, pass)
-			f.learned.Store(c.ID, "basic")
+			f.learned.Store(learnKey(c.ID, u), "basic")
 		}
 		if authz != "" {
 			if resp, err = do(authz); err != nil {
@@ -212,8 +212,8 @@ func (f *Fetcher) request(ctx context.Context, c Camera, method, u string, body 
 			return nil, errors.New("the camera refused the controller's credentials")
 		}
 	}
-	// a SOAP fault travels in a 500: the caller reads its reason
-	if resp.StatusCode == http.StatusInternalServerError && strings.HasPrefix(ctype, "application/soap+xml") {
+	// a SOAP fault travels in a 500 (or a 400): the caller reads its reason
+	if (resp.StatusCode == http.StatusInternalServerError || resp.StatusCode == http.StatusBadRequest) && strings.HasPrefix(ctype, "application/soap+xml") {
 		return resp, nil
 	}
 	if resp.StatusCode != http.StatusOK {
@@ -248,6 +248,16 @@ func scrub(err error, _ string) error {
 		return errors.New("the camera's URL redirected to another host")
 	}
 	return errors.New("the camera did not answer")
+}
+
+// learnKey is what a service of a camera asked for is remembered under: a device
+// has several (its SOAP service, its snapshot port) and each speaks for itself.
+func learnKey(id, u string) string {
+	pu, err := url.Parse(u)
+	if err != nil {
+		return id
+	}
+	return id + "|" + pu.Scheme + "://" + pu.Host
 }
 
 func basic(user, pass string) string {

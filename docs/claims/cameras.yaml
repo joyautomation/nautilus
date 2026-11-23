@@ -387,7 +387,9 @@ claims:
     claim: >-
       What an ONVIF device answers is never followed: the host of every address
       it returns is the manifest's, the scheme must be the one asked for, user
-      information is dropped, answers over 1 MB, non-SOAP answers and DTD
+      information is dropped, an https device's services stay https and a port the
+      device does not name is the manifest's, what one service asked for (basic or
+      digest) is not applied to another, answers over 1 MB, non-SOAP answers and DTD
       entities are refused, a fault's reason is shown trimmed and without
       control characters, and a profile token that is not plain is not used.
       Credentials leave as a WS-Security digest (the device's own clock read
@@ -397,3 +399,10 @@ claims:
     tests:
       - go ./camera TestWhatAnONVIFDeviceSendsIsNeverTrustedOrFollowed
       - go ./camera TestONVIFCredentialsGoOutAsADigestAndAWrongPasswordIsRefusedPlainly
+      - go ./camera TestADeviceReachedOverHTTPSIsNeverSentTheCredentialsOverHTTPAndKeepsItsPort
+      - go ./camera TestASnapshotAddressThatCouldNotBeAskedForIsNotRememberedAsNone
+      - go ./camera TestAPlayingStreamIsNotHeldUpWhenTheDeviceIsGoneAndItsAnswerExpired
+    note: >-
+      Run against a fake device only; no real ONVIF camera has been tried yet
+      (pending: a bench device, one that asks HTTP basic on its snapshot port,
+      a Profile-T device).

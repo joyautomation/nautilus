@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,12 +32,14 @@ import (
 // (the password never crosses the wire in it), and, if the device asks for HTTP
 // authentication instead, in the scheme it asks for, as for any camera.
 
+// OnvifTTL is a variable so a test need not wait ten minutes.
+var OnvifTTL = 10 * time.Minute
+
 const (
 	// MaxSOAPBytes bounds one device answer: profile lists are a few kilobytes.
 	MaxSOAPBytes = 1 << 20
-	// OnvifTTL is how long a resolved address is kept; a failure is kept for
+	// OnvifRetry: a resolved address is kept for OnvifTTL; a failure is kept for
 	// OnvifRetry, so a camera that is down is not asked at every request.
-	OnvifTTL   = 10 * time.Minute
 	OnvifRetry = 5 * time.Second
 	onvifTime  = 10 * time.Second
 )
@@ -188,8 +191,8 @@ func (f *Fetcher) discoverONVIF(ctx context.Context, c Camera) (Resolved, error)
 		if !strings.EqualFold(strings.ReplaceAll(p.Video.Encoding, ".", ""), "H264") {
 			continue
 		}
-		area := p.Video.Resolution.Width * p.Video.Resolution.Height
-		if best < 0 || area < profs.Profiles[best].Video.Resolution.Width*profs.Profiles[best].Video.Resolution.Height {
+		a := area(p.Video.Resolution.Width, p.Video.Resolution.Height)
+		if best < 0 || a < profileArea(profs.Profiles[best].Video.Resolution.Width, profs.Profiles[best].Video.Resolution.Height) {
 			best = i
 		}
 	}
@@ -217,13 +220,28 @@ func (f *Fetcher) discoverONVIF(ctx context.Context, c Camera) (Resolved, error)
 	var sn struct {
 		URI string `xml:"Body>GetSnapshotUriResponse>MediaUri>Uri"`
 	}
-	if err := cl.call(ctx, media, `<trt:GetSnapshotUri xmlns:trt="`+nsMedia+`"><trt:ProfileToken>`+p.Token+`</trt:ProfileToken></trt:GetSnapshotUri>`, &sn); err == nil {
+	switch err := cl.call(ctx, media, `<trt:GetSnapshotUri xmlns:trt="`+nsMedia+`"><trt:ProfileToken>`+p.Token+`</trt:ProfileToken></trt:GetSnapshotUri>`, &sn); {
+	case err == nil:
 		if s, err := cl.pin(sn.URI, "http", "https"); err == nil {
 			out.Snapshot = s
 		}
+	case errors.As(err, new(*soapFault)):
+		// the device says it has none
+	default:
+		return out, fmt.Errorf("ONVIF: asking the device for the snapshot address: %w", err) // not cached as "none"
 	}
 	return out, nil
 }
+
+// area is a picture's size; a profile that states none is the largest, not the smallest.
+func area(w, h int) int {
+	if w <= 0 || h <= 0 {
+		return 1 << 40
+	}
+	return w * h
+}
+
+func profileArea(w, h int) int { return area(w, h) }
 
 // validToken says a profile token is safe to put in a request: devices use
 // short names, and what a device sends is never spliced into XML unchecked.
@@ -267,7 +285,7 @@ func (s *soap) skew(ctx context.Context) {
 		return
 	}
 	dt := time.Date(r.Year, time.Month(r.Month), r.Day, r.Hour, r.Minute, r.Second, 0, time.UTC)
-	if d := time.Until(dt); d > -24*time.Hour*365 && d < 24*time.Hour*365 {
+	if d := time.Until(dt); d > -30*365*24*time.Hour && d < 30*365*24*time.Hour {
 		s.offset = d
 	}
 }
@@ -297,8 +315,23 @@ func (s *soap) pin(raw string, schemes ...string) (string, error) {
 	}
 	u.User = nil
 	host := s.dev.Hostname()
-	if p := u.Port(); p != "" {
-		u.Host = net.JoinHostPort(host, p)
+	port := u.Port()
+	if u.Scheme == "http" || u.Scheme == "https" {
+		// the credentials go to these: never to a weaker scheme than the manifest's (a
+		// device reached over https often names its own services as http), and a device
+		// behind a port forward that names no port is reached on the manifest's
+		if strings.EqualFold(s.dev.Scheme, "https") {
+			u.Scheme = "https"
+		}
+		if port == "" {
+			port = s.dev.Port()
+		}
+	}
+	if port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return "", errors.New("a port that is not one")
+		}
+		u.Host = net.JoinHostPort(host, port)
 	} else if strings.Contains(host, ":") {
 		u.Host = "[" + host + "]"
 	} else {
@@ -344,6 +377,11 @@ func (s *soap) send(ctx context.Context, to, body string, out any, sign bool) er
 	return decodeSOAP(b, out)
 }
 
+// soapFault is a device saying no, as opposed to a device that did not answer.
+type soapFault struct{ reason string }
+
+func (e *soapFault) Error() string { return "the device refused: " + e.reason }
+
 // decodeSOAP reads a SOAP answer: a fault is an error carrying the device's
 // reason (bounded; it is the device's text), anything else fills out.
 func decodeSOAP(b []byte, out any) error {
@@ -366,7 +404,7 @@ func decodeSOAP(b []byte, out any) error {
 		if len(t) > 120 {
 			t = t[:120]
 		}
-		return fmt.Errorf("the device refused: %s", strings.TrimSpace(t))
+		return &soapFault{reason: strings.TrimSpace(t)}
 	}
 	if out == nil {
 		return nil

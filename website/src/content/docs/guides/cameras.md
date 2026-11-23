@@ -264,11 +264,20 @@ What a device answers is data, not an instruction:
   internal one, behind NAT). The controller keeps the port the device names and
   uses the host of the `url:` row, so a device cannot send the controller to another
   machine. The scheme must be the one asked for (`rtsp` for the stream, `http` or
-  `https` for the rest); user names and passwords in an address are dropped.
+  `https` for the rest); user names and passwords in an address are dropped. A device
+  reached over `https` that names its services as `http` is still reached over `https`
+  (the credentials never go to a weaker scheme than the row's), and one that names no
+  port is reached on the row's.
 - **Credentials leave in a hashed token.** The password goes out as a WS-Security
   digest, never as itself. A device that asks for HTTP authentication instead is sent
   basic or digest only after it asks, as any camera is. The device's clock is read
   first, so a camera whose time is wrong still accepts the token.
+- A token that is a salted SHA-1 hash (and HTTP digest's MD5) can be guessed offline by
+  whoever sees it: use `https://` if the camera has it, and a long password. The device's
+  clock reading is not authenticated, so on plain `http` someone on the plant network can
+  make the controller issue tokens dated in the future.
+- Devices that speak only the newer Media2 service (some H.265-only cameras) are not
+  read; give such a camera's H.264 stream as an `rtsp` row.
 - Answers are bounded (1 MB), refused if they are not SOAP, and a device's fault reason is
   shown trimmed and with control characters removed. The address is asked once and kept
   for ten minutes; a device that failed is not asked again for five seconds.

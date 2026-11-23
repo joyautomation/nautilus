@@ -2,6 +2,7 @@ package camera
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -81,10 +82,11 @@ func TestWhatAnONVIFDeviceSendsIsNeverTrustedOrFollowed(t *testing.T) {
 	for _, tc := range []struct{ mis, want string }{
 		{"garbage", "not SOAP"},
 		{"huge", "larger than"},
-		{"fault", "refused: Sender not authorized"},
+		{"fault", "refused: Sendernotauthorized"},
 		{"no-media", "no media service"},
-		{"bad-scheme", ""}, // media service on file://, or a stream on http://: refused either way
-		{"userinfo", ""},   // the credentials in the stream address are dropped, not used
+		{"bad-media-scheme", "no media service"},
+		{"bad-stream-scheme", "the stream address: not a rtsp address"},
+		{"userinfo", ""}, // the credentials in the stream address are dropped, not used
 		{"evil-token", "no H.264 profile"},
 		{"doctype", "not SOAP"},
 	} {
@@ -150,5 +152,76 @@ func TestAnONVIFCameraStreamsThroughTheSameRelayAndAStillComesFromItsSnapshotAdd
 	f := &Fetcher{Secret: secrets(map[string]string{"camera.dome": "admin:pw"})}
 	if _, err := f.Snapshot(context.Background(), onvifRow(d)); err == nil || err.Error() != ErrNoSnapshot.Error() {
 		t.Errorf("a device without a snapshot address: %v", err)
+	}
+}
+
+func TestADeviceReachedOverHTTPSIsNeverSentTheCredentialsOverHTTPAndKeepsItsPort(t *testing.T) {
+	pin := func(dev, raw string, schemes ...string) string {
+		u, _ := url.Parse(dev)
+		out, err := (&soap{dev: u}).pin(raw, schemes...)
+		if err != nil {
+			return "ERR " + err.Error()
+		}
+		return out
+	}
+	for _, tc := range []struct{ dev, raw, want string }{
+		// a device reached over https names its services as http: they stay https
+		{"https://cam:8443/onvif/device_service", "http://192.168.1.64/onvif/media", "https://cam:8443/onvif/media"},
+		// a device behind a port forward that names no port is reached on the manifest's
+		{"http://gw:8081/onvif/device_service", "http://192.168.1.64/onvif/media", "http://gw:8081/onvif/media"},
+		// one that names a port keeps it
+		{"http://gw:8081/onvif/device_service", "http://192.168.1.64:8080/onvif/media", "http://gw:8080/onvif/media"},
+		// the stream is RTSP: the manifest's HTTP port is not its port
+		{"http://gw:8081/onvif/device_service", "rtsp://192.168.1.64/live", "rtsp://gw/live"},
+		// a plain device on a plain port
+		{"http://cam/onvif/device_service", "HTTP://192.168.1.64/x?a=1", "http://cam/x?a=1"},
+		{"http://cam/d", "http://cam:0/x", "ERR a port that is not one"},
+		{"http://cam/d", "http://cam:99999/x", "ERR a port that is not one"},
+		{"http://[fe80::1]/d", "http://10.0.0.1:8000/x", "http://[fe80::1]:8000/x"},
+	} {
+		sc := []string{"http", "https"}
+		if strings.HasPrefix(tc.raw, "rtsp") {
+			sc = []string{"rtsp"}
+		}
+		if got := pin(tc.dev, tc.raw, sc...); got != tc.want {
+			t.Errorf("%s names %s: got %s, want %s", tc.dev, tc.raw, got, tc.want)
+		}
+	}
+	// what one service of a device asks for is not what another is sent
+	if learnKey("c", "http://cam:80/soap") == learnKey("c", "http://cam:8080/snap") {
+		t.Error("two services of one device share what they asked for")
+	}
+}
+
+func TestASnapshotAddressThatCouldNotBeAskedForIsNotRememberedAsNone(t *testing.T) {
+	d := cameratest.StartONVIF(t, cameratest.ONVIFOpts{Misbehave: "snapshot-503"})
+	c := onvifRow(d)
+	c.Credentials = false
+	f := &Fetcher{}
+	if _, err := f.Resolve(context.Background(), c); err == nil || !strings.Contains(err.Error(), "snapshot address") {
+		t.Errorf("a snapshot request that failed in transit was taken as 'none': %v", err)
+	}
+}
+
+func TestAPlayingStreamIsNotHeldUpWhenTheDeviceIsGoneAndItsAnswerExpired(t *testing.T) {
+	old := OnvifTTL
+	OnvifTTL = time.Millisecond
+	t.Cleanup(func() { OnvifTTL = old })
+	rt := cameratest.Start(t, cameratest.Opts{Loops: -1, Pause: 50 * time.Millisecond})
+	port := rt.Addr()[strings.LastIndex(rt.Addr(), ":")+1:]
+	d := cameratest.StartONVIF(t, cameratest.ONVIFOpts{Stream: "rtsp://10.9.9.9:" + port + "/live"})
+	c := onvifRow(d)
+	c.Credentials = false
+	h := NewHLSHub(&Fetcher{}, nil)
+	t.Cleanup(h.Stop)
+	s1, err := h.Session(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	d.Close()
+	s2, err := h.Session(c)
+	if err != nil || s2 != s1 {
+		t.Errorf("the playing session was not returned while the device is down: %v", err)
 	}
 }

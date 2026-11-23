@@ -66,8 +66,12 @@ func (h *HLSHub) Session(c Camera) (*HLSSession, error) {
 		return nil, errors.New("camera: not an RTSP camera")
 	}
 	if c.Kind == KindONVIF {
-		// the device's stream address (kept for a while; a device that is down is not
-		// asked again at once)
+		// a stream that is playing is not held up by a device slow to answer again: only a
+		// camera with no live session asks the device (its answer is kept for a while, and a
+		// device that is down is not asked again at once)
+		if s := h.live(c.ID); s != nil {
+			return s, nil
+		}
 		var err error
 		if c, err = h.f.Resolve(context.Background(), c); err != nil {
 			return nil, err
@@ -129,6 +133,23 @@ func (h *HLSHub) Session(c Camera) (*HLSSession, error) {
 		go h.reap()
 	}
 	return s, nil
+}
+
+// live returns camera id's session if it is running, marked used.
+func (h *HLSHub) live(id string) *HLSSession {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	s := h.sessions[id]
+	if s == nil {
+		return nil
+	}
+	select {
+	case <-s.done:
+		return nil
+	default:
+		s.last = time.Now()
+		return s
+	}
 }
 
 // reap stops the sessions nobody has asked for lately, until there are none.
