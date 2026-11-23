@@ -6,7 +6,7 @@ package server
 // overlay (alarms.tuning), which is reviewed and applied at the next start.
 
 import (
-	"fmt"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -24,6 +24,15 @@ const adviceSpan = 7 * 24 * time.Hour
 var adviceKinds = []string{alarm.KindActive, alarm.KindRTN, alarm.KindShelve, alarm.KindUnshelve,
 	alarm.KindSuppress, alarm.KindUnsuppress, alarm.KindTuned}
 
+// adviceRowLimit is the most journal rows read for one alarm, and
+// adviceMaxAlarms the most alarms read for: a noisier alarm than that has
+// its oldest rows cut (and then no suggestion is made: the last tuning may
+// be among them), and one past the cap is not examined.
+const (
+	adviceRowLimit  = 5000
+	adviceMaxAlarms = 20
+)
+
 // adviceLimits is the honest limits of the replay, shown beside every
 // suggestion.
 const adviceLimits = "Only longer delays can be judged: bounces the current delays already filter are not in the journal, " +
@@ -40,6 +49,10 @@ type adviceAlarm struct {
 	OnDelayMs  int64            `json:"onDelayMs"`
 	OffDelayMs int64            `json:"offDelayMs"`
 	Suggestion *adviceSuggested `json:"suggestion,omitempty"`
+	// Cut says the journal read for this alarm was cut (more rows than
+	// could be read, or the alarm is past the cap), so no suggestion was
+	// made: one from part of the history could be wrong.
+	Cut bool `json:"cut,omitempty"`
 	// Row is the suggestion as a tuning overlay row, ready to paste into
 	// the file `alarms.tuning` names.
 	Row string `json:"row,omitempty"`
@@ -62,19 +75,39 @@ type adviceAnswer struct {
 
 // adviceFor builds the answer from the chattering records and a way to read
 // one alarm's journal rows, oldest first. Pure, so it has a test.
-func adviceFor(recs []alarm.Record, rows func(id string) []alarm.Event) adviceAnswer {
+func adviceFor(recs []alarm.Record, rows func(id string) ([]alarm.Event, bool)) adviceAnswer {
 	out := adviceAnswer{Alarms: []adviceAlarm{}, Note: adviceLimits}
+	var chat []alarm.Record
 	for _, r := range recs {
-		if r.Chatter == nil {
-			continue
+		if r.Chatter != nil {
+			chat = append(chat, r)
 		}
+	}
+	// the worst first, and only the first few are read for
+	slices.SortFunc(chat, func(x, y alarm.Record) int {
+		if x.Chatter.Activations != y.Chatter.Activations {
+			return y.Chatter.Activations - x.Chatter.Activations
+		}
+		return strings.Compare(x.ID, y.ID)
+	})
+	for i, r := range chat {
 		cur := rationalize.Delays{On: r.OnDelay, Off: r.OffDelay}
 		a := adviceAlarm{ID: r.ID, Name: r.Def.Name, Priority: r.Priority, Chatter: *r.Chatter,
 			OnDelayMs: r.OnDelay.Milliseconds(), OffDelayMs: r.OffDelay.Milliseconds()}
 		if a.Name == "" {
 			a.Name = r.ID
 		}
-		s, ok := rationalize.Suggest(rows(r.ID), cur, time.Duration(r.Chatter.WindowMs)*time.Millisecond, r.Chatter.Count)
+		var evs []alarm.Event
+		cut := i >= adviceMaxAlarms
+		if !cut {
+			evs, cut = rows(r.ID)
+		}
+		if cut {
+			a.Cut = true
+			out.Alarms = append(out.Alarms, a)
+			continue
+		}
+		s, ok := rationalize.Suggest(evs, cur, time.Duration(r.Chatter.WindowMs)*time.Millisecond, r.Chatter.Count)
 		if ok {
 			a.Suggestion = &adviceSuggested{
 				OnDelayMs: time.Duration(s.On).Milliseconds(), OffDelayMs: time.Duration(s.Off).Milliseconds(),
@@ -84,17 +117,13 @@ func adviceFor(recs []alarm.Record, rows func(id string) []alarm.Event) adviceAn
 		}
 		out.Alarms = append(out.Alarms, a)
 	}
-	slices.SortFunc(out.Alarms, func(x, y adviceAlarm) int {
-		if x.Chatter.Activations != y.Chatter.Activations {
-			return y.Chatter.Activations - x.Chatter.Activations // the worst first
-		}
-		return strings.Compare(x.ID, y.ID)
-	})
 	return out
 }
 
 // overlayRow is a suggestion as one tuning overlay row: only the delay the
-// suggestion lengthens, and the why in one line.
+// suggestion lengthens, and the why in one line. The id and the why are
+// written as JSON strings, which are YAML double-quoted scalars: an alarm id
+// is free-form text and may hold a comma, a colon or a brace.
 func overlayRow(id string, cur rationalize.Delays, s rationalize.Suggestion) string {
 	var parts []string
 	if on := time.Duration(s.On); on > cur.On {
@@ -106,8 +135,27 @@ func overlayRow(id string, cur rationalize.Delays, s rationalize.Suggestion) str
 	if len(parts) == 0 {
 		return ""
 	}
-	why := strings.ReplaceAll(strings.TrimSpace(s.Why), `"`, `'`)
-	return fmt.Sprintf(`- { id: %s, %s, why: "%s" }`, id, strings.Join(parts, ", "), why)
+	why := strings.Join(strings.Fields(s.Why), " ") // one line
+	if r := []rune(why); len(r) > 200 {
+		why = string(r[:199]) + "…"
+	}
+	jid, _ := json.Marshal(id)
+	jwhy, _ := json.Marshal(why)
+	return "- { id: " + string(jid) + ", " + strings.Join(parts, ", ") + ", why: " + string(jwhy) + " }"
+}
+
+// readAdviceRows reads one alarm's rows oldest first through query (which
+// answers newest first, as the journal does), and says when more matched
+// than the limit: then the oldest were cut.
+func readAdviceRows(query func(alarm.Filter) ([]alarm.Event, error), id string) ([]alarm.Event, bool) {
+	evs, err := query(alarm.Filter{IDs: []string{id}, Kinds: adviceKinds, Limit: adviceRowLimit})
+	if err != nil {
+		return nil, true
+	}
+	cut := len(evs) >= adviceRowLimit
+	out := slices.Clone(evs)
+	slices.Reverse(out)
+	return out, cut
 }
 
 func (s *Server) handleAlarmChatterAdvice(w http.ResponseWriter, r *http.Request) {
@@ -116,13 +164,10 @@ func (s *Server) handleAlarmChatterAdvice(w http.ResponseWriter, r *http.Request
 	}
 	now := time.Now()
 	recs := s.alarms.Records()
-	out := adviceFor(recs, func(id string) []alarm.Event {
-		evs, err := s.alarms.Journal(now.Add(-adviceSpan), now, alarm.Filter{IDs: []string{id}, Kinds: adviceKinds, Limit: 5000})
-		if err != nil {
-			return nil
-		}
-		slices.Reverse(evs) // the journal answers newest first
-		return evs
+	out := adviceFor(recs, func(id string) ([]alarm.Event, bool) {
+		return readAdviceRows(func(f alarm.Filter) ([]alarm.Event, error) {
+			return s.alarms.Journal(now.Add(-adviceSpan), now, f)
+		}, id)
 	})
 	writeJSON(w, http.StatusOK, out)
 }

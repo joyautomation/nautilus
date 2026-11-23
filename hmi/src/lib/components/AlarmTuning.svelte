@@ -23,6 +23,11 @@
 	} = $props();
 
 	let copied = $state('');
+	// a refreshed answer may carry a different row: forget what was copied
+	$effect(() => {
+		void advice;
+		copied = '';
+	});
 	async function copy(id: string, row: string) {
 		try {
 			await navigator.clipboard.writeText(row);

@@ -138,6 +138,7 @@ export function delaysText(onMs: number, offMs: number): string {
  * What the suggestion says in one line: "5 s on-delay: 7 bounces in 60 s
  * become 1" is the controller's own `why`; with none, why there is none.
  */
-export function adviceLine(a: { suggestion?: { why: string } }): string {
+export function adviceLine(a: { suggestion?: { why: string }; cut?: boolean }): string {
+	if (a.cut) return 'Too much history to read for this alarm (or too many alarms chatter): no suggestion. Look at the signal itself.';
 	return a.suggestion ? a.suggestion.why : 'No longer delay would have stopped it: look at the signal itself.';
 }

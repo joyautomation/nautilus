@@ -597,12 +597,12 @@ const defaultAlarms = `<script>
 	import { AlarmTable, AlarmTuning, OutOfServicePanel, FloodBanner } from '@joyautomation/nautilus-hmi';
 	import { alarms } from 'nx:default/client';
 	let focus = $state(false);
-	// what would stop each chattering alarm: read when the number chattering
-	// changes (a derived, so a frame that changes nothing does not refetch)
-	const chattering = $derived(alarms.summary?.chattering ?? 0);
+	// what would stop each chattering alarm: read when the SET chattering
+	// changes (a derived string, so a frame that changes nothing does not refetch)
+	const chatKey = $derived(alarms.instances.filter((a) => a.chatter).map((a) => a.id).join(','));
 	$effect(() => {
-		if (chattering) void alarms.loadAdvice();
-		else alarms.advice = null;
+		if (chatKey) void alarms.loadAdvice();
+		else alarms.clearAdvice();
 	});
 	let now = $state(Date.now());
 	$effect(() => {

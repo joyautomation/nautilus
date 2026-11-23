@@ -224,6 +224,8 @@ export interface AlarmAdvice {
 	};
 	/** The suggestion as a tuning overlay row, ready to paste. */
 	row?: string;
+	/** The journal read for it was cut (or it is past the cap): no suggestion was made. */
+	cut?: boolean;
 }
 
 export interface AlarmAdviceAnswer {
@@ -410,6 +412,7 @@ export class AlarmClient {
 	#url: string;
 	#token?: string;
 	#lastFetchedRev: number | null = null;
+	#adviceSeq = 0;
 	#unsub: (() => void) | null = null;
 
 	constructor(realtime: FrameSource<FrameWithAlarms> | null, opts: AlarmClientOptions = {}) {
@@ -480,16 +483,25 @@ export class AlarmClient {
 	/** `GET /api/alarms/chatter`: what would have stopped each chattering alarm.
 	 * Advisory and read-only; a failed read keeps the last answer. */
 	async loadAdvice(): Promise<void> {
+		const seq = ++this.#adviceSeq;
 		try {
 			const res = await kitFetch(`${this.#url}/chatter`, { headers: authHeaders(this.#token, false) });
 			if (!res.ok) {
-				this.error = refusalMessage(res.status, await res.text(), `suggestions failed`);
+				if (seq === this.#adviceSeq) this.error = refusalMessage(res.status, await res.text(), `suggestions failed`);
 				return;
 			}
-			this.advice = (await res.json()) as AlarmAdviceAnswer;
+			const body = (await res.json()) as AlarmAdviceAnswer;
+			// only the newest ask counts: a slow answer must not overwrite a newer one
+			if (seq === this.#adviceSeq) this.advice = body;
 		} catch {
 			this.error = 'suggestions failed — controller unreachable';
 		}
+	}
+
+	/** Forget the suggestions (nothing chatters now); a read still in flight is dropped. */
+	clearAdvice(): void {
+		this.#adviceSeq++;
+		this.advice = null;
 	}
 
 	/** Read the out-of-service windows. A failed read keeps the last list. */

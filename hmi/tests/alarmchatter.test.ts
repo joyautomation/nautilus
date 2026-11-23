@@ -186,5 +186,6 @@ describe('the tuning panel words', () => {
 		expect(delaysText(90_000, 300_000)).toBe('on-delay 90 s, off-delay 5 min');
 		expect(adviceLine({ suggestion: { why: '5 s on-delay: 7 bounces in 60 s become 1' } })).toBe('5 s on-delay: 7 bounces in 60 s become 1');
 		expect(adviceLine({}).includes('No longer delay would have stopped it')).toBe(true);
+		expect(adviceLine({ cut: true, suggestion: { why: 'x' } }).startsWith('Too much history')).toBe(true);
 	});
 });
