@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strings"
 	"time"
@@ -60,6 +61,22 @@ func buildHMI(proj *project.Project, dir string) (*hmibuild.Result, error) {
 	return hmibuild.Build(opts)
 }
 
+// hmiArch is the architecture naut is running on (a variable so a test can say another).
+var hmiArch = goruntime.GOARCH
+
+// slowBoxNotice is what `naut run` says before it builds the screens on a small ARM
+// board: the build is about four seconds on a desktop and was still going at full use
+// of both cores after 90 seconds on a two-core Cortex-A53 board, and nothing is served
+// until it ends. A controller built off the box (`naut build`, or `naut deploy`, which
+// builds and ships it) carries its screens already built and never builds them.
+func slowBoxNotice(goarch string) string {
+	if goarch != "arm" && goarch != "arm64" {
+		return ""
+	}
+	return "naut run: building the screens first; on a small ARM board this takes minutes of every core before anything is served. " +
+		"Build off the board instead: `naut build` (or `naut deploy`, which does it for you) ships the screens built and the controller never rebuilds them."
+}
+
 // buildHMIForRun builds the HMI `naut run` serves at "/", or says why it
 // can't and leaves the built-in dashboard there. The banner suffix it
 // returns names what was built.
@@ -68,6 +85,11 @@ func buildHMIForRun(proj *project.Project, dir string, stderr io.Writer) string 
 		return ""
 	}
 	src := hmiSource(proj)
+	if src != "" {
+		if n := slowBoxNotice(hmiArch); n != "" {
+			fmt.Fprintln(stderr, n)
+		}
+	}
 	res, err := buildHMI(proj, dir)
 	if err != nil {
 		fmt.Fprintf(stderr, "naut run: hmi: %s didn't build, so the built-in dashboard has \"/\":\n", src)

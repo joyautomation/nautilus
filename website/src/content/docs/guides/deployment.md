@@ -43,6 +43,17 @@ so it runs on an ARM64 IPC and reports that release's version. Pass the
 `naut` inside the archive, not the archive itself; `naut build` refuses
 anything that is not an executable.
 
+### Build the screens off the box
+
+`naut build` also builds the project's operator screens and ships them inside the
+controller, built. The controller serves them at boot and never builds them, and
+`naut deploy` builds this way too, so a box you deploy to never rebuilds its screens.
+`naut run` is different: it builds the screens every time it starts. That is about
+four seconds on a desktop, and on a small ARM board it takes minutes of every core before
+anything is served (still running after a minute and a half on a two-core Cortex-A53
+board). On an ARM board `naut run` says so before it starts. Use `naut build` or `naut
+deploy` from a faster machine, and run the controller it makes.
+
 ## The cluster
 
 `deploy/k8s.yaml` runs **two replicas** with the manifest's `retain: {}`
