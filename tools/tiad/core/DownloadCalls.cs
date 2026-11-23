@@ -773,6 +773,7 @@ namespace Tiad
             NeedTia();
             return WithSession(c, delegate(Session s)
             {
+                HeldOnlineRefuses(s, "compare");
                 var r = c.Json();
                 string password = OnlinePassword(r);
                 r.Done();
@@ -867,6 +868,7 @@ namespace Tiad
             NeedTia();
             return WithSession(c, delegate(Session s)
             {
+                HeldOnlineRefuses(s, "upload");
                 var r = c.Json();
                 // An explicit, per-call opt-in, only here: trust the CPU's
                 // TLS certificate blindly for this read-only upload.

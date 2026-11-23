@@ -252,6 +252,19 @@ namespace Tiad
 
         CompileResult Compile(object project, bool hardware, bool software);
 
+        // HoldOnline takes the project online to its CPU at address and
+        // keeps it online, so TIA's window shows the CPU's online state and
+        // its online/offline compare: it never loads, compares or reads
+        // anything itself. TIA's questions going online are answered as a
+        // compare's are (use). It returns TIA's online state. The agent
+        // asks it only of a TIA started with its user interface.
+        // ReleaseOnline takes it offline again; it does nothing for a
+        // project that is not held online. CloseProject goes offline first
+        // for a project still held online.
+        string HoldOnline(object project, string address, LoginUse use);
+
+        void ReleaseOnline(object project);
+
         // Show opens the block named name, in group (a ProjectBlock.Group
         // the agent read with Blocks), in TIA Portal's editor. The agent
         // asks it only of a TIA started with its user interface

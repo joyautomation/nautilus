@@ -264,6 +264,7 @@ namespace Tiad
             NeedTia();
             return WithSession(c, delegate(Session s)
             {
+                HeldOnlineRefuses(s, "read the fingerprint");
                 // Every read is journalled, refusals too: the request and
                 // the gates are checked inside the audited read.
                 FingerprintRun run = ReadFingerprintAudited(s, null, TrustFix, delegate(FingerprintRun r)

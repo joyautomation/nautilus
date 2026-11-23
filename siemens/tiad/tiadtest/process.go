@@ -434,6 +434,16 @@ func (p *Process) SetArchiveFails(t testing.TB, msg string) {
 	p.SetScript(t, s)
 }
 
+// OnlineEvents lists every hold online and release tiad-fake made.
+func (p *Process) OnlineEvents(t testing.TB) []string {
+	t.Helper()
+	var out struct {
+		Online []string `json:"online"`
+	}
+	p.controlInto(t, http.MethodGet, "/fake/online", nil, &out)
+	return out.Online
+}
+
 // Shown lists every block tiad-fake's show opened.
 func (p *Process) Shown(t testing.TB) []string {
 	t.Helper()

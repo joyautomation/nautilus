@@ -22,6 +22,12 @@ namespace Tiad
         // longer matches its spec, but compare and export still know the
         // CPU.
         public string Address = "";
+        // HeldOnline is the CPU address a UI agent's online call holds the
+        // project online to (POST /v1/sessions/{id}/online), "" when
+        // offline. Written and read on the TIA thread. While it is set,
+        // nothing else on the session goes online; a close goes offline
+        // first (ITia.CloseProject).
+        public string HeldOnline = "";
         public bool Compiled;           // fully compiled since the last change
         // Unclean is set while an apply or an upload runs and stays set
         // when it fails part-way: the project then matches no spec, and

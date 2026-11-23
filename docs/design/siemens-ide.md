@@ -254,8 +254,13 @@ name, such as `naut_main`) in TIA's editor. An agent without the window is
 refused before anything opens, and the refusal names `install-tiad.ps1
 -Ui`. The project stays open, so another show reuses it, and `--close`
 closes it. A show of a block the project lacks closes the session only
-when that show opened it. For a demo, the order is: deploy, `naut siemens
-verify`, then `naut siemens show naut_main`. The verify needs the agent
+when that show opened it. `--online` also takes the project online to the
+CPU in TIA's window (`POST /v1/sessions/{id}/online`, §3.4). TIA's project
+tree then shows its own online/offline compare, and the device its state,
+the proof a person can see that the CPU runs what was deployed. It goes
+online read-only and stays online until `--close`, which goes offline
+first. For a demo, the order is: deploy, `naut siemens verify`, then
+`naut siemens show --online naut_main`. The verify needs the agent
 free of sessions, and the show keeps one open.
 
 ## 2. Codegen
@@ -910,6 +915,7 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
 | `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
+| `POST /v1/sessions/{id}/online` | `{online, secrets?: {fullAccessPassword}}` → `{online, address, state?}`. Holds the session's project online to its CPU (`OnlineProvider.GoOnline`) and keeps it online, so TIA's window shows the CPU's state and its own online/offline compare; `{online: false}` takes it offline (`address` is then the CPU it was held to, `""` if none). Refused (`bad_request`) unless the agent runs with `TIAD_UI=1`. The CPU is the spec's (or, for a project opened as found, the project's own), a target, pin checked; TIA's questions are answered as a compare's (§3.9), with no blind trust. It loads, compares and writes nothing. While held online, compare, fingerprint and upload on the session are `busy`; a close goes offline first. A second `{online: true}` to the same CPU changes nothing |
 | `POST /v1/sessions/{id}/show` | `{block}` → `{block, type, number, group}`. Opens the program block named `block` (compared without case) in TIA Portal's editor, with Openness's `ShowInEditor`. Refused (`bad_request`) unless the agent runs with `TIAD_UI=1`, before TIA is asked anything; a block the project lacks is `not_found`. It changes nothing in the project. `group` is the block's group path (`""` for the root) |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 | `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, outsideChanges?, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
