@@ -191,6 +191,13 @@ the TIA project is not saved. The steps:
    after a stop, in doubt with the CPU possibly left in STOP. The operator
    types `yes`, or passes `--yes`, which answers exactly what was printed.
    Acting answers each have a flag and are never implied:
+   - `--reset-data` (`resetData: true`, #1341), required with every
+     `--download`: the CPU stops and every data block of the program
+     returns to its start values, retained ones included; TIA does not
+     ask. A CPU already in STOP loads the same way with no stop question,
+     and nothing reads the mode first. The refusal prints the command to
+     rerun (without `--yes`). Relaxed only for loads that bench evidence
+     shows keep the data (#1341's real fix);
    - `--allow-stop` (otherwise `stopCpu: false`);
    - `--reinit DB,...` (otherwise none);
    - `--start` or `--no-start`, one of them always (TIA's start-after
@@ -1133,7 +1140,7 @@ Request:
   "address": "192.0.2.10",
   "hardware": true, "software": true,
   "dryRun": false,
-  "decisions": { "stopCpu": true, "reinitialize": ["Tags"], "overwrite": true,
+  "decisions": { "stopCpu": true, "resetData": true, "reinitialize": ["Tags"], "overwrite": true,
                  "consistentDownload": true, "alarmTexts": true, "allBlocks": true,
                  "identificationDataLoadNothing": true,
                  "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
@@ -1606,6 +1613,16 @@ behaviour. So, until then:
     it, and TIA may ask another. After an acting answer it is
     `outcome_unknown` instead (above).
   - A `reinitialize` answer must name every DB the check named.
+  - Every download needs `resetData: true` (#1341), a dry run too (one TIA
+    asks nothing of may load); checked before anything reaches the CPU
+    (`bad_request`, nothing sent). Measured on the bench S7-1500 with TIA
+    V21: TIA's first check is StopModules, and a load in STOP returns every
+    data block of the program to its start values, retained ones included,
+    with no reinitialize question. A CPU already in STOP loads in STOP with
+    no question at all, and tiad reads no mode first, so the consent goes
+    with every download, not only with a stop. An agent older than #1341
+    refuses the field (`decisions.resetData`), and naut says to reinstall
+    it.
   - A download that loads hardware needs `acceptUnverifiedHardware: true`
     and an `attestation`, checked before anything reaches the CPU
     ("What a download verifies", above).

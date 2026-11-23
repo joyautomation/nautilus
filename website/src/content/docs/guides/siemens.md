@@ -152,7 +152,8 @@ Answers are never implied. Each acting answer has its own flag:
 
 | Flag | Answer |
 |---|---|
-| `--allow-stop` | TIA may stop the CPU to load. Without it, a load that needs STOP is cancelled and loads nothing. **A load in STOP returns every data block of the program to its start values, retained ones included, and TIA does not ask.** Today every deploy needs STOP, so every deploy resets the CPU's data (#1341, measured on an S7-1500 with TIA V21) |
+| `--reset-data` | required with every `--download`. You accept what a load in STOP does: **the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask.** A CPU already in STOP loads the same way, with no stop question, and today every deploy loads in STOP, so every deploy resets the CPU's data (#1341, measured on an S7-1500 with TIA V21). Without it the deploy is refused and prints the command to rerun |
+| `--allow-stop` | TIA may stop the CPU to load. Without it, a load that needs STOP is cancelled and loads nothing; a CPU already in STOP is loaded without that question |
 | `--reinit DB,...` | the DBs TIA may reinitialize if it asks. Their values go back to start values, retained ones too. On the bench TIA has not asked: a load in STOP resets the DBs without the question (see `--allow-stop`) |
 | `--start` or `--no-start` | one of them is required: whether TIA starts the CPU after the load |
 | `--hardware` | load the hardware configuration too. Needs `--attest-hardware "<statement>"`; `--cpu-access-control disabled\|enabled` is your observation of the CPU's access control now |

@@ -208,7 +208,7 @@ func contractTurnOnLoads(t *testing.T, start Starter) {
 		return r
 	}
 	software := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes()}}
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes()}}
 	noReset := load(tiad.AttestCPUAccessDisabled)
 	noReset.Decisions.UserManagementResetToProject = nil
 	noReset.Decisions.UserManagementKeepOnline = tiad.Yes()
@@ -327,7 +327,7 @@ func contractTurnOnPending(t *testing.T, start Starter) {
 		_, err := s.Save(ctx, false)
 		wantBadRequest(t, name+": save", err, TurnOnSaveRefused)
 		software := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true,
-			Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes()}}
+			Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes()}}
 		_, err = s.Download(ctx, software)
 		wantBadRequest(t, name+": software only", err, tiad.TurnOnDownloadRefusedTried)
 		_, err = s.Download(ctx, ResetLoad(benchCPU))

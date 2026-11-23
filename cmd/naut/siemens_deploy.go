@@ -73,10 +73,14 @@ the nautilus file and line it came from.
 
 Answers are never implied: each acting one has its own flag.
   --allow-stop        TIA may stop the CPU to load (without it, a load that
-                      needs STOP is cancelled, and loads nothing). A load
-                      in STOP returns every data block of the program to
-                      its start values, retained ones included, and TIA
-                      does not ask (#1341); today every deploy needs STOP
+                      needs STOP is cancelled, and loads nothing; a CPU
+                      already in STOP is loaded without that question)
+  --reset-data        every --download needs it: you accept what a load
+                      in STOP does: the CPU stops and every data block of
+                      the program returns to its start values, retained
+                      ones included; TIA does not ask. A CPU already in
+                      STOP loads the same way, and today every deploy
+                      loads in STOP (#1341)
   --reinit DB,...     the DBs TIA may reinitialize (their values go back to
                       start values, retained ones too). Without the DB it
                       asks for, the download is cancelled there: after a
@@ -166,6 +170,9 @@ type siemensDeployOptions struct {
 	download, yes, dryRun bool
 	verbose               bool // -v: list the sites behind a summary warning
 	allowStop             bool
+	resetData             bool            // --reset-data: the consent to what a load in STOP does to the data (#1341); every --download needs it
+	args                  []string        // the command line's arguments, for a refusal's rerun line
+	valueFlags            map[string]bool // the flags that take a value (the rerun line keeps it with its flag)
 	start, noStart        bool
 	reinit                []string
 	hardware              bool
@@ -215,6 +222,7 @@ func parseSiemensDeployFlags(o *siemensDeployOptions, args []string, stderr io.W
 	fs.BoolVar(&o.verbose, "v", false, "list every site behind a summary warning")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "after the confirmation, ask TIA's first pre-download check (it reaches the CPU)")
 	fs.BoolVar(&o.allowStop, "allow-stop", false, "TIA may stop the CPU")
+	fs.BoolVar(&o.resetData, "reset-data", false, "with --download: you accept that "+tiad.ResetDataSentence+" ("+tiad.ResetDataInStop+")")
 	fs.BoolVar(&o.start, "start", false, "start the CPU after the load")
 	fs.BoolVar(&o.noStart, "no-start", false, "leave the CPU in STOP after the load")
 	reinit := fs.String("reinit", "", "DBs TIA may reinitialize, comma-separated")
@@ -231,6 +239,13 @@ func parseSiemensDeployFlags(o *siemensDeployOptions, args []string, stderr io.W
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	o.args = slices.Clone(args)
+	o.valueFlags = map[string]bool{}
+	fs.VisitAll(func(f *flag.Flag) {
+		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); !ok || !b.IsBoolFlag() {
+			o.valueFlags[f.Name] = true
+		}
+	})
 	if fs.NArg() > 1 {
 		fs.Usage()
 		return errors.New("one project directory at most")
@@ -287,11 +302,11 @@ func (o siemensDeployOptions) flagsError() error {
 	if _, err := o.device.attestation(o.by); err != nil {
 		return err
 	}
-	acting := o.yes || o.dryRun || o.allowStop || o.start || o.noStart || len(o.reinit) > 0 || o.hardware || o.attest != "" ||
+	acting := o.yes || o.dryRun || o.allowStop || o.resetData || o.start || o.noStart || len(o.reinit) > 0 || o.hardware || o.attest != "" ||
 		o.cpuAccess != "" || o.trustCertificate != "" || o.acceptOutside
 	switch {
 	case !o.download && acting:
-		return errors.New("--yes, --dry-run, --allow-stop, --start, --no-start, --reinit, --hardware, --attest-hardware, --cpu-access-control, --trust-certificate and --accept-outside-changes go with --download")
+		return errors.New("--yes, --dry-run, --allow-stop, --reset-data, --start, --no-start, --reinit, --hardware, --attest-hardware, --cpu-access-control, --trust-certificate and --accept-outside-changes go with --download")
 	case o.download && o.start == o.noStart:
 		return errors.New("--download needs --start or --no-start: whether TIA starts the CPU after the load (also one that was in STOP before) is never implied")
 	case !o.hardware && (o.attest != "" || o.cpuAccess != ""):
@@ -312,9 +327,68 @@ func (o siemensDeployOptions) flagsError() error {
 		return fmt.Errorf("--adopt %q: want a project archive (.zap21), last-deploy or upload", o.adopt)
 	case o.trustUnverified && o.adopt != adoptUpload:
 		return errors.New("--trust-unverified-certificate goes with --adopt upload: no other step of a deploy trusts a certificate blindly")
+	case o.download && !o.resetData:
+		// #1341: a load in STOP resets every DB, retained ones included,
+		// and a CPU already in STOP is loaded with no stop question, so
+		// every download needs the consent until a load keeps the data.
+		return fmt.Errorf("--download needs --reset-data: %s, and %s (#1341). To accept that, run (POSIX shell; it still asks you to confirm the plan):\n  %s", tiad.ResetDataSentence, tiad.ResetDataInStop, o.rerunWithResetData())
 	}
 	return nil
 }
+
+// rerunWithResetData is the deploy's command line with --reset-data
+// after --download and without --yes (a pasted line still asks for the
+// confirmation), each argument quoted for a POSIX shell where it needs
+// it.
+func (o siemensDeployOptions) rerunWithResetData() string {
+	parts := []string{"naut", "siemens", "deploy"}
+	added, value, flags := false, false, true
+	for _, a := range o.args {
+		switch {
+		case value: // a flag's value, whatever it reads
+			value = false
+		case flags && a == "--":
+			flags = false
+		case flags && strings.HasPrefix(a, "-") && a != "-":
+			f := strings.TrimLeft(a, "-")
+			name, _, hasValue := strings.Cut(f, "=")
+			if name == "yes" {
+				continue
+			}
+			value = o.valueFlags[name] && !hasValue
+			parts = append(parts, shellQuote(a))
+			if !added && name == "download" {
+				parts = append(parts, "--reset-data")
+				added = true
+			}
+			continue
+		default:
+			flags = false // the project directory ends the flags
+		}
+		parts = append(parts, shellQuote(a))
+	}
+	if !added {
+		parts = append(parts, "--reset-data")
+	}
+	return strings.Join(parts, " ")
+}
+
+// shellQuote quotes s for a POSIX shell when it holds anything but
+// letters, digits and -_./:=,@+.
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./:=,@+") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// oldResetDataAgent is an agent older than #1341 refusing the consent
+// field (it names it "decisions.resetData").
+func oldResetDataAgent(err error) bool {
+	return tiad.Kind(err) == tiad.KindBadRequest && strings.Contains(err.Error(), "unknown field") && strings.Contains(err.Error(), `resetData"`)
+}
+
+const oldResetDataMessage = "the agent is older than this naut (it does not know resetData, the consent every download needs, #1341): reinstall tiad from this nautilus version"
 
 // The --adopt sources besides a project archive.
 const (
@@ -861,13 +935,16 @@ func (d *siemensDeployer) decisions(st tiad.Station, kept []tiad.KeptDevice) (ti
 	var plan []string
 	if o.allowStop {
 		dec.StopCPU = tiad.Yes()
-		// Measured on the bench (#1341): a load in STOP brings every DB
-		// back at its start values and TIA asks no reinitialize question,
-		// so the plan says so here rather than under reinitialize.
-		plan = append(plan, "stop the CPU if TIA needs to: yes (--allow-stop). A load in STOP returns every data block of the program to its start values, retained ones included; TIA does not ask (#1341)")
+		plan = append(plan, "stop the CPU if TIA needs to: yes (--allow-stop)")
 	} else {
 		dec.StopCPU = tiad.No()
-		plan = append(plan, "stop the CPU: no. If TIA asks, the download is cancelled there and loads nothing (pass --allow-stop to let it stop the CPU)")
+		plan = append(plan, "stop the CPU: no. If TIA asks, the download is cancelled there and loads nothing (pass --allow-stop to let it stop the CPU); a CPU already in STOP is loaded without that question")
+	}
+	// The consent the agent needs for every download (#1341); flagsError
+	// refused a download without --reset-data.
+	if o.resetData {
+		dec.ResetData = tiad.Yes()
+		plan = append(plan, "reset the CPU's data: yes (--reset-data). "+strings.ToUpper(tiad.ResetDataSentence[:1])+tiad.ResetDataSentence[1:]+", and "+tiad.ResetDataInStop+" (#1341)")
 	}
 	if len(o.reinit) > 0 {
 		dec.Reinitialize = slices.Clone(o.reinit)
@@ -1376,6 +1453,9 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 			}
 		case !loadedNothing(err):
 			return d.outcomeUnknown(ctx, s, sec, "dry run", err)
+		case oldResetDataAgent(err):
+			d.fail("%s; nothing was loaded", oldResetDataMessage)
+			return 1
 		case tiad.Kind(err) == tiad.KindBadRequest:
 			// The agent's own refusal of a dry run (tiad.Openness gives
 			// none until S2b): nothing reached the CPU.
@@ -1430,6 +1510,10 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 	if err != nil {
 		if !loadedNothing(err) {
 			return d.outcomeUnknown(ctx, s, sec, "download", err)
+		}
+		if oldResetDataAgent(err) {
+			d.fail("%s; nothing was loaded", oldResetDataMessage)
+			return 1
 		}
 		return d.tiadErr("download (refused; nothing was loaded)", err)
 	}

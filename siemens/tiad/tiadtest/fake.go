@@ -1715,6 +1715,10 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if !s.compiled {
 		return nil, fail(http.StatusConflict, tiad.KindNotCompiled, "the project changed since the last full compile; compile hardware and software first")
 	}
+	// A stop without the consent to what it does to the data (#1341).
+	if why := tiad.CheckResetData(req); why != "" {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", why)
+	}
 	if s.turnOn && !s.turnOnLoaded {
 		if why := tiad.TurnOnDownloadRefusal(req, s.turnOnTried); why != "" {
 			return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s; nothing was sent to the CPU", why)

@@ -18,7 +18,7 @@ func loggedOnBench(t *testing.T) (*tiadtest.Process, *tiad.Session) {
 	t.Helper()
 	p, s := downloadReady(t)
 	hw := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})
 	if r, err := s.Download(ctx, hw); err != nil || !r.Downloaded {
 		t.Fatalf("the first hardware load: %+v %v", r, err)
 	}
@@ -46,7 +46,7 @@ func TestAgentLogsOnWithoutLoggingThePassword(t *testing.T) {
 	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: wrong}); tiad.Kind(err) != tiad.KindOperationFailed {
 		t.Fatalf("fingerprint read with a wrong password: %v", err)
 	}
-	sw := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()},
+	sw := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()},
 		Secrets: &tiad.Secrets{FullAccessPassword: wrongPw}}
 	if _, err := s.Download(ctx, sw); tiad.Kind(err) != tiad.KindOutcomeUnknown {
 		t.Fatalf("a download with a wrong password: %v", err)
@@ -121,7 +121,7 @@ func TestAgentSendsNoPasswordAfterABlindTrust(t *testing.T) {
 	p, s := loggedOnBench(t)
 	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true})
 	sw := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.No()}, Fingerprint: &tiad.FingerprintRequest{TrustUnverifiedCertificate: true}}
+		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}, Fingerprint: &tiad.FingerprintRequest{TrustUnverifiedCertificate: true}}
 	r, err := s.Download(ctx, sw)
 	if err != nil || !r.Downloaded || !r.CompareEqual || r.Deploy == nil || r.Deploy.Fingerprint == nil {
 		t.Fatalf("a download whose read trusts blindly: %+v %v", r, err)

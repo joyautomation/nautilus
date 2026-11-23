@@ -104,6 +104,21 @@ namespace Tiad.Test
             Eq(TiaNames.Members(null), "null", "members of null");
         }
 
+        // #1341: every download is refused without resetData yes (a CPU
+        // already in STOP loads in STOP with no stop question), a dry run
+        // too; the refusal says what a load in STOP does to the data.
+        static void StopNeedsTheResetDataConsent()
+        {
+            Contains(ResetDataRule.Check(new Decisions { StopCpu = true }), "decisions.stopCpu yes needs decisions.resetData yes: the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask (#1341); nothing was sent to the CPU", "stop, no consent");
+            True(ResetDataRule.Check(new Decisions { StopCpu = true, ResetData = false }) != null, "stop, consent no");
+            Contains(ResetDataRule.Check(new Decisions { StopCpu = false }), "a download needs decisions.resetData yes: the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask, and a CPU already in STOP loads the same way, with no stop question (#1341)", "no stop, no consent");
+            True(ResetDataRule.Check(new Decisions { ResetData = false }) != null, "consent no");
+            True(ResetDataRule.Check(new Decisions()) != null, "nothing answered");
+            True(ResetDataRule.Check(null) != null, "no decisions");
+            Eq(ResetDataRule.Check(new Decisions { StopCpu = true, ResetData = true }), null, "stop with the consent");
+            Eq(ResetDataRule.Check(new Decisions { ResetData = true }), null, "consent alone");
+        }
+
         static int Main()
         {
             var tests = new List<KeyValuePair<string, Action>>
@@ -142,6 +157,7 @@ namespace Tiad.Test
                 T("CyclicObsPlan", CyclicObsPlan),
                 T("CyclicObsVerifyAndXml", CyclicObsVerifyAndXml),
                 T("KeptDevicesNeedANamedYes", KeptDevicesNeedANamedYes),
+                T("StopNeedsTheResetDataConsent", StopNeedsTheResetDataConsent),
                 T("ProtectionStepsHappyPaths", ProtectionStepsHappyPaths),
                 T("ProtectionStepsStranded", ProtectionStepsStranded),
                 T("ProtectionStepsReadBack", ProtectionStepsReadBack),

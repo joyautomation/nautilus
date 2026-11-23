@@ -62,6 +62,11 @@ type deployRig struct {
 	// oldTypes answers a software import with a data type source as an
 	// agent before D1b's types does (TypesRefused).
 	oldTypes bool
+	// oldResetData answers a download that carries resetData as an agent
+	// before #1341 does: 400, unknown field.
+	oldResetData bool
+	// noResetData leaves --reset-data off a download (run adds it).
+	noResetData bool
 }
 
 // downloads are the downloads since the CPU ran its own project (cpuRuns).
@@ -116,7 +121,7 @@ func (r *deployRig) cpuRunsAt(address string, stale bool) string {
 		}
 	}
 	dl := tiadtest.AcceptHardware(tiad.DownloadRequest{Address: address, Hardware: true, Software: true, Announced: true, Secrets: &sec,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes(), Overwrite: tiad.Yes()}})
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes(), Overwrite: tiad.Yes()}})
 	dl.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
 	if res, err := s.Download(ctx, dl); err != nil || !res.CompareEqual {
 		r.t.Fatalf("the CPU's own project did not load: %+v %v", res, err)
@@ -173,6 +178,11 @@ func newDeployRig(t *testing.T) *deployRig {
 			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"body: json: unknown field \"prunePrefix\"","fatal":false},"events":[]}`)
 			return
 		}
+		if r.oldResetData && strings.HasSuffix(q.URL.Path, "/download") && strings.Contains(string(body), `"resetData"`) {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"body: unknown field \"decisions.resetData\"","fatal":false},"events":[]}`)
+			return
+		}
 		if r.oldTypes && strings.HasSuffix(q.URL.Path, "/software") && strings.Contains(string(body), `.udt"`) {
 			w.WriteHeader(http.StatusBadRequest)
 			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"src/naut_M.udt declares data type \"naut_M\": data types are not imported yet (TIA puts them beside the project's own, so tiad cannot keep a customer's apart). Nothing was imported","fatal":false},"events":[]}`)
@@ -216,6 +226,11 @@ func (r *deployRig) run(stdin string, terminal bool, args ...string) (string, in
 	// fails here. A download names --start unless the test chose.
 	if slices.Contains(args, "--download") && !slices.Contains(args, "--start") && !slices.Contains(args, "--no-start") {
 		args = append(args, "--start")
+	}
+	// Every download needs --reset-data (#1341), unless the test is of
+	// that refusal.
+	if slices.Contains(args, "--download") && !slices.Contains(args, "--reset-data") && !r.noResetData {
+		args = append(args, "--reset-data")
 	}
 	if err := parseSiemensDeployFlags(&o, append(append([]string{"--agent", r.url}, args...), r.dir), &out); err != nil {
 		r.t.Fatalf("flags %v: %v\n%s", args, err, out.String())
@@ -280,7 +295,7 @@ func TestSiemensDeployMapsTIACompileErrorsToTheSourceLine(t *testing.T) {
 		{Object: line, Severity: "error", Text: "Tag \"naut_Tags\".Level not defined.", Path: []string{"PLC_1", "Program blocks", "nautilus", "naut_main (FB1)"}},
 		{Object: "", Severity: "error", Text: "Compiling finished (errors: 1; warnings: 0)"},
 	}})
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	want := filepath.Join(r.dir, "main.st") + ":4:1: error: TIA: Tag \"naut_Tags\".Level not defined. [naut_main]"
 	if code != 1 || !strings.Contains(out, want) || !strings.Contains(out, "TIA's compile: 1 error(s), 0 warning(s); nothing downloaded") ||
 		strings.Contains(out, "PLAN") {
@@ -328,7 +343,7 @@ func TestSiemensDeployAsksBeforeItLoads(t *testing.T) {
 		{"answered no", "no\n", true, "not confirmed"},
 		{"answered y", "y\n", true, "not confirmed"},
 	} {
-		out, code := r.run(c.stdin, c.terminal, "--download", "--dry-run", "--allow-stop")
+		out, code := r.run(c.stdin, c.terminal, "--download", "--dry-run", "--allow-stop", "--reset-data")
 		if code != 1 || !strings.Contains(out, c.says) || strings.Contains(out, "TIA asks stop-cpu") {
 			t.Fatalf("%s: exit %d:\n%s", c.name, code, out)
 		}
@@ -342,7 +357,8 @@ func TestSiemensDeployAsksBeforeItLoads(t *testing.T) {
 			"after your yes: a dry run first (--dry-run)",
 			"announced: you have told everyone who shares this CPU",
 			"user management: not answered",
-			"stop the CPU if TIA needs to: yes (--allow-stop). A load in STOP returns every data block of the program to its start values, retained ones included; TIA does not ask (#1341)",
+			"stop the CPU if TIA needs to: yes (--allow-stop)",
+			"reset the CPU's data: yes (--reset-data). The CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask, and a CPU already in STOP loads the same way, with no stop question (#1341)",
 			"reinitialize a DB: no. If TIA asks, the download is cancelled there: before the CPU was stopped that loads nothing, but after a stop it ends IN DOUBT",
 			"start the CPU after the load: yes (--start), also a CPU that was in STOP before",
 		} {
@@ -401,7 +417,7 @@ func TestSiemensDeployPlanListsForeignBlocks(t *testing.T) {
 	// No adopt compare in this deploy: the plan does not say where they are.
 	r = newDeployRig(t)
 	r.adopt()
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		t.Fatalf("first download: exit %d:\n%s", code, out)
 	}
 	r.base = len(r.fake.Downloads())
@@ -426,7 +442,7 @@ func TestSiemensDeployPrunesOnlyItsOwn(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
 	r.fake.SetTypes(tiadtest.TypesScript{Foreign: []tiadtest.ForeignType{{Name: "Theirs", Group: "nautilus"}}})
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, `data type "Theirs" in data types group "nautilus": not named with the prefix "naut_"`) || len(r.downloads()) != 0 {
 		t.Fatalf("a deploy over a customer's type in nautilus's group: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
 	}
@@ -434,7 +450,7 @@ func TestSiemensDeployPrunesOnlyItsOwn(t *testing.T) {
 	r = newDeployRig(t)
 	r.adopt()
 	r.oldSoftware = true
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "the agent is older than this naut (it does not know prunePrefix") || !strings.Contains(out, "reinstall tiad") || len(r.downloads()) != 0 {
 		t.Fatalf("an agent older than prunePrefix: exit %d:\n%s", code, out)
 	}
@@ -452,7 +468,7 @@ func TestSiemensDeployDataTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.adopt()
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 0 || len(r.downloads()) != 1 || strings.Contains(out, "VERIFY") {
 		t.Fatalf("a deploy with a data type: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
 	}
@@ -466,7 +482,7 @@ func TestSiemensDeployDataTypes(t *testing.T) {
 	}
 	r.adopt()
 	r.oldTypes = true
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "or does not import PLC data types): reinstall tiad") || len(r.downloads()) != 0 {
 		t.Fatalf("an agent before data types: exit %d:\n%s", code, out)
 	}
@@ -485,7 +501,7 @@ func TestSiemensDeployRefusesAStopItWasNotAllowed(t *testing.T) {
 		t.Fatalf("exit %d, downloads %d:\n%s", code, len(r.downloads()), out)
 	}
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionReinitialize, Message: "reinitialize", Objects: []string{"naut_Tags", "naut_main_DB"}}})
-	out, code = r.run("", false, "--download", "--dry-run", "--yes", "--allow-stop", "--reinit=naut_Tags")
+	out, code = r.run("", false, "--download", "--dry-run", "--yes", "--allow-stop", "--reset-data", "--reinit=naut_Tags")
 	if code != 1 || !strings.Contains(out, "TIA reinitializes naut_main_DB") || len(r.downloads()) != 0 {
 		t.Fatalf("exit %d, downloads %d:\n%s", code, len(r.downloads()), out)
 	}
@@ -500,7 +516,7 @@ func TestSiemensDeployEndToEnd(t *testing.T) {
 	r.adopt()
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionStopCPU, Message: "stop the CPU"}})
 	r.commit = strings.Repeat("ab", 20)
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -520,7 +536,7 @@ func TestSiemensDeployEndToEnd(t *testing.T) {
 	}
 
 	r.write("50ms")
-	out, code = r.run("", false, "--download", "--allow-stop")
+	out, code = r.run("", false, "--download", "--allow-stop", "--reset-data")
 	if code != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -537,7 +553,7 @@ func TestSiemensDeployEndToEnd(t *testing.T) {
 	if len(r.downloads()) != 1 {
 		t.Fatal("downloaded without a yes")
 	}
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 0 || len(r.downloads()) != 2 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -550,15 +566,15 @@ func TestSiemensDeployRefusesACPUChangedOutside(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionStopCPU, Message: "stop the CPU"}})
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	r.fake.LoadOutside(deployCPU)
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "compares DIFFERENT") || !strings.Contains(out, "--accept-outside-changes") || len(r.downloads()) != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--accept-outside-changes")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--accept-outside-changes")
 	if code != 0 || !strings.Contains(out, "replacing it anyway (--accept-outside-changes): the deploy record journals your accept, by test operator") ||
 		len(r.downloads()) != 2 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -583,11 +599,11 @@ func TestSiemensDeployOutcomeUnknownComparesOnTheSession(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionStopCPU, Message: "stop the CPU"}})
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		t.Fatalf("the first deploy: exit %d:\n%s", code, out)
 	}
 	r.fake.CompareResult = &tiad.CompareResult{Equal: false, Differences: []tiad.Difference{{Object: "naut_main [FB1]", State: "different"}}}
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "OUTCOME UNKNOWN") || !strings.Contains(out, "the compare after it is DIFFERENT: naut_main [FB1] (different)") ||
 		strings.Contains(out, "saved projects/") {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -621,7 +637,7 @@ func TestSiemensDeploySecretsAreNamedByVariable(t *testing.T) {
 func TestSiemensDeployStopsWhenTheDryRunLoaded(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
-	out, code := r.run("yes\n", true, "--download", "--dry-run", "--allow-stop")
+	out, code := r.run("yes\n", true, "--download", "--dry-run", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "dry run: OUTCOME UNKNOWN") || strings.Index(out, "Type yes") > strings.Index(out, "dry run: OUTCOME") ||
 		strings.Contains(out, "downloading to") {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -660,7 +676,7 @@ func TestSiemensDeployInDoubtAfterAStop(t *testing.T) {
 	r.adopt()
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionStopCPU, Message: "stop the CPU"},
 		{ID: tiad.QuestionReinitialize, Message: "reinitialize", Objects: []string{"naut_Tags"}}})
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "download: OUTCOME UNKNOWN") || !strings.Contains(out, "TIA may already have acted on: stop-cpu") ||
 		strings.Contains(out, "saved projects/") {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -674,7 +690,7 @@ func TestSiemensDeployInDoubtAfterAStop(t *testing.T) {
 func TestSiemensDeployLoadsHardwareOnlyAttested(t *testing.T) {
 	r := newDeployRig(t)
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionStopCPU, Message: "stop the CPU"}})
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--hardware",
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--hardware",
 		"--attest-hardware=the CPU's hardware is what I intend to load", "--cpu-access-control=disabled")
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -738,7 +754,7 @@ func TestSiemensDeployTurnsAccessControlOnOnlyAsked(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "station note: "+tiadtest.TurnedOnNote) || !strings.Contains(out, "station note: the project's anonymous user is not active") {
 		t.Fatalf("a build that turns it on: exit %d:\n%s", code, out)
 	}
-	hw := []string{"--download", "--yes", "--allow-stop", "--hardware", "--attest-hardware=as intended", "--cpu-access-control=disabled"}
+	hw := []string{"--download", "--yes", "--allow-stop", "--reset-data", "--hardware", "--attest-hardware=as intended", "--cpu-access-control=disabled"}
 	// The download without the flag: the adopted project as found, with
 	// the default spec, is refused again.
 	out, code = r.run("", false, hw...)
@@ -766,7 +782,10 @@ func TestSiemensDeployTurnsAccessControlOnOnlyAsked(t *testing.T) {
 // hardware load without the operator's statement, and an access control
 // that is not one of the two words are refused before anything is read.
 func TestSiemensDeployFlagsGoTogether(t *testing.T) {
-	dl := func(o siemensDeployOptions) siemensDeployOptions { o.download, o.start = true, true; return o }
+	dl := func(o siemensDeployOptions) siemensDeployOptions {
+		o.download, o.start, o.resetData = true, true, true
+		return o
+	}
 	for i, c := range []struct {
 		o    siemensDeployOptions
 		says string
@@ -774,6 +793,8 @@ func TestSiemensDeployFlagsGoTogether(t *testing.T) {
 		{siemensDeployOptions{yes: true}, "go with --download"},
 		{siemensDeployOptions{dryRun: true}, "go with --download"},
 		{siemensDeployOptions{allowStop: true}, "go with --download"},
+		{siemensDeployOptions{resetData: true}, "go with --download"},
+		{siemensDeployOptions{download: true, start: true}, "--download needs --reset-data"},
 		{siemensDeployOptions{start: true}, "go with --download"},
 		{siemensDeployOptions{reinit: []string{"x"}}, "go with --download"},
 		{siemensDeployOptions{acceptOutside: true}, "go with --download"},
@@ -800,13 +821,77 @@ func TestSiemensDeployFlagsGoTogether(t *testing.T) {
 			t.Errorf("case %d: %v, want %q", i, err, c.says)
 		}
 	}
-	for i, o := range []siemensDeployOptions{{}, dl(siemensDeployOptions{yes: true, dryRun: true, allowStop: true}),
-		{download: true, noStart: true}, dl(siemensDeployOptions{hardware: true, attest: "x", cpuAccess: "enabled", by: "op"}),
+	for i, o := range []siemensDeployOptions{{}, dl(siemensDeployOptions{yes: true, dryRun: true, allowStop: true, resetData: true}),
+		{download: true, noStart: true, resetData: true}, dl(siemensDeployOptions{hardware: true, attest: "x", cpuAccess: "enabled", by: "op"}),
 		dl(siemensDeployOptions{acceptOutside: true, by: "op"}), {adopt: "Line 3.ZAP21"}, {adopt: "upload", trustUnverified: true},
 		dl(siemensDeployOptions{adopt: "last-deploy"}), {turnOnAccess: true}, {adopt: "upload", turnOnAccess: true},
 		dl(siemensDeployOptions{turnOnAccess: true, hardware: true, attest: "x", cpuAccess: "disabled", by: "op"})} {
 		if err := o.flagsError(); err != nil {
 			t.Errorf("ok case %d: %v", i, err)
+		}
+	}
+}
+
+// TestSiemensDeployDownloadNeedsResetData (#1341): every --download
+// needs --reset-data (a load in STOP resets every DB, and a CPU already in
+// STOP loads with no stop question). Without it the deploy is refused
+// before anything is read, saying what happens and printing the command
+// to rerun, without --yes; with it the agent gets the consent and the
+// plan says it in words, and the no-stop line never promises a CPU in
+// STOP loads nothing; an agent that does not know the consent is told to
+// be reinstalled, on the dry-run path too.
+func TestSiemensDeployDownloadNeedsResetData(t *testing.T) {
+	var out bytes.Buffer
+	o := siemensDeployOptions{by: "op"}
+	if err := parseSiemensDeployFlags(&o, []string{"--agent", "http://h:8190", "--download", "--yes", "--allow-stop", "--start", "--attest-hardware", "it's the bench", "--hardware", "proj dir"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	// A flag's value spelt --yes stays its value (Fable).
+	o2 := siemensDeployOptions{by: "op"}
+	if err := parseSiemensDeployFlags(&o2, []string{"--download", "--hardware", "--attest-hardware", "--yes", "--start", "dir"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := o2.rerunWithResetData(); got != "naut siemens deploy --download --reset-data --hardware --attest-hardware --yes --start dir" {
+		t.Errorf("rerun keeps a value spelt --yes: %s", got)
+	}
+	if err := parseSiemensDeployFlags(&o2, []string{"--download", "--yes=true", "--start", "dir"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := o2.rerunWithResetData(); got != "naut siemens deploy --download --reset-data --start dir" {
+		t.Errorf("rerun drops --yes=true: %s", got)
+	}
+	err := o.flagsError()
+	want := "--download needs --reset-data: the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask, and a CPU already in STOP loads the same way, with no stop question (#1341). To accept that, run (POSIX shell; it still asks you to confirm the plan):\n" +
+		"  naut siemens deploy --agent http://h:8190 --download --reset-data --allow-stop --start --attest-hardware 'it'\\''s the bench' --hardware 'proj dir'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("got\n%v\nwant\n%s", err, want)
+	}
+
+	r := newDeployRig(t)
+	r.adopt()
+	r.noResetData = true
+	got, code := r.run("", false, "--download", "--yes")
+	if code != 2 || !strings.Contains(got, "--download needs --reset-data") || len(r.downloads()) != 0 {
+		t.Fatalf("no --reset-data: exit %d, %d download(s):\n%s", code, len(r.downloads()), got)
+	}
+	r.noResetData = false
+	got, code = r.run("", false, "--download", "--yes")
+	dls := r.downloads()
+	if code != 0 || len(dls) != 1 || dls[0].Request.Decisions.ResetData == nil || !*dls[0].Request.Decisions.ResetData ||
+		!strings.Contains(got, "reset the CPU's data: yes (--reset-data). The CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask, and a CPU already in STOP loads the same way, with no stop question (#1341)") ||
+		!strings.Contains(got, "stop the CPU: no. If TIA asks, the download is cancelled there and loads nothing (pass --allow-stop to let it stop the CPU); a CPU already in STOP is loaded without that question") {
+		t.Fatalf("with --reset-data: exit %d, %d download(s):\n%s", code, len(dls), got)
+	}
+
+	for _, args := range [][]string{{"--download", "--yes", "--allow-stop"}, {"--download", "--yes", "--dry-run"}} {
+		r = newDeployRig(t)
+		r.adopt()
+		r.oldResetData = true
+		got, code = r.run("", false, args...)
+		// A dry run stops where the agent refused: never on to the download.
+		if code != 1 || !strings.Contains(got, "it does not know resetData, the consent every download needs, #1341): reinstall tiad") || len(r.downloads()) != 0 ||
+			(slices.Contains(args, "--dry-run") && strings.Contains(got, "downloading to")) {
+			t.Fatalf("an agent before #1341 %v: exit %d:\n%s", args, code, got)
 		}
 	}
 }
@@ -848,7 +933,7 @@ func TestGitHeadNamesNoCommitForADirtyProject(t *testing.T) {
 func TestSiemensDeployNeverDryRunsUnasked(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 0 || strings.Contains(out, "OUTCOME UNKNOWN") || !strings.Contains(out, "no dry run (--dry-run asks") || len(r.downloads()) != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -859,7 +944,7 @@ func TestSiemensDeployNeverDryRunsUnasked(t *testing.T) {
 func TestSiemensDeployDownloadsOnATypedYes(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
-	out, code := r.run("yes\n", true, "--download", "--allow-stop")
+	out, code := r.run("yes\n", true, "--download", "--allow-stop", "--reset-data")
 	if code != 0 || !strings.Contains(out, "Type yes") || len(r.downloads()) != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -873,7 +958,7 @@ func TestSiemensDeployInDoubtOnAnUnreadableReply(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
 	r.mangleDownload = true
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "download: OUTCOME UNKNOWN") || strings.Contains(out, "nothing was loaded") ||
 		!strings.Contains(out, "the compare after it is EQUAL") || strings.Contains(out, "saved projects/") || len(r.downloads()) != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -892,7 +977,7 @@ func TestSiemensDeployInDoubtComparesAPinnedCPU(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.mangleDownload = true
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--attest-order", "6ES7 510-1DK03-0AB0", "--attest-firmware", "3.1.3")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--attest-order", "6ES7 510-1DK03-0AB0", "--attest-firmware", "3.1.3")
 	if code != 1 || !strings.Contains(out, "download: OUTCOME UNKNOWN") || !strings.Contains(out, "the compare after it is EQUAL") || len(r.downloads()) != 1 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -904,11 +989,11 @@ func TestSiemensDeployInDoubtComparesAPinnedCPU(t *testing.T) {
 func TestSiemensDeployRefusesABrokenRecord(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	r.write("50ms")
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	list, err := tiad.New(r.url, r.fake.Token).Deploys(context.Background(), deployCPU)
@@ -916,11 +1001,11 @@ func TestSiemensDeployRefusesABrokenRecord(t *testing.T) {
 		t.Fatalf("%+v %v", list, err)
 	}
 	r.fake.SwapArchive(list.Deploys[0].Archive.File, list.Deploys[1].Archive.File)
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "its archive is broken") || !strings.Contains(out, "--accept-outside-changes") || len(r.downloads()) != 2 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--accept-outside-changes")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--accept-outside-changes")
 	dl := r.downloads()
 	if code != 0 || len(dl) != 3 || dl[2].Request.OutsideChanges == nil ||
 		*dl[2].Request.OutsideChanges != (tiad.OutsideChanges{By: "test operator", Verdict: tiad.OutsideBroken, Deploy: list.Deploys[0].ID}) {
@@ -932,7 +1017,7 @@ func TestSiemensDeployRefusesABrokenRecord(t *testing.T) {
 // station record or a source in the agent's work dir.
 func TestSiemensDeployPrintsNoSecret(t *testing.T) {
 	r := newDeployRig(t)
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--hardware", "--attest-hardware=as intended")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--hardware", "--attest-hardware=as intended")
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -964,10 +1049,10 @@ func TestSiemensDeployPrintsNoSecret(t *testing.T) {
 func TestSiemensDeploySaysWhetherTheStationChanged(t *testing.T) {
 	r := newDeployRig(t)
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionStopCPU, Message: "stop the CPU"}})
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--hardware", "--attest-hardware=as intended"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--hardware", "--attest-hardware=as intended"); code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	out, code := r.run("", false, "--download", "--allow-stop")
+	out, code := r.run("", false, "--download", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "station: the spec is the one the last hardware load loaded") || !strings.Contains(out, "  hardware: not loaded\n") {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -975,7 +1060,7 @@ func TestSiemensDeploySaysWhetherTheStationChanged(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.dir, "nautilus.yaml"), []byte(strings.Replace(string(m), "subnet-mask: 255.255.255.0", "subnet-mask: 255.255.255.0, router: 192.0.2.1", 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, code = r.run("", false, "--download", "--allow-stop")
+	out, code = r.run("", false, "--download", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "station: the spec CHANGED since the last hardware load") ||
 		!strings.Contains(out, "hardware: NOT loaded, although it may differ from the CPU's (the station spec changed since the last hardware load)") {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -989,11 +1074,11 @@ func TestSiemensDeployAcceptsAnUnreadableJournalOnlyOnRecord(t *testing.T) {
 	r := newDeployRig(t)
 	r.fake.SetUnreadableLines(1)
 	hw := []string{"--hardware", "--attest-hardware=as intended", "--cpu-access-control=enabled"}
-	out, code := r.run("", false, append([]string{"--download", "--yes", "--allow-stop"}, hw...)...)
+	out, code := r.run("", false, append([]string{"--download", "--yes", "--allow-stop", "--reset-data"}, hw...)...)
 	if code != 1 || !strings.Contains(out, "1 journal line(s) the agent cannot read") || len(r.downloads()) != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
-	out, code = r.run("", false, append([]string{"--download", "--yes", "--allow-stop", "--accept-outside-changes"}, hw...)...)
+	out, code = r.run("", false, append([]string{"--download", "--yes", "--allow-stop", "--reset-data", "--accept-outside-changes"}, hw...)...)
 	dl := r.downloads()
 	if code != 0 || len(dl) != 1 || dl[0].Request.OutsideChanges == nil ||
 		*dl[0].Request.OutsideChanges != (tiad.OutsideChanges{By: "test operator", Verdict: tiad.OutsideUnreadable}) {
@@ -1038,7 +1123,7 @@ func TestSiemensDeployAdoptsTheCPUsProject(t *testing.T) {
 	r := newDeployRig(t)
 	f := r.cpuRuns(false)
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionStopCPU, Message: "stop the CPU"}})
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", f)
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--adopt", f)
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1083,7 +1168,7 @@ func TestSiemensDeployAdoptsTheCPUsProject(t *testing.T) {
 	// The next deploy builds on it: no compare before the import, the
 	// plan still says where it came from.
 	r.write("50ms")
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 0 || !strings.Contains(out, "opened projects/s7_demo/s7_demo.ap21 as last saved") || strings.Contains(out, "comparing the adopted project") ||
 		!strings.Contains(out, "project: adopted from the project archive Customer Line 3.zap21") || !strings.Contains(out, "  hardware: not loaded\n") ||
 		len(r.downloads()) != 2 {
@@ -1103,17 +1188,17 @@ func TestSiemensDeployAdoptsTheCPUsProject(t *testing.T) {
 func TestSiemensDeployRefusesAnAdoptedArchiveTheCPUDoesNotRun(t *testing.T) {
 	r := newDeployRig(t)
 	f := r.cpuRuns(true)
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", f)
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--adopt", f)
 	if code != 1 || !strings.Contains(out, "refusing the download: the adopted project (the project archive Customer Line 3.zap21) is not what the CPU runs") ||
 		!strings.Contains(out, "nothing was imported or downloaded") || strings.Contains(out, "blocks in group") || len(r.downloads()) != 0 {
 		t.Fatalf("a stale archive: exit %d:\n%s", code, out)
 	}
 	// Without --adopt, the next deploy compares it again: still refused.
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "is not what the CPU runs") || len(r.downloads()) != 0 {
 		t.Fatalf("the stale adoption again: exit %d:\n%s", code, out)
 	}
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", "last-deploy")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--adopt", "last-deploy")
 	if code != 0 || !strings.Contains(out, "replacing the adopted project (from the project archive Customer Line 3.zap21), which no download took yet") ||
 		!strings.Contains(out, "adopted the archive of deploy d-") || !strings.Contains(out, "equal: the adopted project is what the CPU runs") ||
 		len(r.downloads()) != 1 {
@@ -1130,7 +1215,7 @@ func TestSiemensDeployRefusesAnAdoptedArchiveTheCPUDoesNotRun(t *testing.T) {
 // keep. Nothing is created and nothing downloads.
 func TestSiemensDeployRefusesWhatANewProjectCannotDo(t *testing.T) {
 	r := newDeployRig(t)
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "refusing the download: this deploy would build a NEW TIA project from the station spec") ||
 		!strings.Contains(out, "--adopt <its project archive .zap21>") || !strings.Contains(out, "--hardware --attest-hardware") {
 		t.Fatalf("a new project, software only: exit %d:\n%s", code, out)
@@ -1145,7 +1230,7 @@ func TestSiemensDeployRefusesWhatANewProjectCannotDo(t *testing.T) {
 	} {
 		r := newDeployRig(t)
 		r.setStation(c.extra)
-		for _, args := range [][]string{nil, {"--download", "--yes", "--allow-stop"}} {
+		for _, args := range [][]string{nil, {"--download", "--yes", "--allow-stop", "--reset-data"}} {
 			out, code := r.run("", false, args...)
 			if code != 1 || !strings.Contains(out, c.says) || !strings.Contains(out, "Adopt the CPU's project first: --adopt") {
 				t.Fatalf("%q %v: exit %d:\n%s", c.extra, args, code, out)
@@ -1169,7 +1254,7 @@ func TestSiemensDeployAdoptsAnUpload(t *testing.T) {
 	r := newDeployRig(t)
 	r.cpuRuns(false)
 	r.setStation(", access-control: keep, configuration-protection: keep")
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", "upload")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--adopt", "upload")
 	if code != 0 || !strings.Contains(out, "uploading the CPU's program from 192.0.2.10 (read-only: it reaches the CPU)") ||
 		!strings.Contains(out, "adopted an upload of the CPU as projects/s7_demo/s7_demo.ap21") || !strings.Contains(out, "station: no change") ||
 		!strings.Contains(out, "equal: the adopted project is what the CPU runs") || !strings.Contains(out, "load the devices the project keeps as found: io-device-up") ||
@@ -1194,7 +1279,7 @@ func TestSiemensDeployAfterAnAdoptedUploadOfAPinnedCPU(t *testing.T) {
 			r.cpuRuns(false)
 			r.setStation(", access-control: keep, configuration-protection: keep")
 			r.fake.SetDevice(tiadtest.BenchDevice(), true)
-			dl := []string{"--download", "--yes", "--allow-stop"}
+			dl := []string{"--download", "--yes", "--allow-stop", "--reset-data"}
 			if oneRun {
 				dl = append(dl, "--adopt", "upload")
 			} else {
@@ -1211,7 +1296,7 @@ func TestSiemensDeployAfterAnAdoptedUploadOfAPinnedCPU(t *testing.T) {
 			}
 			if oneRun {
 				// The upload pinned the CPU; the next --adopt upload matches it.
-				dl = append(dl[:3:3], "--adopt", "upload")
+				dl = append(dl[:4:4], "--adopt", "upload")
 			}
 			bad := append(append([]string{}, dl...), "--attest-order", "6ES7 510-1DK03-0AB0", "--attest-firmware", "V3.2.0")
 			out, code = r.run("", false, bad...)
@@ -1234,7 +1319,7 @@ func TestSiemensDeployAfterAnAdoptedUploadOfAPinnedCPU(t *testing.T) {
 			}
 			// The next deploy verifies the CPU against that record first: an
 			// online call to the pinned CPU too.
-			next := []string{"--download", "--yes", "--allow-stop"}
+			next := []string{"--download", "--yes", "--allow-stop", "--reset-data"}
 			out, code = r.run("", false, next...)
 			if code != 1 || !strings.Contains(out, "verify of the last deploy") || !strings.Contains(out, "device_unverified") || len(r.downloads()) != 1 {
 				t.Fatalf("the next deploy with no attestation: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
@@ -1311,11 +1396,11 @@ func TestSiemensDeployNeverBuildsOnAnUnfinishedAdopt(t *testing.T) {
 func TestSiemensDeployRefusesWhenTheCPUsLastDeployIsAnotherProject(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	r.cpuRuns(false)
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "loaded another project (projects/customer/customer.ap21), not this deploy's saved one (projects/s7_demo/s7_demo.ap21)") ||
 		!strings.Contains(out, "--accept-outside-changes") || len(r.downloads()) != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
@@ -1324,7 +1409,7 @@ func TestSiemensDeployRefusesWhenTheCPUsLastDeployIsAnotherProject(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--accept-outside-changes")
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--accept-outside-changes")
 	dl := r.downloads()
 	if code != 0 || len(dl) != 1 || dl[0].Request.OutsideChanges == nil ||
 		*dl[0].Request.OutsideChanges != (tiad.OutsideChanges{By: "test operator", Verdict: tiad.OutsideOtherProject, Deploy: list.Deploys[0].ID}) ||
@@ -1364,7 +1449,7 @@ func TestSiemensDeployAdoptsLastDeployOnlyWhatTheCPURuns(t *testing.T) {
 	// Refused as an adopt, never pointed at --accept-outside-changes, which
 	// would not make that archive what the CPU runs.
 	for _, args := range [][]string{{}, {"--accept-outside-changes"}} {
-		out, code := r.run("", false, append([]string{"--download", "--yes", "--allow-stop", "--adopt", "last-deploy"}, args...)...)
+		out, code := r.run("", false, append([]string{"--download", "--yes", "--allow-stop", "--reset-data", "--adopt", "last-deploy"}, args...)...)
 		if code != 1 || !strings.Contains(out, "--adopt last-deploy: last deploy") || !strings.Contains(out, "compares DIFFERENT") ||
 			!strings.Contains(out, "so that archive is not what the CPU runs") || len(r.downloads()) != 0 {
 			t.Fatalf("%v: exit %d:\n%s", args, code, out)
@@ -1375,7 +1460,7 @@ func TestSiemensDeployAdoptsLastDeployOnlyWhatTheCPURuns(t *testing.T) {
 	}
 	// And no record at all: nothing to adopt, with or without --download.
 	r = newDeployRig(t)
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", "last-deploy")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--adopt", "last-deploy")
 	if code != 1 || !strings.Contains(out, "--adopt last-deploy: no deploy record for this CPU") || !strings.Contains(out, "so there is no archive to adopt") {
 		t.Fatalf("no record, --download: exit %d:\n%s", code, out)
 	}
@@ -1392,7 +1477,7 @@ func TestSiemensDeploySaysAnAdoptedStationChanged(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
 	r.setStation(", router: 192.0.2.1")
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 0 || !strings.Contains(out, `station: cpu PLC_1 router none -> "192.0.2.1"`) ||
 		!strings.Contains(out, "station: this deploy CHANGES the project's station (above)") ||
 		!strings.Contains(out, "hardware: NOT loaded, although it may differ from the CPU's (this deploy changes the project's station)") {
@@ -1401,7 +1486,7 @@ func TestSiemensDeploySaysAnAdoptedStationChanged(t *testing.T) {
 	if a := r.adoption(); a == nil || !a.StationChanged {
 		t.Fatalf("the adoption record: %+v", a)
 	}
-	out, code = r.run("", false, "--download", "--allow-stop")
+	out, code = r.run("", false, "--download", "--allow-stop", "--reset-data")
 	if code != 1 || strings.Contains(out, "station: as adopted") || !strings.Contains(out, "hardware: NOT loaded, although it may differ from the CPU's") {
 		t.Fatalf("the next plan: exit %d:\n%s", code, out)
 	}
@@ -1418,7 +1503,7 @@ func TestSiemensDeployNeverAdoptsAnotherCPUsProject(t *testing.T) {
 	r.fake.Targets = append(r.fake.Targets, other)
 	r.cpuRuns(false)
 	f := r.cpuRunsAt(other, false)
-	for _, args := range [][]string{nil, {"--download", "--yes", "--allow-stop"}} {
+	for _, args := range [][]string{nil, {"--download", "--yes", "--allow-stop", "--reset-data"}} {
 		out, code := r.run("", false, append(args, "--adopt", f)...)
 		if code != 1 || !strings.Contains(out, "has its CPU at 192.0.2.11, not at 192.0.2.10, the deploy's CPU") || len(r.downloads()) != 0 {
 			t.Fatalf("%v: exit %d:\n%s", args, code, out)
@@ -1431,7 +1516,7 @@ func TestSiemensDeployNeverAdoptsAnotherCPUsProject(t *testing.T) {
 	r = newDeployRig(t)
 	r.adopt()
 	r.fake.CompareResult = &tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, Address: other}
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, `has its CPU at "192.0.2.11", not at 192.0.2.10, the deploy's CPU`) || strings.Contains(out, "blocks in group") || len(r.downloads()) != 0 {
 		t.Fatalf("a compare with another CPU: exit %d:\n%s", code, out)
 	}
@@ -1451,11 +1536,11 @@ func TestSiemensDeployNeverBuildsOnAnAdoptItCouldNotRecord(t *testing.T) {
 		t.Fatal("the agent's adopt did not place the project")
 	}
 	r.failCompleteRecord = false
-	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "the last --adopt (the project archive Customer Line 3.zap21) did not finish") || len(r.downloads()) != 0 {
 		t.Fatalf("a deploy on the unrecorded adopt: exit %d:\n%s", code, out)
 	}
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", f); code != 0 || len(r.downloads()) != 1 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--adopt", f); code != 0 || len(r.downloads()) != 1 {
 		t.Fatalf("--adopt again: exit %d:\n%s", code, out)
 	}
 }
@@ -1464,14 +1549,14 @@ func TestSiemensDeployNeverBuildsOnAnAdoptItCouldNotRecord(t *testing.T) {
 // hardware load of an earlier project says nothing of an adopted one.
 func TestSiemensDeployAdoptForgetsAnOldHardwareLoad(t *testing.T) {
 	r := newDeployRig(t)
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--hardware", "--attest-hardware=as intended", "--cpu-access-control=enabled"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data", "--hardware", "--attest-hardware=as intended", "--cpu-access-control=enabled"); code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	if err := tiad.New(r.url, r.token).DeleteFile(context.Background(), "projects/s7_demo/s7_demo.ap21"); err != nil {
 		t.Fatal(err)
 	}
 	f := r.cpuRuns(false)
-	out, code := r.run("", false, "--download", "--allow-stop", "--adopt", f)
+	out, code := r.run("", false, "--download", "--allow-stop", "--reset-data", "--adopt", f)
 	if code != 1 || strings.Contains(out, "the spec is the one the last hardware load loaded") || !strings.Contains(out, "station: as adopted") {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
@@ -1488,14 +1573,14 @@ func TestSiemensDeployAdoptedProjectIsItsCPUs(t *testing.T) {
 	r := newDeployRig(t)
 	r.fake.Targets = append(r.fake.Targets, "192.0.2.11")
 	r.adopt()
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	m, _ := os.ReadFile(filepath.Join(r.dir, "nautilus.yaml"))
 	if err := os.WriteFile(filepath.Join(r.dir, "nautilus.yaml"), []byte(strings.Replace(string(m), "address: 192.0.2.10", "address: 192.0.2.11", 1)), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{nil, {"--download", "--yes", "--allow-stop"}} {
+	for _, args := range [][]string{nil, {"--download", "--yes", "--allow-stop", "--reset-data"}} {
 		out, code := r.run("", false, args...)
 		if code != 1 || !strings.Contains(out, "was adopted from the CPU at 192.0.2.10, and target.siemens.station.cpu.address is 192.0.2.11") || len(r.downloads()) != 1 {
 			t.Fatalf("%v: exit %d:\n%s", args, code, out)
@@ -1530,7 +1615,24 @@ func TestSiemensDeployAdoptTypoKeepsTheAdoption(t *testing.T) {
 	if a := r.adoption(); a == nil || !a.Complete || a.Source != "archive" {
 		t.Fatalf("the adoption record after a typo: %+v", a)
 	}
-	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data"); code != 0 {
 		t.Fatalf("the adoption still deploys: exit %d:\n%s", code, out)
+	}
+}
+
+// TestSiemensDeployConsentOnlyFromTheFlag (#1341, Fable): the decisions
+// carry resetData only when --reset-data was given, whatever else the
+// options say, so no caller that skips flagsError can make consent.
+func TestSiemensDeployConsentOnlyFromTheFlag(t *testing.T) {
+	for _, o := range []siemensDeployOptions{{download: true, allowStop: true, start: true}, {download: true, start: true}} {
+		d := &siemensDeployer{o: o}
+		if dec, _ := d.decisions(tiad.Station{}, nil); dec.ResetData != nil {
+			t.Errorf("%+v: resetData %v without --reset-data", o, *dec.ResetData)
+		}
+		o.resetData = true
+		d = &siemensDeployer{o: o}
+		if dec, _ := d.decisions(tiad.Station{}, nil); dec.ResetData == nil || !*dec.ResetData {
+			t.Errorf("%+v: no resetData with --reset-data", o)
+		}
 	}
 }

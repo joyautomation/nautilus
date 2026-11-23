@@ -31,8 +31,8 @@ func contractCredentials(t *testing.T, start Starter) {
 	// access control yet), but the compare right after it would: a
 	// download of a fullAccessUser station without the password is
 	// refused before anything reaches the CPU, a dry run too.
-	hw := AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
-	for _, req := range []tiad.DownloadRequest{hw, {Address: benchCPU, Software: true, Announced: true, DryRun: true}} {
+	hw := AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})
+	for _, req := range []tiad.DownloadRequest{hw, {Address: benchCPU, Software: true, Announced: true, DryRun: true, Decisions: tiad.Decisions{ResetData: tiad.Yes()}}} {
 		if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), LoginDownloadNeedsPassword) {
 			t.Fatalf("a download without the password (dry run %v): %v", req.DryRun, err)
 		}
@@ -69,7 +69,7 @@ func contractCredentials(t *testing.T, start Starter) {
 	// A download with a wrong password: refused going online (in doubt,
 	// as any refusal inside TIA's download call), nothing loaded; with
 	// the right one, loaded and compared equal.
-	sw := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	sw := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	sw.Secrets = &tiad.Secrets{FullAccessPassword: wrong.FullAccessPassword}
 	_, err = s.Download(ctx, sw)
 	refused("a download with a wrong password", err, tiad.KindOutcomeUnknown, LoginAskedAgain)
@@ -149,7 +149,7 @@ func contractCredentials(t *testing.T, start Starter) {
 	_, err = s3.CompareWith(ctx, BenchCompare)
 	blocked("a compare", err, tiad.KindOperationFailed)
 	_, err = s3.Download(ctx, AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.No(), AcceptBlindTrust: tiad.Yes()}}))
+		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No(), AcceptBlindTrust: tiad.Yes()}}))
 	blocked("a download of a fullAccessUser station", err, tiad.KindBadRequest)
 	if n := len(a.Loaded(t)); n != 4 {
 		t.Fatalf("loaded %d after the refused download, want 4", n)

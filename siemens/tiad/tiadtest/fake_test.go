@@ -64,7 +64,7 @@ func TestClientChecksBeforeSending(t *testing.T) {
 		},
 		"Export": func() error { _, err := s.Export(ctx, tiad.ExportRequest{Dir: "out.", Blocks: "scl"}); return err },
 		"Download": func() error {
-			_, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true})
+			_, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true})
 			return err
 		},
 	}
@@ -131,7 +131,7 @@ func TestFakeCarriesTheModeOfADoubtfulDownload(t *testing.T) {
 	}
 	f.PreDownload = func(tiad.DownloadRequest) []tiad.Question { return []tiad.Question{{ID: tiad.QuestionStopCPU}} }
 	f.CompareResult = &tiad.CompareResult{Differences: []tiad.Difference{{Object: "PLC_1", State: "different"}}}
-	_, err = s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}})
+	_, err = s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No()}})
 	if state, source := tiad.StateOf(err); tiad.Kind(err) != tiad.KindOutcomeUnknown || state != "STOP" || source != tiad.StateFromTIAMessage {
 		t.Fatalf("%v (state %q %q)", err, state, source)
 	}

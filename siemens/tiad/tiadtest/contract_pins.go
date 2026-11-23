@@ -107,7 +107,7 @@ func contractPinDeviceChanged(t *testing.T, start Starter) {
 	}
 	updated := tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.2"}
 	a.SetDevice(t, updated, false)
-	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	dry := dl
 	dry.DryRun = true
 	for _, call := range []struct {
@@ -150,7 +150,7 @@ func contractPinUnverified(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	c := a.Client()
 	a.SetDevice(t, BenchDevice(), true)
-	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	if _, err := s.CompareWith(ctx, BenchCompare); err != nil {
 		t.Fatalf("compare to an unpinned CPU: %v", err)
 	}
@@ -266,7 +266,7 @@ func contractPinAttested(t *testing.T, start Starter) {
 	if _, err := c.SetPin(ctx, benchCPU, benchPinRequest); err != nil {
 		t.Fatal(err)
 	}
-	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	_, err := s.Download(ctx, dl)
 	if tiad.Kind(err) != tiad.KindDeviceUnverified || !strings.Contains(err.Error(), "--attest-order and --attest-firmware") ||
 		!strings.Contains(err.Error(), "deviceAttestation: {by, order, firmware}") || !strings.Contains(err.Error(), "off the device itself") {
@@ -326,7 +326,7 @@ func contractPinAttestedRefusals(t *testing.T, start Starter) {
 	if _, err := c.SetPin(ctx, benchCPU, benchPinRequest); err != nil {
 		t.Fatal(err)
 	}
-	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	for _, x := range []struct {
 		name, order, firmware, kind, want string
 	}{
