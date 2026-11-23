@@ -107,7 +107,7 @@ namespace Tiad
         public string By = "", Verdict = "", Deploy = "";
 
         public const int MaxBy = 200, MaxDeploy = 100;
-        public const string Different = "different", Broken = "broken", Unreadable = "unreadable";
+        public const string Different = "different", Broken = "broken", OtherProject = "other-project", Unreadable = "unreadable";
 
         public static OutsideChanges Read(Reader r)
         {
@@ -123,7 +123,7 @@ namespace Tiad
         {
             if (By.Trim() == "") return "outsideChanges.by is empty: who accepts replacing the CPU's outside change";
             if (Encoding.UTF8.GetByteCount(By) > MaxBy) return "outsideChanges.by is longer than " + MaxBy + " bytes";
-            if (Verdict != Different && Verdict != Broken && Verdict != Unreadable) return "outsideChanges.verdict is not one of different, broken, unreadable";
+            if (Verdict != Different && Verdict != Broken && Verdict != OtherProject && Verdict != Unreadable) return "outsideChanges.verdict is not one of different, broken, other-project, unreadable";
             if (Encoding.UTF8.GetByteCount(Deploy) > MaxDeploy) return "outsideChanges.deploy is longer than " + MaxDeploy + " bytes";
             if (Deploy == "" && Verdict != Unreadable) return "outsideChanges.deploy is empty: name the deploy record whose verify found " + Verdict;
             return null;

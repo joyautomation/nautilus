@@ -1015,7 +1015,8 @@ func TestSiemensDeployRefusesWhenTheCPUsLastDeployIsAnotherProject(t *testing.T)
 	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--accept-outside-changes")
 	dl := r.downloads()
 	if code != 0 || len(dl) != 1 || dl[0].Request.OutsideChanges == nil ||
-		*dl[0].Request.OutsideChanges != (tiad.OutsideChanges{By: "test operator", Verdict: tiad.OutsideDifferent, Deploy: list.Deploys[0].ID}) {
+		*dl[0].Request.OutsideChanges != (tiad.OutsideChanges{By: "test operator", Verdict: tiad.OutsideOtherProject, Deploy: list.Deploys[0].ID}) ||
+		!strings.Contains(out, "verdict other-project") {
 		t.Fatalf("exit %d, request %+v:\n%s", code, dl, out)
 	}
 }

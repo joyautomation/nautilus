@@ -513,7 +513,8 @@ type lastDeploy struct {
 	outside    bool   // the CPU changed outside nautilus, or the record cannot say
 	why        string
 	// accept is what a download with --accept-outside-changes journals:
-	// tiad.OutsideDifferent, OutsideBroken or OutsideUnreadable.
+	// tiad.OutsideDifferent, OutsideBroken, OutsideOtherProject or
+	// OutsideUnreadable.
 	accept string
 }
 
@@ -745,7 +746,7 @@ func (d *siemensDeployer) checkLastDeployIsThisProject(saved string, last *lastD
 	if last.id == "" || last.project == "" || strings.EqualFold(last.project, saved) || last.outside {
 		return 0
 	}
-	last.outside, last.accept = true, tiad.OutsideDifferent
+	last.outside, last.accept = true, tiad.OutsideOtherProject
 	last.why = fmt.Sprintf("the CPU's last deploy %s loaded another project (%s), not this deploy's saved one (%s): the CPU runs what that deploy loaded, not what this project was last downloaded as", last.id, last.project, saved)
 	if !d.o.acceptOutside {
 		d.fail("refusing the download: %s. A deploy would replace it. Pass --accept-outside-changes once you know what the CPU runs and mean to replace it", last.why)

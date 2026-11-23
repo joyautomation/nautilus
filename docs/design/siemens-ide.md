@@ -172,8 +172,8 @@ the TIA project is not saved. The steps:
    record loaded another project than this deploy's saved one (a restore,
    another deploy), the saved project is not what the CPU runs. The
    download is refused as a change outside it, and
-   `--accept-outside-changes` journals the accept as for a different
-   verdict.
+   `--accept-outside-changes` journals the accept with the verdict
+   `other-project`, naming that deploy.
 5. **Software.** The sources go into the group (`target.siemens.group`) with
    the writer's OBs as `obs` and `prune`. Each OB step is printed.
 6. **Compile.** Hardware and software are compiled. Each message is printed
@@ -1506,7 +1506,10 @@ get a record too, just as it must get the hardware opt-in (#1180 review).
     nautilus, or cannot say:
     - `by`: who accepts, not blank, at most 200 bytes;
     - `verdict`: what the caller's verify of the last deploy found,
-      `different`, `broken` or `unreadable`;
+      `different`, `broken` or `unreadable`, or `other-project` when that
+      deploy (which may still compare equal) loaded another project than
+      the one this download builds on, a restore or another deploy
+      (#1272);
     - `deploy`: that record's id, at most 100 bytes, required unless
       `unreadable`.
 

@@ -60,7 +60,8 @@ func (s DeploySource) Validate() error {
 // OutsideChanges is the operator's accept of a download onto a CPU whose
 // deploy record says it was changed outside nautilus, or cannot say: By
 // is who accepts, Verdict what the caller's check of the last deploy
-// found (OutsideDifferent, OutsideBroken or OutsideUnreadable), Deploy
+// found (OutsideDifferent, OutsideBroken, OutsideOtherProject or
+// OutsideUnreadable), Deploy
 // that record's id ("" only for OutsideUnreadable, which found none to
 // verify). The agent checks only its shape and journals it with the
 // deploy, as the caller's claim, so an overwrite of someone's change is
@@ -82,6 +83,10 @@ const (
 	// OutsideUnreadable: journal lines the agent cannot read may hide a
 	// newer deploy.
 	OutsideUnreadable = "unreadable"
+	// OutsideOtherProject: the last deploy that may have loaded the CPU
+	// (which may still compare equal) loaded another project than the one
+	// this download builds on: a restore, another deploy (#1272).
+	OutsideOtherProject = "other-project"
 )
 
 // MaxOutsideBy and MaxOutsideDeploy bound OutsideChanges, in bytes.
@@ -97,8 +102,8 @@ func (o OutsideChanges) Validate() error {
 		return errors.New("outsideChanges.by is empty: who accepts replacing the CPU's outside change")
 	case len(o.By) > MaxOutsideBy:
 		return fmt.Errorf("outsideChanges.by is longer than %d bytes", MaxOutsideBy)
-	case o.Verdict != OutsideDifferent && o.Verdict != OutsideBroken && o.Verdict != OutsideUnreadable:
-		return errors.New("outsideChanges.verdict is not one of different, broken, unreadable")
+	case o.Verdict != OutsideDifferent && o.Verdict != OutsideBroken && o.Verdict != OutsideOtherProject && o.Verdict != OutsideUnreadable:
+		return errors.New("outsideChanges.verdict is not one of different, broken, other-project, unreadable")
 	case len(o.Deploy) > MaxOutsideDeploy:
 		return fmt.Errorf("outsideChanges.deploy is longer than %d bytes", MaxOutsideDeploy)
 	case o.Deploy == "" && o.Verdict != OutsideUnreadable:
