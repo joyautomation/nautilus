@@ -326,6 +326,7 @@ var Mutations = []string{
 	"link_sign_in_ignored",              // server: ack-from-notification: sign-in lets the link alone acknowledge (#715)
 	"link_needs_write_rule",             // server: an ack link without an auth: block needs NAUTILUS_TOKEN too (#715)
 	"link_not_forwarded",                // server: a standby answers an ack link itself instead of forwarding it to the leader (#715)
+	"leader_headers_unbounded",          // server: a standby's forward waits for the leader's response headers without a deadline (#710)
 	"link_reason_html",                  // server: a refused ack link is journalled with its page's HTML as the reason (#715)
 	"link_acks_on_standby",              // server: a replica that does not lead acknowledges an ack link on its own engine (#715)
 	"link_session_cookie_refused",       // server: a signed-in browser from another origin is refused on a link in link mode instead of the link alone acting (#715)
@@ -360,6 +361,9 @@ var Mutations = []string{
 	"peer_bind_wildcard",                // naut: a pair member's peer listener binds every interface, not the address peers: names (#710)
 	"peer_tls_handshake_unbounded",      // node: a peer TLS handshake has no bound of its own (#1230 review)
 	"peer_tls_mismatch_unnamed",         // node: a peer that speaks the other protocol, or holds another key, raises nothing (#710)
+	"peer_api_guessed",                  // node: a standby names the leader's tag API by its own API port (#710 demo finding 1)
+	"peer_api_unbound",                  // node: the announced tag API is outside the hello's InfoMAC
+	"peer_api_self",                     // node: a peer announcing this controller's own tag API is proxied to
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

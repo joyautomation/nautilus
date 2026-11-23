@@ -169,6 +169,9 @@ type helloAnswer struct {
 	// only to an asker that asks for it (log=1), so a build before it
 	// still verifies the answer. Bound by InfoMAC.
 	Log string `json:"log,omitempty"`
+	// API is the answerer's tag API address (peerInfo.API), bound by
+	// InfoMAC when sent. A build before it sends none.
+	API string `json:"api,omitempty"`
 	// The answerer's credentials (Credentials), each part as its state
 	// and its MAC (credMAC). A build before #708's check sends none.
 	Users    string `json:"users,omitempty"`

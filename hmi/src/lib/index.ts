@@ -112,6 +112,8 @@ export { default as DriverStatusPanel } from './components/DriverStatusPanel.sve
 export { default as AlarmBanner } from './components/AlarmBanner.svelte';
 export { default as AlarmTable } from './components/AlarmTable.svelte';
 export { default as AlarmJournal } from './components/AlarmJournal.svelte';
+export { default as ChatterBadge } from './components/ChatterBadge.svelte';
+export { default as FloodBanner } from './components/FloodBanner.svelte';
 export { default as AckButton, worstFirst, ackLine } from './components/AckButton.svelte';
 export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY_META, PRIORITY_SIGN, STATE_META, DEFAULT_SHELVE_TIMES_S } from './alarms.svelte.js';
 // Substitute values (#707) — GET/POST/DELETE /api/substitutes. The client owns
@@ -133,6 +135,10 @@ export type {
 	AlarmInstance,
 	AlarmBrief,
 	AlarmSummary,
+	AlarmChatter,
+	AlarmFlood,
+	AlarmFloodBrief,
+	AlarmFloodGroup,
 	AlarmEvent,
 	AlarmEventKind,
 	AlarmJournalFilter,
@@ -368,7 +374,8 @@ export { ParametersClient, driftBadge, drifted, rangeText, takeRepoSet, takeRepo
 export type { Parameter, DriftState, WriteBack, ImportResult, ImportAnswer, ParametersAnswer, ParametersClientOptions, TakeOutcome } from './parameters.js';
 
 // What the alarm history shows for a paging (notify) row, and the kinds that fetch them (#616).
-export { STATE_KINDS, journalKinds, visibleKind, pagingEvent, pagingOutcome } from './alarmjournal.js';
+export { chatterBadge, chatterText, floodText, groupsText, spanText, seenWhenText, chatteringIds, focusSplit, detectionEvent, detectionOutcome } from './alarmchatter.js';
+export { DETECTION_KINDS, STATE_KINDS, journalKinds, visibleKind, pagingEvent, pagingOutcome } from './alarmjournal.js';
 export {
 	OOS_MAX_SECONDS,
 	OOS_DURATIONS_S,

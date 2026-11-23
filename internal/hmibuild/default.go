@@ -348,11 +348,13 @@ const defaultLayout = `<script>
 	import '@joyautomation/nautilus-hmi/theme.css';
 	import '@joyautomation/nautilus-hmi/fonts.css';
 	import { onMount } from 'svelte';
-	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill, ThemeSwitch, AccountChip, ReferralBanner, createAuth%s } from '@joyautomation/nautilus-hmi';
+	import { theme, ConfirmDialog, AlarmBanner, FloodBanner, AckButton, StatusPill, ThemeSwitch, AccountChip, ReferralBanner, createAuth%s } from '@joyautomation/nautilus-hmi';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { rt, alarms } from 'nx:default/client';
 	let { children } = $props();
+	// the flood banner's ages tick
+	let now = $state(Date.now());
 	// Sign-in (#708): who this screen is signed in as, Sign out, the password
 	// prompt for an elevated action, a standby's referral to the leader.
 	const auth = createAuth();
@@ -361,7 +363,9 @@ const defaultLayout = `<script>
 		void auth.start();
 		rt.start();
 		void alarms.start();
+		const tick = setInterval(() => (now = Date.now()), 1000);
 		return () => {
+			clearInterval(tick);
 			rt.stop();
 			alarms.stop();
 			auth.stop();
@@ -400,6 +404,9 @@ const defaultLayout = `<script>
 			<ThemeSwitch />
 		</div>
 	</header>
+	{#if alarms.supported && alarms.flood && !(alarmsHref && page.url.pathname === resolve(alarmsHref))}
+		<div class="nx-flood"><FloodBanner flood={alarms.flood} {now} journalHref={alarmsHref ? resolve(alarmsHref) + page.url.search : undefined} /></div>
+	{/if}
 	<main>{@render children()}</main>
 </div>
 
@@ -417,6 +424,7 @@ const defaultLayout = `<script>
 	nav a:hover { color: var(--ink); }
 	nav a[aria-current='page'] { color: var(--ink); background: color-mix(in srgb, var(--ink) 12%%, transparent); }
 	.nx-status { flex: 1 1 0; min-width: max-content; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+	.nx-flood { padding: 8px 16px 0; }
 	main { flex: 1; min-height: 0; overflow: auto; padding: 16px; position: relative; }
 	@media (max-width: 900px) { .nx-title span { display: none; } }
 	/* a phone: the status row (max-content) would be wider than the window
@@ -585,8 +593,9 @@ const defaultLog = `<script>
 // defaultAlarms is the alarms page the bar's alarm banner opens: the
 // active ones, to acknowledge and shelve.
 const defaultAlarms = `<script>
-	import { AlarmTable, OutOfServicePanel } from '@joyautomation/nautilus-hmi';
+	import { AlarmTable, OutOfServicePanel, FloodBanner } from '@joyautomation/nautilus-hmi';
 	import { alarms } from 'nx:default/client';
+	let focus = $state(false);
 	let now = $state(Date.now());
 	$effect(() => {
 		const id = setInterval(() => (now = Date.now()), 1000);
@@ -600,9 +609,12 @@ const defaultAlarms = `<script>
 		<p>The project defines no alarms (nautilus.yaml's alarms:).</p>
 	{:else}
 		{#if alarms.error}<p role="alert">{alarms.error}</p>{/if}
+		<FloodBanner flood={alarms.flood} {now} focused={focus} onfocus={(on) => (focus = on)} />
 		<AlarmTable
 			alarms={alarms.instances}
 			{now}
+			flood={alarms.flood}
+			{focus}
 			onack={(ids, by) => alarms.ack(ids, by)}
 			onshelve={(id, until, by) => alarms.shelve(id, Math.max(1, Math.round((until - Date.now()) / 1000)), by)}
 			onunshelve={(id, by) => alarms.unshelve(id, by)}

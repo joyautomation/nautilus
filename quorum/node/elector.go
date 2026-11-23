@@ -72,10 +72,13 @@ type Options struct {
 	// this process: only an HMAC of it, for the peer to compare (design
 	// §6.1).
 	ClientToken string
-	// SelfAPI and PeerAPI are the two controllers' tag API addresses
-	// (host:port): Status.LeaderAddr names the leader's, for a standby's
-	// proxy and for clients that follow the leader.
-	SelfAPI, PeerAPI string
+	// SelfAPI is this controller's tag API address (host:port) as the peer
+	// reaches it. Status.LeaderAddr names it while this controller leads,
+	// and the hello announces it to the peer, whose Status.LeaderAddr
+	// names it while this one leads: for a standby's proxy and for clients
+	// that follow the leader. The peer's is never guessed from this one's
+	// port (#710 demo finding 1).
+	SelfAPI string
 	// Config is a hash of the pair's section as this controller read it
 	// (ConfigHash), and Caps what its build does that the peer must too
 	// (KeepsLiveIO): both sent at every hello (peerinfo.go). Config ""
@@ -302,7 +305,8 @@ type Status struct {
 	Term    uint64
 	// Leader is who leads as this controller sees it: itself, the peer
 	// (seen holding a lease), or "". LeaderAddr is its tag API address
-	// (Options.SelfAPI or PeerAPI), "" when none leads or it is unset.
+	// (Options.SelfAPI, or the address the peer announced in its last
+	// verified hello), "" when none leads or it is not known.
 	Leader     string
 	LeaderAddr string
 	// Commissioned: an incarnation adopted. A controller that isn't grants
@@ -401,6 +405,7 @@ type Elector struct {
 	// The peer's part of the hello (peerinfo.go).
 	peerCaps   []string
 	peerKnown  bool
+	peerAPI    string // its tag API, from a verified answer (heardAPI)
 	cfgDiffers bool
 	cfgDiffAt  time.Time // the last hello that showed it
 	boxChanged string    // EventBoxChanged's report
@@ -1576,7 +1581,7 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		cs = credUnreadable
 	}
 	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.Peer, e.o.Self, e.o.ClientToken),
-		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps, Log: self.Log,
+		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps, Log: self.Log, API: self.API,
 		InfoMAC: infoMAC(e.o.Token, c, e.o.Peer, e.o.Self, self),
 		Users:   us, UsersMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "users", us, cr.Users),
 		TLS: credOK, TLSMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "tls", credOK, cr.TLS),
@@ -1642,6 +1647,7 @@ func (e *Elector) checkToken(ctx context.Context) {
 	pi, verified := e.answerVerified(c, h)
 	if verified {
 		e.heard(pi)
+		e.heardAPI(pi.API)
 	}
 	e.checkCredentials(c, h, verified)
 	got := TokenDiffers
@@ -1741,7 +1747,7 @@ func (e *Elector) answerVerified(c string, h helloAnswer) (peerInfo, bool) {
 	if err != nil || n == 0 {
 		return peerInfo{}, false
 	}
-	pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps, Log: h.Log}
+	pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps, Log: h.Log, API: h.API}
 	return pi, sameMAC(h.InfoMAC, infoMAC(e.o.Token, c, e.o.Self, e.o.Peer, pi))
 }
 
@@ -1974,7 +1980,10 @@ func (e *Elector) Status() Status {
 	case s.Leading:
 		s.Leader, s.LeaderAddr = s.Self, e.o.SelfAPI
 	case from == e.o.Peer && now < until:
-		s.Leader, s.LeaderAddr = s.Peer, e.o.PeerAPI
+		s.Leader, s.LeaderAddr = s.Peer, e.peerAPI
+		if mut("peer_api_guessed") {
+			s.LeaderAddr = guessPeerAPI(e.o.PeerAddr, e.o.SelfAPI)
+		}
 	}
 	if e.witHeard {
 		s.WitnessAge = now.Sub(e.witAt)
