@@ -466,7 +466,46 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 		warns = append(warns, fmt.Sprintf("alarms.rules[%d] (%s) matches no tag in this project — "+
 			"dead, or a generator moved out from under it", i, ruleLabel(r)))
 	}
+	warns = append(warns, p.uncoveredAlarmWarnings(defs)...)
 	return defs, errs, warns, nil
+}
+
+// maxUncoveredWarnings caps the one-line-per-alarm warnings of an alarm no
+// escalation policy covers; the rest are counted.
+const maxUncoveredWarnings = 20
+
+// uncoveredAlarmWarnings warns of each alarm no escalation policy's match
+// covers at any time of day: with escalation configured, such an alarm
+// pages nobody. Silent when there are no policies (no escalation at all).
+func (p *Project) uncoveredAlarmWarnings(defs []alarm.Def) []string {
+	ec, err := p.Alarms.escalation()
+	if err != nil || ec == nil || len(ec.Policies) == 0 {
+		return nil
+	}
+	var warns []string
+	missed := 0
+	for _, d := range defs {
+		covered := false
+		for i := range ec.Policies {
+			if ec.Policies[i].Match.Covers(d) {
+				covered = true
+				break
+			}
+		}
+		if covered {
+			continue
+		}
+		if len(warns) >= maxUncoveredWarnings {
+			missed++
+			continue
+		}
+		warns = append(warns, fmt.Sprintf("alarm %s: no escalation policy covers it (class %q, priority %s, area %q), so it pages nobody",
+			d.ID, d.Class, d.Priority, d.Area))
+	}
+	if missed > 0 {
+		warns = append(warns, fmt.Sprintf("...and %d more alarms no escalation policy covers", missed))
+	}
+	return warns
 }
 
 func ruleLabel(r alarm.Rule) string {
