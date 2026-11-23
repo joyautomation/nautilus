@@ -253,7 +253,9 @@ All the task OBs run at the priority TIA gives a new cyclic interrupt OB
 (13 on TIA V21), so none interrupts another. That keeps the copy-in and
 the write-back in one piece. It also means a fast task can wait behind a
 slow one, which nautilus's tasks never do. Giving faster tasks a higher
-priority is a later step. A task's `priority:` in `nautilus.yaml` (a Linux
+priority is a later step. Until then, don't change the priority of the
+`naut_` OBs in TIA: the copies stay whole only while no task OB can
+interrupt another. A task's `priority:` in `nautilus.yaml` (a Linux
 real-time priority) has no effect on a Siemens target.
 
 ## What does not translate yet
