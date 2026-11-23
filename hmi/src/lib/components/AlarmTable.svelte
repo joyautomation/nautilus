@@ -82,7 +82,7 @@
 		focus?: boolean;
 		/** Set it and a chattering alarm's badge opens the shelve-with-a-reason
 		 *  dialog; `by` is the name to record. Unset, the badge is only a label. */
-		onchattershelve?: (id: string, seconds: number, reason: string, by: string) => void;
+		onchattershelve?: (id: string, seconds: number, reason: string, by: string) => void | boolean | Promise<void | boolean>;
 		/** Seconds the chatter dialog opens on (the project's `shelve-suggest`). */
 		suggestShelve?: number;
 	} = $props();

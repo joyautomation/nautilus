@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/joyautomation/nautilus/alarm"
@@ -404,8 +405,19 @@ func checkShelveWhy(req shelveRequest) string {
 	default:
 		return `via: "` + capText(req.Via, byMax) + `" is not one of: chatter`
 	}
-	if strings.ContainsAny(reason, "\r\n") {
-		return "reason: one line, no line breaks"
+	// One printable line: no breaks, controls (an escape sequence would ride
+	// into a terminal view of the audit log) or invisible-only text.
+	visible := false
+	for _, c := range reason {
+		if unicode.IsControl(c) || c == '\u2028' || c == '\u2029' {
+			return "reason: one line of text, no line breaks or control characters"
+		}
+		if !unicode.IsSpace(c) && !unicode.Is(unicode.Cf, c) {
+			visible = true
+		}
+	}
+	if reason != "" && !visible {
+		return "reason: say it in words, not invisible characters"
 	}
 	if utf8.RuneCountInString(reason) > shelveReasonMax {
 		return "reason: at most 200 characters"

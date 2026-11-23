@@ -719,6 +719,15 @@ func auditRows() []auditRow {
 					t.Errorf("detail %v, want the reason and via: chatter", e.Detail)
 				}
 			}},
+		{name: "shelve keeps a 200-character reason whole", pattern: "POST /api/alarms/shelve", server: none,
+			method: "POST", path: "/api/alarms/shelve", body: `{"id":"HiTemp","seconds":900,"reason":"` + strings.Repeat("é", 200) + `","via":"chatter"}`,
+			action: "alarm.shelve", target: "HiTemp", user: "anonymous", source: "api", result: "ok",
+			after: map[string]any{"seconds": 900.0},
+			check: func(t *testing.T, e audit.Entry) {
+				if got, _ := e.Detail["reason"].(string); got != strings.Repeat("é", 200) {
+					t.Errorf("audit reason = %d bytes, want the 200 characters whole", len(got))
+				}
+			}},
 		{name: "shelve from a chatter badge with no reason", pattern: "POST /api/alarms/shelve", server: none,
 			method: "POST", path: "/api/alarms/shelve", body: `{"id":"HiTemp","seconds":900,"reason":"  ","via":"chatter"}`,
 			action: "alarm.shelve", target: "HiTemp", user: "anonymous", source: "api", result: "refused"},

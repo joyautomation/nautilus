@@ -120,7 +120,8 @@ export const SHELVE_REASON_MAX = 200;
 export function reasonProblem(reason: string): string {
 	const r = reason.trim();
 	if (!r) return 'Say why: what you saw, or what you will do about it.';
-	if (/[\r\n]/.test(r)) return 'One line, please.';
+	if (/[\p{Cc}\u2028\u2029]/u.test(r)) return 'One line of text, please.';
+	if (!/[^\s\p{Cf}]/u.test(r)) return 'Say it in words.';
 	if ([...r].length > SHELVE_REASON_MAX) return `At most ${SHELVE_REASON_MAX} characters.`;
 	return '';
 }

@@ -169,7 +169,10 @@ describe('the chatter shelve reason', () => {
 		expect(reasonProblem('')).toBe('Say why: what you saw, or what you will do about it.');
 		expect(reasonProblem('   ')).toBe('Say why: what you saw, or what you will do about it.');
 		expect(reasonProblem('seal weeping')).toBe('');
-		expect(reasonProblem('a\nb')).toBe('One line, please.');
+		expect(reasonProblem('a\nb')).toBe('One line of text, please.');
+		expect(reasonProblem('a\u2028b')).toBe('One line of text, please.');
+		expect(reasonProblem('a\x1b[31m')).toBe('One line of text, please.');
+		expect(reasonProblem('\u200b\u200b')).toBe('Say it in words.');
 		expect(reasonProblem('é'.repeat(SHELVE_REASON_MAX))).toBe('');
 		expect(reasonProblem('é'.repeat(SHELVE_REASON_MAX + 1))).toBe('At most 200 characters.');
 	});

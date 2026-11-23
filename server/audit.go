@@ -1201,7 +1201,7 @@ func shelveTarget(_ *http.Request, body []byte) auditTarget {
 			detail = map[string]any{}
 		}
 		if reason != "" {
-			detail["reason"] = capText(reason, shelveReasonMax)
+			detail["reason"] = capText(reason, shelveReasonMax*4) // the cap counts bytes; the route allows 200 characters
 		}
 		if req.Via != "" {
 			detail["via"] = capText(req.Via, byMax)

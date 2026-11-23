@@ -724,6 +724,9 @@ func TestCheckShelveWhy(t *testing.T) {
 		{"chatter with a blank reason", shelveRequest{Via: "chatter", Reason: "  \t"}, "needs a one-line reason"},
 		{"an unknown via", shelveRequest{Via: "bulk", Reason: "x"}, "not one of: chatter"},
 		{"a line break", shelveRequest{Reason: "a\nb"}, "one line"},
+		{"a unicode line separator", shelveRequest{Reason: "a\u2028b"}, "one line"},
+		{"an escape sequence", shelveRequest{Reason: "a\x1b[31mb"}, "control characters"},
+		{"only zero-width characters", shelveRequest{Via: "chatter", Reason: "\u200b\u200b"}, "invisible"},
 		{"exactly the limit", shelveRequest{Reason: strings.Repeat("é", shelveReasonMax)}, ""},
 		{"one over, counted in characters", shelveRequest{Reason: long}, "at most 200"},
 	} {
