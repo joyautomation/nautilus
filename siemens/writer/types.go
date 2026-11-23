@@ -161,7 +161,7 @@ func (pw *progWriter) typ(e st.Expression) string {
 			if l == "BOOL" && r == "BOOL" {
 				return "BOOL"
 			}
-			if t, ok := pw.sameWidth(e); ok {
+			if t, ok := sameWidthOf(e, l, r); ok {
 				return t
 			}
 			if (intOrBits(l) || isIntish(l)) && (intOrBits(r) || isIntish(r)) {

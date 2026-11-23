@@ -64,7 +64,13 @@ func bitsLit(n int64, bits string) string {
 // sameWidth is the type T of a bitwise AND, OR or XOR written at its
 // operands' width, when there is one.
 func (pw *progWriter) sameWidth(e *st.BinaryExpr) (string, bool) {
-	lt, rt := pw.typ(e.Left), pw.typ(e.Right)
+	return sameWidthOf(e, pw.typ(e.Left), pw.typ(e.Right))
+}
+
+// sameWidthOf is sameWidth with the operands' types already known: typ
+// calls it with the types it has, so a chain of N bitwise operators types
+// each operand once, not 2^N times.
+func sameWidthOf(e *st.BinaryExpr, lt, rt string) (string, bool) {
 	if intOrBits(lt) && lt == rt {
 		return lt, true
 	}
@@ -97,7 +103,7 @@ func (pw *progWriter) bitwise(e *st.BinaryExpr, op string, parent int) string {
 	}
 	lt, rt := pw.typ(e.Left), pw.typ(e.Right)
 	if !(intOrBits(lt) || isIntish(lt)) || !(intOrBits(rt) || isIntish(rt)) {
-		pw.diag("siemens/operator", e.Pos.Line, fmt.Sprintf("%s on %s and %s", op, orUnknown(lt), orUnknown(rt)))
+		pw.gap("siemens/operator", e.Pos.Line, gapOther, fmt.Sprintf("%s on %s and %s", op, orUnknown(lt), orUnknown(rt)), "")
 		return ""
 	}
 	if unsigned64(lt) && lt != rt || unsigned64(rt) && lt != rt {
@@ -144,7 +150,7 @@ func (pw *progWriter) asLWORD(e st.Expression) string {
 // operand's own type, the store writes it at that width instead (store).
 func (pw *progWriter) bitwiseNot(e *st.UnaryExpr, t string) string {
 	if !intOrBits(t) && !isIntish(t) {
-		pw.diag("siemens/operator", e.Pos.Line, "NOT of "+orUnknown(t))
+		pw.gap("siemens/operator", e.Pos.Line, gapOther, "NOT of "+orUnknown(t), "")
 		return ""
 	}
 	if unsigned64(t) {
@@ -202,7 +208,7 @@ func (pw *progWriter) guardedDivision(e *st.BinaryExpr, op string) string {
 	case t == "LREAL":
 		fn = "DIV_LREAL"
 	default:
-		pw.diag("siemens/operator", e.Pos.Line, fmt.Sprintf("%s of %s", op, orUnknown(t)))
+		pw.gap("siemens/operator", e.Pos.Line, gapOther, fmt.Sprintf("%s of %s", op, orUnknown(t)), "")
 		return ""
 	}
 	pw.w.useGuarded(fn, pw.path)
@@ -214,9 +220,17 @@ func (pw *progWriter) guardedDivision(e *st.BinaryExpr, op string) string {
 // integer operand of a REAL division is converted explicitly, as
 // nautilus converts it.
 func (pw *progWriter) divOperand(e st.Expression, ft string) string {
+	if ft == "LINT" {
+		return pw.expr(e, 0) // wide mode: an integer operand prints as LINT
+	}
+	// A REAL division's operands are not integer arithmetic: printed at
+	// their own type even inside a wide comparison, then converted.
 	t := pw.typ(e)
+	wide := pw.wide
+	pw.wide = false
 	s := pw.expr(e, 0)
-	if ft != "LINT" && isInt(t) && t != ft {
+	pw.wide = wide
+	if isInt(t) && t != ft {
 		return t + "_TO_" + ft + "(" + s + ")"
 	}
 	return s
@@ -266,7 +280,7 @@ func (l latchDef) members() string {
 func (pw *progWriter) latch(b *strings.Builder, c *st.CallExpr, l local, def latchDef, in string, at int) {
 	line := c.Pos.Line
 	if len(c.Args) > 0 {
-		pw.diag("siemens/call", line, fmt.Sprintf("%s: name the inputs (%s := …); positional instance arguments are not written", l.name, def.set))
+		pw.diag("siemens/call", line, l.name+": "+gapMessage(gapOther, "positional instance arguments", "name the inputs ("+def.set+" := …)"))
 		return
 	}
 	self := "#" + l.name

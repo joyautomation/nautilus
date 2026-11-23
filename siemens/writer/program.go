@@ -5,7 +5,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -229,23 +231,58 @@ func (w *writer) program(path string, libs []string, prog *st.Program) *progWrit
 }
 
 // libraryMiss reports a lowering error for a name the project's library
-// sources (Program.Libs) declare: the writer lowers without them. A name
-// no library has is nautilus's own refusal.
+// sources (Program.Libs) declare as a TYPE, FUNCTION, FUNCTION_BLOCK or
+// VAR_GLOBAL: the writer lowers the program without them. Any other
+// unknown name, a typo included, is nautilus's own refusal.
 func (pw *progWriter) libraryMiss(err error) bool {
 	m := libraryName.FindStringSubmatch(err.Error())
-	if m == nil {
-		return false
-	}
-	word := regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_])` + regexp.QuoteMeta(m[1]) + `($|[^A-Za-z0-9_])`)
-	for _, lib := range pw.libs {
-		if word.MatchString(lib) {
-			return true
-		}
-	}
-	return false
+	return m != nil && libraryDecls(pw.libs)[strings.ToLower(m[1])]
 }
 
 var libraryName = regexp.MustCompile(`(?:unknown type|unknown function|undeclared identifier) "([A-Za-z_][A-Za-z0-9_]*)"`)
+
+// libraryDecls is every name the library sources declare at the top
+// level, lower-cased. A ladder or FBD library is read through its
+// transpiler; a source that reads as none declares nothing.
+func libraryDecls(libs []string) map[string]bool {
+	out := map[string]bool{}
+	for _, src := range libs {
+		prog, err := st.Parse(src)
+		if err != nil {
+			prog = nil
+			if f, _, err := ld.TranspileWithLines(src, libs...); err == nil {
+				if s, _, err := fbd.TranspileWithLines(f); err == nil {
+					prog, _ = st.Parse(s)
+				}
+			}
+			if prog == nil {
+				if s, _, err := fbd.TranspileWithLines(src); err == nil {
+					prog, _ = st.Parse(s)
+				}
+			}
+		}
+		if prog == nil {
+			continue
+		}
+		for _, t := range prog.TypeDecls {
+			out[strings.ToLower(t.Name)] = true
+		}
+		for _, f := range prog.FuncDecls {
+			out[strings.ToLower(f.Name)] = true
+		}
+		for _, f := range prog.FBDecls {
+			out[strings.ToLower(f.Name)] = true
+		}
+		for _, vb := range append(prog.GlobalConsts, prog.VarBlocks...) {
+			if vb.Kind == "VAR_GLOBAL" {
+				for _, v := range vb.Variables {
+					out[strings.ToLower(v.Name)] = true
+				}
+			}
+		}
+	}
+	return out
+}
 
 func lineOf(vb st.VarBlock) int {
 	if len(vb.Variables) > 0 {

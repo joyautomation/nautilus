@@ -166,8 +166,15 @@ func (pw *progWriter) binary(e *st.BinaryExpr, parent int) string {
 		}
 	case "=", "<>", "<", ">", "<=", ">=":
 		// A comparison of integer arithmetic compares 64-bit values in
-		// nautilus: widen both sides.
-		if lt == tWide || rt == tWide {
+		// nautilus: widen both sides. So does a bit string against an
+		// integer (the bit string by its unsigned value), which TIA
+		// would not compare as they are.
+		mixed := isBits(lt) && isInt(rt) || isInt(lt) && isBits(rt)
+		if mixed && (unsigned64(lt) || unsigned64(rt)) {
+			pw.gap("siemens/int-width", e.Pos.Line, gapOther, fmt.Sprintf("comparing %s with %s", lt, rt), "")
+			return ""
+		}
+		if lt == tWide || rt == tWide || mixed {
 			wide := pw.wide
 			pw.wide = true
 			s := pw.expr(e.Left, p) + " " + op + " " + pw.expr(e.Right, p+1)
@@ -248,7 +255,7 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			return ""
 		}
 		if len(c.Args) > 0 {
-			pw.diag("siemens/call", line, fmt.Sprintf("%s: name the inputs (IN := …); positional instance arguments are not written", l.name))
+			pw.diag("siemens/call", line, l.name+": "+gapMessage(gapOther, "positional instance arguments", "name the inputs (IN := …)"))
 			return ""
 		}
 		var parts []string
@@ -331,6 +338,11 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			return ""
 		}
 		return "(" + pw.expr(argExprs[0], unaryPrec+1) + " ** " + pw.expr(argExprs[1], unaryPrec+1) + ")"
+	case (name == "MIN" || name == "MAX" || name == "LIMIT") && slices.ContainsFunc(argExprs, func(a st.Expression) bool { return isBits(pw.typ(a)) }):
+		// nautilus compares bit strings as unsigned numbers; TIA's
+		// MIN, MAX and LIMIT take numbers only.
+		pw.gap("siemens/function", line, gapOther, name+" of bit strings", "")
+		return ""
 	case name == "MIN" || name == "MAX":
 		// TIA's MIN and MAX take IN1 … IN32.
 		if len(args) < 2 || len(args) > 32 {

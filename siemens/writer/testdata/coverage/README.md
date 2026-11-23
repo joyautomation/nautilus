@@ -16,3 +16,13 @@ Compiled 0 errors, 0 warnings on TIA V21 through tiad (a build-only
 pass (st-div-zero, st-mux-fault, st-xor, bin-fill). Compile only: the
 runtime behaviour on a CPU (INT_TO_WORD as a bit copy, TRUNC_LINT toward
 zero, MOD's sign) is TIA's documented behaviour, not yet measured.
+
+The tests pin the emitted SCL (goldens and strings). The SR/RS latch is the
+one form run against nautilus itself: `TestLatchesMatchNautilus` evaluates
+the emitted latch against lang/ir's own SR/RS step. Still to check on a CPU,
+from TIA's documentation only:
+
+- `ROL`/`ROR` by a count beyond the width (nautilus takes it modulo the
+  width; TIA documents rotating by N positions, which is the same);
+- `<int>_TO_BOOL` (nautilus: any non-zero value is TRUE);
+- `DWORD_TO_REAL` of a NaN bit pattern (nautilus faults the scan).

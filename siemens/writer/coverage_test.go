@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/joyautomation/nautilus/lang/ir"
 )
 
 // write writes one ST program and fails on any diagnostic; it returns the
@@ -78,10 +80,11 @@ func TestBitwise(t *testing.T) {
 	)
 }
 
-// TestBitwiseMatchesNautilus checks the two forms' arithmetic against the
-// VM's 64-bit rule for every INT, UINT and WORD case that matters: the
-// same-width form must equal the 64-bit result cut to the type.
-func TestBitwiseMatchesNautilus(t *testing.T) {
+// TestSameWidthIdentity is the arithmetic identity the same-width form
+// rests on, not a test of the writer: for INT operands the VM's 64-bit
+// AND/OR/XOR/NOT (lang/ir vm.go: l.I & r.I on the sign-extended values)
+// equals the 16-bit operation on their bits read back as an INT.
+func TestSameWidthIdentity(t *testing.T) {
 	vals := []int64{0, 1, -1, -2, 255, -32768, 32767, 0x5A5A}
 	for _, x := range vals {
 		for _, y := range vals {
@@ -216,19 +219,85 @@ func TestLatches(t *testing.T) {
 	)
 }
 
-// TestLatchesMatchNautilus drives the inline forms through every input
-// sequence of two scans and compares them with lang/ir's SR and RS.
+// TestLatchesMatchNautilus runs lang/ir's own SR and RS step against the
+// SCL the writer emits for them, evaluated, over every input sequence of
+// three scans: same Q1 every scan.
 func TestLatchesMatchNautilus(t *testing.T) {
-	sr := func(s1, r, q bool) bool { return s1 || (q && !r) }       // lang/ir builtins_fb.go
-	rs := func(s, r1, q bool) bool { return !r1 && (s || q) }       // lang/ir builtins_fb.go
-	srInline := func(s1, r, q bool) bool { return s1 || (q && !r) } // #f.S1 OR (#f.Q1 AND NOT #f.R)
-	rsInline := func(s, r1, q bool) bool { return !r1 && (s || q) } // NOT #g.R1 AND (#g.S OR #g.Q1)
-	for i := 0; i < 8; i++ {
-		a, b, q := i&1 != 0, i&2 != 0, i&4 != 0
-		if sr(a, b, q) != srInline(a, b, q) || rs(a, b, q) != rsInline(a, b, q) {
-			t.Fatalf("latch differs at %v %v %v", a, b, q)
+	scl, _ := write(t, "PROGRAM P\nVAR a, b, q : BOOL; f : SR; g : RS; END_VAR\nf(S1 := a, R := b);\ng(S := a, R1 := b);\nEND_PROGRAM\n")
+	latch := map[string]string{}
+	for _, l := range strings.Split(scl, "\n") {
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, "#f.Q1 := ") || strings.HasPrefix(l, "#g.Q1 := ") {
+			latch[l[1:2]] = strings.TrimSuffix(strings.TrimPrefix(l[9:], " "), ";")
 		}
 	}
+	if len(latch) != 2 {
+		t.Fatalf("latch lines not found in\n%s", scl)
+	}
+	for _, c := range []struct{ inst, set, reset string }{{"SR", "S1", "R"}, {"RS", "S", "R1"}} {
+		def := ir.LookupFBType(c.inst).FB
+		name := map[string]string{"SR": "f", "RS": "g"}[c.inst]
+		for seq := 0; seq < 64; seq++ {
+			inst := &ir.FBInstance{Def: def, Slots: []ir.Value{ir.BoolVal(false), ir.BoolVal(false), ir.BoolVal(false)}}
+			q := false
+			for scan := 0; scan < 3; scan++ {
+				s, r := seq>>(2*scan)&1 != 0, seq>>(2*scan+1)&1 != 0
+				inst.Slots[0], inst.Slots[1] = ir.BoolVal(s), ir.BoolVal(r)
+				if err := def.Step(inst, ir.FBStepCtx{}); err != nil {
+					t.Fatal(err)
+				}
+				q = evalBool(t, latch[name], map[string]bool{
+					"#" + name + "." + c.set: s, "#" + name + "." + c.reset: r, "#" + name + ".Q1": q,
+				})
+				if q != inst.Slots[2].B {
+					t.Fatalf("%s sequence %06b scan %d: SCL %v, nautilus %v (%s)", c.inst, seq, scan, q, inst.Slots[2].B, latch[name])
+				}
+			}
+		}
+	}
+}
+
+// evalBool evaluates the boolean SCL the latch is written as: names,
+// NOT (binding tightest), AND, OR and parentheses.
+func evalBool(t *testing.T, src string, vars map[string]bool) bool {
+	t.Helper()
+	toks := strings.Fields(strings.NewReplacer("(", " ( ", ")", " ) ").Replace(src))
+	pos := 0
+	var or, atom func() bool
+	atom = func() bool {
+		tok := toks[pos]
+		pos++
+		switch tok {
+		case "NOT":
+			return !atom()
+		case "(":
+			v := or()
+			pos++ // )
+			return v
+		}
+		v, ok := vars[tok]
+		if !ok {
+			t.Fatalf("unknown name %q in %q", tok, src)
+		}
+		return v
+	}
+	and := func() bool {
+		v := atom()
+		for pos < len(toks) && toks[pos] == "AND" {
+			pos++
+			v = atom() && v
+		}
+		return v
+	}
+	or = func() bool {
+		v := and()
+		for pos < len(toks) && toks[pos] == "OR" {
+			pos++
+			v = and() || v
+		}
+		return v
+	}
+	return or()
 }
 
 // TestBitAccess: .n and .%Xn, read and written, as TIA's .%Xn.
@@ -286,7 +355,12 @@ func TestLibraryNamesAreAGap(t *testing.T) {
 	if len(diags) != 1 || diags[0].Rule != "siemens/library" || !strings.Contains(diags[0].Message, "(#1299, #1301)") {
 		t.Errorf("with the library: %v", diags)
 	}
-	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: src, Libs: []string{"FUNCTION Scaled : REAL\nEND_FUNCTION\n"}}}})
+	// A GVL of constants (#176) declares its names too.
+	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a : REAL; END_VAR\na := HI;\nEND_PROGRAM\n", Libs: []string{"VAR_GLOBAL CONSTANT\n    HI : REAL := 80.0;\nEND_VAR\n"}}}})
+	if len(diags) != 1 || diags[0].Rule != "siemens/library" {
+		t.Errorf("a GVL constant: %v", diags)
+	}
+	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: src, Libs: []string{"(* Scale is mentioned here *)\nFUNCTION Scaled : REAL\nVAR_INPUT Scale : REAL; END_VAR\nScaled := Scale;\nEND_FUNCTION\n"}}}})
 	if len(diags) != 1 || diags[0].Rule != "siemens/nautilus" {
 		t.Errorf("without it: %v", diags)
 	}
@@ -419,5 +493,30 @@ func TestWarningsPointAtTheDiagramLine(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no MUX warning: %v", out.Warnings)
+	}
+}
+
+// TestReviewFixes: a long bitwise chain types in linear time; a REAL
+// division's INT operand inside a wide comparison converts once; a bit
+// string compared with an integer compares 64-bit values, as nautilus
+// does; MIN/MAX/LIMIT of bit strings are a gap.
+func TestReviewFixes(t *testing.T) {
+	chain := "a" + strings.Repeat(" AND b", 40)
+	start := time.Now()
+	scl, _ := write(t, "PROGRAM P\nVAR a, b : INT; END_VAR\na := "+chain+";\nEND_PROGRAM\n")
+	if d := time.Since(start); d > 2*time.Second {
+		t.Errorf("a chain of 41 ANDs took %s", d)
+	}
+	wantLines(t, scl, "WORD_TO_INT(INT_TO_WORD(WORD_TO_INT(")
+
+	scl, _ = write(t, "PROGRAM P\nVAR a, b : INT; r : REAL; w : WORD; q : BOOL; END_VAR\nq := (a + b) > r / a;\nq := a = w;\nEND_PROGRAM\n")
+	wantLines(t, scl, `B := INT_TO_REAL(#a))`, "#q := INT_TO_LINT(#a) = UINT_TO_LINT(WORD_TO_UINT(#w));")
+	if strings.Contains(scl, "INT_TO_REAL(INT_TO_LINT") {
+		t.Errorf("a REAL division operand converted twice:\n%s", scl)
+	}
+
+	_, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR w, v : WORD; END_VAR\nw := MAX(w, v);\nEND_PROGRAM\n"}}})
+	if len(diags) != 1 || !strings.Contains(diags[0].Message, "MAX of bit strings yet (#1305)") {
+		t.Errorf("MAX of WORDs: %v", diags)
 	}
 }

@@ -497,7 +497,9 @@ func literal(src string) (string, string) {
 // gives a tag with no type: the type the logic binds it as (runtime
 // tagdef.go: `init: 0` on a tag declared `Counter : DINT` is a DINT), so
 // the CLI asks this before it types such a tag for the tags DB. A source
-// that does not parse declares nothing here (check reports it).
+// that does not parse declares nothing here (check reports it). Two
+// programs binding one tag as different types is the runtime's refusal
+// (CheckBindings), not the writer's: the last one read wins here.
 func ExternalTypes(progs []Program) map[string]string {
 	out := map[string]string{}
 	add := func(vbs []st.VarBlock) {
