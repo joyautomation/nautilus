@@ -128,6 +128,18 @@ type StreamStatus struct {
 	// took over with are as of then. -1 when it had none (it never
 	// followed, or took over before its first image).
 	TakeoverImageAgeMs int64 `json:"takeoverImageAgeMs"`
+	// Takeover is this controller's last takeover, hot or cold (#710 S2):
+	// empty before its first. TakeoverCold says why it was cold.
+	Takeover     string `json:"takeover,omitempty"`
+	TakeoverCold string `json:"takeoverCold,omitempty"`
+	// TakeoverOldestFrameMs is, after a hot takeover, how old the oldest
+	// task's frame was at the install (a fast task's state can be older
+	// than the image by up to the slowest task's period).
+	TakeoverOldestFrameMs int64 `json:"takeoverOldestFrameMs,omitempty"`
+	// RetainInMemory: this leader took over hot over a retain store it
+	// could not read, and holds its retained values only in memory until
+	// a save succeeds (a power cycle now loses them).
+	RetainInMemory bool `json:"retainInMemory,omitempty"`
 }
 
 // LogStatus is a pair's operator-intent log as one controller sees it.

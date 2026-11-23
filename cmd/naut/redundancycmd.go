@@ -474,6 +474,15 @@ func streamLine(s *leader.StreamStatus) string {
 	if s.TakeoverImageAgeMs >= 0 {
 		line += fmt.Sprintf("; last takeover loaded an image %s old, flushed in %.1f ms", ms(s.TakeoverImageAgeMs), s.FlushMs)
 	}
+	switch {
+	case s.Takeover == "hot":
+		line += fmt.Sprintf("; last takeover hot (oldest task state %s old)", ms(s.TakeoverOldestFrameMs))
+	case s.Takeover != "":
+		line += "; last takeover cold (" + s.TakeoverCold + ")"
+	}
+	if s.RetainInMemory {
+		line += "; retained values only in memory: no retain save has succeeded since the takeover"
+	}
 	return line
 }
 

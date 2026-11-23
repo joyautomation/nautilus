@@ -3,12 +3,15 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/quorum/node"
@@ -70,8 +74,11 @@ type pairStream struct {
 	shadow *runtime.Shadow
 	budget int64
 	build  string
-	client *http.Client
-	url    string
+	// hotMaxAge is redundancy.hot-max-age, -1 for its default (3 × lease
+	// + 2 × the stream's interval).
+	hotMaxAge time.Duration
+	client    *http.Client
+	url       string
 	// ctx ends with the member (Close): every handler and the follower
 	// stop with it, so a closing member's peer listener shuts down at
 	// once rather than waiting on a stream that never ends by itself.
@@ -114,6 +121,19 @@ type pairStream struct {
 	// out of sync. held says a send loop saw it (no image is under way).
 	// persistHold, in tests, keeps the standby's 2 s persist from running.
 	hold, held, persistHold atomic.Bool
+	// coldWhy is why this leader's takeover was cold although an image
+	// existed: its condition, until a standby follows a hot-capable
+	// stream again (an image of the newest format sent).
+	coldWhy string
+	// lastReport is the newest takeover report taken (they come on their
+	// own goroutines: an older one is dropped).
+	lastReport time.Time
+	// flushMu serializes takeover flushes.
+	flushMu sync.Mutex
+	// flushTook: a flush of the pending takeover edge took the shadow's
+	// image (the next flush of the same edge, for a moved term, finds the
+	// shadow empty), until the takeover reports.
+	flushTook bool
 	// Leader side.
 	sending   atomic.Int32
 	sentTerm  uint64
@@ -163,32 +183,75 @@ func askedFormat(h string) byte {
 func streamPath(cluster string) string { return node.Prefix + cluster + "/stream" }
 
 // streamBuild names this nautilus build in an image (Image.Build): the
-// release, and the commit where the binary records one.
+// release, and the commit where the binary records one. A build from a
+// modified tree (or with no commit recorded) also names its executable's
+// hash: two such builds of one commit are not the same build, and a hot
+// takeover needs the same (Fable, #1342).
 func streamBuild() string {
-	b := lsp.Version
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		for _, s := range bi.Settings {
-			if s.Key == "vcs.revision" && len(s.Value) >= 12 {
-				b += "+" + s.Value[:12]
+	buildOnce.Do(func() {
+		b, commit, modified := lsp.Version, false, false
+		if bi, ok := debug.ReadBuildInfo(); ok {
+			for _, s := range bi.Settings {
+				switch {
+				case s.Key == "vcs.revision" && len(s.Value) >= 12:
+					b += "+" + s.Value[:12]
+					commit = true
+				case s.Key == "vcs.modified" && s.Value == "true":
+					modified = true
+				}
 			}
 		}
-	}
-	return b
+		if !commit || modified {
+			b += "+exe:" + exeHash()
+		}
+		buildName = b
+	})
+	return buildName
 }
+
+var (
+	buildOnce sync.Once
+	buildName string
+)
+
+// exeHash is a short hash of this process's executable, "unknown" when
+// it cannot be read.
+func exeHash() string {
+	p, err := os.Executable()
+	if err != nil {
+		return "unknown"
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return "unknown"
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "unknown"
+	}
+	return hex.EncodeToString(h.Sum(nil)[:6])
+}
+
+// streamBuildFor is the build a member names in its images and checks a
+// hot takeover's image against (streamBuild; tests give one member
+// another).
+var streamBuildFor = func(self string) string { return streamBuild() }
 
 // startStream builds the member's state stream over rt and mounts its
 // handler: call it after startLog, before the runtime and the election
 // run. budget is redundancy.stream-budget in bytes a second. It runs
 // until Close.
-func (m *pairMember) startStream(rt *runtime.Runtime, budget int64) *pairStream {
+func (m *pairMember) startStream(rt *runtime.Runtime, budget int64, hotMaxAge time.Duration) *pairStream {
 	s := &pairStream{
-		m: m, rt: rt, shadow: rt.NewShadow(), budget: budget, build: streamBuild(),
+		m: m, rt: rt, shadow: rt.NewShadow(), budget: budget, build: streamBuildFor(string(m.o.Self)), hotMaxAge: hotMaxAge,
 		client: node.NewPeerClient(m.o.Dial, m.o.TLS),
 		url:    node.PeerURL(m.o.PeerAddr, m.o.TLS != nil) + streamPath(m.o.Cluster),
 		state:  "off", tookOverAge: -1,
 	}
 	m.stream = s
 	rt.SetTakeoverFlush(s.takeoverFlush)
+	rt.SetTakeoverReport(s.tookOver)
 	m.q.SetStreamStatus(s.status)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.ctx = ctx
@@ -316,6 +379,9 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 		s.intervalMs, s.total = interval.Milliseconds(), s.total+uint64(len(buf))+9
 		if kind == streamImage {
 			s.sentTerm, s.sentSeq, s.sentAt, s.bytes = img.Term, img.Seq, time.Now(), len(buf)
+			if format >= runtime.ImageFormats[len(runtime.ImageFormats)-1] && !mutNaut("hot_cold_condition_never_clears") {
+				s.coldWhy = "" // a standby follows a stream it could take over hot from
+			}
 		} else {
 			s.tooBig, s.tooBigAt = tb.Bytes, time.Now()
 		}
@@ -363,7 +429,30 @@ func (s *pairStream) run(ctx context.Context) {
 			s.startFollower(ctx)
 		}
 		s.m.q.SetCondition("state-stream", s.condition())
+		cold, mem := s.takeoverConditions()
+		s.m.q.SetCondition("takeover-cold", cold)
+		s.m.q.SetCondition("retain-in-memory", mem)
 	}
+}
+
+// takeoverConditions are a leader's lines in /api/cluster's warnings
+// about its own takeover (#710 S2): cold although an image existed (until
+// a standby follows again), and retained values held only in memory
+// (until a retain save succeeds). "" when well, and on a standby.
+func (s *pairStream) takeoverConditions() (cold, mem string) {
+	if _, lead := s.rt.LeadingTerm(); !lead {
+		return "", ""
+	}
+	s.mu.Lock()
+	why := s.coldWhy
+	s.mu.Unlock()
+	if why != "" {
+		cold = "the last takeover was cold although the standby held a state image (" + why + "): timers, counters, SFC steps and state tags restarted, retained values kept. This clears once a standby follows this leader's state stream again"
+	}
+	if s.rt.RetainOnlyInMemory() {
+		mem = "this leader's retain store could not be read at its takeover, and no save has succeeded since: its retained values (the state image's) are only in memory, and a power cycle or restart loses them. Check the disk the retain file is on"
+	}
+	return cold, mem
 }
 
 func (s *pairStream) startFollower(ctx context.Context) {
@@ -379,6 +468,9 @@ func (s *pairStream) startFollower(ctx context.Context) {
 	fctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	s.followStop, s.followDone = cancel, done
+	s.mu.Lock()
+	s.flushTook = false // a standby spell: a new edge's flushes start clean
+	s.mu.Unlock()
 	go func() {
 		defer close(done)
 		s.follow(fctx)
@@ -630,9 +722,16 @@ func (s *pairStream) persist(ctx context.Context) (time.Duration, error) {
 }
 
 // takeoverFlush is the runtime's takeover flush (SetTakeoverFlush): stop
-// following, carry the newest image into the retain file, empty the
-// shadow. The runtime loads the store after it returns.
-func (s *pairStream) takeoverFlush() error {
+// following, carry the newest image into the retain file, take the
+// shadow's copy of it as the hot candidate (#710 S2) and empty the
+// shadow. The runtime loads the store after it returns, then installs the
+// candidate or goes cold.
+func (s *pairStream) takeoverFlush() (*runtime.HotImage, error) {
+	// One flush at a time: one the runtime gave up on (late, or its edge
+	// abandoned) runs on, and must not empty the shadow or the pending
+	// image under the next edge's (Fable, #1342).
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	start := time.Now()
 	if !mutNaut("stream_flush_keeps_follower") {
 		s.stopFollower()
@@ -641,8 +740,17 @@ func (s *pairStream) takeoverFlush() error {
 	defer cancel()
 	s.mu.Lock()
 	term, seq, arrived, every := s.pendTerm, s.pendSeq, s.arrived, max(time.Duration(s.intervalMs)*time.Millisecond, streamMinInterval)
+	var ret []byte
+	if s.pending != nil {
+		ret = append([]byte(nil), s.pending...) // the image's retain section, for an unreadable own store
+	}
 	s.mu.Unlock()
 	following := s.following()
+	// The one candidate: the shadow's newest image, taken before the
+	// carry's fsync so a slow disk does not age it (hot-max-age is judged
+	// at the election). It must be the image whose retain section the
+	// file then takes.
+	hot := s.shadow.Take()
 	var took time.Duration
 	var err error
 	if !mutNaut("stream_flush_no_persist") {
@@ -650,6 +758,35 @@ func (s *pairStream) takeoverFlush() error {
 	}
 	if !mutNaut("stream_flush_keeps_shadow") {
 		s.shadow.Reset()
+	}
+	_, done := s.rt.LeadingTerm()
+	s.mu.Lock()
+	switch {
+	case hot != nil && !done:
+		// (A flush that ends after its takeover was taken records
+		// nothing: the edge is over.)
+		s.flushTook = true
+	case s.flushTook:
+		// An earlier flush of this same edge took the image and emptied
+		// the shadow, then the term moved before the takeover ran: the
+		// other controller may have led in between, so it is not hot,
+		// but there was an image, and the cold takeover says so.
+		hot = &runtime.HotImage{Cold: "the term moved while the takeover waited: another leadership may have come between the image and this one"}
+	}
+	s.mu.Unlock()
+	if hot != nil && hot.Term != 0 {
+		hot.Retain = ret
+		hot.MaxAge = s.hotMaxAge
+		if hot.MaxAge < 0 {
+			hot.MaxAge = 3*s.m.o.Lease + 2*every
+		}
+		switch {
+		case hot.Cold != "":
+		case hot.Term != term || hot.Seq != seq:
+			hot.Cold = fmt.Sprintf("the shadow's image (term %d, seq %d) is not the one the retain file took (term %d, seq %d)", hot.Term, hot.Seq, term, seq)
+		case hot.Build != s.build && !mutNaut("hot_build_unchecked"):
+			hot.Cold = fmt.Sprintf("the image is of another nautilus build (%s; this one is %s)", hot.Build, s.build)
+		}
 	}
 	s.mu.Lock()
 	// What the takeover loads: the newest image when the flush kept it,
@@ -683,7 +820,48 @@ func (s *pairStream) takeoverFlush() error {
 		slog.Info("redundancy: takeover: the newest state image is in the retain file", "age", age.Round(time.Millisecond), "term", term, "seq", seq,
 			"save", took.Round(10*time.Microsecond), "flush", time.Since(start).Round(10*time.Microsecond))
 	}
-	return err
+	return hot, err
+}
+
+// tookOver is the runtime's report of each takeover (SetTakeoverReport):
+// journalled, and a cold one with an image a condition until a standby
+// follows again.
+func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
+	s.mu.Lock()
+	if rep.At.Before(s.lastReport) {
+		s.mu.Unlock()
+		return // a newer takeover reported already
+	}
+	s.lastReport = rep.At
+	s.flushTook = false // the edge is taken
+	s.coldWhy = ""
+	if !rep.Hot && rep.Image {
+		s.coldWhy = rep.Reason
+	}
+	s.mu.Unlock()
+	j := s.m.journal.Load()
+	if j == nil {
+		return
+	}
+	detail := map[string]any{"term": rep.Term, "hot": rep.Hot}
+	if !rep.Hot {
+		detail["reason"] = rep.Reason
+	}
+	if rep.ImageAge >= 0 {
+		detail["imageAgeMs"] = rep.ImageAge.Milliseconds()
+	}
+	if rep.Hot && rep.OldestFrameAge >= 0 {
+		detail["oldestFrameAgeMs"] = rep.OldestFrameAge.Milliseconds()
+	}
+	if rep.RetainFromImage {
+		detail["retainFromImage"] = true
+		detail["retain"] = "this controller's retain store could not be read: its retained values are the state image's, held only in memory until a save succeeds"
+	}
+	_, _ = (*j).Record(audit.Entry{
+		User: "system", Source: audit.SourceSystem,
+		Action: "redundancy.takeover", Target: string(s.m.o.Self),
+		Detail: detail, Result: audit.ResultOK,
+	})
 }
 
 // status is the stream's block of /api/cluster.
@@ -697,6 +875,13 @@ func (s *pairStream) status() *leader.StreamStatus {
 	if s.tookOverAge >= 0 {
 		st.TakeoverImageAgeMs = s.tookOverAge.Milliseconds()
 	}
+	if tr := s.rt.LastTakeover(); !tr.At.IsZero() {
+		st.Takeover, st.TakeoverCold = "cold", tr.Reason
+		if tr.Hot {
+			st.Takeover, st.TakeoverCold, st.TakeoverOldestFrameMs = "hot", "", tr.OldestFrameAge.Milliseconds()
+		}
+	}
+	st.RetainInMemory = rtLead && s.rt.RetainOnlyInMemory()
 	if lead {
 		st.Role, st.State = "leader", "no-standby"
 		st.Term, st.Seq, st.Bytes = s.sentTerm, s.sentSeq, s.bytes

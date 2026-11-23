@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
 )
@@ -26,6 +27,17 @@ type Shadow struct {
 	// tags is the newest image's carried tags (imagetags.go), nil when
 	// that image's could not be applied (another layout, format 1).
 	tags *shadowTags
+	// build is the newest image's Build, arrived when it was applied (the
+	// runtime's clock, monotonic in production), last what Apply reported
+	// for it: Take's (#710 S2).
+	build   string
+	arrived time.Time
+	last    ShadowReport
+	// refMs is the latest leader time in the newest image: when it was
+	// taken (TagsNowMs), or its latest task copy. Every task's timers are
+	// carried from it (hot_install.go): a fast task copied its frame
+	// earlier, and kept running on the leader until then.
+	refMs int64
 }
 
 type shadowTask struct {
@@ -35,6 +47,7 @@ type shadowTask struct {
 	spare  *ir.Frame // where the next one is applied, then swapped in
 	nowMs  int64
 	scans  uint64
+	source string // the image's TaskImage.Source
 	// applied: frame holds an image, not the program's initial values.
 	applied bool
 }
@@ -131,7 +144,7 @@ func (s *Shadow) Apply(img *Image) (ShadowReport, error) {
 			continue
 		}
 		st.frame, st.spare = st.spare, st.frame
-		st.nowMs, st.scans, st.applied = ti.NowMs, ti.Scans, true
+		st.nowMs, st.scans, st.source, st.applied = ti.NowMs, ti.Scans, ti.Source, true
 		rep.Applied = append(rep.Applied, np.name)
 	}
 	for _, ti := range img.Tasks {
@@ -143,6 +156,11 @@ func (s *Shadow) Apply(img *Image) (ShadowReport, error) {
 	// The position moves even when a task's frame did not fit: the image
 	// was the newest, and its other tasks are applied.
 	s.term, s.seq = img.Term, img.Seq
+	s.build, s.arrived, s.last = img.Build, s.r.now(time.Now()), rep
+	s.refMs = img.TagsNowMs
+	for i := range img.Tasks {
+		s.refMs = max(s.refMs, img.Tasks[i].NowMs)
+	}
 	return rep, firstErr
 }
 
@@ -229,6 +247,7 @@ func (s *Shadow) Reset() {
 	s.term, s.seq = 0, 0
 	s.tasks = map[string]*shadowTask{}
 	s.tags = nil
+	s.build, s.arrived, s.last, s.refMs = "", time.Time{}, ShadowReport{}, 0
 }
 
 // frameOf is a task's shadow frame, nil when none was applied (tests).
@@ -240,4 +259,50 @@ func (s *Shadow) frameOf(task string) (*ir.Frame, int64) {
 		return nil, 0
 	}
 	return st.frame, st.nowMs
+}
+
+// Take is the shadow's newest image as a candidate for a hot takeover
+// (#710 S2), nil when it holds none: every task's frame copied out by
+// value (leaves, never the shadow's frame), its carried tags, its
+// position, build and age on this controller's clock. A shadow that is
+// not in sync (a task of another layout, one the image lacks or this
+// build lacks, tags another set or none) gives a candidate whose Cold
+// says why. The pair's takeover flush takes it, after stopping the
+// follower, before Reset.
+func (s *Shadow) Take() *HotImage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.term == 0 && s.seq == 0 {
+		return nil
+	}
+	h := &HotImage{Term: s.term, Seq: s.seq, Build: s.build, Age: s.r.now(time.Now()).Sub(s.arrived), arrived: s.arrived, refMs: s.refMs, tasks: map[string]hotTask{}}
+	rep := s.last
+	switch {
+	case len(rep.LayoutDiffers) > 0:
+		h.Cold = fmt.Sprintf("tasks %v run another program here than in the image", rep.LayoutDiffers)
+	case len(rep.Missing) > 0:
+		h.Cold = fmt.Sprintf("the image has no frame of tasks %v", rep.Missing)
+	case len(rep.Extra) > 0:
+		h.Cold = fmt.Sprintf("the image has tasks %v this controller does not run", rep.Extra)
+	case rep.TagsMissing:
+		h.Cold = "the image carries no tags (a leader of an older nautilus)"
+	case rep.TagsDiffer:
+		h.Cold = "the image carries another set of tags (another manifest, or other tag types)"
+	}
+	for name, st := range s.tasks {
+		if !st.applied {
+			if h.Cold == "" {
+				h.Cold = "task " + name + " holds no frame of the newest image"
+			}
+			continue
+		}
+		h.tasks[name] = hotTask{layout: st.layout, source: st.source, nowMs: st.nowMs, leaves: ir.FlattenInto(nil, st.frame)}
+	}
+	if s.r.carried != nil {
+		h.tags = s.tags // Apply makes a fresh one for every image: never written again
+		if h.tags == nil && h.Cold == "" {
+			h.Cold = "the shadow holds no tags of the newest image"
+		}
+	}
+	return h
 }

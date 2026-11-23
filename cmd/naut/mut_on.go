@@ -66,6 +66,8 @@ import "os"
 //   - witness_lease_no_alarm: the witness refusing the pair's lease raises no system alarm;
 //   - lease_check_unwarned: naut check says nothing of a pair lease under 1 s;
 //   - stream_format_ignored: the leader sends its newest image format whatever the standby reads (#710 S2a);
+//   - hot_build_unchecked: a takeover goes hot on an image of another build (#710 S2b);
+//   - hot_cold_condition_never_clears: the cold-takeover warning stays after a standby follows again (#710 S2b);
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutNaut(name string) bool { return name == mutOn }

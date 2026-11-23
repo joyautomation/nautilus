@@ -276,7 +276,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.startStream(rt, proj.Redundancy.StreamBudgetBytes())
+	m.startStream(rt, proj.Redundancy.StreamBudgetBytes(), proj.Redundancy.HotMaxAgeOr(-1))
 	gate := gateOnLiveScans(proj, m.q, rt, localGateLease)
 	// Live I/O configuration, as runProject wires it: its edge re-applies
 	// what the retain store keeps, reading the store before the takeover.

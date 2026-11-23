@@ -66,6 +66,47 @@ func rebaseValue(v *Value, d int64) {
 	}
 }
 
+// ForgetHost zeroes every HostLocal slot of every function-block
+// instance in f, at any depth: a frame carried to another controller
+// (#710 S2 hot takeover) holds no handle into the new host's tables. A
+// READ or WRITE that was BUSY then polls ticket 0 and reports its request
+// lost (ERROR, STATUS lost), never another request's reply.
+func ForgetHost(f *Frame) {
+	if f == nil {
+		return
+	}
+	for i := range f.Slots {
+		forgetValue(&f.Slots[i])
+	}
+}
+
+func forgetValue(v *Value) {
+	switch v.Kind {
+	case TypeArray:
+		for i := range v.Arr {
+			forgetValue(&v.Arr[i])
+		}
+	case TypeStruct:
+		for i := range v.Fld {
+			forgetValue(&v.Fld[i])
+		}
+	case TypeFB:
+		if v.FB == nil {
+			return
+		}
+		if v.FB.Def != nil {
+			for _, i := range v.FB.Def.HostLocal {
+				if i >= 0 && i < len(v.FB.Slots) {
+					v.FB.Slots[i].I = 0
+				}
+			}
+		}
+		for i := range v.FB.Slots {
+			forgetValue(&v.FB.Slots[i])
+		}
+	}
+}
+
 // FlattenValueInto appends v's leaves to dst, in FlattenInto's order, and
 // returns it: one tag's value for a state image (#710 S2). Like
 // FlattenInto it copies values only.

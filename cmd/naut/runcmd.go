@@ -407,7 +407,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}
 		// The state stream (#710 S1b): the leader's images to the standby,
 		// and the takeover's flush of the newest one before the store loads.
-		pair.startStream(rt, proj.Redundancy.StreamBudgetBytes())
+		pair.startStream(rt, proj.Redundancy.StreamBudgetBytes(), proj.Redundancy.HotMaxAgeOr(-1))
 		if alarmLog != nil && alarms.Escalation != nil {
 			// The occurrences a takeover continues (#715): those an
 			// escalation policy covers, so a page goes on at its level.

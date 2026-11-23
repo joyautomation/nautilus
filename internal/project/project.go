@@ -522,6 +522,21 @@ type RedundancyConfig struct {
 	// drops images. A number of bytes a second, or with kB/s, MB/s, KiB/s
 	// or MiB/s (default 1MB/s). Pair only.
 	StreamBudget string `yaml:"stream-budget"`
+	// HotMaxAge is the oldest state image a takeover goes on from (#710
+	// S2, design §4.2): an image older at the election makes the takeover
+	// cold. Default 3 × lease + 2 × the stream's interval, which covers a
+	// crash, a kill and an isolation of the leader; 0 makes every takeover
+	// cold. Pair only.
+	HotMaxAge *Duration `yaml:"hot-max-age"`
+}
+
+// HotMaxAgeOr is redundancy.hot-max-age, or def when the manifest sets
+// none.
+func (r *RedundancyConfig) HotMaxAgeOr(def time.Duration) time.Duration {
+	if r == nil || r.HotMaxAge == nil {
+		return def
+	}
+	return time.Duration(*r.HotMaxAge)
 }
 
 // FloatingIPConfig is redundancy.floating-ip. The process needs
@@ -561,10 +576,9 @@ func checkPublicURLs(urls map[string]string) error {
 	return nil
 }
 
-// PairColdTakeover is what an experimental pair says at every start
-// until hot takeover (#710 S2): the leader streams its state to the
-// standby, which keeps the retained values, but a takeover is cold.
-const PairColdTakeover = "a takeover is cold: the standby keeps the leader's retained values (setpoints, VAR RETAIN, online edits) from the state stream, but program state (timers, counters, SFC steps) restarts from the field, and a setpoint written in the last stream interval before a crash (up to a lease before an isolation) is lost"
+// PairColdTakeover is what an experimental pair says at every start: what
+// a takeover keeps, hot (#710 S2) or cold.
+const PairColdTakeover = "a takeover goes on hot from the leader's newest state image when the standby is in sync with it (timers, counters, SFC steps and state tags continue; FIRST_SCAN() is still TRUE on its first scan), and is cold otherwise (program state restarts from the field, the retained values kept); either way a setpoint written in the last stream interval before a crash (up to a lease before an isolation) is lost"
 
 // DefaultStreamBudget is the state stream's bytes a second when the
 // manifest names none (1 MB/s).
@@ -663,6 +677,8 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.peer-tls applies to a redundant pair (peers:): the TLS of its controllers' and witness's peer ports")
 		case r.StreamBudget != "":
 			return errors.New("redundancy.stream-budget applies to a redundant pair (peers:): the bytes a second its leader streams its state to the standby at")
+		case r.HotMaxAge != nil:
+			return errors.New("redundancy.hot-max-age applies to a redundant pair (peers:): the oldest state image its takeover goes on from")
 		}
 		return nil
 	}
@@ -729,6 +745,9 @@ func checkRedundancy(r *RedundancyConfig) error {
 		case n < minStreamBudget:
 			return fmt.Errorf("redundancy.stream-budget %s: want at least 10kB/s", r.StreamBudget)
 		}
+	}
+	if r.HotMaxAge != nil && *r.HotMaxAge < 0 {
+		return fmt.Errorf("redundancy.hot-max-age %s: want 0 (every takeover cold) or more", time.Duration(*r.HotMaxAge))
 	}
 	if err := checkPublicURLs(r.PublicURLs); err != nil {
 		return err
