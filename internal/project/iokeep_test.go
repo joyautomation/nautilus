@@ -490,6 +490,19 @@ func TestIOKeptAcrossATakeover(t *testing.T) {
 		t.Fatalf("not kept: %s", res.KeptWhy)
 	}
 	eventually(t, "the standby to follow", func() bool { return len(b.io.Differs()) == 1 })
+	// Differs() turns 1 inside the follower's apply; what the takeover edge
+	// compares (IOCurrent) is recorded only when the follow settles, a moment
+	// later. An edge that lands between the two calls RestoreIO (which then
+	// finds nothing to change), so wait for the settled state.
+	eventually(t, "the follow to settle on the store", func() bool {
+		st, err := store.Load()
+		if err != nil {
+			return false
+		}
+		b.io.mu.Lock()
+		defer b.io.mu.Unlock()
+		return b.io.memo.st == hashOf(st.IO) && b.io.memo.gen == b.io.gen
+	})
 	if b.scans.Load() != 0 {
 		t.Fatal("the standby scanned")
 	}
