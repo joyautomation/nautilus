@@ -108,6 +108,12 @@ func WithGate(ctx context.Context, g nio.SendGate, term uint64) context.Context 
 // is closed, or open under another term than the send's.
 var ErrGateClosed = errors.New("write gate closed (or the lease's term moved) before this request: not sent")
 
+// ErrNotStarted marks a send refused before anything went out (its gate
+// closed, or its deadline passed first). Such a write is never a cut
+// (CutSend). A transport that can tell wraps it (cip.ErrNotStarted is
+// this value).
+var ErrNotStarted = errors.New("request not started")
+
 // Check reads the gate WithGate put on ctx, immediately before one request
 // of a send: nil to send it, ErrGateClosed (or ctx's error, past its
 // deadline) not to. A ctx with no gate checks only its deadline.

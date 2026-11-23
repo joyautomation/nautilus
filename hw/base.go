@@ -161,6 +161,7 @@ type Config struct {
 // it — either way the runtime sees one Driver with the modbus-shaped surface
 // (New never dials, Start polls, Stop waits).
 type Base struct {
+	fence.CutLabel
 	kind        string
 	log         *slog.Logger
 	poll        PollFunc
@@ -1176,6 +1177,7 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 			s.mu.Lock()
 			s.lastWrite = fmt.Errorf("write %s: outcome unknown: no answer by its send deadline, so the connection was reset; the device may have carried it out, and it is not sent again (%w)", name, err)
 			s.mu.Unlock()
+			fence.Cut(b.CutName(s.cfg.ID))
 			b.log.Warn(b.kind+": command outcome unknown (no answer by its send deadline; not sent again)", "source", s.cfg.ID, "tag", name, "error", err)
 			continue
 		}

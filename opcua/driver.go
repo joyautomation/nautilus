@@ -1564,8 +1564,12 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 		stop := fence.ArmAbort(sess.Fence, deadline)
 		fence.BeforeSend()
 		resp, err := sess.Client.Write(wctx, &ua.WriteRequest{NodesToWrite: items[start:end]})
-		if stop() {
+		fired := stop()
+		if fired {
 			d.timerAborts.Add(1)
+		}
+		if !deadline.IsZero() && (fired || (err != nil && !time.Now().Before(deadline))) {
+			fence.Cut(d.name) // began, and its deadline passed: one write cut
 		}
 		fcancel()
 		cancel()

@@ -49,9 +49,18 @@ type Quorum struct {
 	mu           sync.Mutex
 	unhealthy    string
 	warnings     []string
-	conds        map[string]string    // SetCondition, by key
-	logStatus    func() *LogStatus    // SetLogStatus
-	streamStatus func() *StreamStatus // SetStreamStatus
+	conds        map[string]string     // SetCondition, by key
+	logStatus    func() *LogStatus     // SetLogStatus
+	streamStatus func() *StreamStatus  // SetStreamStatus
+	writesCut    func() map[string]int // SetWritesCut
+}
+
+// SetWritesCut adds the writes cut at their send deadline, by device, to
+// Status (its WritesCut field). f is called outside the Quorum's lock.
+func (q *Quorum) SetWritesCut(f func() map[string]int) {
+	q.mu.Lock()
+	q.writesCut = f
+	q.mu.Unlock()
 }
 
 // SetStreamStatus adds the pair's state stream to Status (its Stream
@@ -122,8 +131,11 @@ func (q *Quorum) Release()                 { q.n.Release() }
 func (q *Quorum) Status() Status {
 	st := quorumStatus(q.n.Status())
 	q.mu.Lock()
-	ls, ss := q.logStatus, q.streamStatus
+	ls, ss, wc := q.logStatus, q.streamStatus, q.writesCut
 	q.mu.Unlock()
+	if wc != nil {
+		st.WritesCut = wc()
+	}
 	if ls != nil {
 		st.Log = ls()
 	}

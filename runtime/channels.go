@@ -113,6 +113,7 @@ type commHub struct {
 }
 
 type commWorker struct {
+	name    string // the channel's name, for the writes-cut counter
 	ch      ChannelIO
 	timeout time.Duration
 	q       chan commReq
@@ -145,7 +146,7 @@ func newCommHub(chs []Channel) *commHub {
 	// never name a request of this one: it polls as lost.
 	h.next.Store(time.Now().UnixNano())
 	for _, c := range chs {
-		w := &commWorker{ch: c.Channel, timeout: c.Timeout, q: make(chan commReq, c.Queue)}
+		w := &commWorker{name: c.Name, ch: c.Channel, timeout: c.Timeout, q: make(chan commReq, c.Queue)}
 		if w.timeout <= 0 {
 			w.timeout = DefaultChannelTimeout
 		}
@@ -290,8 +291,13 @@ func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
 			ctx, fcancel = fence.Context(ctx, deadline)
 			defer fcancel()
 			ctx = fence.WithGate(ctx, h.send, req.lead)
+			// The channel's transport records a cut under this name, and
+			// only for a request it had on the wire at the deadline (#710):
+			// a dial, or a failure before anything was sent, is no cut.
+			ctx = fence.WithDevice(ctx, w.name)
 		}
-		return ir.CommResult{Status: commStatus(w.ch.Write(ctx, req.variable, req.val, req.elem))}
+		werr := w.ch.Write(ctx, req.variable, req.val, req.elem)
+		return ir.CommResult{Status: commStatus(werr)}
 	}
 	v, err := w.ch.Read(ctx, req.variable, req.val, req.elem)
 	if err != nil {

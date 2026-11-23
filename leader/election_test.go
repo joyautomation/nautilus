@@ -2,9 +2,11 @@ package leader
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,5 +56,38 @@ func TestQuorumHealth(t *testing.T) {
 	}
 	if q.IsLeader() || q.Status().Mode != "quorum" {
 		t.Fatalf("status %+v", q.Status())
+	}
+}
+
+// #710: a pair member's Status carries the writes cut at the send deadline,
+// by device, as /api/cluster serves it; with none cut the field is absent.
+func TestQuorumStatusCarriesWritesCut(t *testing.T) {
+	if !quorum.BootClock {
+		t.Skip("controllers need CLOCK_BOOTTIME")
+	}
+	q, err := NewQuorum(node.Options{Cluster: node.NewClusterID(), Self: "a", Peer: "b", PeerAddr: "127.0.0.1:1", WitnessAddr: "127.0.0.1:1",
+		Lease: 800 * time.Millisecond, StatePath: filepath.Join(t.TempDir(), "q.state"), Token: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer q.Node().Close()
+	js := func() string {
+		b, err := json.Marshal(q.Status())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	if strings.Contains(js(), "writesCut") {
+		t.Fatalf("no source set, no field: %s", js())
+	}
+	cuts := map[string]int{}
+	q.SetWritesCut(func() map[string]int { return cuts })
+	if strings.Contains(js(), "writesCut") {
+		t.Fatalf("nothing cut, no field: %s", js())
+	}
+	cuts["plc1"], cuts["bmc2"] = 14, 3
+	if got := js(); !strings.Contains(got, `"writesCut":{"bmc2":3,"plc1":14}`) {
+		t.Fatalf("status %s lacks the writes cut", got)
 	}
 }

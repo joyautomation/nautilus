@@ -663,3 +663,6 @@ func (d *Driver) AuthMode(sourceID string) string {
 	}
 	return ""
 }
+
+// SetCutLabel names this driver for the writes-cut counter (fence.CutLabel).
+func (d *Driver) SetCutLabel(driver string, multi bool) { d.base.SetCutLabel(driver, multi) }

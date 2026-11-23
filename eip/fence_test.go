@@ -41,6 +41,28 @@ func TestEIPEachRequestRunsToItsSendDeadline(t *testing.T) {
 	}
 }
 
+// #710: a request's context carries the driver's name for the writes-cut
+// counter, so the transport that resets its socket at the deadline can
+// record the cut.
+func TestEIPSendNamesTheDeviceForTheCutCounter(t *testing.T) {
+	d, err := New("127.0.0.1", testManifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.SetCutLabel("plc7", false)
+	d.SetSendGate(func() (bool, time.Duration, uint64) { return true, time.Second, 1 })
+	ctx, cancel, err := d.send(context.Background(), d.term)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	fence.ResetCutsForTest()
+	fence.CutSend(ctx, true)
+	if got := fence.CutCounts(); len(got) != 1 || got["plc7"] != 1 {
+		t.Fatalf("writes cut = %v, want plc7 1", got)
+	}
+}
+
 // #1040 review: a flush that took its queue under one term of the lease
 // sends none of it once the term has moved, even when no look saw the gate
 // closed in between (lost and won again between two looks).

@@ -2541,6 +2541,7 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		if err != nil {
 			return nil, nil, err
 		}
+		labelCuts(d, c.Name, false)
 		return d, []nio.NamedDriver{{Name: c.Name, Driver: d}}, nil
 	}
 	named := make([]nio.NamedDriver, 0, len(configs))
@@ -2551,6 +2552,7 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		if err != nil {
 			return nil, nil, fmt.Errorf("drivers[%d] (%s): %w", i, name, err)
 		}
+		labelCuts(d, name, true)
 		named = append(named, nio.NamedDriver{Name: name, Driver: d})
 	}
 	multi, err := nio.NewMulti(named...)
@@ -2558,6 +2560,14 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		return nil, nil, fmt.Errorf("drivers: %w", err)
 	}
 	return multi, named, nil
+}
+
+// labelCuts tells a driver its name for the writes-cut counter (#710,
+// fence.CutLabel): among several drivers a source is "driver/id".
+func labelCuts(d nio.Driver, name string, multi bool) {
+	if l, ok := d.(interface{ SetCutLabel(string, bool) }); ok {
+		l.SetCutLabel(name, multi)
+	}
 }
 
 // withDeviceTypes makes the composed device types this manifest's:
