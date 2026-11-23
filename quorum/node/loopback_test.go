@@ -74,6 +74,12 @@ type sentVote struct {
 	from, to quorum.NodeID
 	at       time.Time
 	req      quorum.Request
+	// The call's outcome at the transport, once it returned: how long it
+	// took and its error (nil: an answer of any status). For steady()'s
+	// report when a lease lapses (#1120).
+	done bool
+	took time.Duration
+	err  error
 }
 
 type member struct {
@@ -323,16 +329,29 @@ type faultRT struct {
 
 func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	to := f.c.byHP[r.URL.Host]
+	sent := -1 // its index in c.votes, when it is a vote
 	if strings.HasSuffix(r.URL.Path, "/vote") && r.Body != nil {
 		b, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(b))
 		var q quorum.Request
 		if q.UnmarshalBinary(b) == nil {
 			f.c.mu.Lock()
+			sent = len(f.c.votes)
 			f.c.votes = append(f.c.votes, sentVote{from: f.from, to: to, at: time.Now(), req: q})
 			f.c.mu.Unlock()
 		}
 	}
+	resp, err := f.roundTrip(r, to)
+	if sent >= 0 {
+		f.c.mu.Lock()
+		v := &f.c.votes[sent]
+		v.done, v.took, v.err = true, time.Since(v.at), err
+		f.c.mu.Unlock()
+	}
+	return resp, err
+}
+
+func (f *faultRT) roundTrip(r *http.Request, to quorum.NodeID) (*http.Response, error) {
 	if f.c.isCut(f.from, to) {
 		return nil, errCut
 	}
@@ -501,11 +520,11 @@ func (c *cluster) steady(id quorum.NodeID, n int) {
 	for time.Now().Before(end) {
 		switch leading := e.IsLeader(); {
 		case e.Term() != term:
-			c.t.Fatalf("%s did not hold its lease steadily: leading=%v term %d (was %d)", id, leading, e.Term(), term)
+			c.t.Fatalf("%s did not hold its lease steadily: leading=%v term %d (was %d); %s", id, leading, e.Term(), term, c.voteTrail(id, leases(2)))
 		case leading:
 			lapsed = time.Time{}
 		case !raceOn:
-			c.t.Fatalf("%s did not hold its lease steadily: leading=%v term %d (was %d)", id, leading, e.Term(), term)
+			c.t.Fatalf("%s did not hold its lease steadily: leading=%v term %d (was %d); %s", id, leading, e.Term(), term, c.voteTrail(id, leases(2)))
 		case lapsed.IsZero():
 			// Under -race a renewal can come late on a loaded runner
 			// (#1120): its gate closes until the renewal lands, at the same
@@ -516,10 +535,76 @@ func (c *cluster) steady(id quorum.NodeID, n int) {
 			// -race, and in the mutation runner, any lapse fails.
 			lapsed = time.Now()
 		case time.Since(lapsed) > loopLease:
-			c.t.Fatalf("%s did not hold its lease steadily: not leading for %v at term %d", id, time.Since(lapsed), term)
+			c.t.Fatalf("%s did not hold its lease steadily: not leading for %v at term %d; %s", id, time.Since(lapsed), term, c.voteTrail(id, leases(2)))
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// voteTrail sums up, then lists, the vote requests id sent in the last
+// span, with each call's outcome: when a lease lapses it tells a renewal
+// never sent (the process stalled: a long gap between sends) from one sent
+// and answered late, or not at all (#1120). The summary is one line, so
+// the mutation runner, which keeps only report lines, keeps it.
+func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	type sum struct {
+		sent, answered, failed, pending int
+		slowest                         time.Duration
+		lastErr                         error
+	}
+	per := map[quorum.NodeID]*sum{}
+	var detail strings.Builder
+	var prev time.Time
+	var gap time.Duration
+	for _, v := range c.votes {
+		if v.from != id || now.Sub(v.at) > span {
+			continue
+		}
+		if !prev.IsZero() {
+			gap = max(gap, v.at.Sub(prev))
+		}
+		prev = v.at
+		s := per[v.to]
+		if s == nil {
+			s = &sum{}
+			per[v.to] = s
+		}
+		s.sent++
+		out := "pending"
+		switch {
+		case v.done && v.err != nil:
+			s.failed++
+			s.lastErr = v.err
+			out = fmt.Sprintf("%v: %v", v.took.Round(time.Millisecond), v.err)
+		case v.done:
+			s.answered++
+			s.slowest = max(s.slowest, v.took)
+			out = fmt.Sprintf("answered in %v", v.took.Round(time.Millisecond))
+		default:
+			s.pending++
+		}
+		fmt.Fprintf(&detail, "\n  -%v to %s term %d renewal=%v %s", now.Sub(v.at).Round(time.Millisecond), v.to, v.req.Term, v.req.Renewal, out)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "votes %s sent in the last %v:", id, span)
+	if prev.IsZero() {
+		b.WriteString(" none")
+	} else {
+		fmt.Fprintf(&b, " longest gap between sends %v, none since %v ago;", gap.Round(time.Millisecond), now.Sub(prev).Round(time.Millisecond))
+	}
+	for _, to := range []quorum.NodeID{"a", "b", WitnessID} {
+		if s := per[to]; s != nil {
+			fmt.Fprintf(&b, " to %s: %d sent, %d answered (slowest %v), %d failed, %d pending", to, s.sent, s.answered, s.slowest.Round(time.Millisecond), s.failed, s.pending)
+			if s.lastErr != nil {
+				fmt.Fprintf(&b, " (last: %v)", s.lastErr)
+			}
+			b.WriteString(";")
+		}
+	}
+	return b.String() + detail.String()
 }
 
 func (c *cluster) startAll() {
