@@ -33,23 +33,31 @@ export interface SnapshotClientOptions {
 	fetch?: Fetch;
 	/** Requests in flight at once. Default 3. */
 	concurrency?: number;
+	/** How long an empty or failed answer is remembered (ms). Default 20 000. */
+	emptyMs?: number;
 }
 
 export const NO_SNAP_VIEW = 'Alarm pictures: no permission to view cameras.';
 export const MAX_THUMBS = 3;
+/** How long an empty answer is remembered. */
+export const EMPTY_MS = 20_000;
 
 const NONE: SnapResult = { state: 'none', snaps: [] };
 const DENIED: SnapResult = { state: 'denied', snaps: [] };
 
+/** The only names the controller makes for a picture: `<ms>-<camera id>.jpg`. */
+const FILE = /^[0-9]{10,16}-[A-Za-z0-9_-]{1,64}\.jpg$/;
+
 function normalize(j: any): AlarmSnap | null {
-	// only a path on this controller is a picture: never follow another origin
-	if (!j || typeof j.url !== 'string' || !j.url.startsWith('/') || j.url.startsWith('//')) return null;
+	// the address is built here from a validated file name, never taken from the
+	// answer: a hostile answer cannot point an <img> or a link at another origin
+	if (!j || typeof j.file !== 'string' || !FILE.test(j.file)) return null;
 	return {
-		file: typeof j.file === 'string' ? j.file : '',
+		file: j.file,
 		ts: typeof j.ts === 'number' && isFinite(j.ts) ? j.ts : 0,
 		camera: typeof j.camera === 'string' ? j.camera : '',
 		alarm: typeof j.alarm === 'string' ? j.alarm : '',
-		url: j.url
+		url: `/api/camera-snapshots/${j.file}`
 	};
 }
 
@@ -69,6 +77,7 @@ export class SnapshotClient {
 	readonly #token?: string;
 	readonly #fetch: Fetch;
 	readonly #limit: number;
+	readonly #emptyMs: number;
 	#none = false;
 	#denied = false;
 	#active = 0;
@@ -80,6 +89,7 @@ export class SnapshotClient {
 		this.#token = opts.token;
 		this.#fetch = opts.fetch ?? kitFetch;
 		this.#limit = Math.max(1, opts.concurrency ?? 3);
+		this.#emptyMs = opts.emptyMs ?? EMPTY_MS;
 	}
 
 	/** The controller answered 404 (or failed): it keeps no pictures; no more is asked. */
@@ -99,6 +109,14 @@ export class SnapshotClient {
 		if (!p) {
 			p = this.#queued(occurrence);
 			this.#cache.set(occurrence, p);
+			// a row drawn before its picture landed must not stay empty until a
+			// reload: an empty or failed answer is forgotten after a while
+			void p.then((r) => {
+				if (r.state === 'ok' && r.snaps.length > 0) return;
+				setTimeout(() => {
+					if (this.#cache.get(occurrence) === p) this.#cache.delete(occurrence);
+				}, this.#emptyMs);
+			});
 		}
 		return p;
 	}

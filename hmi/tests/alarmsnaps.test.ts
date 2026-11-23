@@ -5,7 +5,8 @@ import { describe, it, expect } from './harness.js';
 import { SnapshotClient, parseSnaps, thumbSplit } from '../src/lib/alarmsnaps.js';
 
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
-const snap = (n: number) => ({ file: `f${n}.jpg`, ts: n, camera: `c${n}`, alarm: 'a', url: `/api/camera-snapshots/f${n}.jpg` });
+const fname = (n: number) => `${1700000000000 + n}-c${n}.jpg`;
+const snap = (n: number) => ({ file: fname(n), ts: n, camera: `c${n}`, alarm: 'a', url: `/api/camera-snapshots/${fname(n)}` });
 
 function fake(answer: (url: string) => Response | Error | Promise<Response>) {
 	const sent: string[] = [];
@@ -19,9 +20,19 @@ function fake(answer: (url: string) => Response | Error | Promise<Response>) {
 }
 
 describe('parseSnaps', () => {
-	it('reads the list and drops rows that are not a path on this controller', () => {
-		const l = parseSnaps({ snapshots: [snap(1), { url: 'http://elsewhere/x.jpg' }, { url: '//x/y' }, null, snap(2)] });
-		expect(l.map((s) => s.file)).toEqual(['f1.jpg', 'f2.jpg']);
+	it('reads the list, builds each address from a validated file name and drops the rest', () => {
+		const hostile = [
+			{ file: '../etc/passwd', url: '/x' },
+			{ file: 'x.jpg', url: 'http://elsewhere/x.jpg' },
+			{ file: fname(3), url: 'http://elsewhere/x.jpg' }, // a good name with a hostile address
+			{ file: `${fname(4)}/..`, url: '/api/camera-snapshots/x' },
+			{ url: '/\\evil.example/x' },
+			null
+		];
+		const l = parseSnaps({ snapshots: [snap(1), ...hostile, snap(2)] });
+		expect(l.map((s) => s.file)).toEqual([fname(1), fname(3), fname(2)]);
+		// whatever the answer says, the address is this controller's own
+		expect(l.every((s) => s.url === `/api/camera-snapshots/${s.file}`)).toBe(true);
 		expect(parseSnaps({})).toEqual([]);
 		expect(parseSnaps(null)).toEqual([]);
 	});
@@ -32,6 +43,28 @@ describe('thumbSplit', () => {
 		expect(thumbSplit([1, 2])).toEqual({ shown: [1, 2], more: 0 });
 		expect(thumbSplit([1, 2, 3])).toEqual({ shown: [1, 2, 3], more: 0 });
 		expect(thumbSplit([1, 2, 3, 4, 5])).toEqual({ shown: [1, 2, 3], more: 2 });
+	});
+});
+
+describe('SnapshotClient (empty answers)', () => {
+	it('an empty answer is forgotten after a while, a real one is kept', async () => {
+		let calls = 0;
+		let have = false;
+		const f = (async () => {
+			calls++;
+			return json({ snapshots: have ? [snap(1)] : [] });
+		}) as unknown as typeof fetch;
+		const client = new SnapshotClient({ fetch: f, emptyMs: 30 });
+		expect((await client.list('occ')).snaps.length).toBe(0);
+		await client.list('occ'); // remembered
+		expect(calls).toBe(1);
+		have = true; // the picture lands after the row was drawn
+		await new Promise((r) => setTimeout(r, 80));
+		expect((await client.list('occ')).snaps.length).toBe(1);
+		expect(calls).toBe(2);
+		await new Promise((r) => setTimeout(r, 80));
+		await client.list('occ'); // a real answer stays cached
+		expect(calls).toBe(2);
 	});
 });
 

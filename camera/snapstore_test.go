@@ -187,3 +187,62 @@ func TestAFloodSharesOnePictureAndEachAlarmFindsIt(t *testing.T) {
 		t.Errorf("the second alarm: %d pictures, %d files kept", len(st.ForOccurrence("occ-2")), st.Len())
 	}
 }
+
+// A flood's later alarms share the first's picture, and each of their rows
+// survives a restart (a deploy must not unlink all but the first occurrence).
+func TestSharedPicturesKeepEveryOccurrenceAcrossARestart(t *testing.T) {
+	st, dir, clock := snapStore(t, SnapOptions{})
+	first, _ := st.Save(clock.UnixMilli(), "c", "A1", "occ-1", []byte("pic"))
+	st.Attach(first, "A2", "occ-2")
+	st.Attach(first, "A3", "occ-3")
+	st.Close()
+	st2, err := OpenSnapStore(dir, SnapOptions{Now: func() time.Time { return *clock }, Free: func(string) (uint64, uint64, bool) { return 0, 0, false }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st2.Close()
+	for _, occ := range []string{"occ-1", "occ-2", "occ-3"} {
+		if len(st2.ForOccurrence(occ)) != 1 {
+			t.Errorf("after a restart %s has %d pictures", occ, len(st2.ForOccurrence(occ)))
+		}
+	}
+	if st2.Len() != 1 || st2.Bytes() != 3 {
+		t.Errorf("one shared file counted as %d files, %d bytes (want 1, 3)", st2.Len(), st2.Bytes())
+	}
+}
+
+// A filesystem that reports nothing free does not trim every picture there is,
+// and a picture the bounds drop as it is saved is not reported as kept; a write
+// that did not finish leaves no litter.
+func TestTheByteBoundNeverTrimsEverythingAndASaveSaysWhenItDidNotKeep(t *testing.T) {
+	st, dir, clock := snapStore(t, SnapOptions{})
+	st.Save(clock.UnixMilli(), "c", "A", "occ-1", []byte("pic"))
+	st.Close()
+	zero := func(string) (uint64, uint64, bool) { return 0, 8 << 30, true }
+	st2, err := OpenSnapStore(dir, SnapOptions{Now: func() time.Time { return *clock }, Free: zero})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st2.ForOccurrence("occ-1")) != 1 {
+		t.Error("a filesystem reporting 0 free trimmed the pictures kept")
+	}
+	st2.Close()
+	// larger than the byte bound: not kept, and said so
+	st3, _, clock3 := snapStore(t, SnapOptions{MaxBytes: 4})
+	if _, err := st3.Save(clock3.UnixMilli(), "c", "A", "occ-big", []byte("larger than four bytes")); !errors.Is(err, ErrNotKept) {
+		t.Errorf("a picture over the byte bound: %v", err)
+	}
+	if len(st3.ForOccurrence("occ-big")) != 0 {
+		t.Error("a picture dropped as it was saved is listed")
+	}
+	// litter from a write that did not finish is swept at open
+	os.WriteFile(filepath.Join(dir, "17000000000-x.jpg.tmp"), []byte("half"), 0o600)
+	st4, err := OpenSnapStore(dir, SnapOptions{Now: func() time.Time { return *clock }, Free: func(string) (uint64, uint64, bool) { return 0, 0, false }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st4.Close()
+	if _, err := os.Stat(filepath.Join(dir, "17000000000-x.jpg.tmp")); err == nil {
+		t.Error("a .tmp left by a failed write was kept")
+	}
+}

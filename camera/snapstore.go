@@ -53,6 +53,10 @@ func ValidSnapName(name string) bool { return snapName.MatchString(name) }
 // need.
 var ErrLowSpace = errors.New("camera: the state filesystem is nearly full: no more pictures are kept")
 
+// ErrNotKept says a picture was dropped as it was saved: it is larger than the
+// byte bound or older than the age bound.
+var ErrNotKept = errors.New("camera: the picture is outside the retention bounds (too large, or older than keep-days) and was not kept")
+
 // SnapOptions bound the store. Zero values take the defaults.
 type SnapOptions struct {
 	MaxCount int
@@ -109,8 +113,11 @@ func OpenSnapStore(dir string, o SnapOptions) (*SnapStore, error) {
 	if free == nil {
 		free = diskFree
 	}
+	// 5% of the free space at start, when that is a bound at all: a filesystem
+	// reporting nothing free is the floor's to refuse writes for, not a reason to
+	// trim every picture there is
 	if f, _, ok := free(dir); ok {
-		if cap := int64(f / 20); cap < maxBytes {
+		if cap := int64(f / 20); cap > 0 && cap < maxBytes {
 			maxBytes = cap
 		}
 	}
@@ -127,6 +134,7 @@ func (s *SnapStore) load() error {
 		return err
 	}
 	known := map[string]bool{}
+	sized := map[string]int{}
 	if f != nil {
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 0, 64<<10), 64<<10)
@@ -135,14 +143,21 @@ func (s *SnapStore) load() error {
 			if json.Unmarshal(sc.Bytes(), &sn) != nil || !ValidSnapName(sn.File) {
 				continue // a torn last line
 			}
-			st, err := os.Stat(filepath.Join(s.dir, sn.File))
-			if err != nil || known[sn.File] {
-				continue
+			// one row per (picture, occurrence): a flood's later alarms share the
+			// first's file, and each of their rows is kept
+			size, seen := sized[sn.File]
+			if !seen {
+				st, err := os.Stat(filepath.Join(s.dir, sn.File))
+				if err != nil {
+					continue
+				}
+				size = int(st.Size())
+				sized[sn.File] = size
+				s.total += int64(size)
 			}
-			sn.Size = int(st.Size())
+			sn.Size = size
 			known[sn.File] = true
 			s.snaps = append(s.snaps, sn)
-			s.total += int64(sn.Size)
 		}
 		f.Close()
 		if err := sc.Err(); err != nil && !errors.Is(err, io.EOF) {
@@ -156,8 +171,9 @@ func (s *SnapStore) load() error {
 	// pictures no index row knows are litter (a crash between the file and its row)
 	if ents, err := os.ReadDir(s.dir); err == nil {
 		for _, e := range ents {
-			if ValidSnapName(e.Name()) && !known[e.Name()] {
-				os.Remove(filepath.Join(s.dir, e.Name()))
+			n := e.Name()
+			if (ValidSnapName(n) && !known[n]) || strings.HasSuffix(n, ".jpg.tmp") {
+				os.Remove(filepath.Join(s.dir, n)) // a picture no row knows, a write that did not finish
 			}
 		}
 	}
@@ -206,6 +222,7 @@ func (s *SnapStore) Save(ts int64, cam, alarm, occurrence string, jpeg []byte) (
 	path := filepath.Join(s.dir, name)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, jpeg, 0o600); err != nil {
+		os.Remove(tmp) // a full disk leaves half a file
 		return Snap{}, err
 	}
 	if err := os.Rename(tmp, path); err != nil {
@@ -222,6 +239,18 @@ func (s *SnapStore) Save(ts int64, cam, alarm, occurrence string, jpeg []byte) (
 	s.lastShot[cam] = sn
 	if s.trimLocked() {
 		_ = s.rewriteIndexLocked()
+	}
+	// a picture the bounds would drop at once (larger than the byte bound, older
+	// than keep-days) was not kept: say so rather than journal a success
+	kept := false
+	for _, k := range s.snaps {
+		if k.File == name {
+			kept = true
+			break
+		}
+	}
+	if !kept {
+		return Snap{}, ErrNotKept
 	}
 	return sn, nil
 }
@@ -262,7 +291,9 @@ func (s *SnapStore) Purge(olderThan time.Duration) int {
 		if olderThan == 0 || sn.TS < cut {
 			drop[sn.File] = true
 			os.Remove(filepath.Join(s.dir, sn.File))
-			delete(s.lastShot, sn.Camera)
+			if l, ok := s.lastShot[sn.Camera]; ok && l.File == sn.File {
+				delete(s.lastShot, sn.Camera)
+			}
 			s.total -= int64(sn.Size)
 			n++
 		}

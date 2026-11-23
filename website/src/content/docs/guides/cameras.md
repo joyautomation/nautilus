@@ -162,9 +162,9 @@ camera-snapshots:        # optional: how long, how many, how much
 - **Only the controller that leads** captures. After a takeover, pictures taken
   by the previous leader stay on its box, not on the new leader's.
 - **A flood shares a picture.** An alarm that activates within five seconds of
-  the camera's last picture is attached to that picture instead of fetching
-  another. At most two captures run at once, and a capture that cannot start is
-  skipped and logged.
+  the camera's last picture, or while a picture of that camera is being fetched,
+  is attached to that picture instead of fetching another. At most two captures run at once, and a capture of another camera that finds both
+  places taken is skipped and journalled as failed ("captures are busy").
 - **Each capture is journalled**, by the system, as `camera.snapshot` (the
   camera, the alarm and its occurrence, the file and its size, or why it failed).
 - **No picture leaves the controller in a page.** Pictures are never put in an
@@ -184,6 +184,10 @@ These are pictures of people, so they are bounded in time as well as in space:
   failed, and a line is logged) while less than 5% of the filesystem, or 256 MB,
   is free. Pictures never take the space the retained state and the
   operator-intent log need.
+
+On a small state filesystem (256 MB or less) the floor is always reached, so no
+picture is ever kept there: the journal says why (`camera.snapshot`, failed, "nearly
+full"), and the fix is a larger filesystem or no `snapshot-on-alarm`.
 
 They live in `snapshots/` of the controller's state directory (mode 0700, the
 files 0600), under names the controller makes. To drop them sooner:

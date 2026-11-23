@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -238,5 +239,97 @@ func TestNoPicturesAreKeptWhileTheDiskIsNearlyFull(t *testing.T) {
 	}
 	if !said || len(st.ForOccurrence("occ-full")) != 0 {
 		t.Errorf("under the floor: journalled %v, pictures %d", said, len(st.ForOccurrence("occ-full")))
+	}
+}
+
+// A real flood: many activations arrive while the first fetch is still running.
+// Every one of them ends up with the picture (one fetch), none is skipped.
+func TestAFloodThatArrivesWhileTheFirstFetchRunsAllGetThePicture(t *testing.T) {
+	var hits atomic.Int64
+	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		time.Sleep(400 * time.Millisecond)
+		w.Write(camJPEG(t))
+	}))
+	defer back.Close()
+	st := snapDir(t, nil)
+	srv, _, co := snapServer(t, back.URL, st, nil)
+	n := co.AlarmNotifier()
+	now := time.Now().UnixMilli()
+	const flood = 12
+	for i := 0; i < flood; i++ {
+		n.Notify(context.Background(), active("PlantTrip", fmt.Sprintf("occ-%d", i), now+int64(i)))
+	}
+	for i := 0; i < flood; i++ {
+		waitSnaps(t, st, fmt.Sprintf("occ-%d", i), 1)
+	}
+	if hits.Load() != 1 || st.Len() != 1 {
+		t.Errorf("a flood of %d: the camera was asked %d times and %d pictures were kept, want 1 and 1", flood, hits.Load(), st.Len())
+	}
+	for _, e := range srv.audit.ring.Recent() {
+		if e.Action == "camera.snapshot" && e.Result == "error" {
+			t.Errorf("an activation in the flood was journalled as failed: %+v", e.Detail)
+		}
+	}
+}
+
+// With every capture place taken by other cameras, an activation is journalled
+// as skipped: not lost without a trace.
+func TestAnActivationThatFindsTheCapturePlacesBusyIsJournalled(t *testing.T) {
+	release := make(chan struct{})
+	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release; w.Write(camJPEG(t)) }))
+	defer back.Close()
+	st := snapDir(t, nil)
+	// let the two running captures finish before the temp directory goes
+	defer func() {
+		close(release)
+		for i := 0; i < 100 && st.Len() < 2; i++ {
+			time.Sleep(30 * time.Millisecond)
+		}
+	}()
+	co := &CameraOptions{
+		Cameras: []camera.Camera{
+			{ID: "c1", Asset: "E1", Kind: camera.KindSnapshot, URL: back.URL, SnapshotOnAlarm: true},
+			{ID: "c2", Asset: "E2", Kind: camera.KindSnapshot, URL: back.URL, SnapshotOnAlarm: true},
+			{ID: "c3", Asset: "E3", Kind: camera.KindSnapshot, URL: back.URL, SnapshotOnAlarm: true},
+		},
+		Fetcher: &camera.Fetcher{}, Snaps: st,
+		Equipment: func(id string) string { return id },
+	}
+	o := Options{}
+	co.Install(&o)
+	srv, _, _ := patServerSettings(t, newTestRuntime(t), o, camSettings())
+	srv.Handler()
+	n := co.AlarmNotifier()
+	now := time.Now().UnixMilli()
+	for i, id := range []string{"E1", "E2", "E3"} {
+		n.Notify(context.Background(), active(id, "occ-"+id, now+int64(i)))
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	skipped := false
+	for time.Now().Before(deadline) && !skipped {
+		for _, e := range srv.audit.ring.Recent() {
+			if e.Action == "camera.snapshot" && e.Result == "error" && strings.Contains(fmt.Sprint(e.Detail["error"]), "busy") && e.Target == "c3" {
+				skipped = true
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !skipped {
+		t.Error("the third camera's activation, with both capture places taken, is not journalled")
+	}
+}
+
+func TestPurgeRefusesDaysOutOfRange(t *testing.T) {
+	st := snapDir(t, nil)
+	srv, toks, _ := snapServer(t, "http://127.0.0.1:1/x", st, nil)
+	eng := bearer(toks["akhan"])
+	for _, body := range []string{`{"olderThanDays":106752}`, `{"olderThanDays":-3}`, `{"olderThanDays":3651}`} {
+		if rec := call(t, srv, "POST", "/api/camera-snapshots/purge", body, eng); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d, want 400", body, rec.Code)
+		}
+	}
+	if rec := call(t, srv, "POST", "/api/camera-snapshots/purge", `{"olderThanDays":30}`, eng); rec.Code != 200 {
+		t.Errorf("a month: %d", rec.Code)
 	}
 }

@@ -163,10 +163,12 @@ claims:
       - go ./server TestAnAlarmActivationKeepsTheStillOfTheCamerasThatWatchItsEquipment
       - go ./server TestAnAlarmFloodSharesAPictureAndAStandbyKeepsNone
       - go ./server TestNoPicturesAreKeptWhileTheDiskIsNearlyFull
+      - go ./server TestAFloodThatArrivesWhileTheFirstFetchRunsAllGetThePicture
+      - go ./server TestAnActivationThatFindsTheCapturePlacesBusyIsJournalled
     note: >-
       The capture is exercised through the notifier the alarm engine calls, with
       events made by the test; the engine's own delivery to it is the existing
-      Notifier path. The two-capture bound is not itself tested.
+      Notifier path.
 
   - id: CAM-012
     claim: >-
@@ -185,6 +187,8 @@ claims:
       - go ./camera TestSnapshotsNeverFillTheFilesystem
       - go ./camera TestPurgeDropsPicturesAndTheirIndexRows
       - go ./camera TestAFloodSharesOnePictureAndEachAlarmFindsIt
+      - go ./camera TestSharedPicturesKeepEveryOccurrenceAcrossARestart
+      - go ./camera TestTheByteBoundNeverTrimsEverythingAndASaveSaysWhenItDidNotKeep
 
   - id: CAM-013
     claim: >-
@@ -195,6 +199,7 @@ claims:
     source: "#how-long-they-are-kept"
     tests:
       - go ./server TestKeptPicturesNeedThePermissionAndPurgeIsAudited
+      - go ./server TestPurgeRefusesDaysOutOfRange
       - go ./cmd/naut TestCameraPurgeCommand
 
   - id: CAM-014

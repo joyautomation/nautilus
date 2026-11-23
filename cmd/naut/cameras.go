@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/oncall"
@@ -80,17 +81,27 @@ func cameraOptions(proj *project.Project, dir string, rt *runtime.Runtime, leads
 			} else {
 				co.Snaps, co.Leads = st, leads
 				closeFn = func() { st.Close() }
+				// alarm id -> equipment, read from the project's definitions when
+				// an alarm first needs it and again a minute later (or at once if the
+				// first read failed or found nothing): never fixed by one failure
+				var mu sync.Mutex
 				var eq map[string]string
-				var once sync.Once
+				var built time.Time
 				co.Equipment = func(id string) string {
-					once.Do(func() {
-						eq = map[string]string{}
+					mu.Lock()
+					defer mu.Unlock()
+					if eq == nil || len(eq) == 0 || time.Since(built) > time.Minute {
+						m := map[string]string{}
 						if defs, err := proj.AlarmDefs(rt); err == nil {
 							for _, d := range defs {
-								eq[d.ID] = d.Equipment
+								m[d.ID] = d.Equipment
 							}
 						}
-					})
+						if len(m) > 0 || eq == nil {
+							eq = m
+						}
+						built = time.Now()
+					}
 					return eq[id]
 				}
 			}

@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/camera"
@@ -62,12 +63,16 @@ type CameraOptions struct {
 	Leads     func() bool
 	snapSem   chan struct{}
 	semOnce   sync.Once
+	inflight  map[string][]alarm.Event
 	lowWarned atomic.Bool
 	api       *cameraAPI
 }
 
 // Install adds the cameras to the server's options: its routes.
 func (co *CameraOptions) Install(o *Options) {
+	if co.Fetcher == nil {
+		co.Fetcher = &camera.Fetcher{}
+	}
 	o.Mounts = append(o.Mounts, co.mount)
 	o.ShownPermissions = append(o.ShownPermissions, auth.Camera)
 }
@@ -89,11 +94,6 @@ func (co *CameraOptions) mount(s *Server, mux *http.ServeMux) {
 	if co.snaps == nil {
 		co.snaps = map[string]*snapCache{}
 	}
-	co.mu.Unlock()
-	if co.Fetcher == nil {
-		co.Fetcher = &camera.Fetcher{}
-	}
-	co.mu.Lock()
 	co.api = a
 	co.mu.Unlock()
 	a.mountSnaps(mux)

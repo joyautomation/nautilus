@@ -71,63 +71,121 @@ func (n camSnapNotifier) Notify(_ context.Context, ev alarm.Event) error {
 		if !want {
 			continue
 		}
-		co.semOnce.Do(func() { co.snapSem = make(chan struct{}, snapParallel) })
-		select {
-		case co.snapSem <- struct{}{}:
-			go func(c camera.Camera) {
-				defer func() { <-co.snapSem }()
-				co.capture(c, ev)
-			}(c)
-		default:
-			slog.Warn("camera: a snapshot for an alarm was skipped: captures are busy", "camera", c.ID, "alarm", ev.ID)
-		}
+		co.want(c, ev)
 	}
 	return nil
 }
 
-// capture keeps camera c's still for the alarm event, sharing a picture the
-// camera took within the window.
-func (co *CameraOptions) capture(c camera.Camera, ev alarm.Event) {
+// want asks for camera c's picture for ev. A picture the camera took within the
+// window is shared at once (a flood costs no fetch); a fetch already running for
+// the camera takes the event along (it is attached when the picture lands); only
+// a new fetch needs one of the two capture places, and an event that finds them
+// all busy is journalled as skipped, not lost without a trace.
+func (co *CameraOptions) want(c camera.Camera, ev alarm.Event) {
+	if sn, ok := co.Snaps.Recent(c.ID, ev.TS, snapWindowMs); ok {
+		co.attach(c, ev, sn)
+		return
+	}
+	co.mu.Lock()
+	if co.inflight == nil {
+		co.inflight = map[string][]alarm.Event{}
+	}
+	if q, running := co.inflight[c.ID]; running {
+		co.inflight[c.ID] = append(q, ev)
+		co.mu.Unlock()
+		return
+	}
+	co.semOnce.Do(func() { co.snapSem = make(chan struct{}, snapParallel) })
+	select {
+	case co.snapSem <- struct{}{}:
+		co.inflight[c.ID] = []alarm.Event{ev}
+		co.mu.Unlock()
+		go func() {
+			defer func() { <-co.snapSem }()
+			co.capture(c)
+		}()
+	default:
+		co.mu.Unlock()
+		slog.Warn("camera: an alarm picture was skipped: captures are busy", "camera", c.ID, "alarm", ev.ID)
+		co.record(c, ev, audit.ResultError, map[string]any{"error": "captures are busy: no picture was taken for this activation"})
+	}
+}
+
+// record journals a capture's outcome by the system.
+func (co *CameraOptions) record(c camera.Camera, ev alarm.Event, result string, d map[string]any) {
 	co.mu.Lock()
 	api := co.api
 	co.mu.Unlock()
-	if co.Fetcher == nil || api == nil {
+	if api == nil {
 		slog.Warn("camera: an alarm picture was skipped: the server is not up yet", "camera", c.ID, "alarm", ev.ID)
 		return
 	}
-	rec := func(result string, d map[string]any) {
-		d["asset"] = c.Asset
-		d["alarm"] = ev.ID
-		d["occurrence"] = ev.Occurrence
-		api.s.audit.record(audit.Entry{Action: "camera.snapshot", Target: c.ID, User: "system", Source: audit.SourceSystem, Result: result, Detail: d})
+	d["asset"] = c.Asset
+	d["alarm"] = ev.ID
+	d["occurrence"] = ev.Occurrence
+	api.s.audit.record(audit.Entry{Action: "camera.snapshot", Target: c.ID, User: "system", Source: audit.SourceSystem, Result: result, Detail: d})
+}
+
+// attach shares picture sn with the event's occurrence.
+func (co *CameraOptions) attach(c camera.Camera, ev alarm.Event, sn camera.Snap) {
+	if err := co.Snaps.Attach(sn, ev.ID, ev.Occurrence); err != nil {
+		co.record(c, ev, audit.ResultError, map[string]any{"error": err.Error()})
+		return
 	}
-	if sn, ok := co.Snaps.Recent(c.ID, ev.TS, snapWindowMs); ok {
-		if err := co.Snaps.Attach(sn, ev.ID, ev.Occurrence); err != nil {
-			rec(audit.ResultError, map[string]any{"error": err.Error()})
-			return
+	co.record(c, ev, audit.ResultOK, map[string]any{"file": sn.File, "shared": true})
+}
+
+// capture fetches and keeps camera c's still for the event that started it, then
+// shares the picture with every event that arrived while it ran.
+func (co *CameraOptions) capture(c camera.Camera) {
+	co.mu.Lock()
+	evs := co.inflight[c.ID]
+	co.mu.Unlock()
+	finish := func() []alarm.Event {
+		co.mu.Lock()
+		defer co.mu.Unlock()
+		more := co.inflight[c.ID]
+		delete(co.inflight, c.ID)
+		return more
+	}
+	if len(evs) == 0 {
+		finish()
+		return
+	}
+	first := evs[0]
+	fail := func(err error) {
+		for _, ev := range finish() {
+			co.record(c, ev, audit.ResultError, map[string]any{"error": err.Error()})
 		}
-		rec(audit.ResultOK, map[string]any{"file": sn.File, "shared": true})
+	}
+	if co.Fetcher == nil {
+		fail(errors.New("no camera fetcher"))
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), snapTimeout)
 	defer cancel()
 	b, err := co.Fetcher.Snapshot(ctx, c)
 	if err != nil {
-		rec(audit.ResultError, map[string]any{"error": err.Error()})
+		fail(err)
 		return
 	}
-	sn, err := co.Snaps.Save(ev.TS, c.ID, ev.ID, ev.Occurrence, b)
+	sn, err := co.Snaps.Save(first.TS, c.ID, first.ID, first.Occurrence, b)
 	if err != nil {
 		if errors.Is(err, camera.ErrLowSpace) {
 			if !co.lowWarned.Swap(true) {
 				slog.Warn("camera: the state filesystem is nearly full: alarm pictures are no longer kept until space returns")
 			}
 		}
-		rec(audit.ResultError, map[string]any{"error": err.Error()})
+		fail(err)
 		return
 	}
 	co.lowWarned.Store(false)
-	rec(audit.ResultOK, map[string]any{"file": sn.File, "bytes": sn.Size})
+	// the picture is in: the first event owns it, the others that waited share it
+	all := finish()
+	co.record(c, first, audit.ResultOK, map[string]any{"file": sn.File, "bytes": sn.Size})
+	for _, ev := range all[1:] {
+		co.attach(c, ev, sn)
+	}
 }
 
 func (a *cameraAPI) mountSnaps(mux *http.ServeMux) {
@@ -177,7 +235,14 @@ func (a *cameraAPI) snapFile(w http.ResponseWriter, r *http.Request) {
 func (a *cameraAPI) purgeTarget(r *http.Request, body []byte) auditTarget {
 	var req purgeRequest
 	_ = json.Unmarshal(body, &req)
-	return auditTarget{target: "camera-snapshots", detail: map[string]any{"all": req.All, "olderThanDays": req.OlderThanDays}}
+	return auditTarget{target: "camera-snapshots", detail: map[string]any{"all": req.All, "olderThanDays": req.OlderThanDays},
+		answered: func(b []byte) any {
+			var r struct {
+				Purged int `json:"purged"`
+			}
+			_ = json.Unmarshal(b, &r)
+			return map[string]any{"purged": r.Purged}
+		}}
 }
 
 type purgeRequest struct {
@@ -191,6 +256,10 @@ func (a *cameraAPI) snapPurge(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "the body is JSON: {\"all\": true} or {\"olderThanDays\": N}"})
+		return
+	}
+	if req.OlderThanDays < 0 || req.OlderThanDays > 3650 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "olderThanDays is between 1 and 3650"})
 		return
 	}
 	if req.All == (req.OlderThanDays > 0) {
