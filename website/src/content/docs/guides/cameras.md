@@ -12,7 +12,7 @@ camera on any page.
 This page describes virtual cameras, JPEG snapshot URLs, motion-JPEG streams,
 RTSP cameras (live H.264 video as HLS) and the pictures kept when an alarm
 activates, and ONVIF cameras (their stream and snapshot addresses found from the
-device). Pan and tilt is a later step and is not built yet.
+device) and pan and tilt for them.
 
 ## The manifest
 
@@ -282,6 +282,43 @@ What a device answers is data, not an instruction:
   shown trimmed and with control characters removed. The address is asked once and kept
   for ten minutes; a device that failed is not asked again for five seconds.
 
+### Pan, tilt and zoom
+
+`ptz: true` on an `onvif` row puts a pad under the camera's live video, for people
+who hold the **`ptz`** permission: the operator role and up, whole-controller (not
+scoped to an area), and **elevated** like the other writes that change something
+physical. A browser sign-in is asked for its password once; every move inside the
+elevation window (`auth.elevation`, 15 minutes by default) then goes straight
+through. A person who may not view cameras may not move them either.
+
+A held button moves the camera and letting go stops it; a key press is a short nudge;
+the pad also lists the device's own presets. A move lasts at most ten seconds: the
+controller tells the device that limit and sends a stop itself when it is up, so a
+closed tab or a lost link never leaves a camera moving, and a stop is also sent
+when the controller shuts down. The controller owns that stop whatever happens to the
+request: a move whose answer was lost, a failed preset sent after a move, and a stop
+that reaches the device before the move it was meant for (the late move is stopped
+again) all end with the camera stopped. Moves are limited to one at a time per camera
+(`429` "too fast" when sent faster than every tenth of a second).
+
+**A stop is a way back.** It needs no `ptz` permission and no fresh password: anyone
+who may see the camera may stop it, because a stop must work when the elevation window
+has lapsed under a moving camera. It is journalled as `camera.ptz-stop`. A controller with
+no `auth:` block lets any same-origin page (or whoever holds the token) move and stop
+cameras, as it lets them write tags.
+
+Each request is journalled as `camera.ptz` with the camera and what was asked
+(`move` with its speeds and length, or `preset`; a stop is `camera.ptz-stop`), who asked, and how the
+person proved it. A device that refuses (a camera with a wrong profile, or one that
+does not move) answers with its own reason, trimmed.
+
+```
+GET  /api/cameras/{id}/ptz    the device's presets: {"presets": [{"token", "name"}]}
+POST /api/cameras/{id}/ptz    {"action": "move", "x": 0.5, "y": 0, "zoom": 0, "ms": 500}
+                              {"action": "preset", "preset": "<token from the list>"}
+POST /api/cameras/{id}/ptz/stop                                  (no body)
+```
+
 ### Finding ONVIF cameras on the network
 
 ```
@@ -365,8 +402,7 @@ token always counts as fresh), and is journalled as `camera.snapshot-purge`.
 
 ## What is not here yet
 
-- `hls` cameras: live video of that kind, pan and tilt, and finding ONVIF cameras
-  on the network (`naut camera discover`) are later steps. An `hls` camera shows a still
+- `hls` cameras: live video of that kind is a later step. An `hls` camera shows a still
   if a `snapshot-url` is given.
 - The playground draws no camera: the camera relay is controller-only code and
   is not in the browser build.

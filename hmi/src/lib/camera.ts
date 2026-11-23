@@ -26,6 +26,8 @@ export interface Camera {
 	live: boolean;
 	/** The live stream is HLS (an RTSP camera): play it with `playHls` in a <video>, not as an <img>. */
 	hls: boolean;
+	/** The camera pans, tilts and zooms (ONVIF): show the pad to a person who holds the `ptz` permission. */
+	ptz: boolean;
 	/** A still exists. */
 	snapshot: boolean;
 	/** How many are watching live now. */
@@ -66,6 +68,7 @@ function normalize(j: any): Camera | null {
 		view: j.view !== false,
 		live: j.live === true,
 		hls: j.hls === true,
+		ptz: j.ptz === true,
 		snapshot: j.snapshot === true,
 		watching: n(j.watching, 0),
 		bps: n(j.bps, 0)
@@ -115,6 +118,61 @@ export class CameraClient {
 		return `${this.#url}/${encodeURIComponent(id)}/hls`;
 	}
 
+	/** A camera's presets (the device's own, names cleaned by the controller); none on any failure. */
+	async ptzPresets(id: string): Promise<PtzPreset[]> {
+		try {
+			const res = await this.#fetch(`${this.#url}/${encodeURIComponent(id)}/ptz`, { headers: this.#headers() });
+			if (!res.ok) return [];
+			const j: any = await res.json();
+			if (!Array.isArray(j?.presets)) return [];
+			return (j.presets as any[])
+				.filter((p) => p && typeof p.token === 'string' && p.token)
+				.map((p) => ({ token: p.token as string, name: typeof p.name === 'string' && p.name ? p.name : p.token }));
+		} catch {
+			return [];
+		}
+	}
+
+	/**
+	 * Move, stop or go to a preset. It goes through the kit's fetch, so an elevated
+	 * permission asks for the password once and the move is sent again; the answer is
+	 * the controller's own words when it refuses.
+	 */
+	async ptz(id: string, body: PtzCommand, signal?: AbortSignal): Promise<PtzResult> {
+		return this.#post(`${this.#url}/${encodeURIComponent(id)}/ptz`, JSON.stringify(body), signal);
+	}
+
+	/**
+	 * Stop a camera. A way back: it needs no ptz permission and no fresh password, and
+	 * it is sent with `keepalive`, so it still goes when the page is closing.
+	 */
+	async ptzStop(id: string): Promise<PtzResult> {
+		return this.#post(`${this.#url}/${encodeURIComponent(id)}/ptz/stop`, '', undefined, true);
+	}
+
+	async #post(url: string, body: string, signal?: AbortSignal, keepalive = false): Promise<PtzResult> {
+		try {
+			const res = await this.#fetch(url, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', ...this.#headers() },
+				body: body || undefined,
+				signal,
+				keepalive
+			});
+			if (res.ok) return { ok: true, status: res.status, message: '' };
+			let message = '';
+			try {
+				const j: any = JSON.parse(await res.text());
+				if (j && typeof j.error === 'string') message = j.error;
+			} catch {
+				// not JSON
+			}
+			return { ok: false, status: res.status, message: message || `The camera did not answer (${res.status}).` };
+		} catch {
+			return { ok: false, status: 0, message: 'The controller did not answer.' };
+		}
+	}
+
 	/**
 	 * An <img> cannot show a JSON error body, so ask the same URL once and read
 	 * it. The request is aborted so a stream that does open is not kept open.
@@ -144,6 +202,53 @@ export class CameraClient {
 	async explain(url: string): Promise<string> {
 		return (await this.describe(url)).message;
 	}
+}
+
+export interface PtzPreset {
+	token: string;
+	name: string;
+}
+
+export type PtzCommand = { action: 'move'; x: number; y: number; zoom: number; ms: number } | { action: 'preset'; preset: string };
+
+export interface PtzResult {
+	ok: boolean;
+	status: number;
+	message: string;
+}
+
+/** How long a held button moves the camera at most (the controller's limit is 10 s); the browser sends a stop when it is let go. */
+export const PTZ_HOLD_MS = 10_000;
+/** A nudge: a key press, or a tap. */
+export const PTZ_NUDGE_MS = 400;
+
+export type PtzDirection = 'up' | 'down' | 'left' | 'right' | 'in' | 'out';
+
+/** A direction as the controller's velocity (-1 to 1 for each of pan, tilt and zoom). */
+export function ptzMove(dir: PtzDirection, ms: number): PtzCommand {
+	const speed = 0.5;
+	const v = { x: 0, y: 0, zoom: 0 };
+	switch (dir) {
+		case 'left':
+			v.x = -speed;
+			break;
+		case 'right':
+			v.x = speed;
+			break;
+		case 'up':
+			v.y = speed;
+			break;
+		case 'down':
+			v.y = -speed;
+			break;
+		case 'in':
+			v.zoom = speed;
+			break;
+		case 'out':
+			v.zoom = -speed;
+			break;
+	}
+	return { action: 'move', ...v, ms: Math.max(100, Math.min(PTZ_HOLD_MS, Math.round(ms))) };
 }
 
 /** Bits per second, for people: 0, 1.5 kbit/s, 2.4 Mbit/s. */

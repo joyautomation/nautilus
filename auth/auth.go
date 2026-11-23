@@ -51,6 +51,10 @@ const (
 	// that can read, so a project without auth: and the existing role setups
 	// keep working; a custom role's deny: takes it away.
 	Camera = "camera"
+	// PTZ moves a camera (#724): a write to the world, whole-controller like
+	// Camera and elevated like the other writes that change something physical.
+	// One elevation covers a session of moves (auth.elevation, 15 minutes by default).
+	PTZ = "ptz"
 	// Redundancy is the redundant pair's operator commands: clearing a
 	// duplicate mark, commissioning and re-commissioning (#710, #1029
 	// 3c-3). Safety-critical: who may tell the pair which process is the
@@ -59,7 +63,7 @@ const (
 )
 
 // Permissions lists every permission, in the order /api/me reports them.
-var Permissions = []string{Read, Write, Ack, Shelve, OutOfService, Note, Substitute, Force, SFC, Edit, Activate, Deploy, Config, Audit, Users, Override, Redundancy, Checkout, Signoff, Camera}
+var Permissions = []string{Read, Write, Ack, Shelve, OutOfService, Note, Substitute, Force, SFC, Edit, Activate, Deploy, Config, Audit, Users, Override, Redundancy, Checkout, Signoff, Camera, PTZ}
 
 // areaScoped are the permissions an area limits to its tags. The rest
 // apply to the whole controller, whatever areas a grant names.
@@ -73,7 +77,7 @@ func AreaScoped(perm string) bool { return areaScoped[perm] }
 // the program, the I/O, a forced value, who may do what, or which process
 // a redundant pair counts as its member. A token always
 // counts as fresh. In /api/me's order.
-var ElevatedPermissions = []string{OutOfService, Force, Edit, Activate, Deploy, Config, Users, Override, Redundancy, Signoff}
+var ElevatedPermissions = []string{OutOfService, Force, Edit, Activate, Deploy, Config, Users, Override, Redundancy, Signoff, PTZ}
 
 // Elevated reports whether perm is one of the ElevatedPermissions.
 func Elevated(perm string) bool { return slices.Contains(ElevatedPermissions, perm) }
@@ -100,7 +104,7 @@ var builtins = []struct {
 	adds []string
 }{
 	{Viewer, []string{Read, Camera}},
-	{Operator, []string{Write, Ack, SFC, Note}},
+	{Operator, []string{Write, Ack, SFC, Note, PTZ}},
 	{Supervisor, []string{Shelve, OutOfService, Substitute, Audit, Signoff}},
 	{Engineer, []string{Force, Edit, Activate, Deploy, Config, Checkout}},
 	{Administrator, []string{Users, Override, Redundancy}},

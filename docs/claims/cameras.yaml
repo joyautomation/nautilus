@@ -407,6 +407,44 @@ claims:
       (pending: a bench device, one that asks HTTP basic on its snapshot port,
       a Profile-T device).
 
+  - id: CAM-023
+    claim: >-
+      A camera marked ptz: true is moved by people who hold the ptz permission
+      (whole-controller, elevated, the operator role and up, and only with the
+      camera permission too): a move is bounded to ten seconds and told to the
+      device with the same limit, the controller owns its stop (when the time is
+      up, when the move's answer was lost, after a failed preset, when a stop
+      overtook the move, and at shutdown), a stop needs only the camera
+      permission and no fresh password and never waits for a move or is refused
+      for being quick, moves are one at a time per camera, a preset is gone to
+      only if the device lists it, a refused request never reaches the camera,
+      and every request is journalled as camera.ptz (a stop as camera.ptz-stop).
+    source: "#pan-tilt-and-zoom"
+    tests:
+      - go ./camera TestAMoveIsBoundedToldToTheDeviceAndStoppedOnRequest
+      - go ./camera TestPresetsAreTheDevicesAndOnlyTheDevicesAreGoneTo
+      - go ./camera TestACameraThatIsNotMarkedPTZOrIsNotONVIFCannotBeMoved
+      - go ./server TestACameraIsMovedBoundedStoppedAndJournalled
+      - go ./server TestPTZRefusesWhatItShouldWithoutAskingTheCamera
+      - go ./server TestMovesCannotBeSentFasterThanOneAtATime
+      - go ./server TestAStopNeedsNeitherThePTZPermissionNorAFreshPassword
+      - go ./server TestAViewerMayStopACameraAndMayNotMoveIt
+      - go ./server TestAFailedRequestNeverCancelsTheStopOfAMoveAlreadyRunning
+      - go ./server TestAMoveWhoseAnswerWasLostIsStoppedAnyway
+      - go ./server TestAStopThatOvertakesItsMoveIsNotUndoneByIt
+    note: >-
+      Run against a fake device only; pending: a real pan and tilt camera.
+
+  - id: CAM-024
+    claim: >-
+      One elevation covers a session of moves: a browser sign-in whose password
+      is fresh pans again and again inside auth.elevation without being asked,
+      and is asked (401 with elevate) once it lapses, and nothing reaches the
+      camera then.
+    source: "#pan-tilt-and-zoom"
+    tests:
+      - go ./server TestOneElevationCoversASessionOfMoves
+      - go ./auth TestElevatedPermissions
   - id: CAM-025
     claim: >-
       naut camera discover probes the local network for ONVIF cameras and lists

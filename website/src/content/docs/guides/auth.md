@@ -62,7 +62,7 @@ Each built-in role adds to the one before:
 | Role | Adds |
 |---|---|
 | `viewer` | `read`, `camera` (viewing the plant's [cameras](/guides/cameras/): whole-controller, not scoped to an area, and held by every built-in role that reads) |
-| `operator` | `write` (tag writes), `ack` (alarms), `sfc` (step and transition commands), `note` ([operator notes and the shift log](/guides/notes/)) |
+| `operator` | `write` (tag writes), `ack` (alarms), `sfc` (step and transition commands), `note` ([operator notes and the shift log](/guides/notes/)), `ptz` (moving a [camera](/guides/cameras/) that pans and tilts: whole-controller, and [elevated](#elevation)) |
 | `supervisor` | `shelve`, `out-of-service` (taking equipment's alarms out of service), `substitute`, `audit` (reading the journal), `signoff` (sealing an [I/O checkout](/guides/checkout/) run: a fresh password, and by default someone who recorded none of its results) |
 | `engineer` | `force`, `edit` (online edits, rollbacks), `activate`, `deploy` (a Logix or Siemens download), `config` (live I/O configuration, and [IO-Link](/guides/io-link/) parameter writes, journalled as `param.write` on `<port device>/<variable>`), `checkout` (recording the results of an [I/O checkout](/guides/checkout/), per area; forcing an output there needs `force` too) |
 | `administrator` | `users`, `override`, `redundancy` (the redundant pair's operator commands: [clearing a duplicate mark](/guides/redundancy/)) |
@@ -208,7 +208,7 @@ The hops, for a proxy or firewall rule:
 
 ## Elevation
 
-Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`out-of-service`, `force`, `edit`, `activate`, `deploy`, `config`, `users` and `override`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor. Taking equipment out of service hides its alarms for up to a week; putting it back needs only `ack` (over any one of its alarms) and no fresh password.
+Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`out-of-service`, `force`, `edit`, `activate`, `deploy`, `config`, `users`, `override` and, on a project with cameras, `ptz`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor. Taking equipment out of service hides its alarms for up to a week; putting it back needs only `ack` (over any one of its alarms) and no fresh password.
 
 - **The window.** The password counts for `auth.elevation` (15 minutes by default, 1m to 12h) after the user last entered it, at sign-in or at re-authentication. Use doesn't extend it. It never outlasts the session; an `elevation` as long as `session` means the sign-in counts for the whole session.
 - **Past it**, an elevated action is refused with `401` and `{"error": …, "elevate": true}`, and nothing is done. The error tells the user to confirm their password. An HMI asks for it (`POST /api/elevate`) and sends the action again.

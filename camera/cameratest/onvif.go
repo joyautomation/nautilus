@@ -25,9 +25,12 @@ type ONVIFOpts struct {
 	User, Pass string // when set, requests must carry a good WS-Security digest (or, with HTTPAuth, basic)
 	HTTPAuth   bool   // ask for HTTP basic instead of WS-Security
 	Profiles   []ONVIFProfile
-	Stream     string // the stream URI the device hands out (default rtsp://10.9.9.9:554/live: a host the controller must replace)
-	Snapshot   string // "" none; the device hands it out as given
-	Skew       time.Duration
+	Stream     string      // the stream URI the device hands out (default rtsp://10.9.9.9:554/live: a host the controller must replace)
+	Snapshot   string      // "" none; the device hands it out as given
+	Presets    [][2]string // token, name
+	// MoveDelay makes ContinuousMove slow to answer (the move itself is recorded when it arrives).
+	MoveDelay time.Duration
+	Skew      time.Duration
 	// Misbehave: "fault", "huge", "garbage", "no-media", "bad-media-scheme", "bad-stream-scheme", "https-downgrade", "snapshot-slow", "userinfo", "evil-token", "slow", "doctype"
 	Misbehave string
 }
@@ -40,6 +43,8 @@ type ONVIF struct {
 	mu  sync.Mutex
 	// Calls is each operation asked, in order ("GetProfiles", ...).
 	calls []string
+	// moves records what the PTZ service was told: "move x y z timeout", "stop", "goto token".
+	moves []string
 	// Rejected counts requests refused for bad credentials.
 	rejected int
 	// Tokens is the Username and digest of each signed request, for tests that check them.
@@ -73,6 +78,15 @@ func (d *ONVIF) Calls() []string {
 	defer d.mu.Unlock()
 	return append([]string(nil), d.calls...)
 }
+
+// Moves returns what the PTZ service was told, in order.
+func (d *ONVIF) Moves() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.moves...)
+}
+
+func (d *ONVIF) move(s string) { d.mu.Lock(); d.moves = append(d.moves, s); d.mu.Unlock() }
 
 // Close stops the device, as if it lost power.
 func (d *ONVIF) Close() { d.srv.CloseClientConnections(); d.srv.Close() }
@@ -212,6 +226,31 @@ func (d *ONVIF) answer(op, body string) string {
 		// which profile was asked for is in the request: a camera answers a different address per profile
 		tok := between(body, "ProfileToken>", "<")
 		return head + `<trt:GetStreamUriResponse xmlns:trt="x" xmlns:tt="y"><trt:MediaUri><tt:Uri>` + strings.Replace(uri, "/live", "/live/"+tok, 1) + `</tt:Uri></trt:MediaUri></trt:GetStreamUriResponse>` + tail
+	case "ContinuousMove":
+		if d.o.MoveDelay > 0 {
+			time.Sleep(d.o.MoveDelay)
+		}
+		if d.o.Misbehave == "move-500" {
+			d.move("move-lost")
+			return "<html>oops"
+		}
+		pt := between(body, "PanTilt ", "/>")
+		zm := between(body, "Zoom x=\"", "\"")
+		d.move("move " + strings.NewReplacer(`x="`, "", `" y="`, " ", `"`, "").Replace(strings.TrimSpace(pt)) + " " + zm + " " + between(body, "Timeout>", "<"))
+		return head + `<tptz:ContinuousMoveResponse xmlns:tptz="x"/>` + tail
+	case "Stop":
+		d.move("stop")
+		return head + `<tptz:StopResponse xmlns:tptz="x"/>` + tail
+	case "GetPresets":
+		var b strings.Builder
+		for _, p := range d.o.Presets {
+			esc := strings.NewReplacer("&", "&amp;", `"`, "&quot;", "<", "&lt;", ">", "&gt;")
+			fmt.Fprintf(&b, `<tptz:Preset token="%s"><tt:Name>%s</tt:Name></tptz:Preset>`, esc.Replace(p[0]), esc.Replace(p[1]))
+		}
+		return head + `<tptz:GetPresetsResponse xmlns:tptz="x" xmlns:tt="y">` + b.String() + `</tptz:GetPresetsResponse>` + tail
+	case "GotoPreset":
+		d.move("goto " + between(body, "PresetToken>", "<"))
+		return head + `<tptz:GotoPresetResponse xmlns:tptz="x"/>` + tail
 	case "GetSnapshotUri":
 		if d.o.Snapshot == "" {
 			return head + `<s:Fault><s:Code><s:Value>s:Receiver</s:Value></s:Code><s:Reason><s:Text>no snapshot</s:Text></s:Reason></s:Fault>` + tail

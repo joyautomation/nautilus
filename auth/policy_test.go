@@ -41,9 +41,9 @@ func TestBuiltInRoles(t *testing.T) {
 		// every built-in role that reads may view the cameras (#724): zero-config
 		// and existing role setups keep working
 		Viewer:        "read camera",
-		Operator:      "read write ack note sfc camera",
-		Supervisor:    "read write ack shelve out-of-service note substitute sfc audit signoff camera",
-		Engineer:      "read write ack shelve out-of-service note substitute force sfc edit activate deploy config audit checkout signoff camera",
+		Operator:      "read write ack note sfc camera ptz",
+		Supervisor:    "read write ack shelve out-of-service note substitute sfc audit signoff camera ptz",
+		Engineer:      "read write ack shelve out-of-service note substitute force sfc edit activate deploy config audit checkout signoff camera ptz",
 		Administrator: strings.Join(Permissions, " "),
 	}
 	for role, perms := range want {
@@ -216,7 +216,7 @@ func TestCanNormalisesTheTarget(t *testing.T) {
 func TestDescribe(t *testing.T) {
 	p := mustCompile(t, plant)
 	got := fmt.Sprint(p.Describe(User("pat")))
-	want := "{user:pat [lead-operator viewer] map[*:[read sfc camera] roasting:[write ack shelve note]] map[roasting:[rst_* burner_*]]}"
+	want := "{user:pat [lead-operator viewer] map[*:[read sfc camera ptz] roasting:[write ack shelve note]] map[roasting:[rst_* burner_*]]}"
 	if got != want {
 		t.Errorf("Describe(pat) = %s, want %s", got, want)
 	}
@@ -272,7 +272,7 @@ func TestAreaEdges(t *testing.T) {
 // substitutes, never ask for the password again. Taking equipment out of
 // service (#715) does: it hides a week of alarms.
 func TestElevatedPermissions(t *testing.T) {
-	want := map[string]bool{OutOfService: true, Force: true, Edit: true, Activate: true, Deploy: true, Config: true, Users: true, Override: true, Redundancy: true, Signoff: true}
+	want := map[string]bool{OutOfService: true, Force: true, Edit: true, Activate: true, Deploy: true, Config: true, Users: true, Override: true, Redundancy: true, Signoff: true, PTZ: true}
 	for _, p := range Permissions {
 		if Elevated(p) != want[p] {
 			t.Errorf("Elevated(%q) = %v, want %v", p, Elevated(p), want[p])
@@ -380,7 +380,7 @@ func TestCameraIsItsOwnWholeControllerPermission(t *testing.T) {
 	if !p.Can(User("blind"), Read, All).Allowed {
 		t.Error("denying camera took away read")
 	}
-	if AreaScoped(Camera) || Elevated(Camera) {
-		t.Error("camera must be whole-controller and not elevated")
+	if !Elevated(PTZ) || AreaScoped(PTZ) || AreaScoped(Camera) || Elevated(Camera) {
+		t.Error("camera must be whole-controller and not elevated; ptz whole-controller and elevated")
 	}
 }

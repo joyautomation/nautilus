@@ -51,6 +51,8 @@ var actionPerm = map[string]string{
 	"camera.view":           auth.Camera, // watching a camera live (#724)
 	"camera.snapshot-view":  auth.Camera, // looking at a picture kept for an alarm (#724)
 	"camera.snapshot-purge": PermConfig,  // dropping the pictures kept for alarms (#724)
+	"camera.ptz":            auth.PTZ,    // moving a camera (#724)
+	"camera.ptz-stop":       auth.Camera, // stopping one: a way back, for whoever may see it
 	"alarm.ack":             PermAck,
 	"alarm.shelve":          PermShelve,
 	"alarm.unshelve":        PermShelve,
@@ -713,12 +715,9 @@ func checkoutPermission(p string) bool { return p == auth.Checkout || p == auth.
 
 // elevatedNames is auth.ElevatedPermissions as this project shows them.
 func (s *Server) elevatedNames() []string {
-	if s.checkoutEnabled() {
-		return auth.ElevatedPermissions
-	}
 	out := make([]string, 0, len(auth.ElevatedPermissions))
 	for _, p := range auth.ElevatedPermissions {
-		if !checkoutPermission(p) {
+		if s.permissionShown(p) {
 			out = append(out, p)
 		}
 	}
@@ -733,7 +732,7 @@ func (s *Server) permissionShown(p string) bool {
 	switch {
 	case checkoutPermission(p):
 		return s.checkoutEnabled()
-	case p == auth.Camera:
+	case p == auth.Camera || p == auth.PTZ:
 		return s.shown[auth.Camera]
 	}
 	return true

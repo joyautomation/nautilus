@@ -67,6 +67,7 @@ type CameraOptions struct {
 	semOnce      sync.Once
 	inflight     map[string][]alarm.Event
 	snapSeen     map[string]time.Time
+	ptz          map[string]*ptzState
 	snapSwept    time.Time
 	hub          *camera.HLSHub
 	leaseMu      sync.Mutex
@@ -93,6 +94,7 @@ func (co *CameraOptions) Stop() {
 	if h != nil {
 		h.Stop()
 	}
+	co.stopMoves()
 }
 
 type cameraAPI struct {
@@ -122,6 +124,9 @@ func (co *CameraOptions) mount(s *Server, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/cameras", a.list)
 	mux.HandleFunc("GET /api/cameras/{id}/snapshot", a.snapshot)
 	mux.HandleFunc("GET /api/cameras/{id}/stream", a.stream)
+	mux.HandleFunc("GET /api/cameras/{id}/ptz", a.ptzPresets)
+	mux.Handle("POST /api/cameras/{id}/ptz", a.s.audited("camera.ptz", a.ptzTarget, a.ptz))
+	mux.Handle("POST /api/cameras/{id}/ptz/stop", a.s.audited("camera.ptz-stop", a.ptzStopTarget, a.ptzStop))
 }
 
 // cameraView is a camera as the browser is told of it: no address, no secret.
@@ -138,7 +143,10 @@ type cameraView struct {
 	Live bool `json:"live"`
 	// Hls says live video is HLS: play /api/cameras/{id}/hls/index.m3u8 with an HLS
 	// player, not motion-JPEG.
-	Hls      bool `json:"hls"`
+	Hls bool `json:"hls"`
+	// Ptz says the camera pans and tilts: the page shows its pad to a person who holds
+	// the ptz permission.
+	Ptz      bool `json:"ptz"`
 	Snapshot bool `json:"snapshot"`
 	Watching int  `json:"watching"`
 	// Bps is what the live relay is carrying now, for the page to show what a
@@ -174,7 +182,7 @@ func (a *cameraAPI) list(w http.ResponseWriter, r *http.Request) {
 	may := a.mayView(r)
 	for _, c := range a.co.Cameras {
 		v := cameraView{View: may, ID: c.ID, Label: c.Label, Asset: c.Asset, Kind: c.Kind, Interval: c.Interval(), MaxViewers: c.Viewers(),
-			Live: c.Live(), Hls: c.HLS(), Snapshot: c.HasSnapshot(), Watching: a.co.limit.Watching(c.ID)}
+			Live: c.Live(), Hls: c.HLS(), Ptz: c.PTZ && c.Kind == camera.KindONVIF, Snapshot: c.HasSnapshot(), Watching: a.co.limit.Watching(c.ID)}
 		if may && v.Watching > 0 {
 			v.Bps = a.meterOf(c.ID).BitsPerSecond()
 		}
