@@ -35,8 +35,11 @@ Usage: naut witness [flags]
                   $STATE_DIRECTORY, which systemd's StateDirectory= sets).
                   Never a temporary directory: a lost state is a new
                   incarnation, which the pair adopts only together.
-  --lease d       this witness's promise (default 2s). At least every
-                  pair's lease: a vote with a longer lease is refused.
+  --lease d       this witness's promise (default 1s). At least every
+                  pair's lease: a vote with a longer lease is refused,
+                  and the pair then runs without fault tolerance. A
+                  pair with its own redundancy.lease gives the witness
+                  the same --lease.
   --rebuild       start over a state file that can't be read: it is moved
                   aside and its pair gets a new incarnation (its log copy
                   is moved aside with it, and the pair's leader fills it

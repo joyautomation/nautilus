@@ -67,8 +67,12 @@ type cluster struct {
 	// monitor's own test.
 	fail func(format string, args ...any)
 	// lease is every member's: loopLease, unless a measurement sets
-	// another before the start.
-	lease time.Duration
+	// another before the start. leaseOf overrides it for one member (the
+	// witness's --lease, or one controller's manifest) at its next start.
+	lease   time.Duration
+	leaseOf map[quorum.NodeID]time.Duration
+	// evBy is every event, by the controller that raised it.
+	evBy map[quorum.NodeID][]Event
 	// votes is every vote request sent, as it left (faultRT).
 	votes []sentVote
 }
@@ -202,7 +206,7 @@ func (c *cluster) clientTLS(id quorum.NodeID) *tls.Config {
 
 func (c *cluster) startWitness() {
 	c.t.Helper()
-	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: c.lease})
+	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: c.leaseFor(WitnessID)})
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -234,12 +238,16 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 		peer = "a"
 	}
 	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
-		Lease: c.lease, StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
+		Lease: c.leaseFor(id), StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
 		SelfAPI: apiAddr(id), TLS: c.clientTLS(id),
 		client: &http.Client{Transport: &faultRT{c: c, from: id, base: c.transportFor(id)}},
 		OnEvent: func(ev Event) {
 			c.evMu.Lock()
 			c.evs = append(c.evs, ev)
+			if c.evBy == nil {
+				c.evBy = map[quorum.NodeID][]Event{}
+			}
+			c.evBy[id] = append(c.evBy[id], ev)
 			c.evMu.Unlock()
 		}})
 	if err != nil {
@@ -621,6 +629,26 @@ func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
 		}
 	}
 	return b.String() + detail.String()
+}
+
+// leaseFor is id's lease at its next start.
+func (c *cluster) leaseFor(id quorum.NodeID) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if d, ok := c.leaseOf[id]; ok {
+		return d
+	}
+	return c.lease
+}
+
+// setLease gives id a lease of its own from its next start.
+func (c *cluster) setLease(id quorum.NodeID, d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.leaseOf == nil {
+		c.leaseOf = map[quorum.NodeID]time.Duration{}
+	}
+	c.leaseOf[id] = d
 }
 
 func (c *cluster) startAll() {

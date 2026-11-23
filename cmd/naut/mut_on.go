@@ -62,6 +62,9 @@ import "os"
 //   - stream_file_floor_unseeded: the standby's floor is not seeded from its retain file's term (review);
 //   - stream_outlives_close: a closing member's stream handlers outlive it;
 //   - stream_persist_error_hidden: a standby whose retain file takes no image still says in sync (review);
+//   - lease_condition_dropped: a voter's lease refusal raises no condition (#710 1 s lease);
+//   - witness_lease_no_alarm: the witness refusing the pair's lease raises no system alarm;
+//   - lease_check_unwarned: naut check says nothing of a pair lease under 1 s;
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutNaut(name string) bool { return name == mutOn }

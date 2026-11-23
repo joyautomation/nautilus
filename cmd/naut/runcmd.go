@@ -348,16 +348,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// The audit journal's system alarm reads the server, which is built
 	// after the alarms (it serves them): srvRef is set once it exists.
 	var srvRef atomic.Pointer[server.Server]
-	sysAlarms := []project.SystemAlarm{auditAlarm(&srvRef)}
-	if proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
-		sysAlarms = append(sysAlarms, usersAlarm(&srvRef))
-	}
-	if proj.Alarms != nil && proj.Alarms.Channels != nil && proj.Alarms.Channels.Push != nil {
-		sysAlarms = append(sysAlarms, pushHeldAlarm(&srvRef))
-	}
-	if proj.Alarms != nil && proj.Alarms.Oncall.Inbound.Takes("sms") {
-		sysAlarms = append(sysAlarms, smsAckSuspendedAlarm(&srvRef))
-	}
+	sysAlarms := systemAlarms(proj, pair, &srvRef)
 	proj.PushSend = pushChannel(&srvRef)
 	alarmStateDir, err := openAlarmContacts(proj, dir, os.Getenv, os.Stderr, proj.Runtime.Coordinator != nil)
 	if err != nil {
@@ -937,6 +928,26 @@ func bindAPI(addr, dir string, redundant bool) (net.Listener, string, error) {
 // TimeoutStopSec=10, Kubernetes' 30 s grace period, systemd's default 90 s.
 const runStopTimeout = 5 * time.Second
 
+// systemAlarms are the alarms nautilus raises itself for proj, beside the
+// manifest's: read from the server srv will hold, and from the pair member
+// (nil outside a pair).
+func systemAlarms(proj *project.Project, pair *pairMember, srv *atomic.Pointer[server.Server]) []project.SystemAlarm {
+	sys := []project.SystemAlarm{auditAlarm(srv)}
+	if proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
+		sys = append(sys, usersAlarm(srv))
+	}
+	if proj.Alarms != nil && proj.Alarms.Channels != nil && proj.Alarms.Channels.Push != nil {
+		sys = append(sys, pushHeldAlarm(srv))
+	}
+	if proj.Alarms != nil && proj.Alarms.Oncall.Inbound.Takes("sms") {
+		sys = append(sys, smsAckSuspendedAlarm(srv))
+	}
+	if pair != nil && !mutNaut("witness_lease_no_alarm") {
+		sys = append(sys, witnessLeaseAlarm(pair))
+	}
+	return sys
+}
+
 // AuditAlarmID is the system alarm raised while the audit journal could
 // not be opened or cannot be written (#709, design §6 question 5).
 const AuditAlarmID = "nautilus.audit-journal"
@@ -1030,6 +1041,25 @@ func pushHeldAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 			s := srv.Load()
 			return s != nil && s.PushHeld() > 0
 		},
+	}
+}
+
+// WitnessLeaseAlarmID is the system alarm raised while the witness
+// refuses a pair member's votes for their lease (#710): the pair has no
+// fault tolerance left.
+const WitnessLeaseAlarmID = "nautilus.witness-lease"
+
+// witnessLeaseAlarm is raised while the witness refuses this controller's
+// lease (WitnessLeaseCondition), cleared once it takes it again.
+func witnessLeaseAlarm(m *pairMember) project.SystemAlarm {
+	return project.SystemAlarm{
+		Def: alarm.Def{
+			ID: WitnessLeaseAlarmID, Tag: "__nautilus.witness-lease",
+			Name:     "Redundancy: the witness refuses this pair's lease, so the pair has no fault tolerance (start the witness with this pair's --lease)",
+			Priority: alarm.High, Class: "system",
+			AckRequired: true, AutoClear: true,
+		},
+		Active: m.WitnessLeaseRefused,
 	}
 }
 

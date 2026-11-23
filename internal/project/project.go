@@ -470,7 +470,9 @@ func (p *Project) AuditJournal() (dir string, keep time.Duration) {
 type RedundancyConfig struct {
 	// Lease is the coordination.k8s.io Lease's name without peers:
 	// (default: the project name). With peers: it is the lease time
-	// (default 2s), a duration: a name there is refused.
+	// (default 1s), a duration: a name there is
+	// refused. A pair with a lease of its own gives its witness the same
+	// --lease: the witness refuses a lease longer than its own.
 	Lease string `yaml:"lease"`
 	// Peers names the pair's two controllers, a and b, by their peer
 	// listeners (host:port). Both controllers run the same file.
@@ -488,7 +490,7 @@ type RedundancyConfig struct {
 	// gate check and its send (design §3.4): the write gate closes their
 	// sum, the fence margin, before the lease ends, and every field write
 	// gets the lease left minus NetDelay as its deadline. Unset, both
-	// scale with the lease (50 ms and 20 ms at the default 2 s lease). Set,
+	// scale with the lease (50 ms and 20 ms at the default 1 s lease). Set,
 	// their sum must stay under a quarter of the lease. Pair only.
 	NetDelay   Duration `yaml:"net-delay"`
 	SendMargin Duration `yaml:"send-margin"`
@@ -612,8 +614,9 @@ const minStreamBudget = 10_000
 func (r *RedundancyConfig) Pair() bool { return r != nil && len(r.Peers) > 0 }
 
 // DefaultPairLease is a pair's lease time when the manifest names none
-// (design §2).
-const DefaultPairLease = 2 * time.Second
+// (design §2): 1 s (#710; it was 2 s). It equals quorum/node's
+// DefaultLease, the witness's default --lease (cmd/naut tests it).
+const DefaultPairLease = time.Second
 
 // Bounds on a pair's lease: shorter, and a vote round with its fsync
 // (deadline lease/8) does not fit; longer, and a takeover waits minutes.

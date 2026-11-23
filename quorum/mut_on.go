@@ -426,6 +426,12 @@ var Mutations = []string{
 	"stream_file_floor_unseeded",        // naut: the standby's floor is not seeded from its retain file's term (#710 S1b review)
 	"stream_persist_error_hidden",       // naut: a standby whose retain file takes no image still says in sync (#710 S1b review)
 	"stream_outlives_close",             // naut: a closing member's stream handlers outlive it, so its shutdown waits on them (#710 S1b)
+	"lease_mismatch_never_clears",       // node: a lease refusal stays raised after the voter takes the lease again (#710 1 s lease)
+	"lease_clear_on_wait",               // node: a voter's restart wait, which still takes a lease it refuses after, clears a lease refusal (#710 1 s lease review)
+	"lease_refusal_one_way",             // node: a refusal given and one received share one report, so a pair whose leases differ flaps (#710 1 s lease)
+	"lease_condition_dropped",           // naut: a voter's lease refusal raises no condition (#710 1 s lease)
+	"witness_lease_no_alarm",            // naut: the witness refusing the pair's lease raises no system alarm (#710 1 s lease)
+	"lease_check_unwarned",              // naut: naut check says nothing of a pair lease under 1 s (#710 1 s lease)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

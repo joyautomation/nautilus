@@ -255,7 +255,7 @@ redundancy:
     a: ctl-a:9450
     b: ctl-b:9450
   witness: witness-host:9460
-  lease: 2s              # default; the takeover time it gives is published
+  lease: 1s              # default; the takeover time it gives is published
   state-dir: /srv/naut   # optional: default $STATE_DIRECTORY (systemd)
   stream-budget: 1MB/s   # the state stream's bytes a second (§4.1)
   stream-link: ctl-a-link:9451   # optional dedicated A–B cable (§6)
@@ -1772,8 +1772,28 @@ same driver contract as the simulator.
     longer than its own, because the lease would outlive the promise it rests on. That covers
     two controllers with different `lease:` values, and a witness started with a shorter
     `--lease` than the pair's. The refusal is logged and raised on both sides
-    (`redundancy.lease-mismatch`), never silent. A longer witness lease is safe; it only slows
-    a takeover.
+    (`redundancy.lease-mismatch`, with the voter it is about and its direction), never silent,
+    and cleared once that voter takes the lease again: any answer past its lease check, a
+    probe's included, so a standby clears it as well as the leader. The refusal given and the
+    refusal received are kept apart, so two controllers with different leases each report once
+    and never flap. Every vote answer states the voter's own lease (`X-Nautilus-Voter-Lease`),
+    and a dialer clears only when its lease fits it: a voter in its restart wait still takes
+    the longer lease it refuses after, which is no all-clear. A controller shows a lease refusal as a condition (a warning, which holds a leader's
+    ServiceLevel at 200): of its own lease by the witness, `witness-lease`, worded as the loss of
+    fault tolerance it is and naming the fix (`--lease` at least the pair's), plus the system
+    alarm `nautilus.witness-lease` in a project with alarms; of its own lease by the peer,
+    `lease-mismatch/<peer>`; and its own voter's refusal of the peer's, `lease-refused/<peer>`.
+    The refuser shows it too because, while a pair is upgraded across a change of the default
+    lease (standby, then leader, witness last), the refused side runs the old release, which
+    shows nothing. A longer witness lease is safe; it only slows a takeover.
+  - The default lease is 1 s for the pair and the witness alike (it was 2 s): measured on
+    loopback and in a 30-minute soak on two ARM controllers (#710; table in the guide). At 1 s
+    a stalled leader's write gate closes after about 0.67 s (up to 0.92 s by where the stall
+    falls; 1.41 s at 2 s), its lease shortly after: the lease runs `lease·(1−ρ)` from the
+    renewal's send, renewals go every `lease/4`, the gate closes the fence margin before the
+    end. A link outage costs less: a lost renewal is retried only on the `lease/4` grid, so an
+    outage to both voters of just over half the lease can cost it. `naut check` warns of a
+    lease under 1 s.
 - **A change of lease across a restart.** A promise can outlive its process. So the state
   file records the longest lease a promise may still run under (`VoterState.Lease`). A voter
   restarted with a shorter lease waits that longer one out before it grants. Until then it

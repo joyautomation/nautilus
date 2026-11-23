@@ -102,6 +102,9 @@ type pairMember struct {
 	// it succeeds: the log is read-only under this leader (node.LogState).
 	stuckTerm atomic.Uint64
 	box       func() string // this box's fingerprint (BoxFunc), nil without
+	// witnessLease: the witness refuses this controller's lease
+	// (WitnessLeaseCondition), for the system alarm.
+	witnessLease atomic.Bool
 
 	// The supersede self-restart (#1029 3c-3c-2a, ruling 20d): getenv
 	// tells a supervisor (INVOCATION_ID, NOTIFY_SOCKET); restart closes
@@ -546,8 +549,64 @@ func (m *pairMember) onEvent(ev node.Event) {
 		m.q.SetCondition("peer-tls-mismatch/"+string(ev.Voter), ev.Detail) // "" clears it (#710)
 	case node.EventPeerIdentity:
 		m.q.SetCondition("peer-identity/"+string(ev.Voter), ev.Detail)
+	case node.EventLeaseMismatch:
+		m.leaseMismatch(ev)
 	}
 }
+
+// WitnessLeaseCondition is the condition (and the system alarm's source)
+// raised while the witness refuses this controller's votes for their
+// lease: the pair runs on its two controllers alone (#710).
+const WitnessLeaseCondition = "witness-lease"
+
+// leaseMismatch shows a lease refusal between this controller and a voter
+// as a condition, cleared once the lease is taken again (#710): a voter's
+// refusal of this controller's lease, and this controller's own voter's
+// refusal of the peer's. Both sides show it, since during an upgrade the
+// refused side may run a release that shows nothing.
+func (m *pairMember) leaseMismatch(ev node.Event) {
+	if mutNaut("lease_condition_dropped") {
+		return
+	}
+	lease := m.o.Lease
+	if lease == 0 {
+		lease = node.DefaultLease
+	}
+	switch {
+	case ev.Voter == m.witnessID() && !ev.Inbound:
+		msg := ""
+		if ev.Detail != "" {
+			msg = fmt.Sprintf("no fault tolerance: the witness refuses this controller's votes (%s), so this controller leads or takes over only with its peer's vote. Start the witness with --lease %s or longer (this pair's redundancy.lease; a witness that serves several pairs takes the longest), or give the pair a lease no longer than the witness's", ev.Detail, lease)
+		}
+		m.witnessLease.Store(msg != "")
+		m.q.SetCondition(WitnessLeaseCondition, msg)
+	case ev.Voter == m.o.Peer && !ev.Inbound:
+		msg := ""
+		if ev.Detail != "" {
+			msg = fmt.Sprintf("controller %s refuses this controller's votes (%s): the two run different leases, so this controller leads or takes over only with the witness's vote. Give both the same redundancy.lease", ev.Voter, ev.Detail)
+		}
+		m.q.SetCondition("lease-mismatch/"+string(ev.Voter), msg)
+	case ev.Voter == m.o.Peer:
+		msg := ""
+		if ev.Detail != "" {
+			msg = fmt.Sprintf("this controller refuses controller %s's votes (%s): the two run different leases, so %s leads or takes over only with the witness's vote. While a pair is upgraded across the change of the default lease (2 s to 1 s), this stands until %s runs the new release; otherwise give both the same redundancy.lease", ev.Voter, ev.Detail, ev.Voter, ev.Voter)
+		}
+		m.q.SetCondition("lease-refused/"+string(ev.Voter), msg)
+	}
+}
+
+// witnessID is the witness's name in the vote protocol.
+func (m *pairMember) witnessID() quorum.NodeID {
+	if m.o.Witness != "" {
+		return m.o.Witness
+	}
+	return node.WitnessID
+}
+
+// WitnessLeaseRefused reports whether the witness refuses this
+// controller's votes for their lease (WitnessLeaseCondition): one atomic
+// load, for the system alarm's every evaluation.
+func (m *pairMember) WitnessLeaseRefused() bool { return m.witnessLease.Load() }
 
 // spareSilent answers every request on the peer listener 503 while this
 // controller is a spare (#1029 3c-2): the vote protocol and the

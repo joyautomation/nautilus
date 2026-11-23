@@ -25,7 +25,10 @@ import (
 
 // Defaults (design §2).
 const (
-	DefaultLease = 2 * time.Second
+	// DefaultLease is a pair's and its witness's lease when none is
+	// given: 1 s (#710; it was 2 s). Keep it equal to project's
+	// DefaultPairLease (cmd/naut tests it).
+	DefaultLease = time.Second
 	DefaultRho   = 0.01
 	// WitnessID is the witness's name in the vote protocol: one witness
 	// per pair, so it needs no other.
@@ -144,7 +147,11 @@ const (
 	// EventLeaseMismatch: a voter refused a vote because its stated lease
 	// is longer than the voter's (Detail says which voter and both
 	// leases). The pair's members (or the witness's --lease) disagree.
-	// Raised on each side once per change.
+	// Raised on each side once per change: Event.Voter names the other
+	// side and Event.Inbound says whose request was refused. Detail ""
+	// clears it, once that voter next takes this controller's lease (a
+	// reply of any kind but a lease refusal), or this controller's voter
+	// next takes the peer's (#710).
 	EventLeaseMismatch EventKind = "redundancy.lease-mismatch"
 	// EventTermJumpRefused: a voter refused a vote asking for a term more
 	// than MaxTermJump above what it promised (Detail: which voter, the
@@ -292,8 +299,15 @@ type Event struct {
 	Gen, Incarnation uint64
 	Other            uint64 // EventTwoCopies, EventReadoptOverSwitch
 	Detail           string
-	// Voter names the voter an EventPeerTLS or EventPeerIdentity is about.
+	// Voter names the voter an EventPeerTLS, EventPeerIdentity,
+	// EventLeaseMismatch, EventTermJumpRefused or EventVersionMismatch is
+	// about.
 	Voter quorum.NodeID
+	// Inbound: a refusal event (lease, term jump, version) is about a
+	// request of Voter's that this controller's voter refused; false:
+	// Voter refused this controller's. The two are kept apart, so a pair
+	// whose leases differ reports each side once and never flaps.
+	Inbound bool
 }
 
 // Status is a snapshot of the elector, for the operator surfaces.
@@ -1078,20 +1092,27 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 	}
 	b, _ := r.MarshalBinary()
 	go func() {
-		body, err := e.call.call(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
+		body, hdr, err := e.call.callHeader(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
 		var se *statusError
 		if errors.As(err, &se) && se.code == http.StatusConflict {
-			kind := EventLeaseMismatch
 			switch se.reason {
+			case "lease":
+				e.mismatched(EventLeaseMismatch, string(to), se.said())
 			case "term-jump":
-				kind = EventTermJumpRefused
+				e.mismatched(EventTermJumpRefused, string(to), se.said())
 			case "version":
-				kind = EventVersionMismatch
+				e.mismatched(EventVersionMismatch, string(to), se.said())
 			}
-			e.mismatched(kind, string(to), se.msg)
 		}
 		if errors.As(err, &se) && se.code == http.StatusBadRequest {
 			e.mismatched(EventVersionMismatch, string(to), olderPeerMsg(string(to)))
+		}
+		if (err == nil || (se != nil && se.code == http.StatusConflict && se.reason == "term-jump")) && voterLeaseFits(hdr, e.o.Lease) {
+			// The voter answered past its lease check (a reply of any
+			// kind, a probe's included, or a later refusal), and its own
+			// lease takes this controller's (not only its restart wait's):
+			// a lease refusal it gave clears.
+			e.leaseTaken(string(to), false)
 		}
 		if err != nil || body == nil {
 			return
@@ -1241,24 +1262,88 @@ func (e *Elector) linkState(kind EventKind, voter quorum.NodeID, msg string) {
 	}
 }
 
-// mismatched reports a refusal between this controller and voter, sent
-// or received (a lease mismatch, or a term jump): logged and raised once
-// per change of what it says.
+// mismatched reports voter's refusal of this controller's request (a
+// lease mismatch, a term jump, a version): logged and raised once per
+// change of what it says.
 func (e *Elector) mismatched(kind EventKind, voter, msg string) {
-	key := string(kind) + "/" + voter
+	e.refusal(kind, voter, false, msg)
+}
+
+// refused reports this controller's voter's refusal of voter's request,
+// as mismatched does the other way.
+func (e *Elector) refused(kind EventKind, voter, msg string) {
+	e.refusal(kind, voter, true, msg)
+}
+
+func (e *Elector) refusal(kind EventKind, voter string, inbound bool, msg string) {
 	e.mu.Lock()
-	changed := e.mismatch[key] != msg
-	e.mismatch[key] = msg
-	if changed {
-		e.event(Event{Kind: kind, Detail: msg})
-	}
+	changed := e.noteRefusal(kind, voter, inbound, msg)
 	e.mu.Unlock()
+	if changed {
+		e.logRefusal(kind, voter, inbound, msg)
+	}
+}
+
+// refusalKey keys a refusal by its kind, the other side and the direction.
+func refusalKey(kind EventKind, voter string, inbound bool) string {
+	if inbound && !mut("lease_refusal_one_way") {
+		return string(kind) + "/" + voter + "/in"
+	}
+	return string(kind) + "/" + voter
+}
+
+// noteRefusal moves a refusal's state and raises its event, under e.mu:
+// msg "" clears it. As linkState, the state moves only with its event, so
+// a raise or a clear the handler drops is tried again at the next call
+// and never lost for good. It reports whether it moved.
+func (e *Elector) noteRefusal(kind EventKind, voter string, inbound bool, msg string) bool {
+	key := refusalKey(kind, voter, inbound)
+	if e.mismatch[key] == msg {
+		return false
+	}
+	if !e.tryEvent(Event{Kind: kind, Voter: quorum.NodeID(voter), Inbound: inbound, Detail: msg}) {
+		return false
+	}
+	if msg == "" {
+		delete(e.mismatch, key)
+	} else {
+		e.mismatch[key] = msg
+	}
+	return true
+}
+
+// leaseTaken clears a lease refusal between this controller and voter in
+// one direction (inbound: this controller's voter took voter's lease),
+// when one stands. Cheap when none does.
+func (e *Elector) leaseTaken(voter string, inbound bool) {
+	if mut("lease_mismatch_never_clears") {
+		return
+	}
+	e.mu.Lock()
+	changed := e.leaseTakenLocked(voter, inbound)
+	e.mu.Unlock()
+	if changed {
+		e.logRefusal(EventLeaseMismatch, voter, inbound, "")
+	}
+}
+
+func (e *Elector) leaseTakenLocked(voter string, inbound bool) bool {
+	if _, ok := e.mismatch[refusalKey(EventLeaseMismatch, voter, inbound)]; !ok {
+		return false
+	}
+	return e.noteRefusal(EventLeaseMismatch, voter, inbound, "")
+}
+
+func (e *Elector) logRefusal(kind EventKind, voter string, inbound bool, msg string) {
 	switch {
-	case !changed:
+	case msg == "" && inbound:
+		e.log.Info("redundancy: this controller's voter takes the peer's lease again", "voter", voter, "was", string(kind))
+	case msg == "":
+		e.log.Info("redundancy: a voter takes this controller's lease again", "voter", voter, "was", string(kind))
 	case kind == EventTermJumpRefused:
-		e.log.Error("redundancy: a vote was refused as a term jump", "voter", voter, "detail", msg)
+		e.log.Error("redundancy: a vote was refused as a term jump", "voter", voter, "inbound", inbound, "detail", msg)
 	default:
-		e.log.Error("redundancy: a vote was refused for its lease: the pair's leases (or the witness's --lease) disagree", "voter", voter, "detail", msg)
+		e.log.Error("redundancy: a vote was refused for its lease: the pair's leases (or the witness's --lease) disagree", "voter", voter, "inbound", inbound, "detail", msg)
 	}
 }
 
@@ -1289,6 +1374,7 @@ func (e *Elector) Handler() http.Handler {
 }
 
 func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(VoterLeaseHeader, strconv.FormatInt(int64(e.o.Lease), 10))
 	if !e.running.Load() || e.silent() {
 		http.Error(w, "not running", http.StatusServiceUnavailable)
 		return
@@ -1297,7 +1383,7 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	var req quorum.Request
 	if err == nil && errors.Is(req.UnmarshalBinary(b), quorum.ErrVersion) {
 		msg := versionMsg(string(e.o.Peer), quorum.FrameVersion(b))
-		e.mismatched(EventVersionMismatch, string(e.o.Peer), msg)
+		e.refused(EventVersionMismatch, string(e.o.Peer), msg)
 		refuse(w, "version", msg)
 		return
 	}
@@ -1315,15 +1401,19 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	if limit := e.v.MaxRequestLease(now); !leaseFits(stated, limit) && !mut("controller_lease_unchecked") {
 		e.mu.Unlock()
 		msg := fmt.Sprintf("%s's lease %v is longer than this voter's %v (or missing)", req.From, stated, limit)
-		e.mismatched(EventLeaseMismatch, string(req.From), msg)
+		e.refused(EventLeaseMismatch, string(req.From), msg)
 		refuse(w, "lease", msg)
 		return
 	}
+	leaseBack := !mut("lease_mismatch_never_clears") && e.leaseTakenLocked(string(req.From), true)
 	if st := e.v.State(); termJump(req.Term, st.Promised, st.Floor) && !mut("controller_no_term_cap") {
 		e.mu.Unlock()
 		msg := fmt.Sprintf("%s asked for term %d, more than %d above the %d this voter promised", req.From, req.Term, uint64(MaxTermJump), max(st.Promised, st.Floor))
-		e.mismatched(EventTermJumpRefused, string(req.From), msg)
+		e.refused(EventTermJumpRefused, string(req.From), msg)
 		refuse(w, "term-jump", msg)
+		if leaseBack {
+			e.logRefusal(EventLeaseMismatch, string(req.From), true, "")
+		}
 		return
 	}
 	if fenced := e.v.FencedRequest(req); !fenced {
@@ -1362,6 +1452,9 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	}
 	e.after(now)
 	e.mu.Unlock()
+	if leaseBack {
+		e.logRefusal(EventLeaseMismatch, string(req.From), true, "")
+	}
 	e.w.ask(p)
 	if push != nil {
 		e.vote(e.o.Witness, e.wit, *push)

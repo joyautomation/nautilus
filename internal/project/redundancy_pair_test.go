@@ -150,7 +150,8 @@ func TestPairSendBudget(t *testing.T) {
 		red  string
 		want time.Duration
 	}{
-		{pairOK, 1450 * time.Millisecond},
+		{pairOK, 700 * time.Millisecond}, // the default 1 s lease
+		{pairOK + "  lease: 2s\n", 1450 * time.Millisecond},
 		{pairOK + "  lease: 200ms\n", 125 * time.Millisecond},
 		{pairOK + "  lease: 4s\n  net-delay: 100ms\n", 2900 * time.Millisecond},
 	} {

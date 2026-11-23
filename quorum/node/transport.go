@@ -29,6 +29,26 @@ const TokenHeader = "X-Nautilus-Cluster"
 // LeaseHeader carries the sender's lease, in nanoseconds, on every vote.
 const LeaseHeader = "X-Nautilus-Lease"
 
+// VoterLeaseHeader carries a voter's own lease, in nanoseconds, on every
+// vote answer (#710). A dialer clears a lease refusal only when its lease
+// fits it: during a voter's restart wait the voter still takes a longer
+// lease it refuses after (quorum.Voter.MaxRequestLease), which is no
+// all-clear. An answer without it (an older voter) clears as before.
+const VoterLeaseHeader = "X-Nautilus-Voter-Lease"
+
+// voterLeaseFits reports whether lease fits the voter's own lease the
+// answer's headers state (true when they state none).
+func voterLeaseFits(h http.Header, lease time.Duration) bool {
+	if mut("lease_clear_on_wait") {
+		return true
+	}
+	n, err := strconv.ParseInt(h.Get(VoterLeaseHeader), 10, 64)
+	if err != nil || n <= 0 {
+		return true
+	}
+	return lease <= time.Duration(n)
+}
+
 // MembersHeader carries the pair's two controller names, "a,b" sorted, on
 // every request a controller sends. The witness binds a cluster to them at
 // its first vote and answers no other sender for it.
@@ -99,6 +119,21 @@ type statusError struct {
 	code   int
 	msg    string
 	reason string // RefusedHeader
+	// body is the answer's own text, at most maxRefusalText bytes: what a
+	// refusal says, for an operator's condition (msg adds the call).
+	body string
+}
+
+// maxRefusalText bounds the refusal text a voter's answer puts in a report.
+const maxRefusalText = 512
+
+// said is what the voter's answer says, or the whole error when it says
+// nothing.
+func (e *statusError) said() string {
+	if e.body == "" {
+		return e.msg
+	}
+	return e.body
 }
 
 func (e *statusError) Error() string { return e.msg }
@@ -299,6 +334,12 @@ type caller struct {
 // call sends one request with a deadline of d and returns the body of a
 // 200 answer, nil for a 204, or an error.
 func (c *caller) call(ctx context.Context, d time.Duration, method, url string, body []byte) ([]byte, error) {
+	b, _, err := c.callHeader(ctx, d, method, url, body)
+	return b, err
+}
+
+// callHeader is call with the answer's headers (nil when none came).
+func (c *caller) callHeader(ctx context.Context, d time.Duration, method, url string, body []byte) ([]byte, http.Header, error) {
 	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
 	var rd io.Reader
@@ -307,7 +348,7 @@ func (c *caller) call(ctx context.Context, d time.Duration, method, url string, 
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, rd)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set(TokenHeader, c.token)
 	req.Header.Set(LeaseHeader, strconv.FormatInt(int64(c.lease), 10))
@@ -318,7 +359,7 @@ func (c *caller) call(ctx context.Context, d time.Duration, method, url string, 
 	resp, err := c.client.Do(req)
 	if err != nil {
 		c.noted(url, err)
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxFrame))
@@ -328,14 +369,16 @@ func (c *caller) call(ctx context.Context, d time.Duration, method, url string, 
 	c.noted(url, err)
 	switch {
 	case err != nil:
-		return nil, err
+		return nil, resp.Header, err
 	case resp.StatusCode == http.StatusNoContent:
-		return nil, nil
+		return nil, resp.Header, nil
 	case resp.StatusCode != http.StatusOK:
-		return nil, &statusError{code: resp.StatusCode, reason: resp.Header.Get(RefusedHeader),
-			msg: fmt.Sprintf("%s %s: %s: %s", method, url, resp.Status, bytes.TrimSpace(b))}
+		body := bytes.TrimSpace(b)
+		said := strings.ToValidUTF8(string(body[:min(len(body), maxRefusalText)]), "")
+		return nil, resp.Header, &statusError{code: resp.StatusCode, reason: resp.Header.Get(RefusedHeader),
+			msg: fmt.Sprintf("%s %s: %s: %s", method, url, resp.Status, body), body: said}
 	}
-	return b, nil
+	return b, resp.Header, nil
 }
 
 func (c *caller) noted(url string, err error) {
