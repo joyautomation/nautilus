@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,5 +179,32 @@ func TestPushPageCarriesItsLinkAndFits(t *testing.T) {
 	p = pushPayload{}
 	if err := json.Unmarshal(b, &p); err != nil || len(b) > webpush.MaxPayload || p.Alarm == "" {
 		t.Fatalf("an oversize id: %d bytes, id %d: %v", len(b), len(p.Alarm), err)
+	}
+}
+
+// A chatter notice and a grouped flood page (#1249) carry no ack link and
+// open the right screen: the alarm, or the flood's focus view. A grouped
+// page fits one push whatever it lists.
+func TestPushChatterAndFloodPages(t *testing.T) {
+	m := escalate.Message{Alarm: alarm.Record{Def: alarm.Def{ID: "P 1", Name: "Seal leak"}, State: alarm.UnackActive}, Level: 1,
+		AckURL: "https://hmi.example/alarm-ack/x", Chatter: &alarm.Chatter{Activations: 7, WindowMs: 60000}}
+	var p pushPayload
+	if err := json.Unmarshal(pageBody(m), &p); err != nil || p.Ack != "" || p.Path != "/alarms?alarm=P+1" || !strings.Contains(p.State, "chattering 7") {
+		t.Fatalf("chatter page %+v %v", p, err)
+	}
+	m.Alarm.ID = strings.Repeat("é", 400)
+	p = pushPayload{}
+	if err := json.Unmarshal(pageBody(m), &p); err != nil || p.Path != "/alarms" {
+		t.Fatalf("an id too long for a path: %q %v", p.Path, err)
+	}
+	g := &escalate.Group{Flood: alarm.FloodBrief{ID: "f1", Count: 40, Threshold: 10, SinceMs: 1}}
+	for i := range 500 {
+		g.Alarms = append(g.Alarms, escalate.GroupAlarm{ID: fmt.Sprint("a", i), Name: strings.Repeat("n", 300)})
+	}
+	b := pageBody(escalate.Message{Group: g, Level: 2})
+	p = pushPayload{}
+	if err := json.Unmarshal(b, &p); err != nil || len(b) > webpush.MaxPayload || p.Ack != "" || p.Path != "/alarms?focus=1" ||
+		!strings.Contains(p.Name, "500 waiting") || p.Priority != "flood" {
+		t.Fatalf("flood page (%d bytes) %+v %v", len(b), p, err)
 	}
 }

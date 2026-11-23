@@ -803,3 +803,29 @@ func TestPWAWorkerTapOpensTheAckPage(t *testing.T) {
 		t.Errorf("a foreign link in the data: opened %q", got)
 	}
 }
+
+// A page's path (#1249: a chatter notice's alarm, a flood's focus view)
+// is the screen a tap opens; anything but an /alarms path on this origin
+// opens the alarms.
+func TestPushPageOpensItsPath(t *testing.T) {
+	for path, want := range map[string]string{
+		"/alarms?focus=1":                     "/alarms?focus=1",
+		"/alarms?alarm=P%201":                 "/alarms?alarm=P%201",
+		"/alarms?alarm=P+1":                   "/alarms?alarm=P+1",
+		"/alarms":                             "/alarms",
+		"https://evil.example/x":              "/alarms",
+		"//evil.example/alarms":               "/alarms",
+		"/alarms/../admin":                    "/alarms",
+		"/alarms?x=<script>":                  "/alarms",
+		"/alarmsx":                            "/alarms",
+		"javascript:alert(1)":                 "/alarms",
+		"/alarms?" + strings.Repeat("a", 600): "/alarms",
+	} {
+		h := pushHarness(t)
+		h.vm.Set("path", path)
+		h.run(t, `handlers.push(pushOf({alarm:'A', state:'unack-active', path: path}))`)
+		if got := h.run(t, `shown[0].options.data.url`).String(); got != want {
+			t.Errorf("path %q: url %q, want %q", path, got, want)
+		}
+	}
+}

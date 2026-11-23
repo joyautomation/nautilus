@@ -2,6 +2,7 @@ package alarm
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,13 +68,63 @@ const FloodJournalID = "__nautilus.flood"
 type ChatterConfig struct {
 	Window Duration `yaml:"window" json:"window,omitempty"`
 	Count  int      `yaml:"count" json:"count,omitempty"`
+	// Page, on unless set false, pages a chattering alarm once per
+	// episode instead of once per bounce (#1249 slice 3; the dispatcher
+	// reads it, the engine does not).
+	Page *bool `yaml:"page" json:"page,omitempty"`
 }
+
+// Pages reports whether a chattering alarm pages once per episode (the
+// default) rather than per bounce.
+func (c ChatterConfig) Pages() bool { return c.Page == nil || *c.Page }
 
 // FloodConfig is `alarms.flood:`. Zero fields take the defaults. A flood
 // is MORE than Threshold activations within Window.
 type FloodConfig struct {
 	Window    Duration `yaml:"window" json:"window,omitempty"`
 	Threshold int      `yaml:"threshold" json:"threshold,omitempty"`
+	// GroupPages, on unless set false, sends one grouped page per policy
+	// level per person during a flood instead of one per alarm (#1249
+	// slice 3; the dispatcher reads it, the engine does not).
+	GroupPages *bool `yaml:"group-pages" json:"groupPages,omitempty"`
+	// Individual names more alarms that page on their own during a flood.
+	// Critical priority and the class "safety" always do, whatever it
+	// says: it adds to them, never replaces them.
+	Individual *FloodIndividual `yaml:"individual" json:"individual,omitempty"`
+}
+
+// FloodIndividual is `alarms.flood.individual:`.
+type FloodIndividual struct {
+	Priorities []string `yaml:"priorities" json:"priorities,omitempty"`
+	Classes    []string `yaml:"classes" json:"classes,omitempty"`
+}
+
+// SafetyClass is the class that always pages individually in a flood.
+const SafetyClass = "safety"
+
+// Groups reports whether a flood groups pages (the default).
+func (c FloodConfig) Groups() bool { return c.GroupPages == nil || *c.GroupPages }
+
+// IndividualSet is every priority and class that pages on its own in a
+// flood: critical and safety, plus what Individual adds. It assumes
+// Validate passed (an unknown priority is skipped).
+func (c FloodConfig) IndividualSet() (prio []Priority, classes []string) {
+	prio, classes = []Priority{Critical}, []string{SafetyClass}
+	if c.Individual == nil {
+		return prio, classes
+	}
+	for _, s := range c.Individual.Priorities {
+		if p, err := ParsePriority(s); err == nil && !slices.Contains(prio, p) {
+			prio = append(prio, p)
+		}
+	}
+	for _, s := range c.Individual.Classes {
+		// Classes compare ignoring case, here and where they are matched.
+		if !slices.ContainsFunc(classes, func(c string) bool { return strings.EqualFold(c, s) }) {
+			classes = append(classes, s)
+		}
+	}
+	return prio, classes
 }
 
 // Resolved is c with its defaults filled in.
@@ -122,6 +173,18 @@ func (c FloodConfig) Validate() error {
 		return fmt.Errorf("alarms.flood.threshold: %d: want 1 or more", c.Threshold)
 	case c.Threshold >= FloodRing:
 		return fmt.Errorf("alarms.flood.threshold: %d: want under %d", c.Threshold, FloodRing)
+	}
+	if c.Individual != nil {
+		for i, s := range c.Individual.Priorities {
+			if _, err := ParsePriority(s); err != nil {
+				return fmt.Errorf("alarms.flood.individual.priorities[%d]: %w", i, err)
+			}
+		}
+		for i, s := range c.Individual.Classes {
+			if strings.TrimSpace(s) == "" {
+				return fmt.Errorf("alarms.flood.individual.classes[%d]: a class name is required", i)
+			}
+		}
 	}
 	return nil
 }

@@ -35,6 +35,12 @@ const (
 	NotifySent         = "sent"
 	NotifyFailed       = "failed"
 	NotifyNobodyOnCall = "nobody-on-call"
+	// NotifyHeld marks a chattering alarm's held pages (#1249): the first
+	// bounce held in an episode, and the episode's end with the count.
+	NotifyHeld = "held"
+	// NotifyGrouped is an alarm a delivered grouped flood page listed
+	// (#1249): who was told about it, by which channel, at which level.
+	NotifyGrouped = "grouped"
 )
 
 // Event is one append-only journal row.

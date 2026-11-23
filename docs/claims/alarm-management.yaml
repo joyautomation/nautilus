@@ -725,3 +725,87 @@ claims:
       - go ./alarm TestCarriedChatterDoesNotSplitWhileTheRingRefills
       - go ./runtime TestDropRetainedIntent
       - go ./cmd/naut TestPairEpisodesCarryAcrossTheLeadersDeath
+
+  - id: AMG-055
+    claim: >-
+      In the modes that page per bounce (stop: ack-or-rtn, ack-required:
+      false, an acknowledgement between bounces), a chattering alarm's
+      bounces are held and it escalates on one clock from the episode's
+      start, under the policy its latest bounce would page under: each
+      level goes once per episode as a chatter notice (level 1 too, even
+      when the chatter is seen late, and a level whose repeats are already
+      due goes once, not as a burst), later
+      levels still climb, a first level that waits still pages, a shelved
+      alarm sends none, and a latched alarm nobody acknowledged keeps its own
+      clock; the notice carries no ack link or reply code, links to the
+      alarm, and the journal has one held row at the first held bounce and
+      one at the end with the count; when the chatter ends with the alarm
+      still waiting, levels its notices sent are not sent again, and a new
+      activation pages as usual.
+    source: "#paging-while-an-alarm-chatters-or-the-plant-floods"
+    tests:
+      - go ./alarm/escalate TestChatterPagesOncePerLevel
+      - go ./alarm/escalate TestChatterPagingOff
+      - go ./alarm/escalate TestChatterThroughNormalSendsOnce
+      - go ./alarm/escalate TestChatterLeavesTheLatchedWaitAlone
+      - go ./alarm/escalate TestChatterAckBetweenBounces
+      - go ./alarm/escalate TestChatterFastWithDelayedLevelStillPages
+      - go ./alarm/escalate TestChatterShelvedSendsNothing
+      - go ./alarm/escalate TestChatterFollowsTheWaitsPolicy
+      - go ./alarm/escalate TestChatterPagesLevel1EvenWhenLate
+      - go ./alarm/escalate TestChatterEndDoesNotRepage
+      - go ./alarm/escalate TestActivationAfterChatterPages
+      - go ./alarm/escalate TestChatterLateSendsEachLevelOnce
+      - go ./alarm/escalate TestChatterPolicyMoveSendsEachLevelOnce
+      - go ./alarm/escalate TestActivationRightAfterChatterPages
+      - go ./alarm/escalate TestSecondChatterEndDoesNotRepage
+      - go ./alarm/channel/send TestChatterNoticeText
+      - go ./cmd/naut TestPushChatterAndFloodPages
+    partial: true
+    note: >-
+      Tested on the escalation engine over a real alarm engine with a
+      virtual clock and recording channels; the latched-acknowledged-while-
+      active mode has no test of its own (it restarts the clock the same way
+      as an ack between bounces).
+
+  - id: AMG-056
+    claim: >-
+      During a flood a covered alarm's due level joins one grouped page per
+      policy level per person per channel, the first at once and then at
+      most every 5 minutes for alarms newly due (so a late joiner is told);
+      critical and class safety (any case) always page on their own and
+      alarms.flood.individual only adds to them; a grouped page carries no
+      ack link, reply code or keypress, fits SMS, voice and push at 200
+      alarms ("+N more" and the link to the flood view), and gives every
+      listed alarm a grouped row; a grouped page that fails falls back to
+      individual pages, as does one the queue could not take; a grouped
+      page released before it left does not delay the next; a level a
+      grouped page covered is not paged again
+      when the flood ends; a restart or takeover mid-flood resends each level
+      once, grouped.
+    source: "#paging-while-an-alarm-chatters-or-the-plant-floods"
+    tests:
+      - go ./alarm/escalate TestFloodGroupsPages
+      - go ./alarm/escalate TestFloodLateJoinerIsTold
+      - go ./alarm/escalate TestFloodFailedGroupFallsBackToIndividual
+      - go ./alarm/escalate TestFloodTakeoverResendsGroupedOnce
+      - go ./alarm/escalate TestFloodCarriedOverARestartResendsGrouped
+      - go ./alarm/escalate TestFloodAndChatter
+      - go ./alarm/escalate TestFloodIndividualAdds
+      - go ./alarm/escalate TestFloodEndNoRepage
+      - go ./alarm/escalate TestFloodNeedsAFlooder
+      - go ./alarm/escalate TestFloodDroppedGroupSendIsNotLost
+      - go ./alarm/escalate TestFloodReleasedBatchHoldsNoFloor
+      - go ./alarm/escalate TestFloodSafetyClassAnyCase
+      - go ./alarm/channel/send TestFitListNeverOverflows
+      - go ./alarm/channel/send TestGroupedPageFitsAt200
+      - go ./alarm/channel/send TestWebhookKinds
+      - go ./cmd/naut TestPushChatterAndFloodPages
+      - go ./internal/hmibuild TestPushPageOpensItsPath
+      - go ./internal/project TestAlarmPagingConfig
+    partial: true
+    note: >-
+      The takeover is tested on the escalation engine (a new leadership
+      term over the same engine) and the restart over the engine's retain
+      path, not across two running controllers; the pair's carry of the
+      flood itself is AMG-054.
