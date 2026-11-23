@@ -2,7 +2,6 @@ package fence
 
 import (
 	"context"
-	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -120,10 +119,12 @@ func WithDevice(ctx context.Context, device string) context.Context {
 }
 
 // CutSend records a cut for the device WithDevice put on ctx, when ctx is
-// a fenced send that was started and failed: fired (the deadline timer
-// reset the socket) or its deadline has passed. A transport calls it once
-// per failed send, after the send began. No device on ctx, or no
-// deadline: nothing.
+// a fenced send that was on the wire and failed at its deadline: fired
+// (the deadline timer reset the socket) or its deadline has passed. A
+// transport calls it once per failed send, after the send began; a
+// failure before the deadline (a connection lost, the driver's own
+// shorter timeout) or before anything was sent (a dial) is no cut. No
+// device on ctx, or no deadline: nothing.
 func CutSend(ctx context.Context, fired bool) {
 	dev, ok := ctx.Value(deviceKey{}).(string)
 	if !ok || !Fenced(ctx) {
@@ -171,9 +172,3 @@ func (l *CutLabel) CutDriver(fallback string) string {
 	}
 	return l.driver
 }
-
-// ErrNotStarted marks a send refused before anything went out (its gate
-// closed, or its deadline passed first). Such a write is never a cut:
-// callers that count cuts skip an error that wraps it. A transport that
-// can tell wraps it (cip.ErrNotStarted is this value).
-var ErrNotStarted = errors.New("request not started")

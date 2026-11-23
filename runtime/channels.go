@@ -291,12 +291,12 @@ func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
 			ctx, fcancel = fence.Context(ctx, deadline)
 			defer fcancel()
 			ctx = fence.WithGate(ctx, h.send, req.lead)
+			// The channel's transport records a cut under this name, and
+			// only for a request it had on the wire at the deadline (#710):
+			// a dial, or a failure before anything was sent, is no cut.
+			ctx = fence.WithDevice(ctx, w.name)
 		}
 		werr := w.ch.Write(ctx, req.variable, req.val, req.elem)
-		if werr != nil && !deadline.IsZero() && !time.Now().Before(deadline) &&
-			!errors.Is(werr, fence.ErrGateClosed) && !errors.Is(werr, fence.ErrNotStarted) {
-			fence.Cut(w.name) // sent, and its deadline passed: one write cut
-		}
 		return ir.CommResult{Status: commStatus(werr)}
 	}
 	v, err := w.ch.Read(ctx, req.variable, req.val, req.elem)
