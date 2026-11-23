@@ -148,7 +148,19 @@ jobs:
           # argument it would leave an empty alternative, which matches every test.
           rig=$(.github/scripts/naut-rig.sh regex)
           [ -n "$rig" ] || { echo "::error::naut-rig.sh gave no regex"; exit 1; }
-          go test -json -count=1 -coverprofile=evidence/cover.out -skip "^TestReleaseTargetsBuildWithoutCgo\$|$rig" ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+          # quorum/node runs in the next step, alone (#1120).
+          pkgs=$(go list ./... | grep -vx 'github.com/joyautomation/nautilus/quorum/node')
+          go test -json -count=1 -coverprofile=evidence/cover.out -skip "^TestReleaseTargetsBuildWithoutCgo\$|$rig" $pkgs | tee evidence/go-test.json | go run ./tools/evidence cat
+      # quorum/node on its own, after the rest, as in the race job (#1120):
+      # its loopback elections on 500 ms leases lost leases to a runner
+      # starved by every other package at once. Its results and coverage
+      # are evidence like the rest (merged in the evidence job).
+      - name: go test quorum/node (alone)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          mkdir -p evidence
+          go test -json -count=1 -coverprofile=evidence/cover-node.out ./quorum/node/ | tee evidence/go-test-node.json | go run ./tools/evidence cat
       # Test plan §3.4 (#710 PR 3b-3a): the quorumtest build's pause hooks
       # between a write's gate check and its send, swept on a real socket
       # (a few seconds). The tag adds the hooks, so it runs apart from ./...
@@ -1372,8 +1384,9 @@ jobs:
           mkdir -p runtime-evidence
           base=()
           [ -f "$RUNNER_TEMP/base/evidence.json" ] && base=(-baseline "$RUNNER_TEMP/base/evidence.json")
-          # cmd/naut's coverage is in two profiles (the Go job and the rig job).
-          .github/scripts/merge-cover.sh "$RUNNER_TEMP/cover.out" evidence/evidence-go/cover.out evidence/evidence-go-naut-rig/cover.out
+          # cmd/naut's coverage is in two profiles (the Go job and the rig job);
+          # quorum/node's is a third, from its own step in the Go job.
+          .github/scripts/merge-cover.sh "$RUNNER_TEMP/cover.out" evidence/evidence-go/cover.out evidence/evidence-go/cover-node.out evidence/evidence-go-naut-rig/cover.out
           go run ./tools/evidence build -in evidence -cover "$RUNNER_TEMP/cover.out" -release "$RUNNER_TEMP/release" \
             -o runtime-evidence/evidence.json "${base[@]}" -summary "$RUNNER_TEMP/claims.md"
           cat "$RUNNER_TEMP/claims.md" >> "$GITHUB_STEP_SUMMARY"
