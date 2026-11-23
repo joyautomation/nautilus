@@ -102,6 +102,9 @@ func (f *Fake) goOnline(r *http.Request) (any, *failure) {
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
+	if fl := checkDeviceAttestation(req.DeviceAttestation); fl != nil {
+		return nil, fl
+	}
 	if !req.Online {
 		was, fl := f.releaseOnline(s)
 		if fl != nil {
@@ -121,7 +124,7 @@ func (f *Fake) goOnline(r *http.Request) (any, *failure) {
 	if !contains(f.Targets, addr) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", addr)
 	}
-	if fl := f.checkDevicePin(addr, "online"); fl != nil {
+	if _, fl := f.checkDevicePin(addr, "online", req.DeviceAttestation); fl != nil {
 		return nil, fl
 	}
 	switch s.heldOnline {

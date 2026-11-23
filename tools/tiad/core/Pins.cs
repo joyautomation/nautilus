@@ -140,6 +140,172 @@ namespace Tiad
         }
     }
 
+    // DeviceAttestation is the operator's reading of the CPU's identity off
+    // the device itself (its label, its display), standing in for the
+    // online read tiad cannot make yet (#789, #1325). It is accepted only
+    // where that read is missing: tiad compares it with the device pin at
+    // the pin's precision, a mismatch is device_changed as a read one is,
+    // and it never adds or changes a pin. Every use is audited. A "tighten
+    // later" loosening (#616): it goes once the online read exists.
+    //
+    // A second copy of tiad.DeviceAttestation's rules (siemens/tiad/pins.go).
+    // Change both or neither.
+    public sealed class DeviceAttestation
+    {
+        public string By = "", Order = "", Firmware = "";
+
+        // Read is null when the request has no deviceAttestation.
+        public static DeviceAttestation Read(Reader r)
+        {
+            if (r == null) return null;
+            var a = new DeviceAttestation();
+            a.By = r.Str("by");
+            a.Order = r.Str("order");
+            a.Firmware = r.Str("firmware");
+            return a;
+        }
+
+        // Validate is tiad.DeviceAttestation.Validate: why the attestation
+        // is malformed, or null.
+        public string Validate()
+        {
+            var errs = new List<string>();
+            if (By.Trim() == "") errs.Add("deviceAttestation.by is empty");
+            else if (Encoding.UTF8.GetByteCount(By) > Attestation.MaxBy) errs.Add("deviceAttestation.by is longer than " + Attestation.MaxBy + " bytes");
+            else if (HasControl(By)) errs.Add("deviceAttestation.by has a control character");
+            Field(errs, "order", Order);
+            Field(errs, "firmware", Firmware);
+            if (Firmware.Trim() != "" && Firmware.Length <= DeviceIdentity.MaxField && Version(Firmware) == null)
+            {
+                errs.Add("deviceAttestation.firmware " + Json.Quote(Firmware) + " is not a firmware version (V3.1.3, or 3.1.3)");
+            }
+            return errs.Count == 0 ? null : string.Join("; ", errs.ToArray());
+        }
+
+        static void Field(List<string> errs, string name, string v)
+        {
+            if (v.Trim() == "") errs.Add("deviceAttestation." + name + " is empty");
+            else if (v.Length > DeviceIdentity.MaxField) errs.Add("deviceAttestation." + name + " is longer than " + DeviceIdentity.MaxField + " characters");
+            else if (HasControl(v)) errs.Add("deviceAttestation." + name + " has a control character");
+        }
+
+        static bool HasControl(string v)
+        {
+            foreach (char c in v)
+            {
+                if (c < 0x20 || c == 0x7f) return true;
+            }
+            return false;
+        }
+
+        // Version is a firmware version's numeric parts ("V3.1.3" and
+        // "3.1.3" are 3, 1, 3), leading zeros dropped; null when it is not
+        // one.
+        static List<string> Version(string v)
+        {
+            v = v.Trim();
+            if (v.StartsWith("V", StringComparison.Ordinal) || v.StartsWith("v", StringComparison.Ordinal)) v = v.Substring(1);
+            var parts = new List<string>();
+            foreach (string p in v.Split('.'))
+            {
+                if (p == "") return null;
+                foreach (char c in p)
+                {
+                    if (c < '0' || c > '9') return null;
+                }
+                string n = p.TrimStart('0');
+                parts.Add(n == "" ? "0" : n);
+            }
+            return parts;
+        }
+
+        // OrderKey is an order number as compared: whitespace dropped,
+        // upper case ("6ES7 510-1DK03-0AB0" is "6ES7510-1DK03-0AB0").
+        static string OrderKey(string v)
+        {
+            var b = new StringBuilder();
+            foreach (char c in v)
+            {
+                if (!char.IsWhiteSpace(c)) b.Append(char.ToUpperInvariant(c));
+            }
+            return b.ToString();
+        }
+
+        // Gap is tiad.DeviceAttestationGap: why the attestation cannot
+        // stand in for the pin's check at all, or null. It states the order
+        // number and firmware only, so a pin holding a serial or MAC fails
+        // closed, and a firmware stated less precisely than the pin's
+        // cannot match it.
+        public static string Gap(DeviceIdentity pinned, DeviceAttestation a)
+        {
+            var gaps = new List<string>();
+            if (pinned.Serial != null) gaps.Add("the pin holds a serial number, which an attestation does not state");
+            if (pinned.Mac != null) gaps.Add("the pin holds a MAC address, which an attestation does not state");
+            List<string> p = Version(pinned.Firmware), n = Version(a.Firmware);
+            if (p != null && n != null && n.Count < p.Count)
+            {
+                gaps.Add("the attested firmware " + Json.Quote(a.Firmware) + " is less precise than the pin's " + Json.Quote(pinned.Firmware) + ": read the full version off the CPU");
+            }
+            return gaps.Count == 0 ? null : string.Join("; ", gaps.ToArray());
+        }
+
+        // Mismatch is tiad.DeviceAttestationMismatch: how the attested
+        // identity differs from the pin, at the pin's precision, or null.
+        // The order number compares without whitespace or case; the
+        // firmware on the pin's parts (a "V3.1" pin matches "3.1.3"). A pin
+        // firmware that is not a version compares exactly.
+        public static string Mismatch(DeviceIdentity pinned, DeviceAttestation a)
+        {
+            var diffs = new List<string>();
+            if (OrderKey(pinned.Order) != OrderKey(a.Order)) diffs.Add("order " + Json.Quote(pinned.Order) + " is attested as " + Json.Quote(a.Order));
+            List<string> p = Version(pinned.Firmware), n = Version(a.Firmware);
+            bool same;
+            if (p == null || n == null) same = string.Equals(pinned.Firmware, a.Firmware.Trim(), StringComparison.Ordinal);
+            else
+            {
+                same = n.Count >= p.Count;
+                for (int i = 0; same && i < p.Count; i++) same = p[i] == n[i];
+            }
+            if (!same) diffs.Add("firmware " + Json.Quote(pinned.Firmware) + " is attested as " + Json.Quote(a.Firmware));
+            return diffs.Count == 0 ? null : string.Join("; ", diffs.ToArray());
+        }
+
+        // Identity is the attested identity, for messages: order and
+        // firmware as stated, serial and MAC not read.
+        public DeviceIdentity Identity()
+        {
+            return new DeviceIdentity { Order = Order, Firmware = Firmware };
+        }
+
+        // Audit is the attestation for an audit line, every part quoted so
+        // none can forge a line.
+        public string Audit()
+        {
+            return "{by=" + Json.Quote(By) + " order=" + Json.Quote(Order) + " firmware=" + Json.Quote(Firmware) + "}";
+        }
+    }
+
+    // DeviceAttestationRecord is a device attestation tiad accepted: what
+    // the operator stated, the pin it was compared with, and when (tiad's
+    // clock), for the response and the deploy record.
+    public sealed class DeviceAttestationRecord
+    {
+        public DeviceAttestation Attestation;
+        public DeviceIdentity Pinned;
+        public string At = "";
+
+        public Obj ToJson()
+        {
+            var o = new Obj();
+            o["by"] = Attestation.By;
+            o["order"] = Attestation.Order;
+            o["firmware"] = Attestation.Firmware;
+            o["pinned"] = Pinned.ToJson();
+            o["at"] = At;
+            return o;
+        }
+    }
+
     // PinRead is what reading one pin file found.
     public enum PinState
     {

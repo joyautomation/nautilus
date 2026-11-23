@@ -248,12 +248,13 @@ namespace Tiad
                     // was written: a record with no outcome means the agent
                     // died during the download.
                     if (run.IntentWritten) WriteOutcome(run, rode, acting);
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} source={13} outsideChanges={14} deploy={15} kept=[{16}] asked=[{17}] acting=[{18}] outcome={19}",
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} source={13} outsideChanges={14} deploy={15} kept=[{16}] asked=[{17}] acting=[{18}] outcome={19} deviceAttestation={20}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
                         req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), reset, BlindTrust.Audit(rode),
                         DeploySource.Audit(req.Source), OutsideChanges.Audit(req.OutsideChanges), run.IntentWritten ? run.Id + (run.Recorded ? "" : "(outcome-not-recorded)") : "unset",
-                        AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
+                        AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome,
+                        req.DeviceAttested != null ? req.DeviceAttested.Attestation.Audit() : req.DeviceAttestation != null ? "given-not-used" : "unset");
                 }
             });
         }
@@ -410,7 +411,7 @@ namespace Tiad
             }
             // The CPU must still be the one tiad pinned (section 3.8),
             // before a dry run too: it reaches the CPU.
-            CheckDevicePin(s, req.Address, req.DryRun ? "dry run" : "download");
+            req.DeviceAttested = CheckDevicePin(s, req.Address, req.DryRun ? "dry run" : "download", req.DeviceAttestation);
             // One project per CPU: the first download claims the CPU for
             // this session, dry runs included, until it is closed.
             sessions.ClaimCpu(s, req.Address);
@@ -726,6 +727,9 @@ namespace Tiad
                 // for the caller's deploy record.
                 o["attestation"] = req.Attestation.ToJson();
             }
+            // The operator's reading of the CPU's identity that stood in for
+            // the online read of a pinned CPU, for the caller's deploy record.
+            if (req.DeviceAttested != null) o["deviceAttestation"] = req.DeviceAttested.ToJson();
             // A user-management reset tiad wrote, and the route that let it
             // (UserManagementRule), for the deploy record.
             if (given != "") o["userManagementReset"] = given;
@@ -776,6 +780,7 @@ namespace Tiad
                 HeldOnlineRefuses(s, "compare");
                 var r = c.Json();
                 string password = OnlinePassword(r);
+                DeviceAttestation att = ReadDeviceAttestation(r);
                 r.Done();
                 // A project opened as found (no spec applied yet: an
                 // adopted one, #1272) compares with its own CPU, at the
@@ -787,7 +792,7 @@ namespace Tiad
                     if (address == "") throw TiadException.BadRequest("the project has no station spec, and its CPU no address to compare with");
                 }
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
-                CheckDevicePin(s, address, "compare");
+                CheckDevicePin(s, address, "compare", att);
                 var diffs = new List<Difference>();
                 // Read on the TIA thread, where trust is recorded: what the
                 // compare rode on, also once a later close retired it.

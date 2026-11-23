@@ -989,6 +989,10 @@ type OnlineSecrets struct {
 // CompareRequest is a compare's options.
 type CompareRequest struct {
 	Secrets *OnlineSecrets `json:"secrets,omitempty"`
+	// DeviceAttestation is the operator's reading of the CPU's order
+	// number and firmware off the device, for a pinned CPU the agent
+	// cannot identify online (DeviceAttestation, #1325); unused otherwise.
+	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
 }
 
 // CompareWith is Compare with options.
@@ -1109,6 +1113,9 @@ type FingerprintRequest struct {
 	// Secrets answer TIA's credentials question (OnlineSecrets). In a
 	// VerifyRequest they go in VerifyRequest.Secrets instead.
 	Secrets *OnlineSecrets `json:"secrets,omitempty"`
+	// DeviceAttestation: as CompareRequest's. In a VerifyRequest or a
+	// DownloadRequest it goes in their own DeviceAttestation instead.
+	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
 }
 
 // FingerprintItem is one item of TIA's fingerprint of a CPU, as TIA names
@@ -1184,6 +1191,10 @@ func (s *Session) Show(ctx context.Context, block string) (Shown, error) {
 type OnlineRequest struct {
 	Online  bool           `json:"online"`
 	Secrets *OnlineSecrets `json:"secrets,omitempty"`
+	// DeviceAttestation is the operator's reading of the CPU's order
+	// number and firmware off the device, for a pinned CPU the agent
+	// cannot identify online (DeviceAttestation, #1325); unused otherwise.
+	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
 }
 
 // OnlineResult is where an online call left the session.

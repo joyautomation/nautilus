@@ -679,6 +679,7 @@ namespace Tiad
             line["tia"] = tia;
             line["archive"] = a.ToJson();
             line["attestation"] = req.Hardware ? req.Attestation.ToJson() : null;
+            line["deviceAttestation"] = req.DeviceAttested == null ? null : req.DeviceAttested.ToJson();
             line["keptDevices"] = KeptDevice.ToJson(s.Kept);
             line["blindTrust"] = rode == null ? null : rode.ToJson();
             try

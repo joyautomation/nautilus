@@ -273,11 +273,12 @@ namespace Tiad
                     // An explicit, per-call opt-in, as an upload's.
                     r.Trust = req.Bool("trustUnverifiedCertificate");
                     r.Password = OnlinePassword(req);
+                    DeviceAttestation att = ReadDeviceAttestation(req);
                     req.Done();
                     r.Address = CpuOf(s);
                     if (!Target(r.Address)) throw new TiadException(403, Kinds.TargetRefused, r.Address + " is not in TIAD_TARGETS");
                     // An online call: the CPU must still be the pinned one.
-                    CheckDevicePin(s, r.Address, "fingerprint read");
+                    CheckDevicePin(s, r.Address, "fingerprint read", att);
                 });
                 var o = new Obj();
                 o["address"] = run.Address;

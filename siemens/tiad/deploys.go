@@ -247,10 +247,13 @@ type Deploy struct {
 	TIA            DeployTIA             `json:"tia"`
 	Archive        DeployArchive         `json:"archive"`
 	Attestation    *AttestationRecord    `json:"attestation"`
-	KeptDevices    []KeptDevice          `json:"keptDevices"`
-	BlindTrust     *BlindTrust           `json:"blindTrust"`
-	Outcome        *DeployOutcome        `json:"outcome"`
-	Status         string                `json:"status"`
+	// DeviceAttestation is the operator's reading of the CPU's identity
+	// the download rested on (#1325); nil when none was used.
+	DeviceAttestation *DeviceAttestationRecord `json:"deviceAttestation"`
+	KeptDevices       []KeptDevice             `json:"keptDevices"`
+	BlindTrust        *BlindTrust              `json:"blindTrust"`
+	Outcome           *DeployOutcome           `json:"outcome"`
+	Status            string                   `json:"status"`
 }
 
 // DeployList is GET /v1/deploys: the records, newest first, and how many
@@ -317,6 +320,10 @@ type VerifyRequest struct {
 	// Secrets answer TIA's credentials question for the compare and the
 	// fingerprint read (OnlineSecrets).
 	Secrets *OnlineSecrets `json:"secrets,omitempty"`
+	// DeviceAttestation is the operator's reading of the CPU's order
+	// number and firmware off the device, for a pinned CPU the agent
+	// cannot identify online (DeviceAttestation, #1325); unused otherwise.
+	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
 }
 
 // VerifyFingerprint is a verify's fingerprint read, with whether its

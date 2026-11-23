@@ -119,7 +119,9 @@ namespace Tiad
         // does not.
         static string Unverifiable(string address)
         {
-            return "; it lifts only once tiad can read a CPU's identity online (#789): a re-pin (POST /v1/pins/" + address +
+            return "; to go ahead, read the CPU's order number and firmware off the device itself (its label or display) and attest them " +
+                "(deviceAttestation: {by, order, firmware}; naut: --attest-order and --attest-firmware): tiad compares them with the pin, audited. " +
+                "It lifts for good once tiad can read a CPU's identity online (#789); a re-pin (POST /v1/pins/" + address +
                 ", audited) records a new identity but cannot lift this";
         }
 
@@ -133,15 +135,20 @@ namespace Tiad
         // CheckDevicePin runs before an online call (compare, download, a
         // dry run too) to address: with a device pin, the CPU's identity
         // read online must match it; without one there is nothing to
-        // check. An identity tiad cannot read fails closed.
-        void CheckDevicePin(Session s, string address, string call)
+        // check. An identity tiad cannot read fails closed, unless the
+        // request carries the operator's attestation of it (#1325), which
+        // must match the pin at the pin's precision. It returns the
+        // attestation it rested on, null when none. It never adds or
+        // changes a pin: an attestation to an unpinned CPU is not used.
+        DeviceAttestationRecord CheckDevicePin(Session s, string address, string call, DeviceAttestation att)
         {
             DeviceIdentity pinned = pins.Device(address);
-            if (pinned == null) return;
+            if (pinned == null) return null;
             DeviceIdentity now = OnSession(s, delegate(ITia t) { return t.Identify(s.Handle, address); });
             string bad = now == null ? "this agent's TIA side cannot read a CPU's identity online yet" : now.Validate();
             if (bad != null)
             {
+                if (att != null) return Attested(s, address, call, pinned, att, bad);
                 Log.Line("audit pin unverified call={0} session={1} address={2} why={3}", call, s.Id, Json.Quote(address), Json.Quote(bad));
                 throw new TiadException(409, Kinds.DeviceUnverified,
                     address + " has a device pin, but its identity could not be read (" + bad + "), so the pin cannot be checked; the " + call + " was refused before it began" + Unverifiable(address));
@@ -153,6 +160,52 @@ namespace Tiad
                     call, s.Id, Json.Quote(address), Json.Write(pinned.ToJson()), Json.Write(now.ToJson()));
                 throw Changed(address, pinned, now, diff, "The " + call + " was refused before it began.");
             }
+            return null;
+        }
+
+        // Attested is CheckDevicePin's check of an attestation, for an
+        // identity tiad could not read (why): one that cannot stand in for
+        // the pin (Gap) fails closed as unverified, one that differs is
+        // device_changed. The attestation's shape was checked when the
+        // request was read.
+        DeviceAttestationRecord Attested(Session s, string address, string call, DeviceIdentity pinned, DeviceAttestation att, string why)
+        {
+            string gap = DeviceAttestation.Gap(pinned, att);
+            if (gap != null)
+            {
+                Log.Line("audit pin unverified call={0} session={1} address={2} why={3} attestation={4} refused={5}",
+                    call, s.Id, Json.Quote(address), Json.Quote(why), att.Audit(), Json.Quote(gap));
+                throw new TiadException(409, Kinds.DeviceUnverified,
+                    address + " has a device pin, but its identity could not be read (" + why + "), and the attestation cannot stand in for it: " + gap +
+                    "; the " + call + " was refused before it began");
+            }
+            string diff = DeviceAttestation.Mismatch(pinned, att);
+            if (diff != null)
+            {
+                Log.Line("audit pin device-changed call={0} session={1} address={2} pinned={3} attestation={4}",
+                    call, s.Id, Json.Quote(address), Json.Write(pinned.ToJson()), att.Audit());
+                throw Changed(address, pinned, att.Identity(), diff, "The " + call + " was refused before it began (the identity is the attestation by " + Json.Quote(att.By) + ").");
+            }
+            var rec = new DeviceAttestationRecord
+            {
+                Attestation = att,
+                Pinned = pinned,
+                At = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture),
+            };
+            Log.Line("audit pin attested call={0} session={1} address={2} why={3} pinned={4} attestation={5} at={6}",
+                call, s.Id, Json.Quote(address), Json.Quote(why), Json.Write(pinned.ToJson()), att.Audit(), rec.At);
+            return rec;
+        }
+
+        // ReadDeviceAttestation reads a request's deviceAttestation, null
+        // when it has none; a malformed one is a bad request.
+        static DeviceAttestation ReadDeviceAttestation(Reader r)
+        {
+            DeviceAttestation a = DeviceAttestation.Read(r.Child("deviceAttestation"));
+            if (a == null) return null;
+            string bad = a.Validate();
+            if (bad != null) throw TiadException.BadRequest("{0}", bad);
+            return a;
         }
 
         // PinUpload checks what an upload read against the device pin, or

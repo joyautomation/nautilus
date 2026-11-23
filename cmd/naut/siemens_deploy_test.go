@@ -966,6 +966,92 @@ func TestSiemensDeployAdoptsAnUpload(t *testing.T) {
 	}
 }
 
+// TestSiemensDeployAfterAnAdoptedUploadOfAPinnedCPU (#1325): the upload
+// of --adopt upload pins the CPU, and the agent cannot read a CPU's
+// identity online, so the download after it is refused, naming the way
+// on; with the operator's attestation of the order number and firmware it
+// loads, and the deploy record keeps the attestation. An attestation that
+// differs from the pin is refused as a changed device, and nothing loads.
+func TestSiemensDeployAfterAnAdoptedUploadOfAPinnedCPU(t *testing.T) {
+	for _, oneRun := range []bool{false, true} {
+		t.Run(map[bool]string{false: "build then download", true: "one run"}[oneRun], func(t *testing.T) {
+			r := newDeployRig(t)
+			r.cpuRuns(false)
+			r.setStation(", access-control: keep, configuration-protection: keep")
+			r.fake.SetDevice(tiadtest.BenchDevice(), true)
+			dl := []string{"--download", "--yes", "--allow-stop"}
+			if oneRun {
+				dl = append(dl, "--adopt", "upload")
+			} else {
+				out, code := r.run("", false, "--adopt", "upload")
+				if code != 0 || !strings.Contains(out, "(device pin: first-trust)") ||
+					!strings.Contains(out, "while the agent cannot read a CPU's identity online (#789) that takes --attest-order and --attest-firmware, read off the CPU itself") {
+					t.Fatalf("--adopt upload: exit %d:\n%s", code, out)
+				}
+			}
+			out, code := r.run("", false, dl...)
+			if code != 1 || !strings.Contains(out, "device_unverified") || !strings.Contains(out, "naut: --attest-order and --attest-firmware") ||
+				!strings.Contains(out, "off the device itself") || len(r.downloads()) != 0 {
+				t.Fatalf("download to the pinned CPU with no attestation: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
+			if oneRun {
+				// The upload pinned the CPU; the next --adopt upload matches it.
+				dl = append(dl[:3:3], "--adopt", "upload")
+			}
+			bad := append(append([]string{}, dl...), "--attest-order", "6ES7 510-1DK03-0AB0", "--attest-firmware", "V3.2.0")
+			out, code = r.run("", false, bad...)
+			if code != 1 || !strings.Contains(out, "device_changed") || !strings.Contains(out, `firmware "V3.1" is attested as "V3.2.0"`) || len(r.downloads()) != 0 {
+				t.Fatalf("download attested as another firmware: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
+			good := append(append([]string{}, dl...), "--attest-order", "6ES7510-1DK03-0AB0", "--attest-firmware", "3.1.3")
+			out, code = r.run("", false, good...)
+			if code != 0 || len(r.downloads()) != 1 ||
+				!strings.Contains(out, `device: you attest order "6ES7510-1DK03-0AB0", firmware "3.1.3", read off the CPU by test operator`) ||
+				!strings.Contains(out, `device pin: checked against your attestation, not read online (#789): test operator read order "6ES7510-1DK03-0AB0", firmware "3.1.3" off the CPU; the pin holds order "6ES7 510-1DK03-0AB0", firmware "V3.1"`) {
+				t.Fatalf("attested download: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
+			if a := r.downloads()[0].Request.DeviceAttestation; a == nil || a.By != "test operator" || a.Firmware != "3.1.3" {
+				t.Fatalf("the download carried %+v", a)
+			}
+			l, err := tiad.New(r.url, r.token).Deploys(context.Background(), deployCPU)
+			if err != nil || len(l.Deploys) == 0 || l.Deploys[0].DeviceAttestation == nil || l.Deploys[0].DeviceAttestation.Order != "6ES7510-1DK03-0AB0" {
+				t.Fatalf("the deploy record does not keep the attestation: %+v %v", l.Deploys, err)
+			}
+		})
+	}
+}
+
+// TestSiemensAttestFlags: --attest-order and --attest-firmware go
+// together, and are checked before anything is read.
+func TestSiemensAttestFlags(t *testing.T) {
+	for _, x := range []struct {
+		f    deviceAttestFlags
+		by   string
+		want string
+	}{
+		{deviceAttestFlags{order: "6ES7 510-1DK03-0AB0"}, "op", "--attest-order and --attest-firmware go together"},
+		{deviceAttestFlags{firmware: "V3.1.3"}, "op", "--attest-order and --attest-firmware go together"},
+		{deviceAttestFlags{order: "x", firmware: "V3.1"}, "", "must name who gives it"},
+		{deviceAttestFlags{order: "x", firmware: "three"}, "op", `deviceAttestation.firmware "three" is not a firmware version`},
+	} {
+		if _, err := x.f.attestation(x.by); err == nil || !strings.Contains(err.Error(), x.want) {
+			t.Errorf("%+v by %q: %v, want %q", x.f, x.by, err, x.want)
+		}
+		o := siemensDeployOptions{device: x.f, by: x.by}
+		if err := o.flagsError(); err == nil || !strings.Contains(err.Error(), x.want) {
+			t.Errorf("deploy %+v by %q: %v, want %q", x.f, x.by, err, x.want)
+		}
+	}
+	if a, err := (deviceAttestFlags{}).attestation("op"); a != nil || err != nil {
+		t.Fatalf("no flags: %+v %v", a, err)
+	}
+	var out bytes.Buffer
+	if err := parseSiemensShowFlags(&siemensShowOptions{}, []string{"--attest-order", "x", "--attest-firmware", "V3.1", "Main"}, &out); err == nil ||
+		!strings.Contains(out.String(), "go with --online") {
+		t.Fatalf("show without --online: %v %s", err, out.String())
+	}
+}
+
 // TestSiemensDeployNeverBuildsOnAnUnfinishedAdopt: an upload that failed
 // leaves a project the deploy never builds on until --adopt runs again.
 func TestSiemensDeployNeverBuildsOnAnUnfinishedAdopt(t *testing.T) {

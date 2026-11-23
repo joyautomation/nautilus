@@ -157,6 +157,12 @@ namespace Tiad
         // (fingerprint.trustUnverifiedCertificate), as a fingerprint
         // call's: TIA's TLS question answered trusted, blindly.
         public bool FingerprintTrust;
+        // DeviceAttestation is the operator's reading of the CPU's identity
+        // (null: none), used only for a pinned CPU tiad cannot identify
+        // online (CheckDevicePin); DeviceAttested is what the check accepted,
+        // set by the agent, for the response and the deploy record.
+        public DeviceAttestation DeviceAttestation;
+        public DeviceAttestationRecord DeviceAttested;
 
         public static DownloadRequest Read(Reader r)
         {
@@ -173,6 +179,7 @@ namespace Tiad
             d.OutsideChanges = OutsideChanges.Read(r.Child("outsideChanges"));
             Reader fp = r.Child("fingerprint");
             if (fp != null) d.FingerprintTrust = fp.Bool("trustUnverifiedCertificate");
+            d.DeviceAttestation = DeviceAttestation.Read(r.Child("deviceAttestation"));
             return d;
         }
 
@@ -188,6 +195,11 @@ namespace Tiad
             if (Encoding.UTF8.GetByteCount(Attestation.By) > Attestation.MaxBy) return "download: attestation.by is longer than " + Attestation.MaxBy + " bytes";
             if (Encoding.UTF8.GetByteCount(Attestation.Text) > Attestation.MaxText) return "download: attestation.text is longer than " + Attestation.MaxText + " bytes";
             if (!Attestation.CpuAccessControlValid) return "download: attestation.cpuAccessControl is not one of disabled, enabled";
+            if (DeviceAttestation != null)
+            {
+                string badDevice = DeviceAttestation.Validate();
+                if (badDevice != null) return "download: " + badDevice;
+            }
             if (Decisions.UserManagementKeepOnline == true && Decisions.UserManagementResetToProject == true)
             {
                 return "download: decisions.userManagementKeepOnline and decisions.userManagementResetToProject are both yes; user-management takes one answer";
