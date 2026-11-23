@@ -66,6 +66,9 @@ type cluster struct {
 	// fail reports an oracle breach: t.Errorf, or a recorder in the
 	// monitor's own test.
 	fail func(format string, args ...any)
+	// lease is every member's: loopLease, unless a measurement sets
+	// another before the start.
+	lease time.Duration
 	// votes is every vote request sent, as it left (faultRT).
 	votes []sentVote
 }
@@ -110,7 +113,7 @@ func newCluster(t *testing.T) *cluster {
 // newClusterHere is newCluster without t.Parallel: a measurement that
 // times one cluster at a time.
 func newClusterHere(t *testing.T) *cluster {
-	c := &cluster{t: t, pair: NewClusterID(), cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
+	c := &cluster{t: t, pair: NewClusterID(), lease: loopLease, cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
 		byHP: map[string]quorum.NodeID{}, noHello: map[quorum.NodeID]bool{}, hellos: map[quorum.NodeID]int{}, real: map[string]string{}, ctl: map[quorum.NodeID]*member{},
 		tok:  map[quorum.NodeID]string{"a": testToken, "b": testToken, WitnessID: testToken},
 		ctok: map[quorum.NodeID]string{"a": "client", "b": "client"}, led: map[uint64]quorum.NodeID{},
@@ -183,7 +186,7 @@ func (c *cluster) clientTLS(id quorum.NodeID) *tls.Config {
 
 func (c *cluster) startWitness() {
 	c.t.Helper()
-	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: loopLease})
+	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: c.lease})
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -215,7 +218,7 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 		peer = "a"
 	}
 	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
-		Lease: loopLease, StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
+		Lease: c.lease, StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
 		SelfAPI: apiAddr(id), TLS: c.clientTLS(id),
 		client: &http.Client{Transport: &faultRT{c: c, from: id, base: c.transportFor(id)}},
 		OnEvent: func(ev Event) {
@@ -409,6 +412,9 @@ func (c *cluster) shutdown() {
 // leases is n leases, the unit every deadline here is in.
 func leases(n int) time.Duration { return time.Duration(n) * loopLease }
 
+// leases is n of this cluster's leases.
+func (c *cluster) leases(n int) time.Duration { return time.Duration(n) * c.lease }
+
 func (c *cluster) waitFor(what string, d time.Duration, ok func() bool) {
 	c.t.Helper()
 	end := time.Now().Add(d)
@@ -465,20 +471,20 @@ func (c *cluster) waitLeader(d time.Duration) quorum.NodeID {
 func (c *cluster) commission() {
 	c.t.Helper()
 	a, b := c.elector("a"), c.elector("b")
-	c.waitFor("both controllers to hear the witness", leases(20), func() bool {
+	c.waitFor("both controllers to hear the witness", c.leases(20), func() bool {
 		return a.Status().WitnessIncarnation != 0 && b.Status().WitnessIncarnation != 0
 	})
 	if a.Status().Commissioned || b.Status().Commissioned {
 		c.t.Fatal("a new pair commissioned itself without the operator")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), leases(10))
+	ctx, cancel := context.WithTimeout(context.Background(), c.leases(10))
 	defer cancel()
 	// A margin above the known terms, as the operator's command gives:
 	// campaigns move them while the command is typed.
 	if err := a.Recommission(ctx, a.Status().WitnessIncarnation, max(a.KnownFloor(), b.KnownFloor())+1000); err != nil {
 		c.t.Fatal(err)
 	}
-	c.waitFor("the pair to commission", leases(20), func() bool {
+	c.waitFor("the pair to commission", c.leases(20), func() bool {
 		sa, sb := a.Status(), b.Status()
 		return sa.Commissioned && sb.Commissioned && sa.Incarnation == sb.Incarnation
 	})
