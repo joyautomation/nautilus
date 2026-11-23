@@ -57,7 +57,13 @@ func measureFailovers(t *testing.T, lease time.Duration, n int) []string {
 	var out []string
 	for _, fault := range []string{"kill", "isolate"} {
 		var takes, gaps []time.Duration
+		loadStart := loadAvg()
 		for range n {
+			if t.Failed() {
+				// The monitor saw two gates open (or another breach): halt
+				// and report, never a statistic.
+				t.FailNow()
+			}
 			c.waitFor("a settled pair", c.leases(20), func() bool {
 				who := c.leader()
 				return who != "" && c.status(c.other(who)).Leader == string(who)
@@ -96,8 +102,11 @@ func measureFailovers(t *testing.T, lease time.Duration, n int) []string {
 				c.isolate(old, false)
 			}
 		}
-		out = append(out, fmt.Sprintf("  lease %-6v %-8s fault->new leader p50 %v p99 %v max %v | control gap p50 %v p99 %v max %v",
-			lease, fault, pctl(takes, .5), pctl(takes, .99), pctl(takes, 1), pctl(gaps, .5), pctl(gaps, .99), pctl(gaps, 1)))
+		if t.Failed() {
+			t.FailNow()
+		}
+		out = append(out, fmt.Sprintf("  lease %-6v %-8s fault->new leader p50 %v p99 %v max %v | control gap p50 %v p99 %v max %v | load %s -> %s",
+			lease, fault, pctl(takes, .5), pctl(takes, .99), pctl(takes, 1), pctl(gaps, .5), pctl(gaps, .99), pctl(gaps, 1), loadStart, loadAvg()))
 	}
 	return out
 }
@@ -107,4 +116,17 @@ func pctl(d []time.Duration, p float64) time.Duration {
 	s := slices.Clone(d)
 	slices.Sort(s)
 	return s[min(len(s)-1, int(float64(len(s))*p))].Round(time.Millisecond)
+}
+
+// loadAvg is the machine's 1-minute load average, "?" where unknown.
+func loadAvg() string {
+	b, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return "?"
+	}
+	f := strings.Fields(string(b))
+	if len(f) == 0 {
+		return "?"
+	}
+	return f[0]
 }
