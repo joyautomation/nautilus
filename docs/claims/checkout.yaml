@@ -81,8 +81,9 @@ claims:
   - id: CHK-007
     claim: >-
       Every begin, result and abandon is an audit entry, accepted or refused,
-      and a redundant pair refuses the checkout until its results go through
-      the log.
+      and a redundant pair that has no checkout store (a project without the
+      section or without auth users) refuses the checkout; one with it keeps
+      its results in the log (CHK-014).
     source: "#who"
     tests:
       - go ./server TestEveryWritePathJournalsExactlyOneEntry
@@ -144,8 +145,8 @@ claims:
       The expiry is a Go timer (the monotonic clock); no test steps the wall
       clock. A force left standing in the file by a process that is gone is
       recorded as interrupted when the store is opened (tested on the store);
-      that naut run calls it at start is not itself tested. A takeover is not
-      applicable yet: a redundant pair refuses the checkout.
+      that naut run calls it at start is not itself tested. A takeover on a
+      pair is CHK-015.
 
   - id: CHK-010
     claim: >-
@@ -297,6 +298,35 @@ claims:
     note: >-
       naut run composes the log's apply, attach and supersede reset for a
       project with a checkout section and auth users (tested through two pair
-      members); the leader's reconcile loop and the halted condition are
-      goroutine and condition wiring tested at their parts, not as a timed
-      run. Not exercised on bench hardware.
+      members); the duty loop's steps (the lead by term, the halted condition,
+      the reconcile) are tested as steps, not as a once-a-second timed run.
+      Not exercised on bench hardware.
+
+  - id: CHK-015
+    claim: >-
+      A force is a controller's own output drive and never fails over. On a
+      pair, the controller that runs the program ends (as interrupted) a
+      standing force it is not driving, once its log has synced; a standby
+      refuses to force; a controller that loses the lead, or wins it again in
+      another term, lets the force it drove go at once (unforced in its own
+      table, its timer and watch stopped) and proposes nothing, also when its
+      checkout has halted; a force still starting at that moment lets go
+      itself; a force whose record the log says is ended (an operator
+      abandoning the run on the other controller) is let go by its driver
+      within a second; a shutdown lets a standing force go and records it as
+      interrupted. A force let go here without a record end logs why (the lead
+      lost, or the log no longer says it stands).
+    source: "#a-redundant-pair"
+    tests:
+      - go ./server TestDemotionLetsAForceGoAndARePromotionFindsNoneStanding
+      - go ./server TestDemotionDuringAStartLetsTheForceGo
+      - go ./server TestCheckoutForceEndedInTheRecordElsewhereIsLetGoHere
+      - go ./server TestStopLetsAStandingForceGoAndWaitsForItsGoroutines
+      - go ./server TestReconcileEndsAForceNothingDrives
+      - go ./checkout TestATakeoverEndsAForceTheLogStillHas
+      - go ./cmd/naut TestCheckoutDutiesFollowTheLeadByTerm
+    note: >-
+      The output is fenced and the table cleared by the runtime on a lost
+      lead; this claim is the checkout's own state following it. The duty
+      loop is tested as steps, not as a timed run; not exercised on bench
+      hardware.
