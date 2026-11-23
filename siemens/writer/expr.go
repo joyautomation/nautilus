@@ -301,6 +301,7 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			pw.gap("siemens/function", line, gapOther, "TRUNC of anything but one REAL or LREAL", "")
 			return ""
 		}
+		pw.diverges(line, "TRUNC", "a value beyond the 64-bit range (or NaN)", "TRUNC_LINT sets ENO FALSE")
 		return "TRUNC_LINT(" + args[0] + ")"
 	case strings.HasPrefix(name, "TRUNC_") || strings.HasPrefix(name, "REAL_TRUNC_") || strings.HasPrefix(name, "LREAL_TRUNC_"):
 		_, to, _ := strings.Cut(name, "TRUNC_")
@@ -308,6 +309,7 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			pw.gap("siemens/function", line, gapOther, name+" of this argument", "")
 			return ""
 		}
+		pw.diverges(line, name, "a value beyond "+to+" (or NaN)", "TRUNC_"+to+" sets ENO FALSE")
 		return "TRUNC_" + to + "(" + args[0] + ")"
 	case mathFuncs[name]:
 		if len(args) != 1 {
@@ -347,6 +349,9 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		if k := pw.typ(argExprs[0]); !intOrBits(k) && k != tAnyInt {
 			pw.gap("siemens/call", line, gapOther, "MUX with a selector of type "+orUnknown(k), "")
 			return ""
+		}
+		if k, ok := litInt(argExprs[0]); !ok || k < 0 || k >= int64(len(args)-1) {
+			pw.diverges(line, "MUX", fmt.Sprintf("a selector K outside 0..%d", len(args)-2), "MUX sets ENO FALSE")
 		}
 		return "MUX(" + formal(ir.FormalNames(name, len(args)), args) + ")"
 	case name == "SHL" || name == "SHR" || name == "ROL" || name == "ROR":
@@ -414,6 +419,9 @@ func (pw *progWriter) conversion(name, from, to string, args []string, line int)
 			return name + "(" + args[0] + ")"
 		}
 		return wrap(toLINT(from, args[0]), to)
+	}
+	if isReal(from) && isInt(to) {
+		pw.diverges(line, name, "a value beyond "+to+" (or NaN)", name+" sets ENO FALSE")
 	}
 	return name + "(" + args[0] + ")"
 }
@@ -494,6 +502,7 @@ func (pw *progWriter) shift(name string, argExprs []st.Expression, args []string
 		n = nt + "_TO_" + unsignedOf(nt) + "(" + n + ")"
 	case isInt(nt) && intWidth[nt].signed:
 		n = nt + "_TO_" + unsignedOf(bitsFor(nt)) + "(" + n + ")"
+		pw.diverges(line, name, "a negative count N", "it becomes an unsigned count beyond the width")
 	case isInt(nt), nt == tAnyInt:
 	default:
 		pw.gap("siemens/function", line, gapOther, name+" by a count of type "+orUnknown(nt), "")

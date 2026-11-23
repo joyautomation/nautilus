@@ -24,7 +24,8 @@
 // Known divergences, documented rather than refused: where nautilus
 // faults the scan the CPU sets ENO FALSE and carries on: a REAL → integer
 // conversion out of range (TRUNC included), a MUX selector out of range,
-// a negative shift count.
+// a negative shift count. Each is a warning at its use site
+// (Output.Warnings), which check and the deploy print.
 //
 // Comments in the nautilus source are not carried into the SCL: nautilus
 // is where the program is read and edited.
@@ -126,6 +127,13 @@ type Output struct {
 	// Sources says where each generated file came from, by its Path:
 	// Locate reads a TIA compile message back through it.
 	Sources map[string]Source
+	// Warnings are the places where the CPU behaves differently from
+	// nautilus in a case the writer documents rather than refuses (a MUX
+	// selector out of range, a negative shift count, a REAL beyond an
+	// integer's range: nautilus faults the scan, the CPU sets ENO FALSE
+	// and carries on). They come with the files, and with the
+	// diagnostics when Write refuses.
+	Warnings []Diag
 	// names are the readable names under each root, lower-cased: the
 	// manifest tags under "", a program's statics under its name. The
 	// value says whether the name has members (an FB instance).
@@ -245,7 +253,7 @@ func Write(in Input) (Output, []Diag, error) {
 		if err != nil {
 			return Output{}, nil, fmt.Errorf("%s: %w", p.Path, err)
 		}
-		mark := len(w.diags)
+		mark, wmark := len(w.diags), len(w.warnings)
 		if !strings.EqualFold(prog.TopKeyword, "PROGRAM") || prog.Name == "" {
 			w.diag("siemens/program", p.Path, 1, "the source declares no PROGRAM")
 			continue
@@ -253,6 +261,9 @@ func Write(in Input) (Output, []Diag, error) {
 		pw := w.program(p.Path, p.Libs, prog)
 		for i := mark; i < len(w.diags); i++ {
 			w.diags[i].Line = mapLine(lines, w.diags[i].Line)
+		}
+		for i := wmark; i < len(w.warnings); i++ {
+			w.warnings[i].Line = mapLine(lines, w.warnings[i].Line)
 		}
 		if pw == nil {
 			continue
@@ -337,8 +348,9 @@ func Write(in Input) (Output, []Diag, error) {
 	}
 
 	if len(w.diags) > 0 {
-		return Output{}, w.diags, nil
+		return Output{Warnings: w.warnings}, w.diags, nil
 	}
+	out.Warnings = w.warnings
 	fc := map[string]bool{}
 	for _, fn := range fns {
 		fc[prefix+fn+".scl"] = true
@@ -358,6 +370,8 @@ type writer struct {
 	tagsDB  string // with the prefix
 	prefix  string
 	diags   []Diag
+	// warnings: Output.Warnings.
+	warnings []Diag
 	// guarded are the guarded division functions the programs call
 	// (ops.go), each with the first program that called it.
 	guarded map[string]string

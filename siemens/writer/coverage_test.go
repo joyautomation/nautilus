@@ -347,3 +347,77 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 		t.Errorf("only %d gaps exercised: %v", gaps, diags)
 	}
 }
+
+// TestDivergencesAreWarnedWhereTheyBite: where nautilus faults the scan
+// and the CPU sets ENO FALSE and carries on, the use site gets a warning
+// (not an error): a MUX selector that may be out of range, a signed
+// shift count, TRUNC and a REAL → integer conversion. A constant K in
+// range, an unsigned count and an integer conversion get none.
+func TestDivergencesAreWarnedWhereTheyBite(t *testing.T) {
+	src := "PROGRAM P\nVAR a, k : INT; u : UINT; w : WORD; r : REAL; l : LINT; d : DINT; END_VAR\n" +
+		"a := MUX(k, a, 1);\n" + // 3: warned
+		"a := MUX(1, a, 2);\n" + // 4: constant in range
+		"a := MUX(2, a, 2);\n" + // 5: constant out of range: warned
+		"w := SHL(w, k);\n" + // 6: signed count: warned
+		"w := SHL(w, u);\n" + // 7: unsigned count
+		"l := TRUNC(r);\n" + // 8: warned
+		"d := REAL_TO_DINT(r);\n" + // 9: warned
+		"d := INT_TO_DINT(a);\n" + // 10
+		"END_PROGRAM\n"
+	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	var lines []int
+	for _, w := range out.Warnings {
+		if w.Rule != "siemens/divergence" || w.Path != "p.st" || !strings.Contains(w.Message, "faults the scan in nautilus; on Siemens") {
+			t.Errorf("warning %v", w)
+		}
+		lines = append(lines, w.Line)
+	}
+	if fmt.Sprint(lines) != "[3 5 6 8 9]" {
+		t.Errorf("warned lines %v, want [3 5 6 8 9]: %v", lines, out.Warnings)
+	}
+	if !strings.Contains(out.Warnings[0].Message, "MUX: a selector K outside 0..1 faults the scan in nautilus; on Siemens MUX sets ENO FALSE and the scan carries on") {
+		t.Errorf("MUX warning %q", out.Warnings[0].Message)
+	}
+
+	// A refused program still reports its warnings.
+	out, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a, k : INT; r : REAL; END_VAR\na := MUX(k, a, 1);\nr := ATAN2(r, r);\nEND_PROGRAM\n"}}})
+	if len(diags) == 0 || len(out.Warnings) != 1 || len(out.Files) != 0 {
+		t.Errorf("refused: diags %v, warnings %v", diags, out.Warnings)
+	}
+}
+
+// TestWarningsPointAtTheDiagramLine: a warning in an FBD (or ladder)
+// program names the diagram's own line, as a refusal does.
+func TestWarningsPointAtTheDiagramLine(t *testing.T) {
+	src := []byte("PROGRAM F\n(* a note,\n   two lines *)\nVAR\n    K, X, Y, Z, M : INT;\nEND_VAR\nFBD\n  M := MAX(X, Y)\n\n  M := MUX(K := K, IN0 := X, IN1 := Y, IN2 := Z)\nEND_FBD\nEND_PROGRAM\n")
+	st, _, err := toST(Program{Path: "f.fbd", Source: string(src)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, l := range strings.Split(st, "\n") {
+		if strings.Contains(l, "MUX(") && i+1 == 10 {
+			t.Fatal("the ST has MUX on the FBD's line too, so this test cannot tell a mapped line from an unmapped one")
+		}
+	}
+	out, _, err := Write(Input{Programs: []Program{{Path: "f.fbd", Source: string(src)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(src), "\n")
+	found := false
+	for _, w := range out.Warnings {
+		if !strings.HasPrefix(w.Message, "MUX:") {
+			continue
+		}
+		found = true
+		if w.Line < 1 || w.Line > len(lines) || !strings.Contains(lines[w.Line-1], "MUX(") {
+			t.Errorf("MUX warning on f.fbd:%d, which is not the MUX line", w.Line)
+		}
+	}
+	if !found {
+		t.Fatalf("no MUX warning: %v", out.Warnings)
+	}
+}

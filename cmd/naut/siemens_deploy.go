@@ -953,6 +953,9 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 			d.say("%s: siemens target: %s [%s]", d.where(x.Path), x.Message, x.Rule)
 		}
 	}
+	for _, x := range out.Warnings {
+		d.say("%s:%d:1: warning: siemens target: %s [%s]", d.where(x.Path), x.Line, x.Message, x.Rule)
+	}
 	if len(problems)+len(diags) > 0 {
 		d.fail("%d problem(s): nothing sent to tiad", len(problems)+len(diags))
 		return 1

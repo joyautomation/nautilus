@@ -498,21 +498,29 @@ func checkSiemensTarget(dir, manifestName, manifestFile string) int {
 		fmt.Printf("%s: siemens target: %s\n", manifestFile, err)
 		return 1
 	}
-	_, diags, err := swriter.Write(in)
+	out, diags, err := swriter.Write(in)
 	if err != nil {
 		fmt.Printf("%s: siemens target: %s\n", manifestFile, err)
 		return 1
 	}
-	for _, d := range diags {
+	report := func(d swriter.Diag, level string) {
 		where := d.Path
 		if where == "" || where == project.ManifestName {
 			where = manifestFile
 		}
 		if d.Line > 0 {
-			fmt.Printf("%s:%d:1: siemens target: %s [%s]\n", where, d.Line, d.Message, d.Rule)
+			fmt.Printf("%s:%d:1: %ssiemens target: %s [%s]\n", where, d.Line, level, d.Message, d.Rule)
 		} else {
-			fmt.Printf("%s: siemens target: %s [%s]\n", where, d.Message, d.Rule)
+			fmt.Printf("%s: %ssiemens target: %s [%s]\n", where, level, d.Message, d.Rule)
 		}
+	}
+	for _, d := range diags {
+		report(d, "")
+	}
+	// Where the CPU behaves differently from nautilus (writer.Output
+	// Warnings): a warning at the use site, not an error.
+	for _, d := range out.Warnings {
+		report(d, "warning: ")
 	}
 	return len(diags)
 }

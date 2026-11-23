@@ -302,3 +302,18 @@ func TestSiemensBlockPrefix(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckSiemensTargetWarnsWhereTheCPUDiffers: a construct the writer
+// translates but the CPU runs differently in an edge case (here a MUX
+// selector out of range: nautilus faults, the CPU sets ENO) is a warning
+// at its line, and check still passes.
+func TestCheckSiemensTargetWarnsWhereTheCPUDiffers(t *testing.T) {
+	prog := "PROGRAM main\nVAR x : REAL; k : INT; END_VAR\nx := MUX(k, Level, 0.0);\nEND_PROGRAM\n"
+	out, code := checkIn(t, map[string]string{"nautilus.yaml": goodSiemensManifest, "main.st": prog})
+	if code != 0 {
+		t.Fatalf("exit %d, want 0:\n%s", code, out)
+	}
+	if !strings.Contains(out, "main.st:3:1: warning: siemens target: MUX: a selector K outside 0..1 faults the scan in nautilus; on Siemens MUX sets ENO FALSE and the scan carries on [siemens/divergence]") {
+		t.Fatalf("no divergence warning at main.st:3:\n%s", out)
+	}
+}

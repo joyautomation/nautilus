@@ -341,10 +341,17 @@ The rules:
   - An untyped manifest tag takes the type a program's VAR_EXTERNAL binds
     it as, as the runtime does (it used to take its init's REAL).
 - **Known divergences, documented rather than refused:** where nautilus
-  faults the scan the CPU sets ENO FALSE and carries on: a REAL → integer
-  conversion (TRUNC included) out of range, a MUX selector out of range,
-  a negative shift count (converted to TIA's unsigned N, a count beyond
-  the width).
+  faults the scan the CPU sets ENO FALSE and carries on. Each is a
+  `naut check --target siemens` (and deploy) **warning at its use site**
+  (`[siemens/divergence]`, `writer.Output.Warnings`), never silent:
+
+  | Construct | Warned when | nautilus | S7-1500 |
+  |---|---|---|---|
+  | `MUX(K, IN0, …)` | K is not a constant in range | K out of range faults the scan | MUX sets ENO FALSE, the scan carries on |
+  | `SHL`/`SHR`/`ROL`/`ROR` | the count N is signed | a negative N faults the scan | N is converted to TIA's unsigned count, beyond the width |
+  | `TRUNC`, `TRUNC_<int>` | always | a value beyond the integer (or NaN) faults the scan | the conversion sets ENO FALSE, the scan carries on |
+  | `REAL_TO_<int>`, `TO_<int>` of a REAL | always | the same | the same |
+
 - Temps have no start value in TIA. nautilus re-sets a temp to its init on
   every scan (#203), so the body starts by assigning each one.
 - Generated state lives in DB members (FB statics), never in temps, so the

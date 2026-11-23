@@ -258,6 +258,14 @@ func (pw *progWriter) diag(rule string, line int, msg string) {
 	pw.w.diag(rule, pw.path, line, msg)
 }
 
+// diverges warns where the CPU behaves differently from nautilus in a
+// case the writer documents rather than refuses: nautilus faults the scan
+// on it, the CPU sets ENO FALSE and carries on (Output.Warnings).
+func (pw *progWriter) diverges(line int, what, onNautilus, onSiemens string) {
+	pw.w.warnings = append(pw.w.warnings, Diag{Rule: "siemens/divergence", Path: pw.path, Line: line,
+		Message: fmt.Sprintf("%s: %s faults the scan in nautilus; on Siemens %s and the scan carries on", what, onNautilus, onSiemens)})
+}
+
 func indent(n int) string { return strings.Repeat("\t", n) }
 
 func (pw *progWriter) stmts(b *strings.Builder, ss []st.Statement, depth int) {
