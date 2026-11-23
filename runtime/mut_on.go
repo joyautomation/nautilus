@@ -53,6 +53,8 @@ import "os"
 //   - image_source_unhashed: a task's image names no running source (#710 S2a).
 //   - shadow_tags_layout_unchecked: the shadow applies the tags of a leader that carries another set (#710 S2a).
 //   - image_tags_retained_twice: an image's store section carries the retained tags the retain section already carries (#710 S2a).
+//   - copy_first_scan_only: an image is taken from the first copies, with no second round for the faster tasks, so a fast task's state can be as old as the slowest task's period (#710 S2c).
+//   - copy_from_older_round: an image takes a copy made for an earlier round, whose image was never taken (#710 S2c).
 //   - hot_no_age_check: a takeover goes hot on an image older than hot-max-age, or with hot-max-age 0 (#710 S2b).
 //   - hot_source_unchecked: a takeover goes hot with a task running another source than the image's (#710 S2b).
 //   - hot_partial_tasks: a takeover installs the tasks that fit and resets the rest, not all or none (#710 S2b).
