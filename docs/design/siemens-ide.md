@@ -100,15 +100,80 @@ the TIA project is not saved. The steps:
    A CPU with no record is no refusal: the plan says plainly that what it
    runs is replaced.
 4. **The project.** The deploy opens `projects/<name>/<name>.ap21` as last
-   saved and PUTs the station. With none, it creates the project from the
-   spec. The project is saved only after a successful download, so the
-   next deploy builds on what the CPU runs. Its OB steps then show `kept`,
-   or `recreated` with the old and new cycle, and prune finds blocks that
-   are gone. tiad's PUT on a saved project reports only "cpu taken over".
-   So a download that loaded hardware leaves the spec it loaded in the
-   work dir (`naut-src/<name>/station.json`). The next plan says from it
-   whether the spec changed, and so whether the hardware may differ from
-   the CPU's. It is a hint for the plan, not a check.
+   saved and PUTs the station. With none, a first deploy to a CPU that
+   already runs a program adopts that CPU's own project (`--adopt`, below);
+   otherwise it creates the project from the spec. The project is saved
+   only after a successful download, so the next deploy builds on what the
+   CPU runs. Its OB steps then show `kept`, or `recreated` with the old and
+   new cycle, and prune finds blocks that are gone. The first PUT on an
+   opened project compares the spec with the project as found and says
+   `station: no change` when nothing it writes differs (§3.4). A download
+   that loaded hardware leaves the spec it loaded in the work dir
+   (`naut-src/<name>/station.json`). The next plan says from it whether
+   the spec changed, and so whether the hardware may differ from the
+   CPU's. It is a hint for the plan, not a check.
+
+   **Refused up front, naming the fix.** A new project cannot load
+   software only onto a CPU that runs a configuration: its hardware,
+   users and devices differ (the spec's defaults are access control with
+   the user `nautilus` and password protection). So `--download` of a new
+   project without `--hardware` is refused before anything is created,
+   naming `--adopt` and `--hardware`. `keep` (access control or
+   configuration protection) in a new project would keep nothing, and
+   TIA's compile refuses it; it is refused before anything is created,
+   naming `--adopt`, build-only too. A build-only deploy of a new project
+   prints a note saying the same.
+   **Adopting the CPU's project (#1272).** `--adopt` names where the
+   CPU's project comes from; it is never guessed:
+   - `--adopt FILE.zap21`: a project archive (TIA's Project > Archive).
+     Customers usually have their TIA project, so this is the first
+     choice. The file goes to the agent's work dir and
+     `POST /v1/projects/adopt` makes it this deploy's saved project.
+   - `--adopt last-deploy`: the archive of the CPU's last deploy record.
+     With `--download`, the CPU must compare equal to that record (the
+     verify of step 3).
+   - `--adopt upload`: an upload of the CPU's program into a project of
+     the deploy's (read-only, but it reaches the CPU even without
+     `--download`; `--trust-unverified-certificate` answers the upload's
+     TLS question trusted, blindly). The project the upload goes into
+     holds only the spec's CPU, unprotected and keeping access control,
+     since the upload replaces its station.
+
+   The deploy keeps a record of the adoption beside its sources
+   (`naut-src/<name>/adopted.json`: source, sha256, by, at, whether a
+   download took it, whether the adopt finished). The record is written
+   unfinished before the adopt starts and finished after: a project an
+   adopt left behind (naut died, the agent failed part-way) is never built
+   on until `--adopt` runs again. The adopt sends the deploy's CPU address,
+   and the agent refuses a project whose CPU is elsewhere. An adopt also
+   removes the station record of an earlier hardware load
+   (`station.json`), which says nothing of the adopted project.
+
+   With `--download`, an adopted project that no download took yet is
+   compared online with the CPU as adopted, before the spec is applied and
+   before anything is imported. The compare must be with the deploy's CPU
+   (its reported `address`) and equal; anything else is refused (an
+   archive of another state, or of another CPU, would put other blocks on
+   this one), naming `--adopt upload` or a current archive. The compare
+   covers the software only (tiad cannot compare hardware or users
+   online). So the plan says `project: adopted from ...` and
+   `station: as adopted: ... taken as the CPU's (the compare covers the
+   software ...)`, `as uploaded from the CPU` for an upload, with the
+   hardware not loaded. A deploy whose apply changes the station says so
+   and that the hardware may differ, and once a software-only download
+   took such a change, so do all later plans. Once a download took the
+   adoption, later deploys build on it, and `--adopt` is refused. Before
+   that, `--adopt` again replaces it. `--adopt last-deploy` on a CPU that
+   does not compare equal to its last deploy is refused as an adopt, before
+   the outside-change refusal. Foreign blocks, users and devices stay as
+   found: adoption changes nothing in the project but its name and place.
+
+   **The CPU's last deploy is another project's.** When the CPU's newest
+   record loaded another project than this deploy's saved one (a restore,
+   another deploy), the saved project is not what the CPU runs. The
+   download is refused as a change outside it, and
+   `--accept-outside-changes` journals the accept with the verdict
+   `other-project`, naming that deploy.
 5. **Software.** The sources go into the group (`target.siemens.group`) with
    the writer's OBs as `obs` and `prune`. Each OB step is printed.
 6. **Compile.** Hardware and software are compiled. Each message is printed
@@ -797,14 +862,15 @@ The client checks each path and the agent checks again.
 | `DELETE /v1/files/{path}` | → `{}` |
 | `POST /v1/gsd/install` | `{path}` → `{path, alreadyInstalled}` (P1) |
 | `POST /v1/projects` | `{name, station, secrets}` → `{session, project}`. A fresh project built from the spec |
+| `POST /v1/projects/adopt` | `{name, archive? \| deploy?, replace?, address?}` → `{project, source: {archive? \| deploy?, sha256, bytes}, cpu, cpuAddress, keptDevices, address?}` (#1272). Makes a project archive the saved project of a deploy named `name`, `projects/<name>/<name>.ap21`: exactly one source, a `.zap21` in the work dir (`archive`) or a deploy record's archive (`deploy`, hashed against the record and refused when broken, when the record loaded nothing, or when the archived CPU is not at the record's address). A copy is retrieved in the agent's staging, saved there with TIA's `SaveAs` (which renames the project to `name`; measured on V21), read and closed: no session stays open. A project whose CPU tiad cannot read is refused; so is one whose CPU is not at `address` (`cpu_mismatch`), the deploy's CPU, so an archive of another CPU (or from before an address change) is never adopted for this one. A `projects/<name>/` that holds anything is refused unless `replace` (as a create replaces one; naut asks only for an adoption no download took), and is removed only once the new source is staged and hashed (audited); a source inside it is refused. A failed or refused adopt leaves no project behind. `cpuAddress` is where the adopted project has its CPU; `address` in the reply is the record's, for a deploy source |
 | `POST /v1/sessions` | `{path}` (a project or archive in the work dir) → `{session, project}` |
 | `GET /v1/sessions` | → `{sessions: [{session, project, idleSeconds}]}` |
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
-| `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, the Full access user made or found, devices kept as found) |
+| `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, the Full access user made or found, devices kept as found). On the first apply to an opened or uploaded project, `changes` compares the spec with the project as found (`CpuReuse.Found`, #1272): each interface node value that differs (address, subnet mask, router, PROFINET name, a name TIA generated), the configuration protection step, and whether the access and web steps wrote anything (a user, role, right, password or web server switch); empty is "no change". A node the agent could not read counts as a change, never none |
 | `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune, obs?: [{name, number, cycleMs}]}` → `{results: [{path, ok, messages}], blocks: [{name, kind}], obs?: [{name, action, was?, now?}]}`. Generates blocks into the group named `group`; `blocks` lists that group's. `obs` are the cyclic interrupt OBs the agent makes first (see "Cyclic interrupt OBs" below). With `prune`, blocks in that group that no source produced are deleted. An import never touches a block outside the group: see "Blocks outside the group" below |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text, path?}]}`. Each message is a leaf of TIA's message tree; `path` is its parents, outermost first. For an error in an SCL block, `object` is the line in the block's body (1 is the `BEGIN` line) and the block is the last parent: `{object: "4", path: ["PLC_1", "Program blocks", "nautilus", "naut_Main (FB1)"]}` (measured on TIA V21, #789) |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
-| `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}}` (§3.9) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null` |
+| `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}}` (§3.9) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null`. A project opened as found, with no spec applied yet (an adopted one), compares with its own CPU at the address the project holds; still only a target. `address` is the CPU compared with, which naut checks is the deploy's |
 | `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
 | `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
@@ -1440,7 +1506,10 @@ get a record too, just as it must get the hardware opt-in (#1180 review).
     nautilus, or cannot say:
     - `by`: who accepts, not blank, at most 200 bytes;
     - `verdict`: what the caller's verify of the last deploy found,
-      `different`, `broken` or `unreadable`;
+      `different`, `broken` or `unreadable`, or `other-project` when that
+      deploy (which may still compare equal) loaded another project than
+      the one this download builds on, a restore or another deploy
+      (#1272);
     - `deploy`: that record's id, at most 100 bytes, required unless
       `unreadable`.
 

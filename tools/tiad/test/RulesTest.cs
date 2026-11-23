@@ -130,6 +130,7 @@ namespace Tiad.Test
                 T("ReuseFirmwareIsExact", ReuseFirmwareIsExact),
                 T("KeptDevicesCollide", KeptDevicesCollide),
                 T("KeptNoteAndChanges", KeptNoteAndChanges),
+                T("FoundSaysWhatTheFirstApplyChanges", FoundSaysWhatTheFirstApplyChanges),
                 T("OwnershipReadsEveryHeader", OwnershipReadsEveryHeader),
                 T("OwnershipRefusesABlockOutsideTheGroup", OwnershipRefusesABlockOutsideTheGroup),
                 T("OwnershipSeesAChangeOutsideTheGroup", OwnershipSeesAChangeOutsideTheGroup),

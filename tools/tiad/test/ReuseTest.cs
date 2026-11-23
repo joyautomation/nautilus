@@ -154,11 +154,45 @@ namespace Tiad.Test
             Contains(n, "a download loads them too", "the note says the download takes them");
             Contains(n, "\"io \\\"up\\\"\" profinetName=\"io-up\" address=\"192.0.2.30\"; \"bare\"", "each device, quoted");
             Eq(string.Join("|", CpuReuse.Changes(CpuReuse.Create, SpecStation(), SpecStation()).ToArray()), "station created", "create");
-            Eq(string.Join("|", CpuReuse.Changes(CpuReuse.Reuse, null, SpecStation()).ToArray()), "cpu PLC_1 taken over from the project", "reuse after an upload");
+            Eq(string.Join("|", CpuReuse.Changes(CpuReuse.Reuse, null, SpecStation()).ToArray()), "station created", "reuse with no spec to compare with reports a change, never none");
             Eq(CpuReuse.Changes(CpuReuse.Reuse, SpecStation(), SpecStation()).Count, 0, "reuse of the same spec");
             var moved = SpecStation();
             moved.Cpu.Address = "192.0.2.11";
             Eq(string.Join("|", CpuReuse.Changes(CpuReuse.Reuse, SpecStation(), moved).ToArray()), "cpu PLC_1 changed", "reuse with a changed address");
+        }
+
+        // FoundSaysWhatTheFirstApplyChanges: on an opened or uploaded
+        // project, the first apply compares the spec with the project as
+        // found; "no change" only when nothing it writes differs.
+        static void FoundSaysWhatTheFirstApplyChanges()
+        {
+            var found = InProject();
+            found.Address = "192.0.2.10";
+            found.ProfinetName = "plc-1";
+            found.NodeRead = true;
+            Eq(CpuReuse.Found(found, SpecStation(), ConfigProtection.Nothing, false).Count, 0, "the spec is the project's station: no change");
+            var moved = SpecStation();
+            moved.Cpu.Address = "192.0.2.11";
+            moved.Cpu.SubnetMask = "255.255.255.0";
+            moved.Cpu.Router = "192.0.2.1";
+            moved.Cpu.ProfinetName = "plc-2";
+            Eq(string.Join("|", CpuReuse.Found(found, moved, ConfigProtection.Nothing, false).ToArray()),
+                "cpu PLC_1 address \"192.0.2.10\" -> \"192.0.2.11\"|cpu PLC_1 subnet mask none -> \"255.255.255.0\"|cpu PLC_1 router none -> \"192.0.2.1\"|cpu PLC_1 PROFINET name \"plc-1\" -> \"plc-2\"",
+                "each node value that differs, was and now");
+            var auto = InProject();
+            auto.Address = "192.0.2.10";
+            auto.ProfinetNameAuto = true;
+            auto.ProfinetName = "plc-1";
+            auto.NodeRead = true;
+            Eq(string.Join("|", CpuReuse.Found(auto, SpecStation(), ConfigProtection.Nothing, false).ToArray()),
+                "cpu PLC_1 PROFINET name \"plc-1\" set (TIA generated it before)", "a generated name is a change even when it reads the same");
+            var unread = InProject();
+            Contains(string.Join("|", CpuReuse.Found(unread, SpecStation(), ConfigProtection.Nothing, false).ToArray()),
+                "network settings applied: the project's could not be read", "a node not read is a change, never none");
+            Eq(string.Join("|", CpuReuse.Found(found, SpecStation(), ConfigProtection.Protect, false).ToArray()),
+                "cpu PLC_1 configuration protection: protect", "a protection step");
+            Eq(string.Join("|", CpuReuse.Found(found, SpecStation(), ConfigProtection.Nothing, true).ToArray()),
+                "cpu PLC_1 users, roles or web server changed as the spec says", "a write of the access or web steps");
         }
 
         // KeptDevicesNeedANamedYes: a download's yes must name exactly the

@@ -46,8 +46,9 @@ into the block group nautilus owns, makes the cyclic interrupt OBs and
 compiles hardware and software. A TIA compile message is printed against
 the nautilus file and line it came from.
 
-  (no flag)    Build and compile only. Nothing reaches the CPU, and the
-               TIA project is not saved.
+  (no flag)    Build and compile only. Nothing reaches the CPU (but
+               --adopt upload reads it), and the TIA project is not saved
+               (an adopted one stays where --adopt placed it).
   --download   Download to the CPU at target.siemens.station.cpu.address.
                It reaches the CPU: announce it to everyone who shares the
                CPU before you run it. In order:
@@ -94,6 +95,27 @@ Answers are never implied: each acting one has its own flag.
   --yes               confirm without the prompt (what is printed is what
                       is answered)
 
+A first deploy to a CPU that already runs a program builds on that CPU's
+own TIA project: a new project built from the station spec cannot load
+software only onto it (its hardware, users and devices differ), and the
+access-control and configuration-protection "keep" settings need a project
+to keep from. Name where it comes from; it is never guessed:
+  --adopt FILE.zap21   a project archive of the CPU's project (TIA's
+                       Project > Archive), usually what you have: it goes
+                       to the agent, becomes this deploy's saved project,
+                       and with --download is compared with the CPU before
+                       anything is imported (a different one is refused);
+                       its CPU must be at target.siemens.station.cpu.address
+  --adopt last-deploy  the archive of the CPU's last deploy record; with
+                       --download the CPU must still compare equal to it
+  --adopt upload       an upload of the CPU's program (read-only, it
+                       reaches the CPU even without --download);
+                       --trust-unverified-certificate answers the
+                       upload's TLS question trusted, blindly
+--adopt is for a first deploy: once a deploy downloaded an adopted
+project, later deploys build on it, and --adopt is refused. Foreign blocks
+and devices stay as found.
+
 Other flags:
   --agent URL   tiad URL (default: $NAUTILUS_TIAD_URL, then
                 target.siemens.agent, then ` + tiad.DefaultURL + `)
@@ -129,6 +151,8 @@ type siemensDeployOptions struct {
 	attest, cpuAccess     string
 	trustCertificate      string
 	acceptOutside         bool
+	adopt                 string // "", last-deploy, upload or a .zap21 path
+	trustUnverified       bool   // the upload's TLS question, trusted blindly
 	keep                  string
 	getenv                func(string) string
 	stdout, stderr        io.Writer
@@ -176,6 +200,8 @@ func parseSiemensDeployFlags(o *siemensDeployOptions, args []string, stderr io.W
 	fs.StringVar(&o.trustCertificate, "trust-certificate", "", "the CPU certificate's SHA-256 TIA may trust")
 	fs.BoolVar(&o.acceptOutside, "accept-outside-changes", false, "download although the CPU changed outside nautilus")
 	fs.StringVar(&o.keep, "keep", "", "directory to keep the generated sources in")
+	fs.StringVar(&o.adopt, "adopt", "", "a first deploy builds on the CPU's project: a project archive (.zap21), last-deploy or upload")
+	fs.BoolVar(&o.trustUnverified, "trust-unverified-certificate", false, "with --adopt upload: answer the upload's TLS question trusted, blindly")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -242,8 +268,55 @@ func (o siemensDeployOptions) flagsError() error {
 		return fmt.Errorf("--cpu-access-control %q: want disabled or enabled, as you observed the CPU", o.cpuAccess)
 	case len(o.attest) > tiad.MaxAttestationText:
 		return fmt.Errorf("--attest-hardware is %d bytes, over %d", len(o.attest), tiad.MaxAttestationText)
+	case o.adopt != "" && o.adopt != adoptLastDeploy && o.adopt != adoptUpload && !strings.EqualFold(filepath.Ext(o.adopt), ".zap21"):
+		return fmt.Errorf("--adopt %q: want a project archive (.zap21), last-deploy or upload", o.adopt)
+	case o.trustUnverified && o.adopt != adoptUpload:
+		return errors.New("--trust-unverified-certificate goes with --adopt upload: no other step of a deploy trusts a certificate blindly")
 	}
 	return nil
+}
+
+// The --adopt sources besides a project archive.
+const (
+	adoptLastDeploy = "last-deploy"
+	adoptUpload     = "upload"
+)
+
+// siemensAdoption is a deploy's record of the project it adopted (#1272),
+// in the agent's work dir beside its sources: what the plan says of it,
+// whether a download took it yet, and whether a download since changed
+// its station without loading the hardware.
+type siemensAdoption struct {
+	Source  string `json:"source"` // last-deploy, upload or archive
+	Deploy  string `json:"deploy,omitempty"`
+	Archive string `json:"archive,omitempty"` // the archive's file name
+	SHA256  string `json:"sha256,omitempty"`
+	// Address is the CPU the project was adopted from: the project is
+	// that CPU's, and a spec naming another is refused.
+	Address        string `json:"address"`
+	By             string `json:"by"`
+	At             string `json:"at"`
+	Downloaded     bool   `json:"downloaded"`
+	StationChanged bool   `json:"stationChanged,omitempty"`
+	// Complete is false from just before an adopt that is not atomic in
+	// the agent (an upload into a new project) until it ended: a project
+	// left by one that failed is never built on.
+	Complete bool `json:"complete"`
+}
+
+func siemensAdoptionRecord(name string) string {
+	return siemensSourceDir + "/" + name + "/adopted.json"
+}
+
+// describe says where the adopted project came from.
+func (a siemensAdoption) describe() string {
+	switch a.Source {
+	case adoptLastDeploy:
+		return "the archive of deploy " + a.Deploy
+	case adoptUpload:
+		return "an upload of the CPU"
+	}
+	return "the project archive " + a.Archive
 }
 
 // siemensSecret reads name, or the file name_FILE names.
@@ -377,6 +450,9 @@ type siemensDeployer struct {
 	// keepSession is set when a download ended unreachable: the agent may
 	// still be loading, so the session is named, not closed.
 	keepSession bool
+	// adoption is the record of the project this deploy builds on when
+	// it was adopted (this deploy or an earlier one), nil otherwise.
+	adoption *siemensAdoption
 }
 
 // siemensStationRecord is where a successful deploy leaves the station
@@ -432,11 +508,13 @@ func (d *siemensDeployer) compileMessage(m tiad.CompileMessage) {
 // lastDeploy is what the CPU's deploy record says before a download.
 type lastDeploy struct {
 	id, status string
+	project    string // the record's project, as the agent named its session
 	verdict    string // tiad.Verify*, "" without a record
 	outside    bool   // the CPU changed outside nautilus, or the record cannot say
 	why        string
 	// accept is what a download with --accept-outside-changes journals:
-	// tiad.OutsideDifferent, OutsideBroken or OutsideUnreadable.
+	// tiad.OutsideDifferent, OutsideBroken, OutsideOtherProject or
+	// OutsideUnreadable.
 	accept string
 }
 
@@ -459,7 +537,7 @@ func (d *siemensDeployer) checkLastDeploy(ctx context.Context, address string, o
 		}
 		return lastDeploy{why: why}, nil
 	}
-	ld := lastDeploy{id: latest.ID, status: latest.Status}
+	ld := lastDeploy{id: latest.ID, status: latest.Status, project: latest.Project}
 	r, err := d.client.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: latest.ID, Secrets: online})
 	if err != nil {
 		return ld, fmt.Errorf("verify of the last deploy %s: %w", latest.ID, err)
@@ -488,6 +566,206 @@ func (d *siemensDeployer) checkLastDeploy(ctx context.Context, address string, o
 		}
 	}
 	return ld, nil
+}
+
+// readAdoption reads the deploy's adoption record, nil without one.
+func (d *siemensDeployer) readAdoption(ctx context.Context) (*siemensAdoption, error) {
+	raw, err := d.client.GetFile(ctx, siemensAdoptionRecord(d.project))
+	if tiad.Kind(err) == tiad.KindNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var a siemensAdoption
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return nil, fmt.Errorf("%s is unreadable (%v): remove it, and the project it names, before deploying", siemensAdoptionRecord(d.project), err)
+	}
+	return &a, nil
+}
+
+// adopt places the CPU's own project as this deploy's saved project, from
+// the source --adopt names, and records where it came from. replace is set
+// for an adoption no download took yet.
+func (d *siemensDeployer) adopt(ctx context.Context, name string, st tiad.Station, sec tiad.Secrets, online *tiad.OnlineSecrets, last lastDeploy, replace bool) int {
+	o := d.o
+	rec := siemensAdoption{By: o.by, At: time.Now().UTC().Format(time.RFC3339), Address: st.CPU.Address}
+	switch o.adopt {
+	case adoptLastDeploy, adoptUpload:
+		rec.Source = o.adopt
+	default:
+		rec.Source, rec.Archive = "archive", filepath.Base(o.adopt)
+	}
+	// What can be checked before anything changes, first: a typo in the
+	// path, or no record to adopt from, leaves an earlier adoption as it
+	// was.
+	var archive []byte
+	id := last.id
+	switch o.adopt {
+	case adoptLastDeploy:
+		switch {
+		case o.download && id == "":
+			d.fail("--adopt last-deploy: %s, so there is no archive to adopt; adopt the CPU's project archive (--adopt FILE.zap21) or an upload (--adopt upload)", last.why)
+			return 1
+		case o.download && last.verdict != tiad.VerifyEqual:
+			d.fail("--adopt last-deploy: the CPU does not compare equal to its last deploy %s, so that archive is not what it runs; adopt the CPU's project archive (--adopt FILE.zap21) or an upload (--adopt upload)", id)
+			return 1
+		case !o.download:
+			list, err := d.client.Deploys(ctx, st.CPU.Address)
+			if err != nil {
+				return d.tiadErr("deploys", err)
+			}
+			for _, x := range list.Deploys {
+				if x.Status != tiad.DeployNotLoaded {
+					id = x.ID
+					break
+				}
+			}
+			if id == "" {
+				d.fail("--adopt last-deploy: no deploy record for the CPU at %s, so there is no archive to adopt", st.CPU.Address)
+				return 1
+			}
+			d.say("adopting deploy %s's archive, not checked against the CPU (built only: a --download compares it first)", id)
+		}
+	case adoptUpload:
+	default:
+		var err error
+		if archive, err = os.ReadFile(o.adopt); err != nil {
+			d.fail("--adopt: %v", err)
+			return 2
+		}
+	}
+	// Until the adopt ended, the project it may leave is marked
+	// unfinished (Complete false): nothing builds on it uncompared, even
+	// when naut dies between the agent's adopt and the record.
+	pending, _ := json.Marshal(rec)
+	if _, err := d.client.PutFile(ctx, siemensAdoptionRecord(name), pending); err != nil {
+		return d.tiadErr("the adoption record", err)
+	}
+	// The station record speaks of a hardware load of another project.
+	if err := d.client.DeleteFile(ctx, siemensStationRecord(name)); err != nil && tiad.Kind(err) != tiad.KindNotFound {
+		return d.tiadErr("the station record", err)
+	}
+	var res tiad.AdoptResult
+	var err error
+	switch o.adopt {
+	case adoptLastDeploy:
+		rec.Deploy = id
+		res, err = d.client.AdoptProject(ctx, tiad.AdoptRequest{Name: name, Deploy: id, Replace: replace, Address: st.CPU.Address})
+		if err != nil {
+			return d.tiadErr("adopt the archive of deploy "+id, err)
+		}
+	case adoptUpload:
+		d.say("uploading the CPU's program from %s (read-only: it reaches the CPU)...", st.CPU.Address)
+		// The upload replaces the project's station with the CPU's: the
+		// project it goes into holds the spec's CPU only, with settings a
+		// new CPU takes without secrets (keep would have nothing to keep).
+		// The create replaces an adoption no download took before the
+		// upload is proven; the pending record keeps anything from
+		// building on what a failed upload leaves.
+		host := tiad.Station{CPU: st.CPU}
+		host.CPU.ConfigurationProtection = tiad.ProtectNone
+		host.CPU.AccessControl = tiad.AccessKeep
+		up, err := d.client.CreateProject(ctx, name, host, tiad.Secrets{})
+		if err != nil {
+			return d.tiadErr("the project to upload into", err)
+		}
+		req := tiad.UploadRequest{TrustUnverifiedCertificate: o.trustUnverified}
+		if !o.trustUnverified {
+			req.Secrets = online
+		}
+		ur, err := up.UploadWith(ctx, req)
+		if err == nil {
+			_, err = up.Save(ctx, false)
+		}
+		d.closeSession(up)
+		if err != nil {
+			return d.tiadErr("upload", err)
+		}
+		for _, q := range ur.TrustedBlindly {
+			d.say("  trusted blindly (--trust-unverified-certificate): %s", q)
+		}
+		d.say("  CPU %s %s %s (device pin: %s)", ur.CPU.Name, ur.Device.Order, ur.Device.Firmware, ur.Pin)
+		cpu := ur.CPU
+		res = tiad.AdoptResult{Project: "projects/" + name + "/" + name + ".ap21", CPU: &cpu, CPUError: ur.CPUError, CPUAddress: st.CPU.Address}
+	default:
+		wp := siemensSourceDir + "/" + name + "/adopt.zap21"
+		if _, err := d.client.PutFile(ctx, wp, archive); err != nil {
+			return d.tiadErr("put "+rec.Archive, err)
+		}
+		res, err = d.client.AdoptProject(ctx, tiad.AdoptRequest{Name: name, Archive: wp, Replace: replace, Address: st.CPU.Address})
+		if derr := d.client.DeleteFile(ctx, wp); derr != nil && err == nil {
+			d.say("WARNING: the copy of the archive was not removed from the agent (%v)", derr)
+		}
+		if err != nil {
+			return d.tiadErr("adopt "+rec.Archive, err)
+		}
+	}
+	if res.CPU == nil || res.CPU.Name == "" || res.CPUAddress != st.CPU.Address {
+		d.fail("the adopted project's CPU could not be read, or is not at %s (%s%s): nothing builds on it; adopt the CPU's own project", st.CPU.Address, res.CPUAddress, res.CPUError)
+		return 1
+	}
+	rec.SHA256 = res.Source.SHA256
+	rec.Complete = true
+	d.say("adopted %s as %s", rec.describe(), res.Project)
+	d.say("  its CPU: %s %s %s at %s", res.CPU.Name, res.CPU.Order, res.CPU.Firmware, res.CPUAddress)
+	if names := keptDeviceNames(res.KeptDevices); len(names) > 0 {
+		d.say("  its devices besides the CPU, kept as found: %s", strings.Join(names, ", "))
+	}
+	raw, _ := json.Marshal(rec)
+	if _, err := d.client.PutFile(ctx, siemensAdoptionRecord(name), raw); err != nil {
+		return d.tiadErr("the adoption record", err)
+	}
+	d.adoption = &rec
+	return 0
+}
+
+// compareAdopted refuses a download that would build on an adopted
+// project no download took yet that does not compare equal with the CPU,
+// as adopted: an archive of another state, an upload or a record the CPU
+// moved away from since.
+func (d *siemensDeployer) compareAdopted(ctx context.Context, s *tiad.Session, address string, online *tiad.OnlineSecrets) int {
+	if a := d.adoption; a != nil {
+		d.say("comparing the adopted project with the CPU before anything is imported...")
+		c, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: online})
+		if err != nil {
+			return d.tiadErr("compare the adopted project with the CPU", err)
+		}
+		// Compared with the deploy's CPU, never only with the CPU the
+		// project names: an archive of another CPU equals that one.
+		if c.Address != address {
+			d.fail("refusing the download: the adopted project (%s) has its CPU at %q, not at %s, the deploy's CPU: it is another CPU's project, or one from before the address changed; nothing was imported or downloaded", a.describe(), c.Address, address)
+			return 1
+		}
+		if !c.Equal {
+			var diffs []string
+			for _, x := range c.Differences {
+				diffs = append(diffs, x.Object+" ("+x.State+")")
+			}
+			d.fail("refusing the download: the adopted project (%s) is not what the CPU runs: %s. A deploy built on it would put that back on the CPU. Adopt what it runs: --adopt upload, or a current project archive; nothing was imported or downloaded", a.describe(), strings.Join(diffs, ", "))
+			return 1
+		}
+		d.say("  equal: the adopted project is what the CPU runs")
+	}
+	return 0
+}
+
+// checkLastDeployIsThisProject refuses a download onto a CPU whose last
+// deploy loaded another project than this deploy's saved one (a restore,
+// another deploy): the CPU runs that, a change outside this deploy's
+// project, accepted only with --accept-outside-changes.
+func (d *siemensDeployer) checkLastDeployIsThisProject(saved string, last *lastDeploy) int {
+	if last.id == "" || last.project == "" || strings.EqualFold(last.project, saved) || last.outside {
+		return 0
+	}
+	last.outside, last.accept = true, tiad.OutsideOtherProject
+	last.why = fmt.Sprintf("the CPU's last deploy %s loaded another project (%s), not this deploy's saved one (%s): the CPU runs what that deploy loaded, not what this project was last downloaded as", last.id, last.project, saved)
+	if !d.o.acceptOutside {
+		d.fail("refusing the download: %s. A deploy would replace it. Pass --accept-outside-changes once you know what the CPU runs and mean to replace it", last.why)
+		return 1
+	}
+	d.say("  %s", last.why)
+	return 0
 }
 
 // decisions is every answer the download gives, from the flags and the
@@ -716,6 +994,10 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 			return 1
 		}
 		d.say("  %s", last.why)
+		if last.outside && o.adopt == adoptLastDeploy {
+			d.fail("--adopt last-deploy: %s, so that archive is not what the CPU runs; adopt the CPU's project archive (--adopt FILE.zap21) or an upload (--adopt upload)", last.why)
+			return 1
+		}
 		if last.outside && !o.acceptOutside {
 			d.fail("refusing the download: %s. A deploy would replace what was changed. Pass --accept-outside-changes once you know what the CPU runs and mean to replace it", last.why)
 			return 1
@@ -737,11 +1019,60 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 	d.project = name
 	saved := "projects/" + name + "/" + name + ".ap21"
 	s, err := d.client.Open(ctx, saved)
+	if err == nil {
+		if d.adoption, err = d.readAdoption(ctx); err != nil {
+			d.closeSession(s)
+			return d.tiadErr("the adoption record", err)
+		}
+		// An adopted project is its CPU's: a spec naming another CPU (a
+		// copy of the project for a like machine, the name unchanged)
+		// would build on it, foreign blocks and all.
+		if a := d.adoption; a != nil && a.Address != "" && a.Address != st.CPU.Address && (o.adopt == "" || a.Downloaded) {
+			d.closeSession(s)
+			d.fail("this deploy's saved project %s was adopted from the CPU at %s, and target.siemens.station.cpu.address is %s: it is that CPU's project. Give this CPU's deploy its own name (name: in %s) and adopt this CPU's project", saved, a.Address, st.CPU.Address, project.ManifestName)
+			return 1
+		}
+		if d.adoption != nil && !d.adoption.Complete && o.adopt == "" {
+			d.closeSession(s)
+			d.fail("the last --adopt (%s) did not finish, so %s is no project to build on: run the deploy with --adopt again", d.adoption.describe(), saved)
+			return 1
+		}
+		if o.adopt != "" {
+			d.closeSession(s)
+			if d.adoption == nil || d.adoption.Downloaded {
+				d.fail("tiad holds this deploy's saved project already (%s): --adopt makes a deploy's first project, and nothing was adopted. Deploy without --adopt to build on it", saved)
+				return 1
+			}
+			// An adoption no download took yet is replaced by the one
+			// asked for now.
+			d.say("replacing the adopted project (from %s), which no download took yet", d.adoption.describe())
+			if code := d.adopt(ctx, name, st, sec, online, last, true); code != 0 {
+				return code
+			}
+			s, err = d.client.Open(ctx, saved)
+		}
+	} else if tiad.Kind(err) == tiad.KindNotFound && o.adopt != "" {
+		if code := d.adopt(ctx, name, st, sec, online, last, false); code != 0 {
+			return code
+		}
+		s, err = d.client.Open(ctx, saved)
+	}
 	var kept []tiad.KeptDevice
 	switch {
 	case err == nil:
-		d.say("opened %s as last saved", saved)
 		defer d.closeSession(s)
+		if d.adoption != nil && !d.adoption.Downloaded {
+			d.say("opened %s, adopted from %s (no download took it yet)", saved, d.adoption.describe())
+		} else {
+			d.say("opened %s as last saved", saved)
+		}
+		// An adopted project no download took yet is compared with the
+		// CPU as adopted, before the spec touches it.
+		if o.download && d.adoption != nil && !d.adoption.Downloaded {
+			if code := d.compareAdopted(ctx, s, st.CPU.Address, online); code != 0 {
+				return code
+			}
+		}
 		r, err := s.ApplyStation(ctx, st, sec)
 		if err != nil {
 			return d.tiadErr("station", err)
@@ -762,13 +1093,41 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 		for _, n := range r.Notes {
 			d.say("station note: %s", n)
 		}
+		if o.download && (d.adoption == nil || d.adoption.Downloaded) {
+			if code := d.checkLastDeployIsThisProject(saved, &last); code != 0 {
+				return code
+			}
+		}
 	case tiad.Kind(err) == tiad.KindNotFound:
+		// A new project, built from the spec: nothing to keep from, and
+		// it cannot load software only onto a CPU that runs one.
+		var keeps []string
+		if st.CPU.AccessControl == tiad.AccessKeep {
+			keeps = append(keeps, "access-control")
+		}
+		if st.CPU.ConfigurationProtection == tiad.ProtectKeep {
+			keeps = append(keeps, "configuration-protection")
+		}
+		if len(keeps) > 0 {
+			d.fail("target.siemens.station.cpu %s: keep keeps what a project holds, and tiad has no project for this deploy yet, so a new one would have nothing to keep (TIA's compile refuses it). Adopt the CPU's project first: --adopt <its project archive .zap21>, --adopt last-deploy or --adopt upload", strings.Join(keeps, ", "))
+			return 1
+		}
+		if o.download && !o.hardware {
+			d.fail("refusing the download: this deploy would build a NEW TIA project from the station spec, and a new project cannot load software only onto a CPU that already runs a configuration (its hardware, users and devices differ). Build on the CPU's own project instead (--adopt <its project archive .zap21>, --adopt last-deploy or --adopt upload), or load the hardware too (--hardware --attest-hardware \"...\" --cpu-access-control ...), which replaces the CPU's configuration and users")
+			return 1
+		}
+		if err := d.client.DeleteFile(ctx, siemensAdoptionRecord(name)); err != nil && tiad.Kind(err) != tiad.KindNotFound {
+			return d.tiadErr("the adoption record", err)
+		}
 		if s, err = d.client.CreateProject(ctx, name, st, sec); err != nil {
 			return d.tiadErr("create project", err)
 		}
 		defer d.closeSession(s)
 		d.created = true
 		d.say("created %s from the station spec", s.Project)
+		if !o.download {
+			d.say("note: a new project downloads only with --hardware (it cannot load software only onto a CPU that runs a configuration); to build on the CPU's own project, --adopt it")
+		}
 	default:
 		return d.tiadErr("open "+saved, err)
 	}
@@ -843,7 +1202,14 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 	}
 	d.say("compiled: %d error(s), %d warning(s)", cr.Errors, cr.Warnings)
 	if !o.download {
-		d.say("built only: nothing reached the CPU, and the TIA project was not saved (--download to load it)")
+		switch {
+		case o.adopt == adoptUpload:
+			d.say("built only: the upload read the CPU, nothing was downloaded, and the build was not saved; the adopted project stays as adopted (--download to load it)")
+		case o.adopt != "":
+			d.say("built only: nothing reached the CPU, and the build was not saved; the adopted project stays as adopted (--download to load it)")
+		default:
+			d.say("built only: nothing reached the CPU, and the TIA project was not saved (--download to load it)")
+		}
 		return 0
 	}
 	return d.download(ctx, s, st, sec, kept, sw, last)
@@ -1019,6 +1385,16 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 		code = 1
 	} else {
 		d.say("saved %s for the next deploy", p)
+		if a := d.adoption; a != nil {
+			// Taken by a download now; a station change loaded without
+			// its hardware leaves the CPU's own station behind.
+			a.Downloaded = true
+			a.StationChanged = a.StationChanged || (len(d.changes) > 0 && !o.hardware)
+			raw, _ := json.Marshal(a)
+			if _, err := d.client.PutFile(ctx, siemensAdoptionRecord(d.project), raw); err != nil {
+				d.say("WARNING: the adoption record was not updated (%v): the next deploy compares the project with the CPU again, and its plan cannot tell that this download changed the station", err)
+			}
+		}
 		if o.hardware {
 			// The spec the CPU's hardware now holds: a software-only
 			// load leaves the record of the last hardware load.
@@ -1045,18 +1421,32 @@ func (d *siemensDeployer) printPlan(address string, last lastDeploy, sw tiad.Sof
 	for _, c := range d.changes {
 		d.say("  station: %s", c)
 	}
+	if a := d.adoption; a != nil {
+		if a.Downloaded {
+			d.say("  project: adopted from %s by %s at %s", a.describe(), a.By, a.At)
+		} else {
+			d.say("  project: adopted from %s by %s at %s, compared equal with the CPU above; this download is its first", a.describe(), a.By, a.At)
+		}
+	}
 	differs := ""
 	switch {
 	case d.created:
 		d.say("  station: a new TIA project, built from the spec")
 		differs = "the project is new"
-	case d.stationSame == nil:
-		differs = "no record of the station spec the last hardware load loaded"
-	case !*d.stationSame:
+	case d.stationSame != nil && !*d.stationSame:
 		d.say("  station: the spec CHANGED since the last hardware load")
 		differs = "the station spec changed since the last hardware load"
-	default:
+	case len(d.changes) > 0:
+		d.say("  station: this deploy CHANGES the project's station (above)")
+		differs = "this deploy changes the project's station"
+	case d.stationSame != nil:
 		d.say("  station: the spec is the one the last hardware load loaded")
+	case d.adoption != nil && !d.adoption.StationChanged && len(d.changes) == 0 && d.adoption.Source == adoptUpload:
+		d.say("  station: as uploaded from the CPU: the spec changes nothing in it")
+	case d.adoption != nil && !d.adoption.StationChanged && len(d.changes) == 0:
+		d.say("  station: as adopted: the spec changes nothing in the adopted project's station, which is taken as the CPU's (the compare covers the software: tiad cannot compare hardware or users online)")
+	default:
+		differs = "no record of the station spec the last hardware load loaded"
 	}
 	switch {
 	case d.o.hardware:

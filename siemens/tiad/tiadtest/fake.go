@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/xml"
@@ -47,6 +48,9 @@ type Fake struct {
 	Token string
 	// Targets are the CPU addresses downloads may go to (TIAD_TARGETS).
 	Targets []string
+	// UploadCPUError makes an upload succeed without its CPU: the agent's
+	// upload whose read of the project's CPU failed (cpuError).
+	UploadCPUError string
 	// Gates are what probe reports. Empty means every gate passes. Any
 	// gate that blocks (tiad.Gate.Blocks: failed, or a state it does not
 	// know) makes every TIA call fail with kind "gate"; an unknown one
@@ -125,6 +129,8 @@ type Fake struct {
 	// one made without the agent (LoadOutside).
 	archived      map[string]archivedProject
 	loadedArchive map[string]string
+	// savedArchives is what each archive a save wrote holds, by sha256.
+	savedArchives map[string]savedProject
 	archiveFails  string
 	archiveN      int
 	// unreadableLines is what the deploy list reports (SetUnreadableLines).
@@ -204,6 +210,12 @@ type session struct {
 	// archive is the sha256 of the deploy archive made for the download
 	// running, "" for none.
 	archive string
+	// node is the CPU's interface node as the project holds it (what an
+	// apply writes); restored the sha256 of the loaded deploy archive the
+	// project is, as long as it is unchanged (an adopt from it, a save
+	// after its load): it compares equal to a CPU still holding that load.
+	node     projectNode
+	restored string
 }
 
 // savedProject is the hardware a saved project holds, as TIA keeps it.
@@ -220,6 +232,9 @@ type savedProject struct {
 	blocks []tiad.Block
 	groups map[string]string
 	obInfo map[string]projectBlock
+	// node and restored are the session's (session.node, .restored).
+	node     projectNode
+	restored string
 }
 
 // UploadedCPUName and UploadedIODevice are what the fake's upload brings
@@ -542,6 +557,7 @@ func (f *Fake) init() {
 		f.answered = map[string]bool{}
 		f.archives = map[string][]byte{}
 		f.archived = map[string]archivedProject{}
+		f.savedArchives = map[string]savedProject{}
 		f.loadedArchive = map[string]string{}
 		m := http.NewServeMux()
 		m.HandleFunc("GET /v1/health", f.wrap(f.health, false))
@@ -552,6 +568,7 @@ func (f *Fake) init() {
 		m.HandleFunc("DELETE /v1/files/{path...}", f.wrap(f.deleteFile, false))
 		m.HandleFunc("POST /v1/gsd/install", f.wrap(f.installGSD, true))
 		m.HandleFunc("POST /v1/projects", f.wrap(f.createProject, true))
+		m.HandleFunc("POST /v1/projects/adopt", f.wrap(f.adoptProject, true))
 		m.HandleFunc("POST /v1/sessions", f.wrap(f.openSession, true))
 		m.HandleFunc("GET /v1/sessions", f.wrap(f.listSessions, false))
 		m.HandleFunc("DELETE /v1/sessions/{id}", f.wrap(f.closeSession, false))
@@ -1017,6 +1034,7 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	}
 	st := req.Station
 	s.station = &st
+	s.node = nodeOf(st)
 	f.files[project] = []byte("fake TIA project")
 	return tiad.Session{ID: s.id, Project: project}, nil
 }
@@ -1044,6 +1062,12 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 		s.cpu, s.others, s.protection, s.protectedWith = sp.cpu, sp.others, sp.protection, sp.protectedWith
 		s.accessControl, s.access, s.webServer, s.webHTTPS = sp.accessControl, sp.access.clone(), sp.webServer, sp.webHTTPS
 		s.blocks, s.groups, s.obInfo = slices.Clone(sp.blocks), maps.Clone(sp.groups), maps.Clone(sp.obInfo)
+		s.node, s.restored = sp.node, sp.restored
+		// A project that is a loaded archive, unchanged, is what that
+		// load put on the CPU.
+		if sp.restored != "" {
+			s.changed = false
+		}
 		f.openRecords(s.access)
 	}
 	return tiad.Session{ID: s.id, Project: p}, nil
@@ -1131,8 +1155,11 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	}
 	var notes []string
 	var kept []tiad.KeptDevice
+	protection := actNothing
+	found := s.node
 	if reuse {
-		if _, fl := planProtection(s.protection, req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword != ""); fl != nil {
+		var fl *failure
+		if protection, fl = planProtection(s.protection, req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword != ""); fl != nil {
 			return nil, fl
 		}
 		current := s.accessControl
@@ -1166,6 +1193,14 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	if s.uploaded {
 		prev = nil
 	}
+	// What the access and web steps may write, as found: the agent counts
+	// their writes (AccessMade.Writes), the fake compares the state.
+	type usersState struct {
+		accessControl       string
+		webServer, webHTTPS bool
+		access              access
+	}
+	usersBefore := usersState{s.accessControl, s.webServer, s.webHTTPS, s.access.clone()}
 	if !reuse {
 		// TIA makes a new CPU with its protection not set up.
 		s.cpu = &tiad.ProjectCPU{Name: req.Station.CPU.Name, Order: req.Station.CPU.Order, Firmware: req.Station.CPU.Firmware}
@@ -1203,10 +1238,15 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	case prev != nil:
 		changes = StationChanges(prev, req.Station)
 	default:
-		changes = []string{"cpu " + req.Station.CPU.Name + " taken over from the project"}
+		usersWrote := wrote || !reflect.DeepEqual(usersState{s.accessControl, s.webServer, s.webHTTPS, s.access.clone()}, usersBefore)
+		changes = FoundChanges(found, req.Station, protection, usersWrote)
 	}
 	st := req.Station
 	s.station = &st
+	s.node = nodeOf(st)
+	if len(changes) > 0 {
+		s.restored = ""
+	}
 	s.kept = kept
 	if len(changes) == 0 {
 		s.compiled, s.changed = was, wasChanged
@@ -1757,6 +1797,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	// The archive this load was archived as, once: a later load without
 	// one (a dry run TIA ran) holds none.
 	f.loadedArchive[req.Address] = s.archive
+	s.restored = s.archive
 	s.archive = ""
 	s.changed = false
 	// A dry run TIA asks nothing about cannot be cancelled: TIA loads.
@@ -1876,25 +1917,32 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if f.CompareResult != nil {
 		return *f.CompareResult, nil
 	}
-	if s.station == nil {
-		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "the project has no station spec")
+	// A project opened as found compares with its own CPU (the agent).
+	addr, name := "", ""
+	switch {
+	case s.station != nil:
+		addr, name = s.station.CPU.Address, s.station.CPU.Name
+	case s.cpu != nil && s.node.read && s.node.address != "":
+		addr, name = s.node.address, s.cpu.Name
+	default:
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "the project has no station spec, and its CPU no address to compare with")
 	}
-	if !contains(f.Targets, s.station.CPU.Address) {
-		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", s.station.CPU.Address)
+	if !contains(f.Targets, addr) {
+		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", addr)
 	}
-	if fl := f.checkDevicePin(s.station.CPU.Address, "compare"); fl != nil {
+	if fl := f.checkDevicePin(addr, "compare"); fl != nil {
 		return nil, fl
 	}
-	why, loggedOn := f.login(s.station.CPU.Address, onlinePassword(req.Secrets), f.blindTrust)
+	why, loggedOn := f.login(addr, onlinePassword(req.Secrets), f.blindTrust)
 	if why != "" {
-		f.forgetFailedCompare(s.station.CPU.Address)
+		f.forgetFailedCompare(addr)
 		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
-	if f.loaded[s.station.CPU.Address] == s.id && !s.changed {
-		f.noteCompare(s.station.CPU.Address, onlinePassword(req.Secrets), loggedOn, true)
-		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, BlindTrust: f.blindTrust}, nil
+	if !s.changed && (f.loaded[addr] == s.id || s.restored != "" && f.loadedArchive[addr] == s.restored) {
+		f.noteCompare(addr, onlinePassword(req.Secrets), loggedOn, true)
+		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, BlindTrust: f.blindTrust, Address: addr}, nil
 	}
-	return tiad.CompareResult{Differences: []tiad.Difference{{Object: s.station.CPU.Name, State: "different"}}, BlindTrust: f.blindTrust}, nil
+	return tiad.CompareResult{Differences: []tiad.Difference{{Object: name, State: "different"}}, BlindTrust: f.blindTrust, Address: addr}, nil
 }
 
 func (f *Fake) export(r *http.Request) (any, *failure) {
@@ -1988,6 +2036,7 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	up := f.device()
 	s.cpu = &tiad.ProjectCPU{Name: UploadedCPUName, Order: up.Order, Firmware: up.Firmware}
 	s.others = []tiad.KeptDevice{UploadedIODevice()}
+	s.node, s.restored = uploadedNode(s.station.CPU.Address), ""
 	// Trust on first use: the first upload pins the CPU's identity; every
 	// later one must match it.
 	read := f.device()
@@ -2011,10 +2060,16 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 		pin = tiad.PinMatched
 	}
 	s.unclean = false
-	// The project's CPU is now what this CPU reported.
+	// The project's CPU is now what this CPU reported, and the project
+	// what it runs: it compares equal while that load stands.
 	s.uploadedFrom = address
+	s.restored, s.changed = f.loadedArchive[address], false
 	// The fake's CPU asks no TLS question going online for an upload, so
 	// nothing is trusted (the C# fake's uploadAsksTls models one).
+	if f.UploadCPUError != "" {
+		// The agent's upload that could not read the project's CPU.
+		return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPUError: f.UploadCPUError, RemovedAccess: removed, BlindTrust: f.blindTrust}, nil
+	}
 	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPU: *s.cpu, RemovedAccess: removed, BlindTrust: f.blindTrust}, nil
 }
 
@@ -2303,18 +2358,22 @@ func (f *Fake) save(r *http.Request) (any, *failure) {
 	if req.Archive {
 		p = strings.TrimSuffix(p, ".ap21") + ".zap21"
 	}
-	f.files[p] = []byte("fake TIA project")
 	if f.saved == nil {
 		f.saved = map[string]savedProject{}
 	}
-	var cpu *tiad.ProjectCPU
-	if s.cpu != nil {
-		c := *s.cpu
-		cpu = &c
+	sp := s.snapshot()
+	f.saved[p] = sp
+	if !req.Archive {
+		f.files[p] = []byte("fake TIA project")
+		return map[string]string{"path": p}, nil
 	}
-	f.saved[p] = savedProject{cpu: cpu, others: append([]tiad.KeptDevice(nil), s.others...), protection: s.protection, protectedWith: s.protectedWith,
-		accessControl: s.accessControl, access: s.access.clone(), webServer: s.webServer, webHTTPS: s.webHTTPS,
-		blocks: slices.Clone(s.blocks), groups: maps.Clone(s.groups), obInfo: maps.Clone(s.obInfo)}
+	// An archive's bytes differ each time, as a real one's do, and hold
+	// the project wherever they are copied: an adopt retrieves it.
+	f.archiveN++
+	b := []byte(fmt.Sprintf("fake TIA project archive %d of %s (saved)", f.archiveN, s.project))
+	f.files[p] = b
+	sum := sha256.Sum256(b)
+	f.savedArchives[hex.EncodeToString(sum[:])] = sp
 	return map[string]string{"path": p}, nil
 }
 

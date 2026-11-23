@@ -19,6 +19,8 @@ import (
 // archivedProject is what an archive holds: its CPU's address and name.
 type archivedProject struct {
 	address, cpu string
+	// project is the project as archived: what an adopt retrieves.
+	project savedProject
 }
 
 // verifyTrustFix is the agent's VerifyTrustFix.

@@ -57,6 +57,14 @@ namespace Tiad
         public string Protection = ConfigProtection.Absent;
         public string AccessControl = AccessRule.Absent;
         public List<KeptDevice> Others = new List<KeptDevice>();
+        // The CPU's PROFINET interface node as the project holds it: what
+        // an apply that reuses the CPU writes (Address, SubnetMask, Router
+        // "" when the node uses none, ProfinetName, ProfinetNameAuto when
+        // TIA generates the name). NodeRead is false when it could not be
+        // read: the first apply on an opened project then reports the
+        // spec's node as a change, never "no change" (CpuReuse.Found).
+        public string Address = "", SubnetMask = "", Router = "", ProfinetName = "";
+        public bool ProfinetNameAuto, NodeRead;
 
         // ToJson is the part a station spec copies: what naut needs to
         // build a spec that reuses this CPU.
@@ -170,16 +178,52 @@ namespace Tiad
             return "the project's other devices are kept as found (tiad does not configure PROFINET IO devices yet), and a download loads them too: " + string.Join("; ", ds.ToArray());
         }
 
-        // Changes is what an apply changed, in words: a new station, the
-        // spec's changes over the one this session last applied, or a CPU
-        // taken over from an upload or an opened project.
+        // Changes is what an apply changed, in words: a new station, or the
+        // spec's changes over the one this session last applied. The first
+        // apply on an opened or uploaded project has no spec to compare
+        // with: Found says what it changed there.
         public static List<string> Changes(string decision, Station prev, Station next)
         {
             if (decision == Create) return Station.Changes(null, next);
-            if (prev != null) return Station.Changes(prev, next);
+            // Without a spec to compare with (a caller that should have
+            // asked Found), it reports a change, never none.
+            return Station.Changes(prev, next);
+        }
+
+        // Found is what the first apply on an opened or uploaded project
+        // changes in the CPU it reuses, from the project as found (read
+        // before the apply): the interface node the apply writes, the
+        // configuration protection step it plans (ConfigProtection's
+        // actions, Nothing for none), and whether the access and web steps
+        // wrote anything (a password, a user, a role, a right, the web
+        // server's switches: AccessWrites.Wrote, AccessMade.Writes). An
+        // empty list is "no change": the spec is the project's station as
+        // far as an apply writes it.
+        public static List<string> Found(ProjectCpu found, Station next, string protectionAction, bool usersWrote)
+        {
             var l = new List<string>();
-            l.Add("cpu " + next.Cpu.Name + " taken over from the project");
+            string cpu = "cpu " + next.Cpu.Name;
+            if (!found.NodeRead)
+            {
+                l.Add(cpu + " network settings applied: the project's could not be read to compare");
+            }
+            else
+            {
+                Node(l, cpu + " address", found.Address, next.Cpu.Address);
+                Node(l, cpu + " subnet mask", found.SubnetMask, next.Cpu.SubnetMask);
+                Node(l, cpu + " router", found.Router, next.Cpu.Router);
+                if (found.ProfinetNameAuto) l.Add(cpu + " PROFINET name " + Json.Quote(next.Cpu.ProfinetName) + " set (TIA generated it before)");
+                else Node(l, cpu + " PROFINET name", found.ProfinetName, next.Cpu.ProfinetName);
+            }
+            if (protectionAction != ConfigProtection.Nothing) l.Add(cpu + " configuration protection: " + protectionAction);
+            if (usersWrote) l.Add(cpu + " users, roles or web server changed as the spec says");
             return l;
+        }
+
+        static void Node(List<string> l, string what, string was, string now)
+        {
+            if (was == now) return;
+            l.Add(what + " " + (was == "" ? "none" : Json.Quote(was)) + " -> " + (now == "" ? "none" : Json.Quote(now)));
         }
     }
 
