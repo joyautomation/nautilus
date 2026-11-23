@@ -24,6 +24,11 @@ namespace Tiad
         // InDoubt marks a failure inside a download TIA had begun: the CPU
         // may or may not be loaded, so the agent answers outcome_unknown.
         public readonly bool InDoubt;
+        // OutsideGroup marks an import that TIA answered with an object
+        // outside the group asked (ITia.ImportSoftware): it replaced a
+        // same-named object where it sits, so the session stays unusable
+        // whatever a compare after it shows.
+        public bool OutsideGroup;
 
         public TiaException(string message) : base(message)
         {
@@ -43,6 +48,9 @@ namespace Tiad
     {
         public string Path = "";     // request form, relative to the work dir
         public string FullPath = "";
+        // DataTypes marks a source that declares data types only
+        // (Ownership.TypeSources): it generates into the data types' group.
+        public bool DataTypes;
     }
 
     public sealed class SourceResult
@@ -112,6 +120,7 @@ namespace Tiad
                 f["kind"] = Ownership.KindOf(b);
                 f["number"] = b.Number;
                 f["group"] = b.Group ?? "";
+                if (b.DataType) f["dataType"] = true;
                 fs.Add(f);
             }
             var o = new Obj();
@@ -255,15 +264,28 @@ namespace Tiad
         // before any write, so such a refusal leaves the session as it was.
         string CannotApply(Station next);
 
-        // ImportSoftware generates blocks from sources into group; with
-        // prune, it deletes blocks in group that no source produced. TIA
-        // replaces a same-named block outside group too: the agent checks
-        // first (Ownership), with Blocks.
-        SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune);
+        // ImportSoftware generates blocks from sources into group, and a
+        // source marked DataTypes into the PLC data types' user group of the
+        // same name (made when it is not there); with prune, it deletes the
+        // blocks in the group that no source produced, and with pruneTypes
+        // then the data types too (the agent sets it only when the caller
+        // sent prunePrefix: an older caller's prune never deletes data
+        // types). It fails (TiaException) when TIA hands back an object
+        // that is not a block in the block group or a data type in the data
+        // types' group: TIA replaces a same-named object where it sits. The
+        // agent checks first (Ownership), with Blocks and Types, and the
+        // result's Blocks lists the group's blocks and data types (UDT).
+        SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune, bool pruneTypes);
 
         // Blocks is every program block the project holds, in every block
         // group, each with its group (ProjectBlock.Group). It reads only.
         List<ProjectBlock> Blocks(object project);
+
+        // Types is every PLC data type the project holds, in every data
+        // types group however deep, each with its group (a path from the
+        // data types' root), DataType set and its modified time. It reads
+        // only.
+        List<ProjectBlock> Types(object project);
 
         // ImportBlock imports one block's SimaticML (CyclicObs.Xml) into
         // group, making the group when it is not there.

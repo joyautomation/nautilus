@@ -911,6 +911,12 @@ namespace Tiad
         // CyclicTime in microseconds, 0 for any other block.
         public string Class = "";
         public long CycleMicros;
+        // DataType marks a PLC data type (ITia.Types), not a program
+        // block: its Group is then a path from the PLC data types' root,
+        // and Number is 0. Blocks and data types share TIA's names (TIA VM,
+        // 2026-11-24: a FUNCTION named like a data type fails "Type
+        // conflict"), so the ownership checks read both as one list.
+        public bool DataType;
     }
 
     // OnlineCompare is one online compare: TIA's compare tree, and every

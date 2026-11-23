@@ -1618,7 +1618,20 @@ namespace Tiad
         // element, so a tag table named exactly like a block the tree
         // leaves out ("Pump [FB1]") would stand in for it; tiad names no
         // object so, and it takes a name made to collide.
-        public static bool CompareEqual(CompareNode root, List<ProjectBlock> blocks, List<Difference> into)
+        //
+        // types are the data types the session's import group holds
+        // (Session.ImportGroup, D1b), null for none: each is required by
+        // name like a block, as an identical element labelled with its bare
+        // name. That label is a GUESS until a bench compare shows a loaded
+        // type's leaf (TypeLabel): a wrong guess can only refuse (the type
+        // reads "not compared"), never pass a type the CPU lacks, since a
+        // missing type's own element is in a non-identical state. One
+        // residual, as for blocks: any identical element named exactly
+        // like the type (a customer's tag table "naut_Valve") stands in for
+        // it, which needs both a wrong guess and a name made to collide.
+        // Data types outside the group stay under the rule that nothing in
+        // the tree may differ, as before.
+        public static bool CompareEqual(CompareNode root, List<ProjectBlock> blocks, List<ProjectBlock> types, List<Difference> into)
         {
             if (root == null)
             {
@@ -1654,6 +1667,17 @@ namespace Tiad
                 else if (!identical.Contains(label) && !named.Contains(label))
                 {
                     into.Add(new Difference { Object = label, State = "not compared" });
+                }
+            }
+            if (types != null)
+            {
+                foreach (ProjectBlock ty in types)
+                {
+                    string label = TypeLabel(ty);
+                    if (!identical.Contains(label) && !named.Contains(label))
+                    {
+                        into.Add(new Difference { Object = label + " (data type)", State = "not compared" });
+                    }
                 }
             }
             return into.Count == before;
@@ -1723,6 +1747,15 @@ namespace Tiad
                 l.Add(BlockLabel(b) ?? b.Name);
             }
             return string.Join(", ", l.ToArray());
+        }
+
+        // TypeLabel is the name tiad expects TIA's compare tree to give a
+        // data type: its bare name. Unmeasured (no loaded type has been
+        // compared yet): see CompareEqual for why a wrong guess only
+        // refuses.
+        public static string TypeLabel(ProjectBlock t)
+        {
+            return t.Name;
         }
 
         // BlockLabel is the name TIA's compare tree gives a program block:

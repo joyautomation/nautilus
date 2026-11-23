@@ -59,6 +59,8 @@ type Script struct {
 	ImportReplacesForeign bool `json:"importReplacesForeign,omitempty"`
 	// OBImportIgnoresClass is SetOBImportIgnoresClass.
 	OBImportIgnoresClass bool `json:"obImportIgnoresClass,omitempty"`
+	// Types is SetTypes.
+	Types *TypesScript `json:"types,omitempty"`
 	// AskFirst is how many times the fake's TIA asks its first check
 	// (nil: once, as TIA does; 0 asks nothing at all and loads; 2 asks
 	// the same configuration twice).
@@ -332,6 +334,16 @@ func (p *Process) SetLogon(t testing.TB, l LogonScript) {
 	t.Helper()
 	p.mu.Lock()
 	p.script.KeepsLogon, p.script.CredentialsAfterChecks = l.KeepsLogon, l.CredentialsAfterChecks
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetTypes scripts tiad-fake's data types (Target.SetTypes).
+func (p *Process) SetTypes(t testing.TB, ts TypesScript) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.Types = &ts
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)

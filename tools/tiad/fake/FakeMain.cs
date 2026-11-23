@@ -262,6 +262,22 @@ namespace Tiad.Fake
         // whatever the SimaticML asks: a TIA that does not keep what the
         // agent asked, which its check after the import must catch.
         bool obImportIgnoresClass;
+        // types scripts the PLC data types (D1b): foreignTypes are the
+        // customer's, in every project (name and group path, as Main [OB1]
+        // is); typesHidden makes Types never list them (the agent's
+        // reading misses them), while an import still hits one as TIA does
+        // on the TIA VM (2026-11-24): it hands the type back where it
+        // sits, no error, and the glue fails with OutsideGroup, the only
+        // sign of it. compileTouchesForeign makes a compile move the
+        // customer types' modified date (a customer type that uses one of
+        // nautilus's); compareDropsTypes leaves the data types out of the
+        // compare tree.
+        List<ProjectBlock> foreignTypes = new List<ProjectBlock>();
+        bool typesHidden, compileTouchesForeign, compareDropsTypes;
+        // importTouchesForeign makes an import move the customer types'
+        // dates without handing them back: only the after-import check
+        // sees it.
+        bool importTouchesForeign;
         int askFirst = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
@@ -676,6 +692,61 @@ namespace Tiad.Fake
             }
         }
 
+        public List<ProjectBlock> ForeignTypes
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return new List<ProjectBlock>(foreignTypes);
+                }
+            }
+        }
+
+        public bool TypesHidden
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return typesHidden;
+                }
+            }
+        }
+
+        public bool CompileTouchesForeign
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return compileTouchesForeign;
+                }
+            }
+        }
+
+        public bool ImportTouchesForeign
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return importTouchesForeign;
+                }
+            }
+        }
+
+        public bool CompareDropsTypes
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return compareDropsTypes;
+                }
+            }
+        }
+
         public bool ImportReplacesForeign
         {
             get
@@ -819,6 +890,17 @@ namespace Tiad.Fake
             bool credsAfter = r.Bool("credentialsAfterChecks");
             bool replaces = r.Bool("importReplacesForeign");
             bool ignoresClass = r.Bool("obImportIgnoresClass");
+            var fts = new List<ProjectBlock>();
+            bool hidden = false, touches = false, dropsTypes = false, importTouches = false;
+            var ty = r.Child("types");
+            if (ty != null)
+            {
+                foreach (var x in ty.Children("foreign")) fts.Add(new ProjectBlock { Name = x.Str("name"), Group = x.Str("group"), Type = "PlcStruct", DataType = true });
+                hidden = ty.Bool("hidden");
+                touches = ty.Bool("compileTouchesForeign");
+                dropsTypes = ty.Bool("compareDropsTypes");
+                importTouches = ty.Bool("importTouchesForeign");
+            }
             int? first = r.OptInt("askFirst");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
@@ -888,6 +970,11 @@ namespace Tiad.Fake
                 credentialsAfterChecks = credsAfter;
                 importReplacesForeign = replaces;
                 obImportIgnoresClass = ignoresClass;
+                foreignTypes = fts;
+                typesHidden = hidden;
+                compileTouchesForeign = touches;
+                compareDropsTypes = dropsTypes;
+                importTouchesForeign = importTouches;
                 askFirst = first.HasValue ? first.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
@@ -984,6 +1071,9 @@ namespace Tiad.Fake
         // check missed). Main is then an FB, still at the root.
         public Dictionary<string, string> GroupOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public bool MainReplaced;
+        // TypeModified is each data type's modified date once something
+        // changed it (by name, any case; absent for one as made).
+        public Dictionary<string, string> TypeModified = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         // ObInfo is each imported OB's class, number and cycle (Class,
         // Number, CycleMicros), as TIA keeps them across a source that
         // replaces the OB's body.
@@ -1687,7 +1777,7 @@ namespace Tiad.Fake
             return c == "" ? null : c;
         }
 
-        public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune)
+        public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune, bool pruneTypes)
         {
             var p = (FakeProject)project;
             // The knob's replacement comes first, so a failure scripted for
@@ -1737,6 +1827,21 @@ namespace Tiad.Fake
                     {
                         if (h.Kind == "OB" && !p.ObInfo.ContainsKey(h.Name))
                             p.ObInfo[h.Name] = new ProjectBlock { Name = h.Name, Type = "OB", Class = "ProgramCycle", Number = FreeOb(p, 123) };
+                        // A data type named like a customer's: TIA
+                        // regenerates that one where it sits and hands it
+                        // back with no error; the glue fails on its group.
+                        if (h.Kind != "UDT" || !src.DataTypes) continue;
+                        foreach (var ft in script.ForeignTypes)
+                        {
+                            if (!string.Equals(ft.Name, h.Name, StringComparison.OrdinalIgnoreCase)) continue;
+                            p.TypeModified[ft.Name] = "regenerated by an import";
+                            throw new TiaException(src.Path + ": TIA generated data type \"" + ft.Name + "\" outside data types group \"" + group + "\", in " + (ft.Group == "" ? "the data types' root" : "\"" + ft.Group + "\"")) { OutsideGroup = true };
+                        }
+                    }
+                    foreach (var h in heads)
+                    {
+                        // A regenerated type of nautilus's: TIA moves its date.
+                        if (h.Kind == "UDT" && p.GroupOf.ContainsKey(h.Name)) p.TypeModified[h.Name] = "regenerated " + Guid.NewGuid().ToString("N");
                     }
                     made.AddRange(heads);
                 }
@@ -1749,8 +1854,9 @@ namespace Tiad.Fake
             {
                 string g;
                 p.GroupOf.TryGetValue(b.Name, out g);
-                // Prune deletes only in the import's group.
-                if (prune && Ownership.Owned(g ?? "", group))
+                // Prune deletes only in the import's group, data types only
+                // with pruneTypes.
+                if (prune && Ownership.Owned(g ?? "", group) && (b.Kind != "UDT" || pruneTypes))
                 {
                     if (!made.Exists(delegate(Block m) { return string.Equals(m.Name, b.Name, StringComparison.OrdinalIgnoreCase); })) p.ObInfo.Remove(b.Name);
                     continue;
@@ -1761,6 +1867,10 @@ namespace Tiad.Fake
             {
                 byName[b.Name.ToLowerInvariant()] = b;
                 p.GroupOf[b.Name] = group;
+            }
+            if (script.ImportTouchesForeign)
+            {
+                foreach (var ft in script.ForeignTypes) p.TypeModified[ft.Name] = "touched by an import " + Guid.NewGuid().ToString("N");
             }
             p.Blocks = new List<Block>(byName.Values);
             p.Blocks.Sort(delegate(Block a, Block b) { return string.CompareOrdinal(a.Name, b.Name); });
@@ -1776,6 +1886,10 @@ namespace Tiad.Fake
         {
             script.Enter("Compile");
             var p = (FakeProject)project;
+            if (script.CompileTouchesForeign)
+            {
+                foreach (var ft in script.ForeignTypes) p.TypeModified[ft.Name] = "recompiled " + Guid.NewGuid().ToString("N");
+            }
             string err = hardware ? p.CompileError() : null;
             if (err == null) return script.Compile;
             var res = new CompileResult { Result = "error", Errors = 1 };
@@ -2034,6 +2148,14 @@ namespace Tiad.Fake
                 Program(leaves),
                 Cmp("PLC tags", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical")),
             };
+            // The data types, each labelled as the agent guesses TIA
+            // labels them (TiaNames.TypeLabel): only the bench can prove it.
+            var typeLeaves = new List<CompareNode>();
+            if (!script.CompareDropsTypes)
+            {
+                foreach (var ty in ProjectTypes(p, script)) typeLeaves.Add(Cmp(TiaNames.TypeLabel(ty), "ObjectsIdentical"));
+            }
+            if (typeLeaves.Count > 0) kids.Add(Cmp("PLC data types", "FolderContentsIdentical", typeLeaves.ToArray()));
             kids.AddRange(EmptyFolders());
             return new OnlineCompare { Tree = Cmp(cpu, equal ? "FolderContentsIdentical" : "ObjectsDifferent", kids.ToArray()), Blocks = blocks };
         }
@@ -2148,6 +2270,38 @@ namespace Tiad.Fake
         {
             script.Enter("Blocks");
             return ProjectBlocks((FakeProject)project);
+        }
+
+        public List<ProjectBlock> Types(object project)
+        {
+            script.Enter("Types");
+            return ProjectTypes((FakeProject)project, script);
+        }
+
+        // ProjectTypes is the fake project's PLC data types: the scripted
+        // customer ones (none with typesHidden),
+        // then every type a source made, in its group.
+        static List<ProjectBlock> ProjectTypes(FakeProject p, Script script)
+        {
+            var l = new List<ProjectBlock>();
+            if (!script.TypesHidden)
+            {
+                foreach (var ft in script.ForeignTypes)
+                {
+                    string m;
+                    p.TypeModified.TryGetValue(ft.Name, out m);
+                    l.Add(new ProjectBlock { Name = ft.Name, Type = "PlcStruct", Group = ft.Group, DataType = true, Modified = m ?? "customer" });
+                }
+            }
+            foreach (var b in p.Blocks)
+            {
+                if (b.Kind != "UDT") continue;
+                string g, m;
+                p.GroupOf.TryGetValue(b.Name, out g);
+                p.TypeModified.TryGetValue(b.Name, out m);
+                l.Add(new ProjectBlock { Name = b.Name, Type = "PlcStruct", Group = g ?? "", DataType = true, Modified = m ?? "made" });
+            }
+            return l;
         }
 
         // Show records the block, as the editor TIA would open it in.

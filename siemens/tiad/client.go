@@ -809,9 +809,17 @@ type SoftwareRequest struct {
 	Group     string   `json:"group"`
 	Sources   []string `json:"sources"`   // .scl, .db, .udt
 	TagTables []string `json:"tagTables"` // tag table XML
-	// Prune deletes blocks in Group that no source produced, so a block
-	// removed from the nautilus project disappears from the CPU too.
+	// Prune deletes blocks and data types in Group that no source
+	// produced, so a block removed from the nautilus project disappears
+	// from the CPU too.
 	Prune bool `json:"prune"`
+	// PrunePrefix, with Prune, is the block prefix (siemens block-prefix):
+	// the agent refuses the call, before anything is imported, when the
+	// group holds a block or data type that no source declares and whose
+	// name lacks it (a customer's object there would be deleted). Empty
+	// keeps the prune as before. An agent older than D1b refuses the
+	// field.
+	PrunePrefix string `json:"prunePrefix,omitempty"`
 	// OBs are the cyclic interrupt OBs the import makes, one per
 	// ORGANIZATION_BLOCK source (siemens/writer Output.OBs). SCL source
 	// cannot make one: the agent makes each first (class, number, cycle)
@@ -883,11 +891,19 @@ type ForeignBlock struct {
 	Name   string `json:"name"`
 	Kind   string `json:"kind"`
 	Number int    `json:"number"`
-	Group  string `json:"group"`
+	// Group is a path from the program blocks' root, or for a data type
+	// from the PLC data types' root.
+	Group string `json:"group"`
+	// DataType marks a PLC data type (kind UDT), not a program block.
+	DataType bool `json:"dataType,omitempty"`
 }
 
-// Label is the block as TIA labels it: "Main [OB1]".
+// Label is the block as TIA labels it: "Main [OB1]"; a data type is its
+// name.
 func (b ForeignBlock) Label() string {
+	if b.DataType {
+		return b.Name
+	}
 	return b.Name + " [" + b.Kind + strconv.Itoa(b.Number) + "]"
 }
 

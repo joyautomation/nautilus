@@ -146,6 +146,10 @@ namespace Tiad
             }
             Obj result = null;
             Exception failed = null;
+            // The deploy's import group (its intent line, D1b): the compare
+            // requires the data types in it by name, as the download's did.
+            object group;
+            if (record.TryGetValue("group", out group) && group is string) s.ImportGroup = (string)group;
             try
             {
                 result = VerifyOpen(s, id, address, record, trust, readFp, password, att, o);

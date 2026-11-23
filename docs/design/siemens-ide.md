@@ -999,7 +999,7 @@ The client checks each path and the agent checks again.
 | `GET /v1/sessions` | → `{sessions: [{session, project, idleSeconds}]}` |
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
 | `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, the Full access user made or found, devices kept as found). On the first apply to an opened or uploaded project, `changes` compares the spec with the project as found (`CpuReuse.Found`, #1272): each interface node value that differs (address, subnet mask, router, PROFINET name, a name TIA generated), the configuration protection step, and whether the access and web steps wrote anything (a user, role, right, password or web server switch); empty is "no change". A node the agent could not read counts as a change, never none |
-| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune, obs?: [{name, number, cycleMs}]}` → `{results: [{path, ok, messages}], blocks: [{name, kind}], obs?: [{name, action, was?, now?}], foreign: [{name, kind, number, group}]}`. Generates blocks into the group named `group`; `blocks` lists that group's. `foreign` lists every program block outside the group after the import, by group path (`""`, the root, first) and then name: what a download loads besides nautilus's own, for the deploy plan (#1326). `kind` is OB, FB, FC, DB or UDT, or the block's Openness type name for one tiad has no kind for. An agent older than #1326 sends no `foreign`, which naut says in the plan rather than showing none `obs` are the cyclic interrupt OBs the agent makes first (see "Cyclic interrupt OBs" below). With `prune`, blocks in that group that no source produced are deleted. An import never touches a block outside the group: see "Blocks outside the group" below |
+| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune, prunePrefix?, obs?: [{name, number, cycleMs}]}` → `{results: [{path, ok, messages}], blocks: [{name, kind}], obs?: [{name, action, was?, now?}], foreign: [{name, kind, number, group, dataType?}]}`. Generates blocks into the group named `group`, and a source of data types (`TYPE … END_TYPE` only) into the PLC data types' user group of the same name; `blocks` lists that group's blocks and data types (`UDT`). `foreign` lists every program block, then every data type (`dataType: true`, its group a path from the data types' root), outside the group after the import, by group path (`""`, the root, first) and then name: what a download loads besides nautilus's own, for the deploy plan (#1326). `kind` is OB, FB, FC, DB or UDT, or the block's Openness type name for one tiad has no kind for. An agent older than #1326 sends no `foreign`, which naut says in the plan rather than showing none `obs` are the cyclic interrupt OBs the agent makes first (see "Cyclic interrupt OBs" below). With `prune`, blocks and then data types in that group that no source produced are deleted; with `prunePrefix` (naut sends the block prefix), the call is refused first, naming each, when the group holds a block or data type that no source declares and whose name lacks the prefix (a customer's object there). An agent older than D1b refuses `prunePrefix` as an unknown field, and naut says to reinstall it. An import never touches a block or data type outside the group: see "Blocks outside the group" below |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text, path?}]}`. Each message is a leaf of TIA's message tree; `path` is its parents, outermost first. For an error in an SCL block, `object` is the line in the block's body (1 is the `BEGIN` line) and the block is the last parent: `{object: "4", path: ["PLC_1", "Program blocks", "nautilus", "naut_Main (FB1)"]}` (measured on TIA V21, #789) |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
 | `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}, deviceAttestation?: {by, order, firmware}}` (§3.9, §3.8) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null`. A project opened as found, with no spec applied yet (an adopted one), compares with its own CPU at the address the project holds; still only a target. `address` is the CPU compared with, which naut checks is the deploy's |
@@ -1033,8 +1033,44 @@ blocks is carried through untouched. So:
   naming it. That session is then never saved, archived for a deploy (so
   never downloaded) or imported into again (`unclean_session`); it can
   only be closed without saving.
-- Not covered yet: data types (`TYPE`). Where TIA puts a type that a
-  source generates is unproven, so no rule is guessed.
+- Data types (D1b, #1301, measured on the TIA VM 2026-11-24). TIA V21's
+  `GenerateBlocksFromSource(PlcTypeUserGroup, …)` generates a `TYPE`
+  source straight into a PLC data types user group, so a source of data
+  types goes into the data types' group named like the block group (a
+  source declaring a data type and a block is refused: each goes to its
+  own group). Regenerating a type there replaces it in place; the
+  compile then recompiles what uses it and moves their modified dates.
+  TIA keeps one name for blocks and data types ("Type conflict: Object …
+  cannot be overwritten"), and a type generated for the group while a
+  same-named type sat in another user group came back where it sat, with
+  no error. So the checks read blocks and data types as one list: a
+  declared block or data type that names either outside the group (the
+  root or any user group however deep, any case) refuses the call
+  before anything is imported; the after-import check covers data types
+  outside the group too (gone, moved, modified, new); and the glue fails
+  the import when TIA hands back any object that is not a block in the
+  block group or a data type in the data types' group, which leaves the
+  session unusable whatever a check after it shows (the regenerated
+  type may have kept its content and date).
+- After an import, a compile on the session checks every block and data
+  type outside the group the same way: TIA's date bump on nautilus's own
+  objects is accepted, while a customer's object whose date moves (it
+  uses something the import changed, such as one of nautilus's types)
+  makes the session unusable, naming it (`unclean_session`), a
+  fail-closed rule (D1b). Closing without saving recovers the session,
+  not the deploy: while the project's own objects use nautilus's blocks
+  or data types (or the project was not compiled as found), every deploy
+  is refused the same way, and that needs the project changed outside
+  nautilus (#616 lists it as a rule to loosen narrowly if a site needs
+  it). Proven on the TIA VM: an adopted copy of the bench's as-found
+  archive never trips it.
+- The import group, the compile check after it and the by-name data
+  type check in compares are per session: the session records the group
+  of its import, and a deploy's record keeps it for a verify. A session
+  that only opens a saved project imports nothing and checks neither;
+  naut's deploy always imports first.
+- Prune deletes data types only when the caller sent `prunePrefix`
+  (naut does): an older caller's prune never deletes them.
 
 **Cyclic interrupt OBs (#789).** A nautilus task runs in a cyclic
 interrupt OB at the task's cycle, and SCL source cannot make one. Proven on
@@ -1239,7 +1275,15 @@ behaviour. So, until then:
   read. So a download's success proves every block it sent landed, by
   name: the response's `blocks` (and `/compare`'s) and the audit line
   list them, so a caller checks the blocks it sent are among them.
-  System blocks, software units, data types and tag tables are not
+  The data types of the session's import group (D1b) are required by
+  name the same way, as an identical element labelled with the bare type
+  name; the deploy record keeps the group, so a verify of the deploy
+  requires them too. That label is unmeasured (no loaded type has been
+  compared yet): a wrong guess can only refuse, since a type the CPU lacks
+  shows in a non-identical state and one the tree leaves out is not
+  compared. A session with no import group (a fingerprint read, a bare
+  compare, a verify of an older deploy) requires none, as before.
+  System blocks, software units, other data types and tag tables are not
   required by name, only never different; and a tag table named exactly
   like a block the tree leaves out would stand in for it (no object
   tiad makes is so named).

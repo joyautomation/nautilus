@@ -56,6 +56,9 @@ type deployRig struct {
 	// failCompleteRecord fails the PUT of an adoption record that says the
 	// adopt completed, as if naut died right after the agent's adopt.
 	failCompleteRecord bool
+	// oldSoftware answers a software import that carries prunePrefix as
+	// an agent older than D1b does: 400, unknown field.
+	oldSoftware bool
 }
 
 // downloads are the downloads since the CPU ran its own project (cpuRuns).
@@ -160,6 +163,11 @@ func newDeployRig(t *testing.T) *deployRig {
 		if r.failCompleteRecord && q.Method == http.MethodPut && strings.HasSuffix(q.URL.Path, "/adopted.json") && strings.Contains(string(body), `"complete":true`) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			io.WriteString(w, "<html>gone</html>")
+			return
+		}
+		if r.oldSoftware && strings.HasSuffix(q.URL.Path, "/software") && strings.Contains(string(body), `"prunePrefix"`) {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"body: json: unknown field \"prunePrefix\"","fatal":false},"events":[]}`)
 			return
 		}
 		if r.mangleDownload && strings.HasSuffix(q.URL.Path, "/download") && !strings.Contains(string(body), `"dryRun":true`) {
@@ -363,11 +371,15 @@ func TestSiemensDeployPlanListsForeignBlocks(t *testing.T) {
 		{Name: "Pump", Kind: "FB", Number: 3, Group: "plant/pumps"},
 		{Name: "naut_Inner", Kind: "FB", Number: 9, Group: "nautilus/inner"},
 	}
+	// The customer's data types (D1b) come after the blocks, by group.
+	r.fake.SetTypes(tiadtest.TypesScript{Foreign: []tiadtest.ForeignType{{Name: "Recipe", Group: "plant"}, {Name: "Cust", Group: ""}, {Name: "Batch", Group: "plant"}}})
 	p := plan(r)
 	for _, want := range []string{
 		"  also loads, not nautilus's: the program blocks' root (1 block: Main [OB1])\n" +
 			"  also loads, not nautilus's: group plant/pumps (1 block: Pump [FB3])\n" +
 			"  also loads, not nautilus's: group probe (3 blocks: probe_DB [DB8], probe_FB [FB7], probe_OB [OB35])\n" +
+			"  also loads, not nautilus's: the PLC data types' root (1 data type: Cust)\n" +
+			"  also loads, not nautilus's: data types group plant (2 data types: Batch, Recipe)\n" +
 			"    on the CPU as they are: the adopted project compared equal with it before the import, which changes no block outside group nautilus\n",
 	} {
 		if !strings.Contains(p, want) {
@@ -395,6 +407,28 @@ func TestSiemensDeployPlanListsForeignBlocks(t *testing.T) {
 	if !strings.Contains(p, "other program blocks: this agent does not report the blocks outside group nautilus, which the download loads too (an agent older than #1326)") ||
 		strings.Contains(p, "also loads") {
 		t.Errorf("an agent that reports no foreign list:\n%s", p)
+	}
+}
+
+// TestSiemensDeployPrunesOnlyItsOwn (D1b): the deploy's prune carries the
+// block prefix, so the agent refuses, naming it, when nautilus's group
+// holds something without the prefix that the deploy would delete; an
+// agent older than that refuses the field, and naut says to reinstall it.
+func TestSiemensDeployPrunesOnlyItsOwn(t *testing.T) {
+	r := newDeployRig(t)
+	r.adopt()
+	r.fake.SetTypes(tiadtest.TypesScript{Foreign: []tiadtest.ForeignType{{Name: "Theirs", Group: "nautilus"}}})
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	if code != 1 || !strings.Contains(out, `data type "Theirs" in data types group "nautilus": not named with the prefix "naut_"`) || len(r.downloads()) != 0 {
+		t.Fatalf("a deploy over a customer's type in nautilus's group: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+	}
+
+	r = newDeployRig(t)
+	r.adopt()
+	r.oldSoftware = true
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop")
+	if code != 1 || !strings.Contains(out, "the agent is older than this naut (it does not know prunePrefix") || !strings.Contains(out, "reinstall tiad") || len(r.downloads()) != 0 {
+		t.Fatalf("an agent older than prunePrefix: exit %d:\n%s", code, out)
 	}
 }
 

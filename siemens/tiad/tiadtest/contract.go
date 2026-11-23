@@ -78,6 +78,10 @@ type Target interface {
 	// keep what the agent asked, which its check after the import must
 	// catch.
 	SetOBImportIgnoresClass(t testing.TB, on bool)
+	// SetTypes scripts the fake TIA's PLC data types (TypesScript): the
+	// customer's, whether the agent's reading before an import misses
+	// them, whether a compile moves their dates.
+	SetTypes(t testing.TB, ts TypesScript)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -150,6 +154,7 @@ func (g goFake) SetImportReplacesForeign(_ testing.TB, on bool) {
 	g.f.SetImportReplacesForeign(on)
 }
 func (g goFake) SetOBImportIgnoresClass(_ testing.TB, on bool) { g.f.SetOBImportIgnoresClass(on) }
+func (g goFake) SetTypes(_ testing.TB, ts TypesScript)         { g.f.SetTypes(ts) }
 func (g goFake) LoadOutside(_ testing.TB, address, file string) {
 	if file == "" {
 		g.f.LoadOutside(address)

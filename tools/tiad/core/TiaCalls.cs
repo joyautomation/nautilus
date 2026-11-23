@@ -819,6 +819,9 @@ namespace Tiad
                 List<string> srcs = r.Strs("sources");
                 List<string> tables = r.Strs("tagTables");
                 bool prune = r.Bool("prune");
+                // prunePrefix: with prune, every object in the group that no
+                // source declares must carry it (Ownership.PruneRefused).
+                string prunePrefix = r.Str("prunePrefix");
                 List<CyclicOB> obs = CyclicObs.Read(r.Children("obs"));
                 r.Done();
                 if (group == "") throw TiadException.BadRequest("group is empty");
@@ -831,10 +834,11 @@ namespace Tiad
                 SoftwareResult res = OnSession(s, delegate(ITia t)
                 {
                     if (s.ForeignChanged) throw Ownership.Unusable("another import");
-                    // Every block the sources declare, read on the TIA
-                    // thread right before TIA reads the same files: a name
-                    // outside the group, or a data type, refuses the whole
-                    // call before anything is imported (Ownership).
+                    // Every block and data type the sources declare, read on
+                    // the TIA thread right before TIA reads the same files:
+                    // a name outside the group (blocks and data types share
+                    // TIA's names), or a source with both kinds, refuses the
+                    // whole call before anything is imported (Ownership).
                     var declared = new List<Declared>();
                     foreach (var src in sources)
                     {
@@ -844,20 +848,33 @@ namespace Tiad
                             declared.Add(d);
                         }
                     }
-                    TiadException types = Ownership.TypesRefused(declared);
-                    if (types != null) throw types;
+                    TiadException mixed = Ownership.MixedRefused(declared);
+                    if (mixed != null) throw mixed;
+                    HashSet<string> typeSources = Ownership.TypeSources(declared);
+                    foreach (var src in sources) src.DataTypes = typeSources.Contains(src.Path);
                     TiadException obSources = CyclicObs.SourcesRefused(declared, obs);
                     if (obSources != null) throw obSources;
                     List<ProjectBlock> before = t.Blocks(s.Handle);
-                    List<string> conflicts = Ownership.Conflicts(declared, before, group);
+                    List<ProjectBlock> objectsBefore = Objects(t, s, before);
+                    List<string> conflicts = Ownership.Conflicts(declared, objectsBefore, group);
                     if (conflicts.Count > 0) throw Ownership.Refusal(conflicts, group);
+                    if (prune)
+                    {
+                        TiadException notOurs = Ownership.PruneRefused(objectsBefore, declared, group, prunePrefix);
+                        if (notOurs != null) throw notOurs;
+                    }
                     TiadException clash = CyclicObs.ConstantClash(declared, before, obs);
                     if (clash != null) throw clash;
                     List<OBStep> steps = CyclicObs.Plan(obs, before, group, prune);
                     s.Compiled = false;
-                    // Unusable until the blocks outside the group compare
-                    // the same afterwards, whether the import returns or
-                    // throws: a failure part-way may have replaced one.
+                    // The group this session imports into: a later compile
+                    // checks what lies outside it, and a compare requires
+                    // its data types by name (TiaNames.CompareEqual).
+                    s.ImportGroup = group;
+                    // Unusable until the blocks and data types outside the
+                    // group compare the same afterwards, whether the import
+                    // returns or throws: a failure part-way may have
+                    // replaced one.
                     s.ForeignChanged = true;
                     // touched: an OB was deleted or imported. A failure after
                     // that may leave an OB gone or an empty stub, so the
@@ -882,15 +899,26 @@ namespace Tiad
                             touched = true;
                             t.ImportBlock(s.Handle, group, CyclicObs.Xml(st.Want));
                         }
-                        sr = t.ImportSoftware(s.Handle, group, sources, tagTables, prune);
+                        sr = t.ImportSoftware(s.Handle, group, sources, tagTables, prune, prune && prunePrefix != "");
                     }
-                    catch
+                    catch (Exception e)
                     {
-                        if (!touched && Ownership.Changed(before, t.Blocks(s.Handle), group).Count == 0) s.ForeignChanged = false;
+                        // TIA handed back an object outside the group: it
+                        // replaced a same-named object where it sits, maybe
+                        // with the same content and date, so no compare can
+                        // clear the session (Ownership).
+                        TiaException te = e as TiaException;
+                        if (te != null && te.OutsideGroup) throw Ownership.OutsideGroupError(te.Message, group);
+                        // A data type import that failed stays unusable too:
+                        // TIA may have regenerated a customer's type with its
+                        // content and date, and the failure may have hidden
+                        // the glue's mark.
+                        if (!touched && typeSources.Count == 0 && Ownership.Changed(objectsBefore, Objects(t, s, t.Blocks(s.Handle)), group).Count == 0) s.ForeignChanged = false;
                         throw;
                     }
                     List<ProjectBlock> after = t.Blocks(s.Handle);
-                    List<string> changed = Ownership.Changed(before, after, group);
+                    List<ProjectBlock> objectsAfter = Objects(t, s, after);
+                    List<string> changed = Ownership.Changed(objectsBefore, objectsAfter, group);
                     if (changed.Count > 0) throw Ownership.ForeignChangedError(changed, group);
                     // A source that declares an asked OB must have made its
                     // body: else the OB is an empty stub (or gone, with prune).
@@ -900,11 +928,25 @@ namespace Tiad
                     if (bad.Count > 0) throw CyclicObs.VerifyFailed(bad);
                     s.ForeignChanged = false;
                     sr.Obs = steps;
-                    sr.Foreign = Ownership.Foreign(after, group);
+                    sr.Foreign = Ownership.Foreign(objectsAfter, group);
                     return sr;
                 });
                 return res.ToJson();
             });
+        }
+
+        // Objects is blocks and then every data type the project holds
+        // (ITia.Types, each marked DataType): the one list the ownership
+        // checks read, since blocks and data types share TIA's names.
+        static List<ProjectBlock> Objects(ITia t, Session s, List<ProjectBlock> blocks)
+        {
+            var l = new List<ProjectBlock>(blocks);
+            foreach (var ty in t.Types(s.Handle))
+            {
+                ty.DataType = true;
+                l.Add(ty);
+            }
+            return l;
         }
 
         object Compile(Call c)
@@ -919,6 +961,19 @@ namespace Tiad
                 if (!hw && !sw) throw TiadException.BadRequest("neither hardware nor software selected");
                 CompileResult res = OnSession(s, delegate(ITia t)
                 {
+                    // After an import, a compile recompiles what uses the
+                    // group's objects. TIA's date bump is accepted on the
+                    // group's own; a block or data type outside the group
+                    // whose date moves (a customer's block that uses one of
+                    // nautilus's types) makes the session unusable: the
+                    // compile changed what nautilus does not own.
+                    // Pinned unusable before the compile and cleared only once
+                    // a read after it shows nothing outside changed: a
+                    // compile, or the read after it, that fails leaves it.
+                    string group = s.ImportGroup;
+                    bool was = s.ForeignChanged;
+                    List<ProjectBlock> before = group == "" ? null : Objects(t, s, t.Blocks(s.Handle));
+                    if (before != null) s.ForeignChanged = true;
                     CompileResult cr;
                     try
                     {
@@ -927,7 +982,18 @@ namespace Tiad
                     catch
                     {
                         s.Compiled = false;
+                        if (before != null && Ownership.Changed(before, Objects(t, s, t.Blocks(s.Handle)), group).Count == 0) s.ForeignChanged = was;
                         throw;
+                    }
+                    if (before != null)
+                    {
+                        List<string> changed = Ownership.Changed(before, Objects(t, s, t.Blocks(s.Handle)), group);
+                        if (changed.Count > 0)
+                        {
+                            s.Compiled = false;
+                            throw Ownership.CompileChangedError(changed, group);
+                        }
+                        s.ForeignChanged = was;
                     }
                     // Only a full compile without errors makes the
                     // project downloadable.
