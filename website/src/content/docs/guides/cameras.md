@@ -9,9 +9,9 @@ equipment from `plant.yaml`, and it shows on that equipment's asset page. It is
 **optional**: a project with no `cameras:` section has no camera routes and no
 camera on any page.
 
-This page describes the first step: virtual cameras, JPEG snapshot URLs and
-motion-JPEG streams. RTSP and ONVIF cameras (live video as HLS, snapshots on
-an alarm, pan and tilt) are later steps and are not built yet.
+This page describes virtual cameras, JPEG snapshot URLs, motion-JPEG streams,
+RTSP cameras (live H.264 video as HLS) and the pictures kept when an alarm
+activates. ONVIF cameras and pan and tilt are a later step and are not built yet.
 
 ## The manifest
 
@@ -31,7 +31,7 @@ cameras:
 |---|---|
 | `id` | Letters, digits, `-` and `_`: it is in a URL. |
 | `asset` | The `plant.yaml` equipment the camera shows. `naut check` refuses one the plant does not have. |
-| `kind` | `virtual` is drawn by the controller (demos, tests, no hardware). `snapshot` is a JPEG at a URL. `mjpeg` is a motion-JPEG stream at a URL. `hls`, `rtsp` and `onvif` are accepted by the manifest but show no picture yet unless a `snapshot-url` is given. |
+| `kind` | `virtual` is drawn by the controller (demos, tests, no hardware). `snapshot` is a JPEG at a URL. `mjpeg` is a motion-JPEG stream at a URL. `rtsp` is an H.264 camera the controller opens over RTSP and plays as HLS (below). `hls` and `onvif` are accepted by the manifest but show no picture yet unless a `snapshot-url` is given. |
 | `url` | The stream or still. Never a user name or password in it: the manifest is refused. |
 | `snapshot-url` | A JPEG URL the controller fetches for the still, for a kind whose `url` is a stream. |
 | `credentials` | `true` when the camera wants a user name and password. They are kept in the secrets file, never in the manifest. |
@@ -141,6 +141,146 @@ at once** across every camera. A person over a cap is told which one it is.
 A live view also ends after **15 minutes** (the picture stops: click Watch live again), when
 the person signs out or may no longer read, and when the browser stops reading
 (each write to it has a 10-second limit).
+
+## Live video of an RTSP camera
+
+An `rtsp` camera (`url: rtsp://…` or `rtsps://…`) is opened by the controller when
+the first person asks to watch it, and played in the browser as HLS (fragmented MP4).
+The controller does not decode or encode video: the camera's **H.264** is repackaged
+as it comes, so the cost is mostly copying bytes. A camera that offers another codec
+(H.265, MJPEG) is refused with "set its stream to H.264"; most cameras offer a second
+stream in H.264, and a low-resolution one is the right one for a slow link.
+
+- **RTSP runs over the control connection (TCP).** A camera that will only send
+  video over UDP is refused. The controller opens no UDP port.
+- **Credentials** are the secret `camera.<id>` as for any camera, sent only after the
+  camera asks, in the scheme it asked for (digest preferred; never basic after digest).
+  They are never in an error, a log or an answer, and neither is the camera's address.
+- **The stream starts on the first request and stops 30 seconds after the last one.**
+  A camera nobody is watching is not being read.
+- **The player** is the kit's own (the asset page's "Watch live"): Safari and iPhone
+  play the HLS playlist natively, other browsers through Media Source Extensions.
+  The latency is a few segments, about 4 to 8 seconds; this is not a control view.
+- **Who may view, the caps and the journal** are the same as for motion-JPEG: a
+  viewer is a lease kept alive by the player's requests and dropped 15 seconds
+  after the last one, so the per-camera `max-viewers`, two streams a person and
+  four across the controller count people watching, and `camera.view` is
+  journalled when a person starts and stops. A view ends after 15 minutes, and a
+  person who loses read or the `camera` permission is refused at their next
+  request (a segment is two seconds).
+
+### What a stream can use
+
+A hostile or broken camera cannot grow the controller's memory. Each stream holds at
+most:
+
+| What | Bound |
+|---|---|
+| Buffers reserved up front (one picture being reassembled, one fragmented NAL unit, frames read before PLAY is answered) | 2 MB + 1 MB + 2 MB = 5 MB |
+| Finished segments | 6 segments and 16 MB, the oldest dropped first |
+| The segment being built | 4 MB (each picture counted with its bookkeeping) and 1,500 pictures |
+| The picture waiting for its duration | 2 MB |
+| An RTSP line, header block or body | 8 KB a line, 64 headers, 64 KB of body |
+
+That is **27 MB counted at the very most for one camera's stream**, and in practice the
+window of six two-second segments (about 3 MB at 2 Mbit/s) plus the 5 MB reserve. The
+count is what the stream holds; for the moment a segment is cut its fragment is
+copied once more (up to 4 MB), so the heap can pass the count by that much, and the
+garbage collector's slack comes on top.
+The 4 MB segment is a whole group of pictures, so it allows 16 Mbit/s at a two-second
+keyframe interval, 8 Mbit/s at four seconds and 3 Mbit/s at ten: more than 1080p
+needs in H.264. A camera whose groups of pictures do not fit twice in a row ends
+the stream with "the camera's keyframes are too far apart for its bitrate: set its
+keyframe interval to 2 seconds, or a lower bitrate". A picture over 2 MB (an
+uncompressed 4K keyframe is far past what a camera sends) is dropped.
+
+**All live streams share one budget**, 64 MB by default, so a hostile camera on a
+small controller cannot make it swap. A stream that would pass it ends with "camera
+stream too large for this controller". Change it in the manifest:
+
+```yaml
+camera-streams:
+  memory-mb: 64     # 16 to 4096
+```
+
+At most four cameras' streams are open at once (a stream stays open 30 seconds
+after its last viewer, so one person asking for every camera cannot hold them
+all), a camera that fails is not redialled for five seconds, and a camera that
+sends nothing for 15 seconds, answers PLAY with nothing, or sends a malformed
+description ends the stream with a reason.
+
+### Live video over a slow link
+
+Many sites reach their HMI over a radio link of a few hundred kilobits a
+second. One live stream can use all of it and starve the tag values. That is why
+the page starts with a still and why live video is an explicit click with its
+bitrate on screen: it is the operator's choice, at a cost.
+
+Three caps bound it: `max-viewers` limits one camera, one person (or token)
+may hold at most **two** live streams, and a controller relays at most **four
+at once** across every camera. A person over a cap is told which one it is.
+A live view also ends after **15 minutes** (the picture stops: click Watch live again), when
+the person signs out or may no longer read, and when the browser stops reading
+(each write to it has a 10-second limit).
+
+## Live video of an RTSP camera
+
+An `rtsp` camera (`url: rtsp://…` or `rtsps://…`) is opened by the controller when
+the first person asks to watch it, and played in the browser as HLS (fragmented MP4).
+The controller does not decode or encode video: the camera's **H.264** is repackaged
+as it comes, so the cost is mostly copying bytes. A camera that offers another codec
+(H.265, MJPEG) is refused with "set its stream to H.264"; most cameras offer a second
+stream in H.264, and a low-resolution one is the right one for a slow link.
+
+- **RTSP runs over the control connection (TCP).** A camera that will only send
+  video over UDP is refused. The controller opens no UDP port.
+- **Credentials** are the secret `camera.<id>` as for any camera, sent only after the
+  camera asks, in the scheme it asked for (digest preferred; never basic after digest).
+  They are never in an error, a log or an answer, and neither is the camera's address.
+- **The stream starts on the first request and stops 30 seconds after the last one.**
+  A camera nobody is watching is not being read.
+- **The player** is the kit's own (the asset page's "Watch live"): Safari and iPhone
+  play the HLS playlist natively, other browsers through Media Source Extensions.
+  The latency is a few segments, about 4 to 8 seconds; this is not a control view.
+- **Who may view, the caps and the journal** are the same as for motion-JPEG: a
+  viewer is a lease kept alive by the player's requests and dropped 15 seconds
+  after the last one, so the per-camera `max-viewers`, two streams a person and
+  four across the controller count people watching, and `camera.view` is
+  journalled when a person starts and stops. A view ends after 15 minutes, and a
+  person who loses read or the `camera` permission is refused at their next
+  request (a segment is two seconds).
+
+### What a stream can use
+
+A hostile or broken camera cannot grow the controller's memory. Each stream holds at
+most:
+
+| What | Bound |
+|---|---|
+| Finished segments | 6 segments and 24 MB, the oldest dropped first |
+| The segment being built | 8 MB; a run that cannot be cut (a camera that sends no keyframes, or one picture over the bound) is dropped and the stream waits for the next keyframe |
+| One picture being reassembled | 4 MB, at most 1,024 NAL units |
+| One fragmented NAL unit | 2 MB |
+| An RTSP line, header block or body | 8 KB a line, 64 headers, 64 KB of body |
+
+That is **27 MB at the very most for one camera's stream**, and in practice the
+window of six two-second segments (about 3 MB at 2 Mbit/s). At most four cameras
+are watched at once, and each stream stops 30 seconds after the last request. A
+camera that sends nothing for 15 seconds, answers PLAY with nothing, or sends a malformed
+description ends the stream with a reason.
+
+### Live video over a slow link
+
+H.264 at even 500 kbit/s is more than a 256 kbit/s radio link carries. Pick the
+camera's low-resolution stream and check the bitrate before offering live video
+there. The asset page starts with a still and shows the bitrate before live video
+runs, as for motion-JPEG.
+
+### What the CPU cost is
+
+Not measured yet: a figure belongs to a measurement on the small ARM controllers,
+which has not been taken. Passing H.264 through involves no decoding, but the
+controller does read, repackage and serve every byte of each watched stream.
 
 ## Pictures when an alarm activates
 

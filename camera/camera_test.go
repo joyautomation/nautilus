@@ -613,3 +613,16 @@ func TestSnapshotOnAlarmNeedsAStillAndThePolicyHasBounds(t *testing.T) {
 		t.Error("no policy is an error")
 	}
 }
+
+func TestStreamPolicyBounds(t *testing.T) {
+	for _, p := range []*StreamPolicy{{MemoryMB: -1}, {MemoryMB: 15}, {MemoryMB: 100000}} {
+		if p.Validate() == nil {
+			t.Errorf("%+v accepted", p)
+		}
+	}
+	for _, p := range []*StreamPolicy{nil, {}, {MemoryMB: 16}, {MemoryMB: 64}, {MemoryMB: 4096}} {
+		if err := p.Validate(); err != nil {
+			t.Errorf("%+v refused: %v", p, err)
+		}
+	}
+}

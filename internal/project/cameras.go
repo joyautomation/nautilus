@@ -18,11 +18,17 @@ type CameraRows = []camera.Camera
 // CameraSnapshotsCfg is the camera-snapshots: policy (a YAML node in the browser build).
 type CameraSnapshotsCfg = *camera.SnapshotPolicy
 
+// CameraStreamsCfg is the camera-streams: policy (a YAML node in the browser build).
+type CameraStreamsCfg = *camera.StreamPolicy
+
 // validateCameras checks the rows and the policy on their own (the plant is
 // CheckCameras').
-func validateCameras(rows CameraRows, pol CameraSnapshotsCfg) error {
+func validateCameras(rows CameraRows, pol CameraSnapshotsCfg, streams CameraStreamsCfg) error {
 	errs := camera.Validate(rows)
 	if err := pol.Validate(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := streams.Validate(); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
@@ -55,7 +61,7 @@ func (p *Project) CheckCameras() (errs, warns []string) {
 			}
 		}
 		switch c.Kind {
-		case camera.KindHLS, camera.KindRTSP, camera.KindONVIF:
+		case camera.KindHLS, camera.KindONVIF:
 			if c.SnapshotURL == "" {
 				warns = append(warns, fmt.Sprintf("camera %q (%s): live video of this kind is not built in yet and it has no snapshot-url, so the asset page has no picture to show", c.ID, c.Kind))
 			}

@@ -79,7 +79,9 @@ type Manifest struct {
 	// CameraSnapshots is how long and how much of the pictures kept when an
 	// alarm activates (#724): keep-days, max-count, max-mb.
 	CameraSnapshots CameraSnapshotsCfg `yaml:"camera-snapshots"`
-	Tasks           []TaskConfig       `yaml:"tasks"`
+	// CameraStreams bounds the memory of all live video streams together (#724).
+	CameraStreams CameraStreamsCfg `yaml:"camera-streams"`
+	Tasks         []TaskConfig     `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
 	// tag set stays a separate reviewable artifact instead of a 500-line
@@ -1232,6 +1234,8 @@ type Project struct {
 	Cameras CameraRows
 	// CameraSnapshots is the manifest's camera-snapshots: policy (#724).
 	CameraSnapshots CameraSnapshotsCfg
+	// CameraStreams is the manifest's camera-streams: policy (#724).
+	CameraStreams CameraStreamsCfg
 	// AlarmNotifiers are heard by the alarm engine besides the manifest's
 	// alarms.notify: ones: what a controller composes in (the cameras'
 	// snapshot on alarm, #724).
@@ -1450,7 +1454,7 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 	if err := m.readCheckout(fsys, !noSheet); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	if err := validateCameras(m.Cameras, m.CameraSnapshots); err != nil {
+	if err := validateCameras(m.Cameras, m.CameraSnapshots, m.CameraStreams); err != nil {
 		return nil, fmt.Errorf("%s: cameras: %w", name, err)
 	}
 	if m.Parameters != nil {
@@ -1982,6 +1986,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		Checkout:        m.Checkout,
 		Cameras:         m.Cameras,
 		CameraSnapshots: m.CameraSnapshots,
+		CameraStreams:   m.CameraStreams,
 		checkout:        m.checkoutSheet,
 
 		AuthStateDir: m.authStateDir(),

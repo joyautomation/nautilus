@@ -77,6 +77,23 @@ type SnapshotPolicy struct {
 	MaxMB    int `yaml:"max-mb"`    // default 200
 }
 
+// StreamPolicy is the manifest's camera-streams: section: the memory all live
+// video streams of the controller may hold together.
+type StreamPolicy struct {
+	MemoryMB int `yaml:"memory-mb"` // default 64
+}
+
+// Validate checks the policy's bound.
+func (p *StreamPolicy) Validate() error {
+	if p == nil {
+		return nil
+	}
+	if p.MemoryMB < 0 || (p.MemoryMB > 0 && p.MemoryMB < 16) || p.MemoryMB > 4096 {
+		return fmt.Errorf("camera-streams.memory-mb is %d: between 16 and 4096 (a stream reserves 5 MB before it has a picture, and a 2 Mbit/s one holds about 5 MB more)", p.MemoryMB)
+	}
+	return nil
+}
+
 // DefaultKeepDays is how long alarm pictures are kept unless the policy says.
 const DefaultKeepDays = 30
 
@@ -99,7 +116,11 @@ func (p *SnapshotPolicy) Validate() error {
 
 // Live reports whether the camera can be watched live (a stream, not only
 // snapshots) in this build.
-func (c Camera) Live() bool { return c.Kind == KindMJPEG || c.Kind == KindVirtual }
+func (c Camera) Live() bool { return c.Kind == KindMJPEG || c.Kind == KindVirtual || c.HLS() }
+
+// HLS reports whether live video is relayed as HLS (an RTSP camera, H.264 remuxed
+// by the controller) rather than as motion-JPEG.
+func (c Camera) HLS() bool { return c.Kind == KindRTSP }
 
 // HasSnapshot reports whether the controller can get a still from it.
 func (c Camera) HasSnapshot() bool {

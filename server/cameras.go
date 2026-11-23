@@ -58,16 +58,22 @@ type CameraOptions struct {
 	// Alarm pictures (#724 slice 2): Snaps keeps them, Equipment names an
 	// alarm's equipment (an alarm id to its key), Leads says this controller
 	// leads (nil: it does).
-	Snaps     *camera.SnapStore
-	Equipment func(alarmID string) string
-	Leads     func() bool
-	snapSem   chan struct{}
-	semOnce   sync.Once
-	inflight  map[string][]alarm.Event
-	snapSeen  map[string]time.Time
-	snapSwept time.Time
-	lowWarned atomic.Bool
-	api       *cameraAPI
+	// LiveBudgetMB is the memory all live HLS streams may hold together (0: 64 MB).
+	LiveBudgetMB int
+	Snaps        *camera.SnapStore
+	Equipment    func(alarmID string) string
+	Leads        func() bool
+	snapSem      chan struct{}
+	semOnce      sync.Once
+	inflight     map[string][]alarm.Event
+	snapSeen     map[string]time.Time
+	snapSwept    time.Time
+	hub          *camera.HLSHub
+	leaseMu      sync.Mutex
+	leases       map[string]*hlsLease
+	leasing      bool
+	lowWarned    atomic.Bool
+	api          *cameraAPI
 }
 
 // Install adds the cameras to the server's options: its routes.
@@ -77,6 +83,16 @@ func (co *CameraOptions) Install(o *Options) {
 	}
 	o.Mounts = append(o.Mounts, co.mount)
 	o.ShownPermissions = append(o.ShownPermissions, auth.Camera)
+}
+
+// Stop closes the RTSP sessions the cameras have open (the controller is going down).
+func (co *CameraOptions) Stop() {
+	co.mu.Lock()
+	h := co.hub
+	co.mu.Unlock()
+	if h != nil {
+		h.Stop()
+	}
 }
 
 type cameraAPI struct {
@@ -96,9 +112,13 @@ func (co *CameraOptions) mount(s *Server, mux *http.ServeMux) {
 	if co.snaps == nil {
 		co.snaps = map[string]*snapCache{}
 	}
+	if co.hub == nil {
+		co.hub = camera.NewHLSHub(co.Fetcher, camera.NewMemBudget(int64(co.LiveBudgetMB)<<20))
+	}
 	co.api = a
 	co.mu.Unlock()
 	a.mountSnaps(mux)
+	mux.HandleFunc("GET /api/cameras/{id}/hls/{name}", a.hls)
 	mux.HandleFunc("GET /api/cameras", a.list)
 	mux.HandleFunc("GET /api/cameras/{id}/snapshot", a.snapshot)
 	mux.HandleFunc("GET /api/cameras/{id}/stream", a.stream)
@@ -114,8 +134,11 @@ type cameraView struct {
 	MaxViewers int    `json:"maxViewers"`
 	// View says whether the person may view cameras: false, and the page says
 	// they have no permission instead of asking for a picture.
-	View     bool `json:"view"`
-	Live     bool `json:"live"`
+	View bool `json:"view"`
+	Live bool `json:"live"`
+	// Hls says live video is HLS: play /api/cameras/{id}/hls/index.m3u8 with an HLS
+	// player, not motion-JPEG.
+	Hls      bool `json:"hls"`
 	Snapshot bool `json:"snapshot"`
 	Watching int  `json:"watching"`
 	// Bps is what the live relay is carrying now, for the page to show what a
@@ -151,7 +174,7 @@ func (a *cameraAPI) list(w http.ResponseWriter, r *http.Request) {
 	may := a.mayView(r)
 	for _, c := range a.co.Cameras {
 		v := cameraView{View: may, ID: c.ID, Label: c.Label, Asset: c.Asset, Kind: c.Kind, Interval: c.Interval(), MaxViewers: c.Viewers(),
-			Live: c.Live(), Snapshot: c.HasSnapshot(), Watching: a.co.limit.Watching(c.ID)}
+			Live: c.Live(), Hls: c.HLS(), Snapshot: c.HasSnapshot(), Watching: a.co.limit.Watching(c.ID)}
 		if may && v.Watching > 0 {
 			v.Bps = a.meterOf(c.ID).BitsPerSecond()
 		}
@@ -184,7 +207,7 @@ func (a *cameraAPI) camera(w http.ResponseWriter, r *http.Request) (camera.Camer
 	if !a.mayView(r) {
 		// a refused live view is journalled; the still the page asks for every few
 		// seconds is not (a refusal flood is coalesced by the recorder either way)
-		if strings.HasSuffix(r.URL.Path, "/stream") {
+		if strings.HasSuffix(r.URL.Path, "/stream") || strings.HasSuffix(r.URL.Path, "/hls/index.m3u8") {
 			a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: a.s.principalOf(r), Source: audit.SourceHMI, Result: audit.ResultRefused,
 				From: a.s.clientAddr(r), Session: a.s.sessionOfEntry(r), Detail: map[string]any{"event": "start", "asset": c.Asset, "reason": noView, "class": audit.ClassAuth}})
 		}
@@ -289,6 +312,10 @@ func (a *cameraAPI) stream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "a live stream is a GET"})
+		return
+	}
+	if c.HLS() {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "this camera's live video is HLS: /api/cameras/" + c.ID + "/hls/index.m3u8"})
 		return
 	}
 	if !c.Live() {
