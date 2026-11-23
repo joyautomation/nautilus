@@ -206,6 +206,9 @@ func StartProcess(t testing.TB, bin string, cfg Config, env ...string) *Process 
 	}
 	p := &Process{WorkDir: t.TempDir(), PinsDir: t.TempDir(), DeploysDir: t.TempDir(), done: make(chan struct{})}
 	p.cmd = Command(bin)
+	if cfg.UI {
+		env = append([]string{"TIAD_UI=1"}, env...)
+	}
 	p.cmd.Env = AgentEnv(append([]string{
 		"TIAD_ADDR=http://127.0.0.1:0",
 		"TIAD_WORKDIR=" + p.WorkDir,
@@ -429,6 +432,16 @@ func (p *Process) SetArchiveFails(t testing.TB, msg string) {
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)
+}
+
+// Shown lists every block tiad-fake's show opened.
+func (p *Process) Shown(t testing.TB) []string {
+	t.Helper()
+	var out struct {
+		Shown []string `json:"shown"`
+	}
+	p.controlInto(t, http.MethodGet, "/fake/shown", nil, &out)
+	return out.Shown
 }
 
 // Loaded lists every download tiad-fake loaded.

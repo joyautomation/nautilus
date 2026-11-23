@@ -82,6 +82,13 @@ namespace Tiad
         // start.
         public bool ExitOnStdin;
 
+        // Ui (TIAD_UI=1) starts TIA Portal with its user interface, for
+        // viewing only: a block can then be shown in TIA's editor (POST
+        // /v1/sessions/{id}/show), and every download is refused, since a
+        // click or a dialog in the visible Portal could change one. Off by
+        // default: tiad drives TIA without a window.
+        public bool Ui;
+
         // Flag reads a switch that is "1" or unset; anything else is a
         // mistake worth refusing to start over.
         static bool Flag(string name)
@@ -240,6 +247,7 @@ namespace Tiad
 
             c.NoTia = Flag("TIAD_NO_TIA");
             c.ExitOnStdin = Flag("TIAD_EXIT_ON_STDIN");
+            c.Ui = Flag("TIAD_UI");
 
             foreach (string t in Env("TIAD_TARGETS").Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries))
             {

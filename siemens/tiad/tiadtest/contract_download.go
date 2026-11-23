@@ -118,10 +118,17 @@ func contractDownload(t *testing.T, start Starter) {
 // imported and fully compiled: ready to download.
 func compiledBench(t *testing.T, start Starter, targets ...string) (Target, *tiad.Session) {
 	t.Helper()
-	if targets == nil {
-		targets = []string{benchCPU}
+	return compiledBenchWith(t, start, Config{Targets: targets})
+}
+
+// compiledBenchWith is compiledBench on an agent started with cfg (its
+// Targets the bench CPU when empty).
+func compiledBenchWith(t *testing.T, start Starter, cfg Config) (Target, *tiad.Session) {
+	t.Helper()
+	if cfg.Targets == nil {
+		cfg.Targets = []string{benchCPU}
 	}
-	a := start(t, Config{Targets: targets})
+	a := start(t, cfg)
 	c := a.Client()
 	installGSD(t, c)
 	s, err := c.CreateProject(ctx, "bench", BenchStation(), BenchSecrets)

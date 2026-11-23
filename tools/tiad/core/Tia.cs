@@ -252,6 +252,12 @@ namespace Tiad
 
         CompileResult Compile(object project, bool hardware, bool software);
 
+        // Show opens the block named name, in group (a ProjectBlock.Group
+        // the agent read with Blocks), in TIA Portal's editor. The agent
+        // asks it only of a TIA started with its user interface
+        // (Config.Ui). It changes nothing in the project.
+        void Show(object project, string group, string name);
+
         // Download loads the project into the CPU at address, never at
         // any address of the project's own. TIA asks its pre-download
         // checks one at a time and lists them nowhere (#789 S2b), so

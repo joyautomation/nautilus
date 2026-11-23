@@ -66,6 +66,9 @@ func TestAgentRefusesUnsafeConfig(t *testing.T) {
 		{"file cap zero", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_MAX_FILE_BYTES=0"}, "TIAD_MAX_FILE_BYTES"},
 		{"no-TIA switch not 1", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_NO_TIA=true"}, "TIAD_NO_TIA must be 1 or unset"},
 		{"stdin switch not 1", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_EXIT_ON_STDIN=yes"}, "TIAD_EXIT_ON_STDIN must be 1 or unset"},
+		// A UI agent refuses every download: a switch half-set must not
+		// start one by mistake, either way.
+		{"UI switch not 1", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_UI=2"}, "TIAD_UI must be 1 or unset"},
 		// The files API writes anywhere in the work dir: a pin must never be
 		// within its reach.
 		{"no pins dir off Windows", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_PINS_DIR="}, "TIAD_PINS_DIR is required"},

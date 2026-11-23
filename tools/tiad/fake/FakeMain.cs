@@ -22,6 +22,7 @@
 //       the moment the ITia was made, which is when TIA would start.
 //   GET /fake/downloads {"downloads": [{address, hardware, software, state}]}
 //       every download that loaded the CPU. Secrets are never recorded.
+//   GET /fake/shown   {"shown": ["group/name", ...]}: the blocks a show opened
 //
 // PUT /fake/script also takes "questions": [{id, message, detail,
 // objects}], TIA's pre-download checks for every download.
@@ -681,6 +682,9 @@ namespace Tiad.Fake
         }
         readonly List<object> calls = new List<object>();
         readonly List<object> downloads = new List<object>();
+        // shown is every block a show opened in the (absent) editor, as
+        // "group/name" ("name" at the root), in order.
+        readonly List<object> shown = new List<object>();
 
         public List<Question> Questions
         {
@@ -855,6 +859,25 @@ namespace Tiad.Fake
                 accessRecords = records;
             }
             return new Obj();
+        }
+
+        public void Showed(string group, string name)
+        {
+            lock (mu)
+            {
+                shown.Add(group == "" ? name : group + "/" + name);
+            }
+        }
+
+        // Shown is GET /fake/shown {"shown": ["group/name", ...]}.
+        public object Shown(Call c)
+        {
+            var o = new Obj();
+            lock (mu)
+            {
+                o["shown"] = shown.ToArray();
+            }
+            return o;
         }
 
         public object Calls(Call c)
@@ -2018,6 +2041,23 @@ namespace Tiad.Fake
             return ProjectBlocks((FakeProject)project);
         }
 
+        // Show records the block, as the editor TIA would open it in.
+        // It refuses a block the project does not hold there, as
+        // Openness finds none.
+        public void Show(object project, string group, string name)
+        {
+            script.Enter("Show");
+            foreach (ProjectBlock b in ProjectBlocks((FakeProject)project))
+            {
+                if (b.Group == group && b.Name == name)
+                {
+                    script.Showed(group, name);
+                    return;
+                }
+            }
+            throw new TiaException("no block \"" + name + "\" in group \"" + group + "\" to show");
+        }
+
         static CompareNode[] EmptyFolders()
         {
             return new[]
@@ -2573,6 +2613,7 @@ namespace Tiad.Fake
             router.Add("PUT", "/fake/script", script.Set);
             router.Add("GET", "/fake/calls", script.Calls);
             router.Add("GET", "/fake/downloads", script.Downloads);
+            router.Add("GET", "/fake/shown", script.Shown);
             router.Add("POST", "/fake/load", delegate(Call c) { return FakeTia.LoadOutside(world, c); });
 
             var server = new Server(cfg, router);
