@@ -113,17 +113,22 @@ func OpenSnapStore(dir string, o SnapOptions) (*SnapStore, error) {
 	if free == nil {
 		free = diskFree
 	}
-	// 5% of the free space at start, when that is a bound at all: a filesystem
-	// reporting nothing free is the floor's to refuse writes for, not a reason to
-	// trim every picture there is
-	if f, _, ok := free(dir); ok {
-		if cap := int64(f / 20); cap > 0 && cap < maxBytes {
-			maxBytes = cap
-		}
-	}
 	st := &SnapStore{dir: dir, maxCount: maxCount, maxBytes: maxBytes, keep: time.Duration(keepDays) * 24 * time.Hour, now: now, free: free, lastShot: map[string]Snap{}}
 	if err := st.load(); err != nil {
 		return nil, err
+	}
+	// 5% of the space the pictures could have (the free space and what they hold),
+	// when that is a bound at all: a filesystem reporting nothing free is the
+	// floor's to refuse writes for, not a reason to trim every picture there is,
+	// and a fuller disk after a restart does not shrink what is already held by
+	// the bytes it holds
+	if f, _, ok := free(dir); ok {
+		st.mu.Lock()
+		if cap := int64((f + uint64(st.total)) / 20); cap > 0 && cap < st.maxBytes {
+			st.maxBytes = cap
+			st.sweepLocked()
+		}
+		st.mu.Unlock()
 	}
 	return st, nil
 }
@@ -218,6 +223,12 @@ func (s *SnapStore) Save(ts int64, cam, alarm, occurrence string, jpeg []byte) (
 	defer s.mu.Unlock()
 	if s.lowSpaceLocked() {
 		return Snap{}, ErrLowSpace
+	}
+	// a picture larger than the whole byte bound is refused before anything is
+	// written or trimmed: keeping it would mean deleting every older picture and
+	// then itself
+	if int64(len(jpeg)) > s.maxBytes {
+		return Snap{}, ErrNotKept
 	}
 	path := filepath.Join(s.dir, name)
 	tmp := path + ".tmp"

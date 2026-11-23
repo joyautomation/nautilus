@@ -189,6 +189,7 @@ claims:
       - go ./camera TestAFloodSharesOnePictureAndEachAlarmFindsIt
       - go ./camera TestSharedPicturesKeepEveryOccurrenceAcrossARestart
       - go ./camera TestTheByteBoundNeverTrimsEverythingAndASaveSaysWhenItDidNotKeep
+      - go ./camera TestAnOversizedPictureDeletesNothingAndTheCapCountsWhatIsHeld
 
   - id: CAM-013
     claim: >-

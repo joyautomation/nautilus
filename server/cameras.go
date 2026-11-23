@@ -65,6 +65,7 @@ type CameraOptions struct {
 	semOnce   sync.Once
 	inflight  map[string][]alarm.Event
 	snapSeen  map[string]time.Time
+	snapSwept time.Time
 	lowWarned atomic.Bool
 	api       *cameraAPI
 }

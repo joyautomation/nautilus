@@ -164,6 +164,13 @@ func (co *CameraOptions) capture(c camera.Camera) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), snapTimeout)
 	defer cancel()
+	// a panic below must not leave the camera marked as fetching for ever
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("camera: an alarm picture capture panicked", "camera", c.ID, "panic", r)
+			fail(errors.New("the capture failed unexpectedly"))
+		}
+	}()
 	b, err := co.Fetcher.Snapshot(ctx, c)
 	if err != nil {
 		fail(err)
@@ -255,7 +262,9 @@ func (a *cameraAPI) recordSnapView(r *http.Request, file string) {
 		return
 	}
 	a.co.snapSeen[key] = now
-	if len(a.co.snapSeen) > 4096 { // the quiet map is bounded: drop what has lapsed
+	// the quiet map is bounded: what has lapsed is dropped, at most once a minute
+	if len(a.co.snapSeen) > 4096 && now.Sub(a.co.snapSwept) > time.Minute {
+		a.co.snapSwept = now
 		for k, t := range a.co.snapSeen {
 			if now.Sub(t) >= snapViewQuiet {
 				delete(a.co.snapSeen, k)

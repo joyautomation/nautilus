@@ -246,3 +246,39 @@ func TestTheByteBoundNeverTrimsEverythingAndASaveSaysWhenItDidNotKeep(t *testing
 		t.Error("a .tmp left by a failed write was kept")
 	}
 }
+
+// One picture larger than the whole byte bound must not delete every older
+// picture on its way out, and a restart with a fuller disk must not shrink the
+// bound below what is already held.
+func TestAnOversizedPictureDeletesNothingAndTheCapCountsWhatIsHeld(t *testing.T) {
+	st, _, clock := snapStore(t, SnapOptions{MaxBytes: 20})
+	for i := 0; i < 3; i++ {
+		if _, err := st.Save(clock.UnixMilli()+int64(i), "c", "A", "occ", []byte("12345")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.Save(clock.UnixMilli()+10, "c", "A", "big", []byte(strings.Repeat("x", 25))); !errors.Is(err, ErrNotKept) {
+		t.Errorf("a picture over the bound: %v", err)
+	}
+	if st.Len() != 3 || st.Bytes() != 15 {
+		t.Errorf("an oversized picture left %d pictures, %d bytes (want 3, 15 untouched)", st.Len(), st.Bytes())
+	}
+	// 15 bytes held, 285 free: the bound is 5% of free plus held (300): 15, so all stay
+	// (5% of free alone, 14, would trim one)
+	dir := filepath.Join(t.TempDir(), "s")
+	o := SnapOptions{MaxBytes: 1000, Now: func() time.Time { return *clock }, Free: func(string) (uint64, uint64, bool) { return 0, 0, false }}
+	s1, _ := OpenSnapStore(dir, o)
+	for i := 0; i < 3; i++ {
+		s1.Save(clock.UnixMilli()+int64(i), "c", "A", "occ", []byte("12345"))
+	}
+	s1.Close()
+	o.Free = func(string) (uint64, uint64, bool) { return 285, 1 << 30, true }
+	s2, err := OpenSnapStore(dir, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if s2.Len() != 3 {
+		t.Errorf("a restart with %d free trimmed what was held: %d pictures kept, want 3", 285, s2.Len())
+	}
+}
