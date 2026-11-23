@@ -419,7 +419,9 @@ field) and neither are outputs (the first scan computes them).
 **Hot or cold.** A takeover is **hot** when the standby holds an image of
 every task and of the tags, of the same nautilus build, running the same
 programs (an online edit included), no older than `hot-max-age` when the
-standby wins the election, and its retain file took that image. The new
+standby wins the election, and its retain file took that image. The
+voters must also vouch for it: no leadership came after the image, and
+the old leader's last word was that this standby was in sync. The new
 leader then goes on from it: timers keep running (the image's age, and
 the wait for live inputs, count as elapsed), counters, SFC steps and
 their step times, every program's variables and the carried tags go on
@@ -442,6 +444,20 @@ redundancy:
   # ...
   hot-max-age: 4s   # default 3 × lease + 2 × the stream's interval; 0 = always cold
 ```
+
+**What the voters vouch for.** Each voter records, in the write it makes
+for every election it grants, the latest leadership it granted each
+controller. The standby acknowledges each image it applies to the
+leader, and the leader's lease renewals tell the voters how far the
+standby is: the last image it acknowledged, and whether it was at most
+one image behind. A standby that wins goes hot only when the voters that
+elected it show no leadership after its image's, and say it was in sync.
+Otherwise the takeover is cold, and the warning names why: a later
+leadership, a voter that lost its state (a rebuilt witness) or runs an
+older release, a standby that was behind, or no word from the old leader
+at all. After a voter restarts, the next renewal (within a quarter of a
+lease) gives it the standby's position again; a takeover before that
+goes cold.
 
 hot-max-age is judged on the image; a fast task's state can be older by
 up to the slowest task's period. The journal entry and `GET /api/cluster`
@@ -1393,6 +1409,14 @@ in this order:
    out its restart lease. Control stops for the witness's start time
    plus up to about a lease. The takeover is cold.
 3. **The former leader.** It rejoins as the standby, with no stop.
+
+Going back to the earlier release has the same stop, in the same order.
+A member whose voter has granted an election on the new release keeps a
+newer state file, which the earlier release refuses to start over: it
+says so and names the release that wrote it. To go back anyway on a
+controller, move its `quorum.state` aside: it re-adopts from the other
+controller within seconds, as after a lost file. On the witness, rebuild
+it (`naut witness --rebuild`, below) with both controllers up.
 
 Any other order stops control for longer, because it waits for a
 controller to start instead of the witness. Upgrading the leader first
