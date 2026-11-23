@@ -223,13 +223,52 @@ func (a *cameraAPI) snapFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": noView})
 		return
 	}
-	b, err := a.co.Snaps.Read(r.PathValue("file"))
+	file := r.PathValue("file")
+	b, err := a.co.Snaps.Read(file)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such picture (it may be past its retention)"})
 		return
 	}
+	a.recordSnapView(r, file)
 	pictureHeaders(w, "image/jpeg")
 	w.Write(b)
+}
+
+// snapViewQuiet is how long one person's looking at one picture is journalled
+// once: a journal page loads every thumbnail, and each reload would otherwise
+// write a row per picture.
+const snapViewQuiet = 10 * time.Minute
+
+// recordSnapView journals a person looking at a kept picture (camera.snapshot-view:
+// who, the picture and the occurrences it is for), as a live view is journalled:
+// they are pictures of people.
+func (a *cameraAPI) recordSnapView(r *http.Request, file string) {
+	who := a.s.principalOf(r)
+	key := who + "|" + file
+	a.co.mu.Lock()
+	if a.co.snapSeen == nil {
+		a.co.snapSeen = map[string]time.Time{}
+	}
+	now := time.Now()
+	if t, ok := a.co.snapSeen[key]; ok && now.Sub(t) < snapViewQuiet {
+		a.co.mu.Unlock()
+		return
+	}
+	a.co.snapSeen[key] = now
+	if len(a.co.snapSeen) > 4096 { // the quiet map is bounded: drop what has lapsed
+		for k, t := range a.co.snapSeen {
+			if now.Sub(t) >= snapViewQuiet {
+				delete(a.co.snapSeen, k)
+			}
+		}
+	}
+	a.co.mu.Unlock()
+	occ := a.co.Snaps.OccurrencesOf(file)
+	if len(occ) > 5 {
+		occ = occ[:5]
+	}
+	a.s.audit.record(audit.Entry{Action: "camera.snapshot-view", Target: file, User: who, Source: audit.SourceHMI, Result: audit.ResultOK,
+		From: a.s.clientAddr(r), Session: a.s.sessionOfEntry(r), Detail: map[string]any{"occurrences": occ}})
 }
 
 func (a *cameraAPI) purgeTarget(r *http.Request, body []byte) auditTarget {

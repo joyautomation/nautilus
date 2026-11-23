@@ -188,6 +188,24 @@ func TestKeptPicturesNeedThePermissionAndPurgeIsAudited(t *testing.T) {
 			t.Errorf("GET %s: %d, want 404", p, rec.Code)
 		}
 	}
+	// looking at a kept picture is journalled once per person and picture, with its occurrences
+	views := func() (n int, who, occ string) {
+		for _, e := range srv.audit.ring.Recent() {
+			if e.Action == "camera.snapshot-view" && e.Target == sn.File {
+				n++
+				who, occ = e.User, fmt.Sprint(e.Detail["occurrences"])
+			}
+		}
+		return
+	}
+	if n, who, occ := views(); n != 1 || who != "user:akhan" || !strings.Contains(occ, "occ-1") {
+		t.Errorf("journalled views of the picture: %d by %q for %s", n, who, occ)
+	}
+	call(t, srv, "GET", "/api/camera-snapshots/"+sn.File, "", eng)
+	call(t, srv, "GET", "/api/camera-snapshots/"+sn.File, "", eng)
+	if n, _, _ := views(); n != 1 {
+		t.Errorf("a reload wrote %d view rows for one person and picture, want 1", n)
+	}
 	// purge: a person without config is refused and nothing goes
 	if rec := call(t, srv, "POST", "/api/camera-snapshots/purge", `{"all":true}`, blind); rec.Code != http.StatusForbidden || st.Len() != 1 {
 		t.Errorf("a purge by an operator: %d, %d kept", rec.Code, st.Len())

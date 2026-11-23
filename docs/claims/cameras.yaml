@@ -194,7 +194,9 @@ claims:
     claim: >-
       Seeing a kept picture needs read and the camera permission (403 "no
       permission to view cameras" otherwise); a name that is not the store's is a
-      404; a purge needs the config permission, says what it purges, and is
+      404; looking at a kept picture is journalled (camera.snapshot-view: the
+      person, the picture and its occurrences, once per person and picture in ten
+      minutes); a purge needs the config permission, says what it purges, and is
       journalled; `naut camera snapshots purge` sends exactly that.
     source: "#how-long-they-are-kept"
     tests:

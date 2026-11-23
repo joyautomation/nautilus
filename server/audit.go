@@ -101,6 +101,7 @@ var actionClass = map[string]string{
 	// a picture kept when an alarm activates is the system's own record; purging
 	// them is an engineer's, never unrecorded (#724)
 	"camera.snapshot":       operator,
+	"camera.snapshot-view":  operator, // a person looking at a kept picture
 	"camera.snapshot-purge": strict,
 	"alarm.ack":             operator,
 	"alarm.shelve":          operator,

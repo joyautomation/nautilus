@@ -167,6 +167,7 @@ camera-snapshots:        # optional: how long, how many, how much
   places taken is skipped and journalled as failed ("captures are busy").
 - **Each capture is journalled**, by the system, as `camera.snapshot` (the
   camera, the alarm and its occurrence, the file and its size, or why it failed).
+- **Looking at a kept picture is journalled**, as a live view is: `camera.snapshot-view` names the person, the picture and the occurrences it is for, once per person and picture in ten minutes (a journal page loads every thumbnail, and a reload would otherwise write a row for each).
 - **No picture leaves the controller in a page.** Pictures are never put in an
   SMS, an email or a push; they are seen in the alarm journal by a person with
   `read` and the `camera` permission, who is refused with "no permission to view

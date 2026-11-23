@@ -379,6 +379,21 @@ func (s *SnapStore) sweepLocked() {
 	}
 }
 
+// OccurrencesOf lists the alarm occurrences a kept picture is attached to (a
+// flood's later alarms share the first's file), for the journal's record of who
+// looked at it. Empty when it is not kept.
+func (s *SnapStore) OccurrencesOf(name string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, sn := range s.snaps {
+		if sn.File == name {
+			out = append(out, sn.Occurrence)
+		}
+	}
+	return out
+}
+
 // Len and Bytes are what is kept.
 func (s *SnapStore) Len() int {
 	s.mu.Lock()
