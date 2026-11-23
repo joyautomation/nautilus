@@ -1382,6 +1382,27 @@ go in this order:
 Turning peer TLS on or off on a running pair costs the same stop, in the
 same order.
 
+**Upgrading across a change of the vote protocol stops control once.**
+Two members on releases with different vote protocols can't vote with
+each other, and each says so (`redundancy.version-mismatch`). Upgrade
+in this order:
+
+1. **The standby.** The leader keeps leading on the witness's vote.
+2. **The witness.** The leader loses its majority and stops. The
+   upgraded standby takes over once the witness is back and has waited
+   out its restart lease. Control stops for the witness's start time
+   plus up to about a lease. The takeover is cold.
+3. **The former leader.** It rejoins as the standby, with no stop.
+
+Any other order stops control for longer, because it waits for a
+controller to start instead of the witness. Upgrading the leader first
+stops control twice. **Keep the time between the first two steps
+short.** In it, the leader rests on the witness alone: if the leader
+fails, control stops until the witness is upgraded too. A release that
+doesn't change the vote protocol needs no order: upgrade the standby
+and the witness, then the leader, and only the leader's restart costs
+a takeover.
+
 **Rebuilding the witness loses nothing while both controllers are up**:
 `naut witness --rebuild`, or a fresh state directory, is a new
 incarnation that both controllers adopt after a quiet period, and the
