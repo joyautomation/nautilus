@@ -60,6 +60,10 @@ type Program struct {
 	// goroutine, and mu is held through every scan's logic.
 	written atomic.Pointer[map[string]bool]
 
+	// img is the frame copy a pair's state stream asks for (image.go):
+	// taken at the end of a scan, outside of it encoded.
+	img imageCap
+
 	// opts is the compile context every (re)compile of this program uses:
 	// the project's tags, visible without a VAR_EXTERNAL (see TagScope).
 	// An online edit compiles against the same tag table the boot did.
@@ -238,6 +242,9 @@ func (p *Program) Run(tags *Tags) error {
 	err := ir.Run(p.prog, p.frame, p.view)
 	p.ran = true
 	p.view.commit()
+	if p.img.want.Load() {
+		p.captureLocked(tags)
+	}
 	if err != nil {
 		p.lastErr = err.Error()
 		return err

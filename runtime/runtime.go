@@ -334,6 +334,8 @@ type Runtime struct {
 	// additional task's gate that steps down or holds a takeover while the
 	// main read is in flight is not overwritten when that read lands.
 	edges uint64
+	// imageSeq numbers the state images (image.go).
+	imageSeq imageSeqs
 	// ready is the driver as an io.InputsReadier (nil when it is not one),
 	// readyWait how long a takeover waits for it, and readySince when the
 	// pending takeover began waiting (zero when none is). See inputsReady.

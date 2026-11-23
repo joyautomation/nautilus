@@ -267,3 +267,33 @@ func New(configMapName, filePath string) Store {
 	}
 	return &fileStore{path: filePath}
 }
+
+// Carry is own, a pair standby's retained state, with what its leader's
+// image carries (#710 S1, design §4.1) put in its place: the leader's
+// retained tag values and the parameter bookkeeping read against them,
+// its VAR RETAIN locals, its online-edited programs (each with the build
+// it was made against, so a load still reapplies one only on that build),
+// and its Web Push subscriptions (sealed; a box with another key keeps
+// them and sends none, #722).
+//
+// The rest stays the standby's own:
+//   - Alarms, AlarmFlood and Substitutes are operator intent a pair keeps
+//     in its replicated log, which a takeover restores them from; taking
+//     them from an image could undo a superseded log's drop.
+//   - IO: live I/O applies are refused for a pair.
+//
+// Each carried field is taken whole, absent included: an image without
+// online edits clears the standby's, as the leader's own store holds none.
+// The result shares lead's maps and pointers: pass a lead decoded for this
+// call, and do not change it afterwards.
+func Carry(own, lead State) State {
+	if mutRetain("stream_carries_log_intent") {
+		own.Alarms, own.AlarmFlood, own.Substitutes = lead.Alarms, lead.AlarmFlood, lead.Substitutes
+	}
+	own.Tags = lead.Tags
+	own.ParamBases, own.ParamEdits, own.ParamCommitted = lead.ParamBases, lead.ParamEdits, lead.ParamCommitted
+	own.Locals = lead.Locals
+	own.Programs, own.ProgramBases, own.DiscardedPrograms = lead.Programs, lead.ProgramBases, lead.DiscardedPrograms
+	own.Push = lead.Push
+	return own
+}
