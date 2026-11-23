@@ -426,3 +426,18 @@ func wsse(user, pass string, at time.Time) (string, error) {
 		`</wsse:Password><wsse:Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">` +
 		base64.StdEncoding.EncodeToString(nonce) + `</wsse:Nonce><wsu:Created>` + created + `</wsu:Created></wsse:UsernameToken></wsse:Security>`, nil
 }
+
+// cleanText is device text made safe to show: no control characters, cut to n.
+func cleanText(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if len(s) > n {
+		s = strings.ToValidUTF8(s[:n], "")
+	}
+	return s
+}
