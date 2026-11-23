@@ -68,6 +68,11 @@ namespace Tiad
         // WebUsers and WebRoles are the web users and their roles
         // (WebUsers.Run) made on this session.
         public List<string> WebUsers = new List<string>(), WebRoles = new List<string>();
+        // Writes counts the steps' writes that changed the project's
+        // users, roles, access control or web server (AccessSteps.Run,
+        // WebSteps.Run): an apply that leaves it as it was changed none
+        // of them (CpuReuse.Found).
+        public int Writes;
 
         public bool Any { get { return User || Role || WebUsers.Count > 0 || WebRoles.Count > 0; } }
     }
@@ -475,6 +480,7 @@ namespace Tiad
                     throw new TiaException("the new CPU has no access control setting, so it cannot have a Full access user: set cpu.accessControl to keep");
                 }
                 c.Enable();
+                into.Writes++;
                 string now = c.State();
                 if (now != AccessRule.Enabled)
                 {
@@ -491,6 +497,10 @@ namespace Tiad
             {
                 throw new TiaException(ForeignRole);
             }
+            // Already as the steps below leave it: they write nothing new
+            // (the grant and the role are idempotent; Writes counts change).
+            bool already = !madeRole && c.HasUser(UserName) && AccessRecords.IsRecord(c.Comment(UserName)) && c.Check(UserName, RoleName) == null;
+            if (!already) into.Writes++;
             c.GrantFullAccess(RoleName);
             bool madeUser = !c.HasUser(UserName);
             if (madeUser)

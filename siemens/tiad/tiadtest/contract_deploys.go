@@ -256,6 +256,11 @@ func contractDeployOutsideChanges(t *testing.T, start Starter) {
 	if len(l.Deploys) != 2 || l.Deploys[0].OutsideChanges == nil || *l.Deploys[0].OutsideChanges != want || l.Deploys[1].OutsideChanges != nil {
 		t.Fatalf("the list: %+v", l.Deploys)
 	}
+	// Another project's deploy names the record that loaded it (#1272).
+	req.OutsideChanges = &tiad.OutsideChanges{By: "bench operator", Verdict: tiad.OutsideOtherProject, Deploy: "d-20261122T000000000Z-00000001"}
+	if r, err := s.Download(ctx, req); err != nil || r.Deploy.OutsideChanges == nil || r.Deploy.OutsideChanges.Verdict != "other-project" {
+		t.Fatalf("other-project: %+v %v", r.Deploy, err)
+	}
 	// Unreadable journal lines name no record to verify.
 	req.OutsideChanges = &tiad.OutsideChanges{By: "bench operator", Verdict: tiad.OutsideUnreadable}
 	if r, err := s.Download(ctx, req); err != nil || r.Deploy.OutsideChanges == nil || r.Deploy.OutsideChanges.Deploy != "" {
@@ -275,6 +280,7 @@ func contractDeployOutsideChanges(t *testing.T, start Starter) {
 		{"another verdict", map[string]any{"by": "op", "verdict": "equal", "deploy": "d-1"}, "outsideChanges.verdict"},
 		{"no deploy for different", map[string]any{"by": "op", "verdict": "different"}, "outsideChanges.deploy is empty"},
 		{"no deploy for broken", map[string]any{"by": "op", "verdict": "broken"}, "outsideChanges.deploy is empty"},
+		{"no deploy for other-project", map[string]any{"by": "op", "verdict": "other-project"}, "outsideChanges.deploy is empty"},
 		{"a long deploy", map[string]any{"by": "op", "verdict": "broken", "deploy": strings.Repeat("d", tiad.MaxOutsideDeploy+1)}, "outsideChanges.deploy is longer"},
 		{"an unknown field", map[string]any{"by": "op", "verdict": "broken", "deploy": "d-1", "reason": "x"}, "unknown field"},
 	} {
@@ -284,8 +290,8 @@ func contractDeployOutsideChanges(t *testing.T, start Starter) {
 			t.Errorf("%s: HTTP %d %s, want 400 %q", rc.name, status, b, rc.want)
 		}
 	}
-	if l := a.Loaded(t); len(l) != 3 {
-		t.Fatalf("loads %+v, want the three good ones only", l)
+	if l := a.Loaded(t); len(l) != 4 {
+		t.Fatalf("loads %+v, want the four good ones only", l)
 	}
 }
 

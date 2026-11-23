@@ -768,7 +768,15 @@ namespace Tiad
                 var r = c.Json();
                 string password = OnlinePassword(r);
                 r.Done();
-                string address = CpuOf(s);
+                // A project opened as found (no spec applied yet: an
+                // adopted one, #1272) compares with its own CPU, at the
+                // address the project holds; still only a target.
+                string address = s.Address;
+                if (address == "")
+                {
+                    address = OnSession(s, delegate(ITia t) { return t.ProjectCpuAddress(s.Handle); });
+                    if (address == "") throw TiadException.BadRequest("the project has no station spec, and its CPU no address to compare with");
+                }
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
                 CheckDevicePin(s, address, "compare");
                 var diffs = new List<Difference>();
@@ -798,6 +806,9 @@ namespace Tiad
                 }
                 var o = new Obj();
                 o["equal"] = equal;
+                // The CPU compared with: the spec's, or the project's own
+                // for a project opened as found.
+                o["address"] = address;
                 o["differences"] = list;
                 o["blocks"] = new List<object>(TiaNames.Labels(cmp == null ? null : cmp.Blocks).ToArray());
                 // A compare asks no TLS question of its own; it may ride on

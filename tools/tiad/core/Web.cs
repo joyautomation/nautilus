@@ -86,6 +86,9 @@ namespace Tiad
                 if (c.AnonymousActive()) throw new TiaException(WebUsers.AnonymousActive);
             }
             WebUsers.Run(c, want, sec, made, notes);
+            // HttpsOnly is offered only while the server is on.
+            bool was = w.Server(), same = was == on && w.Interface() == on && (!on || w.HttpsOnly());
+            if (!same) made.Writes++;
             w.Set(on);
             bool server = w.Server(), iface = w.Interface();
             if (server != on || iface != on)
@@ -363,6 +366,7 @@ namespace Tiad
                 string user = UserOfRole(c, role);
                 if (user == null || keep.Contains(role)) continue;
                 c.DeleteRole(role);
+                into.Writes++;
                 bool userToo = !string.Equals(user, AccessSteps.UserName, StringComparison.OrdinalIgnoreCase) && c.HasUser(user) && AccessRecords.IsRecord(c.Comment(user));
                 if (userToo) c.DeleteUser(user);
                 notes.Add(RemovedNote(user, userToo));
@@ -390,6 +394,7 @@ namespace Tiad
                 {
                     c.MakeRole(role, RoleComment(wu.Name));
                     into.WebRoles.Add(role);
+                    into.Writes++;
                 }
                 else if (c.RoleComment(role) != RoleComment(wu.Name))
                 {
@@ -399,11 +404,19 @@ namespace Tiad
                 var have = c.RoleRights(role);
                 foreach (string id in ids)
                 {
-                    if (!have.Contains(id)) c.Grant(role, id);
+                    if (!have.Contains(id))
+                    {
+                        c.Grant(role, id);
+                        into.Writes++;
+                    }
                 }
                 foreach (string id in have)
                 {
-                    if (!ids.Contains(id)) c.Revoke(role, id);
+                    if (!ids.Contains(id))
+                    {
+                        c.Revoke(role, id);
+                        into.Writes++;
+                    }
                 }
                 bool madeUser = !c.HasUser(wu.Name);
                 if (madeUser)
@@ -411,6 +424,7 @@ namespace Tiad
                     string pw = sec.WebUsers[wu.Name];
                     c.MakeUser(wu.Name, pw);
                     into.WebUsers.Add(wu.Name);
+                    into.Writes++;
                     c.SetComment(wu.Name, records.Make(wu.Name, pw));
                     notes.Add(MadeNote(wu));
                 }
@@ -422,17 +436,32 @@ namespace Tiad
                 {
                     notes.Add(FoundNote(wu));
                 }
-                if (!c.UserActive(wu.Name)) c.ActivateUser(wu.Name);
+                if (!c.UserActive(wu.Name))
+                {
+                    c.ActivateUser(wu.Name);
+                    into.Writes++;
+                }
                 // Exactly its own role: the user's rights are its role's.
+                bool had = false;
                 foreach (string r in c.UserRoles(wu.Name))
                 {
-                    if (r != role) c.RemoveRole(wu.Name, r);
+                    if (r == role) had = true;
+                    else
+                    {
+                        c.RemoveRole(wu.Name, r);
+                        into.Writes++;
+                    }
                 }
                 c.AddRole(wu.Name, role);
+                if (!had) into.Writes++;
                 // And the role is its user's alone.
                 foreach (string other in c.UserNames())
                 {
-                    if (other != wu.Name && c.UserRoles(other).Contains(role)) c.RemoveRole(other, role);
+                    if (other != wu.Name && c.UserRoles(other).Contains(role))
+                    {
+                        c.RemoveRole(other, role);
+                        into.Writes++;
+                    }
                 }
                 if (!wu.Rights.Contains("read") && (wu.Rights.Contains("write") || wu.Rights.Contains("mode"))) notes.Add(NoReadNote(wu.Name));
             }

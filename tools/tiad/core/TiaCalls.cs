@@ -664,10 +664,11 @@ namespace Tiad
                     // write: a refusal here leaves the session as it was.
                     ProjectCpu pc = s.Unclean ? null : t.ReadCpu(s.Handle);
                     string decision = CpuReuse.Decide(pc, st.Cpu, s.Unclean);
+                    string protection = ConfigProtection.Nothing;
                     if (decision == CpuReuse.Reuse)
                     {
                         CpuReuse.Collides(pc, st);
-                        ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
+                        protection = ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
                         AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "");
                         WebRule.Plan(pc.AccessControl, st.WebServer);
                         kept = pc.Others;
@@ -701,6 +702,7 @@ namespace Tiad
                     // A password set or recorded is a change to the project.
                     bool was = s.Compiled && !w.Wrote;
                     Station prev = s.Station;
+                    int writes = s.Made.Writes;
                     s.Compiled = false;
                     s.Station = null;
                     s.Unclean = true;
@@ -708,7 +710,13 @@ namespace Tiad
                     s.Unclean = false;
                     string kn = CpuReuse.KeptNote(kept);
                     if (kn != null) notes.Add(kn);
-                    List<string> ch = CpuReuse.Changes(decision, prev, st);
+                    // The first apply on an opened or uploaded project says
+                    // what it changed in the project as found; any later
+                    // one, what changed over the spec it last applied.
+                    bool usersWrote = w.Wrote || s.Made.Writes != writes;
+                    List<string> ch = decision == CpuReuse.Reuse && prev == null
+                        ? CpuReuse.Found(pc, st, protection, usersWrote)
+                        : CpuReuse.Changes(decision, prev, st);
                     s.Station = st;
                     s.Kept = kept;
                     s.Address = st.Cpu.Address;

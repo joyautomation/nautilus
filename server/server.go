@@ -1005,6 +1005,7 @@ func (s *Server) Handler() http.Handler {
 	// no alarm engine" a message rather than a bare route-not-found.
 	mux.HandleFunc("GET /api/alarms", s.handleAlarms)
 	mux.HandleFunc("GET /api/alarms/journal", s.handleAlarmJournal)
+	mux.HandleFunc("GET /api/alarms/chatter", s.handleAlarmChatterAdvice)
 	mux.Handle("POST /api/alarms/ack", s.audited("alarm.ack", ackTarget, s.handleAlarmAck))
 	mux.Handle("POST /api/alarms/shelve", s.audited("alarm.shelve", shelveTarget, s.handleAlarmShelve))
 	mux.Handle("POST /api/alarms/unshelve", s.audited("alarm.unshelve", unshelveTarget, s.handleAlarmUnshelve))

@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -777,6 +779,10 @@ func TestCheckoutForceEndedInTheRecordElsewhereIsLetGoHere(t *testing.T) {
 	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
 		t.Fatalf("force: %d %s", rec.Code, rec.Body)
 	}
+	var logs lockedBuf
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
 	run, _ := r.st.Standing()
 	// the end arrives through the log, not through this controller's API
 	if err := r.st.EndForceOf(run.Run, run.Seq, checkout.ForceReleased, "operator"); err != nil {
@@ -789,6 +795,11 @@ func TestCheckoutForceEndedInTheRecordElsewhereIsLetGoHere(t *testing.T) {
 	if r.forced("Out") {
 		t.Fatal("the output stays forced after the record was ended elsewhere")
 	}
+	// the log line names the cause an operator needs: not a lost lead
+	time.Sleep(100 * time.Millisecond)
+	if out := logs.String(); !strings.Contains(out, "ended elsewhere") || strings.Contains(out, "no longer leads") {
+		t.Errorf("the log line for a force whose record ended elsewhere: %q", out)
+	}
 	co := ckOf(r.srv)
 	co.ck.mu.Lock()
 	still := co.ck.force != nil
@@ -797,3 +808,16 @@ func TestCheckoutForceEndedInTheRecordElsewhereIsLetGoHere(t *testing.T) {
 		t.Error("the force's slot is still taken")
 	}
 }
+
+// lockedBuf is a log sink a test can read while goroutines write to it.
+type lockedBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }

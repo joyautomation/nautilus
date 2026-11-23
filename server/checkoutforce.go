@@ -261,7 +261,7 @@ func (a *checkoutAPI) watchLoop(f *ckForce) {
 			// the other controller's screen, a reconcile): this controller drives an
 			// output the log says is released, so let it go
 			if rec, ok := a.co.Store.Standing(); !ok || rec.Seq != f.recSeq {
-				a.dropForceLocally(f)
+				a.dropForceLocally(f, "the log no longer says it stands (its record was ended elsewhere, or the checkout's history was replaced)", false)
 				return
 			}
 		}
@@ -436,12 +436,12 @@ func (co *CheckoutOptions) Demoted() {
 	if f == nil || a == nil {
 		return
 	}
-	a.dropForceLocally(f)
+	a.dropForceLocally(f, "this controller no longer leads", true)
 }
 
 // dropForceLocally is endCheckoutForce without the record and the journal: the
 // local half only.
-func (a *checkoutAPI) dropForceLocally(f *ckForce) {
+func (a *checkoutAPI) dropForceLocally(f *ckForce, why string, wait bool) {
 	a.co.ck.mu.Lock()
 	if a.co.ck.force != f || f.ending {
 		a.co.ck.mu.Unlock()
@@ -465,11 +465,12 @@ func (a *checkoutAPI) dropForceLocally(f *ckForce) {
 		a.co.ck.force = nil
 	}
 	a.co.ck.mu.Unlock()
-	if w != nil {
+	// the watch goroutine itself calls with wait false: it is the one it would wait for
+	if w != nil && wait {
 		select {
 		case <-w:
 		case <-time.After(2 * time.Second):
 		}
 	}
-	slog.Warn("checkout: force let go here (this controller no longer leads)", "tag", f.tag, "point", f.point)
+	slog.Warn("checkout: force let go here", "why", why, "tag", f.tag, "point", f.point)
 }

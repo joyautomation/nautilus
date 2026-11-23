@@ -278,6 +278,18 @@ active alarms in the kit's `AlarmTable` (acknowledge, shelve, unshelve)
 and the history in its `AlarmJournal`, read from the controller's alarm
 journal.
 
+**Chattering and floods.** The `alarms:` section turns live detection on
+with its rates written out (`chatter: 3 in 60 s`, `flood: more than 6 in
+10 min`). To see it, write `P101_FlapOverTemp` true (the Tags view or
+`POST /api/tags`): the sim makes P-101's over-temperature contact 3 s and
+breaks it 2 s, over and over, so after the controller's first minute the
+alarm wears a "chattering ×N" badge. Click the badge to shelve it for 15
+minutes with a reason (one line, required; it is written to the audit log
+and the journal). Raise the inflow to a storm (`InflowGpm` 950) and
+inject a few faults and a flood banner appears with the first alarms out
+and the equipment behind them; Focus puts what needs a person first.
+Tick "Chatter & floods" in the history to see the detection rows.
+
 - **P&ID** (`/`): the wet-well mimic filling the window. Click a piece of
   equipment and its controls pop out on the right
   (`hmi/src/lib/EquipmentPanel.svelte`), with the station still live and

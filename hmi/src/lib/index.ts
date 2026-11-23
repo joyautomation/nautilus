@@ -114,6 +114,7 @@ export { default as AlarmTable } from './components/AlarmTable.svelte';
 export { default as AlarmJournal } from './components/AlarmJournal.svelte';
 export { default as ChatterBadge } from './components/ChatterBadge.svelte';
 export { default as ChatterShelveDialog } from './components/ChatterShelveDialog.svelte';
+export { default as AlarmTuning } from './components/AlarmTuning.svelte';
 export { default as FloodBanner } from './components/FloodBanner.svelte';
 export { default as AckButton, worstFirst, ackLine } from './components/AckButton.svelte';
 export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY_META, PRIORITY_SIGN, STATE_META, DEFAULT_SHELVE_TIMES_S } from './alarms.svelte.js';
@@ -137,6 +138,8 @@ export type {
 	AlarmBrief,
 	AlarmSummary,
 	AlarmChatter,
+	AlarmAdvice,
+	AlarmAdviceAnswer,
 	AlarmFlood,
 	AlarmFloodBrief,
 	AlarmFloodGroup,
@@ -378,7 +381,7 @@ export { ParametersClient, driftBadge, drifted, rangeText, takeRepoSet, takeRepo
 export type { Parameter, DriftState, WriteBack, ImportResult, ImportAnswer, ParametersAnswer, ParametersClientOptions, TakeOutcome } from './parameters.js';
 
 // What the alarm history shows for a paging (notify) row, and the kinds that fetch them (#616).
-export { chatterBadge, chatterText, floodText, groupsText, spanText, seenWhenText, chatteringIds, focusSplit, reasonProblem, SHELVE_REASON_MAX, SHELVE_SUGGEST_S, detectionEvent, detectionOutcome } from './alarmchatter.js';
+export { chatterBadge, chatterText, floodText, groupsText, spanText, seenWhenText, chatteringIds, delaysText, adviceLine, focusSplit, reasonProblem, SHELVE_REASON_MAX, SHELVE_SUGGEST_S, detectionEvent, detectionOutcome } from './alarmchatter.js';
 export { DETECTION_KINDS, STATE_KINDS, journalKinds, visibleKind, pagingEvent, pagingOutcome } from './alarmjournal.js';
 export {
 	OOS_MAX_SECONDS,

@@ -135,6 +135,7 @@ namespace Tiad
             RegisterPins(r);
             RegisterFingerprint(r);
             RegisterDeploys(r);
+            RegisterAdopt(r);
         }
 
         object Health(Call c)

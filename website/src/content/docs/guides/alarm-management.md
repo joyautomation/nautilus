@@ -138,8 +138,10 @@ policy is tried this way before anyone's phone is involved.
 
 - **Policies are tried in order; the first that covers the alarm runs
   it.** `match:` fields (`class`, `priority`, `id`, `site`, `area`) must
-  all match; an optional `when:` limits a policy to days and hours. An
-  alarm no policy covers pages nobody.
+  all match, ignoring case (`class: safety` covers an alarm declared
+  `class: Safety`); an optional `when:` limits a policy to days and hours.
+  An alarm no policy covers pages nobody, and `naut check` warns of each
+  one.
 - **The clock starts when the alarm begins waiting on a person.** A
   latched alarm that flaps between active and returned-to-normal keeps
   climbing; it does not start again at level 1.

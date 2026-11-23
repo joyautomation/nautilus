@@ -1351,7 +1351,7 @@ controller, closing the gate would help nothing.
 
 ### 3.3 Vote freshness
 
-Each renewal tells the voters how far the standby is in sync: the `(term, scan)` of the last
+Each renewal tells the voters how far the standby is in sync: the `(term, seq)` of the last
 image it acknowledged, and whether that is current. The voters record it in their fsynced
 state (§3.1). **An unknown mark counts as out of sync.** The mark is unknown when a witness
 comes back without its state file, or when both controllers restart.
@@ -1431,16 +1431,70 @@ The test plan's I3 oracle checks every row.
 
 ### 4.1 Contents and transport
 
-After every scan, or every N scans, the leader streams:
+The leader streams **images** of its state to the standby (#710 S1; rulings 2026-11-22):
 
-- retained tags and `VAR RETAIN`;
-- every program frame: FB internals, timers, SFC steps and their elapsed times;
-- alarm ack and shelve state.
+- **What an image holds.**
+  - **The retain section**: `retain.State` as JSON, the same state the leader's retain saver
+    writes (`Runtime.RetainImage`).
+  - **Every task's program frame**: every variable, function-block internals (timers,
+    counters, edges), SFC steps and their times. An SFC lowers to ST, so its steps are frame
+    slots. The frame is flattened by `ir.FlattenInto` into 32-byte `ir.Leaf` values.
+  - Alarm ack and shelve state is **not** taken from an image: it comes from the pair's
+    `oplog` (§1).
+- **Where the copy happens.** Each task copies its frame at the **end of its own scan**,
+  once the stream asks (`Runtime.RequestImage`). The copy is values only, into a buffer it
+  reuses, with no allocation, hashing or encoding in the scan (guard (a)).
+  - The stream's goroutine collects the copies (`TakeImage`), adds the retain section, and
+    encodes them.
+  - So the frames of two tasks are not of one instant, as their scans never are.
+  - Measured (i9-14900K): about 4 ns a leaf, so a 32 000-leaf frame adds about 120 µs to the
+    scan that copies. The shipped examples hold 0–210 leaves, and their images are 0.1–2 kB.
+- **Header.** Each image carries:
+  - its format version;
+  - its place in the stream, `(term, seq)`: `seq` only grows within a leadership (a program's
+    scan count does not: an online edit resets it);
+  - the leader's build;
+  - per task: the frame's **layout**, the timers' time base `NowMs` at the copy, and the scan
+    count. The layout (`ir.Program.Layout`) is a hash of every slot's name, kind, binding,
+    RETAIN/CONSTANT/TEMP flags and declared type (`LREAL` is not `REAL`), walked into every
+    STRUCT, ARRAY, enumeration and FB type, plus `ir.FrameFormat`. Initial values and bodies are
+    not in it, so a hot takeover (S2) also requires the same build and running sources.
+  - A CRC-32C over the whole image.
 
-Frames are numbered `(term, scan)`, delta-encoded against the last acknowledged frame, and
-checksummed, and each one carries the **build hash**. A full frame is sent on connect and after
-any gap. The standby applies each frame to a shadow copy and persists retained values to its
-own file, on the 2 s cadence the leader uses today.
+  A timer's internals are absolute on the leader's `NowMs` (its wall clock), so a hot takeover
+  rebases them by the image age (§4.2).
+- **Pace.** Full images, at most one every 100 ms, are sent on connect and after any gap.
+  - A bytes-per-second budget (default 1 MB/s, configurable) stretches the interval rather
+    than dropping images. The status reports the effective interval and the image age.
+  - `naut check` warns when a project's image size × 10/s is over the budget.
+  - Deltas come only if the measured sizes call for them.
+  - An image is at most `runtime.MaxImageBytes` (8 MiB), with no string over 1 MiB in it. The
+    encoder refuses a bigger one (`ErrImageTooBig`, which the stream reports) rather than send
+    what no standby would read, and the decoder reads nothing bigger.
+- **What the standby applies.**
+  - It takes an image only of the term its own voter knows the leader holds, and only in
+    `(term, seq)` order (`Shadow.Apply` refuses an older one too).
+  - It applies each task's frame to a **shadow** frame of its own program (never run), and
+    only when the layout matches. A mismatch leaves that task's shadow as it was and is
+    reported.
+  - It persists the retain section **by name, whatever the layouts**, to its own retain file,
+    on the leader's 2 s cadence. So a rolling update, which is a takeover across builds,
+    keeps the setpoints.
+- **What the standby carries, and what it keeps.** `retain.Carry` decides; a test fails when
+  `retain.State` gains a field that is neither:
+  - **Carried** from the image: retained tags, the parameter bookkeeping, `VAR RETAIN` locals,
+    online edits (each with the build it was made against), and Web Push subscriptions (sealed
+    under the pair's shared key; #722).
+  - **Kept** as its own: alarm acks, shelves and flood, and substitutes (the log owns them,
+    and taking them from an image could undo a superseded log's drop), and live I/O (refused
+    for a pair).
+- **At a takeover.** The new leader:
+  1. stops following;
+  2. flushes the newest image's retain section to its file (one fsync, counted in the
+     takeover time);
+  3. empties its shadow (`Shadow.Reset`): an image from before its own leadership must never
+     be applied over what it did since;
+  4. loads, as §4.2 and §4.3 say.
 
 ### 4.2 Hot takeover
 

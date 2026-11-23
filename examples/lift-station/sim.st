@@ -27,6 +27,7 @@ VAR_EXTERNAL
     P101_InjectSealFail  : BOOL;
     P101_OverTemp        : BOOL;
     P101_InjectOverTemp  : BOOL;
+    P101_FlapOverTemp    : BOOL;
 
     P102_RunCmd      : BOOL;
     P102_SpeedCmd    : REAL;
@@ -45,6 +46,7 @@ VAR
     vfd101 : VfdModel;
     vfd102 : VfdModel;
     tSec   : REAL;
+    flapS  : REAL;
 END_VAR
 VAR CONSTANT
     InflowVaryFrac : REAL := 0.20;
@@ -62,7 +64,16 @@ vfd102(RunCmd := P102_RunCmd, SpeedCmd := P102_SpeedCmd, Dt := SimDtS, InjectFau
 (* Seal-leak and over-temp probes have no physics to speak of: pass the
    bench inject tags straight through, exactly like a wire from a switch. *)
 P101_SealFail := P101_InjectSealFail;
-P101_OverTemp := P101_InjectOverTemp;
+(* A contact that chatters: with the flap tag set, P-101's over-temp probe is
+   made for 3 s and broken for 2 s, over and over, the way a marginal
+   contact or a hunting thermostat does. The alarm's 2 s on-delay lets
+   each 3 s make through, so it activates every 5 s: chatter within a
+   minute. Bench only. *)
+flapS := flapS + SimDtS;
+IF flapS >= 5.0 THEN
+    flapS := 0.0;
+END_IF;
+P101_OverTemp := P101_InjectOverTemp OR (P101_FlapOverTemp AND flapS < 3.0);
 P102_SealFail := P102_InjectSealFail;
 P102_OverTemp := P102_InjectOverTemp;
 

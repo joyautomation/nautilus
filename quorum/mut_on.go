@@ -271,6 +271,15 @@ var Mutations = []string{
 	"accept_survives_reboot",            // oplog: a vouch's one-shot and acceptance survive a restart (#1177, naut-lead)
 	"stale_retained_alarms_kept",        // runtime: a start after a superseded log keeps the retain store's acks and shelves (#1177 review)
 	"takeover_keeps_first_scan",         // runtime: a takeover resets the frames but not FIRST_SCAN (#710)
+	"image_copy_in_scan_encodes",        // runtime: the scan's frame copy also hashes the layout (guard a: the scan copies values only, #710 S1)
+	"image_seq_from_scans",              // runtime: an image is numbered by its program's scan count, which an online edit resets (#710 S1)
+	"image_crc_unchecked",               // runtime: a state image's checksum is neither written nor checked (#710 S1)
+	"shadow_older_image_applied",        // runtime: the standby's shadow applies an image of an older (term, seq) (#710 S1)
+	"shadow_stale_frame_kept",           // runtime: a task an image did not apply keeps offering the older frame (#710 S1)
+	"image_size_unbounded",              // runtime: images over the size limits are encoded and decoded (#710 S1)
+	"shadow_layout_unchecked",           // runtime: the shadow applies a frame to a program of another layout (#710 S1)
+	"shadow_kept_after_leading",         // runtime: a reset (this controller led) keeps the shadow's frames and position (#710 S1)
+	"stream_carries_log_intent",         // retain: Carry takes the leader's acks, shelves, flood and substitutes, which the log owns (#710 S1)
 	"noop_digest_unchecked",             // oplog: #1177 review
 	"vouch_again_noop",                  // oplog: #1177 review
 	"lower_history_peer_synced",         // node: a peer's log at a lower or forked history is one to defer and yield to

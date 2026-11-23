@@ -3,7 +3,9 @@
 // and the order, and nothing may be dropped.
 import { describe, it, expect } from './harness.js';
 import {
+	adviceLine,
 	chatterBadge,
+	delaysText,
 	chatterText,
 	chatteringIds,
 	detectionEvent,
@@ -175,5 +177,15 @@ describe('the chatter shelve reason', () => {
 		expect(reasonProblem('\u200b\u200b')).toBe('Say it in words.');
 		expect(reasonProblem('é'.repeat(SHELVE_REASON_MAX))).toBe('');
 		expect(reasonProblem('é'.repeat(SHELVE_REASON_MAX + 1))).toBe('At most 200 characters.');
+	});
+});
+
+describe('the tuning panel words', () => {
+	it('says the delays in force, and the suggestion or why there is none', () => {
+		expect(delaysText(5000, 0)).toBe('on-delay 5 s, off-delay 0 s');
+		expect(delaysText(90_000, 300_000)).toBe('on-delay 90 s, off-delay 5 min');
+		expect(adviceLine({ suggestion: { why: '5 s on-delay: 7 bounces in 60 s become 1' } })).toBe('5 s on-delay: 7 bounces in 60 s become 1');
+		expect(adviceLine({}).includes('No longer delay would have stopped it')).toBe(true);
+		expect(adviceLine({ cut: true, suggestion: { why: 'x' } }).startsWith('Too much history')).toBe(true);
 	});
 });
