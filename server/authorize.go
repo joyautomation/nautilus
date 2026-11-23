@@ -48,7 +48,7 @@ var actionPerm = map[string]string{
 	"tag.write":            PermWrite,
 	"push.subscribe":       auth.Read, // any person who may read may be paged; read-gated per alarm at send
 	"push.unsubscribe":     auth.Read,
-	"camera.view":          auth.Read, // watching a camera live (#724)
+	"camera.view":          auth.Camera, // watching a camera live (#724)
 	"alarm.ack":            PermAck,
 	"alarm.shelve":         PermShelve,
 	"alarm.unshelve":       PermShelve,
@@ -723,18 +723,31 @@ func (s *Server) elevatedNames() []string {
 	return out
 }
 
+// permissionShown reports whether /api/me lists p: the checkout's two exist
+// only for a project that uses the checkout, and camera only for one with
+// cameras (#724); the roles still define them, so turning the feature on needs
+// no role edit.
+func (s *Server) permissionShown(p string) bool {
+	switch {
+	case checkoutPermission(p):
+		return s.checkoutEnabled()
+	case p == auth.Camera:
+		return s.shown[auth.Camera]
+	}
+	return true
+}
+
 // visiblePermissions is a principal's permissions as /api/me shows them: the
-// checkout's two are left out of a project that does not use it (the roles
-// still define them, so turning it on needs no role edit).
+// ones of a feature the project does not use are left out.
 func (s *Server) visiblePermissions(in map[string][]string) map[string][]string {
-	if s.checkoutEnabled() {
+	if s.checkoutEnabled() && s.shown[auth.Camera] {
 		return in
 	}
 	out := make(map[string][]string, len(in))
 	for scope, perms := range in {
 		kept := make([]string, 0, len(perms))
 		for _, p := range perms {
-			if !checkoutPermission(p) {
+			if s.permissionShown(p) {
 				kept = append(kept, p)
 			}
 		}

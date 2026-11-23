@@ -16,7 +16,7 @@ function fake(answers: Array<Response | Error>) {
 	}) as unknown as typeof fetch;
 	return { sent, client: new CameraClient({ fetch: f }) };
 }
-const cam = (o: Partial<Camera> = {}): Camera => ({ id: 'c1', label: 'Wet well', asset: 'p1', kind: 'mjpeg', interval: 5, maxViewers: 2, live: true, snapshot: true, watching: 0, bps: 0, ...o });
+const cam = (o: Partial<Camera> = {}): Camera => ({ id: 'c1', label: 'Wet well', asset: 'p1', kind: 'mjpeg', interval: 5, maxViewers: 2, view: true, live: true, snapshot: true, watching: 0, bps: 0, ...o });
 
 describe('formatBps', () => {
 	it('names the unit', () => {
@@ -83,6 +83,11 @@ describe('CameraClient', () => {
 		expect(l[0].interval).toBe(5);
 		expect(l[0].bps).toBe(1500);
 		expect(l[0].live).toBe(true);
+	});
+	it('view is false only when the controller says so', async () => {
+		const { client } = fake([json({ cameras: [{ id: 'a', view: false }, { id: 'b', view: true }, { id: 'c' }] })]);
+		const l = await client.list();
+		expect(l.map((c) => c.view)).toEqual([false, true, true]);
 	});
 	it('no route, an empty list, a bad body or no answer is no cameras', async () => {
 		expect(await fake([json({ error: 'not found' }, 404)]).client.list()).toEqual([]);

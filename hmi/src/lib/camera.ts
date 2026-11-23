@@ -20,6 +20,8 @@ export interface Camera {
 	/** Seconds between snapshot refreshes. */
 	interval: number;
 	maxViewers: number;
+	/** The person may view cameras (the controller's `camera` permission); false: say so, ask for no picture. */
+	view: boolean;
 	/** A live stream exists for this camera kind. */
 	live: boolean;
 	/** A still exists. */
@@ -44,6 +46,8 @@ export interface Explained {
 }
 
 const GENERIC = 'the camera did not answer';
+export const NO_VIEW = 'No permission to view cameras.';
+
 export const DEFAULT_INTERVAL = 5;
 
 function normalize(j: any): Camera | null {
@@ -56,6 +60,8 @@ function normalize(j: any): Camera | null {
 		kind: typeof j.kind === 'string' ? j.kind : '',
 		interval: n(j.interval, DEFAULT_INTERVAL) > 0 ? n(j.interval, DEFAULT_INTERVAL) : DEFAULT_INTERVAL,
 		maxViewers: n(j.maxViewers, 0),
+		// an older controller says nothing: it has no such permission
+		view: j.view !== false,
 		live: j.live === true,
 		snapshot: j.snapshot === true,
 		watching: n(j.watching, 0),

@@ -83,12 +83,31 @@ people ask, and a camera that did not answer is not asked again for two seconds.
 
 ## Who may view
 
-Viewing a camera needs the `read` permission, as the live values it sits beside
-do. `read` is whole-controller: it is not scoped to an area, so neither is a
-camera. A person with no `read` (or no sign-in, on a project with an `auth:`
-block) is refused by the same gate that refuses every API read, before the
-camera is named. A permission to view cameras per area is a decision for the
-plant's owner, not made here.
+Video of a plant floor shows people, which is more sensitive than a tag value,
+and a site often gives a contractor or a remote viewer `read` without wanting
+them to watch the floor. So viewing a camera needs the `camera` permission as
+well as `read`. Every built-in role that reads holds it (so a project with no
+`auth:` block, and every existing role setup, keeps working), and a custom role
+takes it away:
+
+```yaml
+auth:
+  roles:
+    contractor:
+      inherits: viewer
+      deny: [camera]
+```
+
+`camera` is **whole-controller**: it is not scoped to an area, so a person
+fenced to one area's tags who holds it may view every camera. Neither is `read`
+scoped to an area in the auth model; per-area viewing is a separate, bigger
+question that is not answered here. A person with `read` and no `camera` sees the
+asset's cameras listed with "no permission to view cameras" in place of a
+picture, and the controller never contacts the camera for them. A refused live
+view is journalled (`camera.view`, refused). A person with no `read`, or no
+sign-in on a project with an `auth:` block, is refused by the same gate that
+refuses every API read, before the camera is named. `/api/me` lists the
+permission only on a project that has cameras.
 
 A live view of a real camera is journalled twice: `camera.view` with `event:
 start` when the first frame is sent, and with `event: stop` when it ends, with the
