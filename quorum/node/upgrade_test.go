@@ -167,6 +167,10 @@ func roll(t *testing.T, lease time.Duration, rel int, down time.Duration, order 
 // Within one release the standby's and the witness's restarts never stop
 // control, and the leader's costs one takeover that doesn't wait for the
 // restarted box: the standby takes over alone.
+//
+// A measurement guard, the baseline the upgrade order is judged against,
+// not a safety gate: of every protocol mutation, only no_reterm turns it
+// red, and only now and then (1 run in 5).
 func TestRollingRestartStopsOnlyAtTheLeader(t *testing.T) {
 	stops := roll(t, loopLease, 0, upgradeDown, "standby", "witness", "leader")
 	for _, role := range []string{"standby", "witness"} {
