@@ -3,6 +3,7 @@ package checkout
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -83,6 +84,11 @@ type entry struct {
 	EvSha  string `json:"evsha,omitempty"`
 	Unreal string `json:"unreal,omitempty"`
 
+	// V is the entry's format version, written by a pair's proposer: a replica
+	// whose build is older than an entry it is handed stops applying (halts)
+	// instead of going on to a state that differs from its peer's.
+	V int `json:"v,omitempty"`
+
 	// kind result: what the controller saw standing on the point's tag when it
 	// recorded ("forced: X", "substituted: X"), and a hash of the devices it
 	// was connected to then, from the controller
@@ -99,9 +105,14 @@ type entry struct {
 	Forced  any `json:"forced,omitempty"`
 	Seconds int `json:"seconds,omitempty"`
 
-	// kind seal: the SHA-256 of the signed payload, and the signature (seal.go)
-	SealSha string `json:"sealsha,omitempty"`
-	Sig     string `json:"sig,omitempty"`
+	// kind seal: the SHA-256 of the signed payload, and the signature (seal.go);
+	// on a pair, the payload itself, the public key and the chain position it
+	// was signed at (there is no record file: every replica rebuilds the record)
+	SealSha string          `json:"sealsha,omitempty"`
+	Sig     string          `json:"sig,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+	PubKey  string          `json:"pubkey,omitempty"`
+	PrevSeq int64           `json:"prevseq,omitempty"`
 
 	// kinds result, abandon and seal
 	Note   string `json:"note,omitempty"`
@@ -193,6 +204,11 @@ type Run struct {
 	forces map[string][]*forceState
 	// standing is the checkout force that has begun and not ended.
 	standing *forceState
+	// a sealed run's signed payload, signature and key, kept in log mode so
+	// any replica can serve the record
+	sealPayload json.RawMessage
+	sealSig     string
+	sealKey     string
 }
 
 type forceState struct {
@@ -222,6 +238,18 @@ type Store struct {
 	key         *signKey
 	keyReplaced bool
 	keyErr      error
+
+	// log mode (a redundant pair, #719 slice 5): no file; the entries are the
+	// operator-intent log's, proposed through propose and applied at commit on
+	// every replica by ApplyLogged. propMu serializes this replica's own
+	// proposals (s.mu is released while one commits, so the commit's apply can
+	// take it).
+	propose func(ctx context.Context, by string, body []byte) (uint64, error)
+	propMu  sync.Mutex
+	lines   [][]byte           // the canonical chain, in committed order
+	outcome map[uint64]applied // what became of each committed entry, by the log's sequence number
+	sheet   *Sheet             // the sheet a replica rebuilds a sealed export from
+	halted  error              // set when an entry this build cannot apply arrived: nothing more is applied or proposed
 }
 
 // appendFile is the file as the store uses it (a test's can fail).
@@ -358,13 +386,18 @@ func (s *Store) apply(e entry) error {
 		if e.Run == "" || s.runs[e.Run] != nil {
 			return errors.New("a run that is empty or already begun")
 		}
+		if s.openRun() != nil {
+			// one run is open at a time: on a pair, two controllers may begin
+			// one in the same moment, and every replica refuses the second alike
+			return ErrRunOpen
+		}
 		s.runs[e.Run] = &Run{ID: e.Run, State: StateOpen, Rehearsal: e.Rehearsal, SheetHash: e.SheetHash, Title: e.Title,
 			EvidenceSha: e.EvSha, Unreal: e.Unreal, At: e.At, By: e.By, Principal: e.Principal, lastResults: map[string][]Result{}, forces: map[string][]*forceState{}}
 		s.ord = append(s.ord, e.Run)
 	case kindResult:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
-			return errors.New("a result for a run that is not open")
+			return ErrNotOpen
 		}
 		res := Result{Run: e.Run, Seq: e.Seq, At: e.At, Point: e.Point,
 			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, Override: e.Override, EvSha: e.EvSha, By: e.By, Principal: e.Principal}
@@ -377,10 +410,10 @@ func (s *Store) apply(e entry) error {
 	case kindForce:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
-			return errors.New("a force for a run that is not open")
+			return ErrNotOpen
 		}
 		if r.standing != nil {
-			return errors.New("a force while another stands")
+			return ErrForceActive
 		}
 		fs := &forceState{rec: ForceRec{Run: e.Run, Point: e.Point, Seq: e.Seq, At: e.At, Value: e.Forced, Seconds: e.Seconds, By: e.By, Principal: e.Principal}}
 		r.forces[e.Point] = append(r.forces[e.Point], fs)
@@ -388,42 +421,98 @@ func (s *Store) apply(e entry) error {
 	case kindForceEnd:
 		r := s.runs[e.Run]
 		if r == nil || r.standing == nil || r.standing.rec.Point != e.Point {
-			return errors.New("the end of a force that does not stand")
+			return ErrNoForce
+		}
+		if e.PrevSeq != 0 && r.standing.rec.Seq != e.PrevSeq {
+			return ErrNoForce // a late end for an earlier force on this point
 		}
 		r.standing.ended = e.Reason
 		r.standing = nil
 	case kindAbandon:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
-			return errors.New("an abandon of a run that is not open")
+			return ErrNotOpen
 		}
 		if r.standing != nil {
-			return errors.New("an abandon while a force stands")
+			return ErrForceActive
 		}
 		r.State, r.Reason, r.EndedAt, r.EndedBy = StateAbandoned, e.Reason, e.At, e.By
 	case kindSeal:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
-			return errors.New("a seal of a run that is not open")
+			return ErrNotOpen
 		}
 		if r.standing != nil {
-			return errors.New("a seal while a force stands")
+			return ErrForceActive
 		}
 		if r.Rehearsal {
 			return errors.New("a seal of a rehearsal run")
 		}
+		if len(e.Payload) > 0 {
+			if err := s.checkSealEntry(r, e); err != nil {
+				return err
+			}
+		}
 		r.State, r.SealedAt, r.SealedBy, r.SealSeq = StateSealed, e.At, e.By, e.Seq
+		if len(e.Payload) > 0 {
+			r.sealPayload, r.sealSig, r.sealKey = e.Payload, e.Sig, e.PubKey
+		}
 	default:
-		return fmt.Errorf("unknown entry kind %q", e.Kind)
+		return fmt.Errorf("%w: %q", errUnknownKind, e.Kind)
 	}
 	return nil
 }
+
+// errUnknownKind: an entry of a kind this build does not know.
+var errUnknownKind = errors.New("unknown entry kind")
 
 // append writes e as the next line, fsyncs the file, and only then folds it
 // into the view. A write or sync that fails cuts the file back to its last
 // good size, so the entry that failed leaves nothing behind; if that fails
 // too, the store takes no more entries until it is opened again.
 func (s *Store) append(e entry) error {
+	_, err := s.appendGet(e)
+	return err
+}
+
+// appendGet is append that also hands back what the entry produced (the run,
+// the result, the force it recorded), as apply made it: after a pair's commit
+// the store's state may already have moved on (another writer, a force's end,
+// a Reset), so a caller never reads it back.
+func (s *Store) appendGet(e entry) (any, error) {
+	if s.propose != nil {
+		return s.appendLogged(e)
+	}
+	if err := s.appendFile(e); err != nil {
+		return nil, err
+	}
+	return s.producedBy(e), nil
+}
+
+// producedBy is what an applied entry made, for its proposer.
+func (s *Store) producedBy(e entry) any {
+	r := s.runs[e.Run]
+	if r == nil {
+		return nil
+	}
+	switch e.Kind {
+	case kindRun:
+		return r.view()
+	case kindResult:
+		if rs := r.lastResults[e.Point]; len(rs) > 0 {
+			return rs[len(rs)-1]
+		}
+	case kindForce:
+		if r.standing != nil {
+			return r.standing.rec
+		}
+	case kindAbandon:
+		return r.view()
+	}
+	return nil
+}
+
+func (s *Store) appendFile(e entry) error {
 	if s.f == nil {
 		return errors.New("checkout: the store is closed")
 	}
@@ -503,10 +592,15 @@ func (s *Store) BeginWith(rehearsal bool, sheetHash, title, by, principal, evide
 		return Run{}, ErrRunOpen
 	}
 	e := entry{Kind: kindRun, Run: newID(), Rehearsal: rehearsal, SheetHash: sheetHash, Title: title, By: by, Principal: principal, EvSha: evidenceSha, Unreal: unreal}
-	if err := s.append(e); err != nil {
+	p, err := s.appendGet(e)
+	if err != nil {
 		return Run{}, err
 	}
-	return s.runs[e.Run].view(), nil
+	run, ok := p.(Run)
+	if !ok {
+		return Run{}, ErrUnknown
+	}
+	return run, nil
 }
 
 // Record adds a result for a point of an open run. A fail and a note say
@@ -547,12 +641,19 @@ func (s *Store) RecordWith(run, point, outcome, note string, seen any, quality, 
 	if r.State != StateOpen {
 		return Result{}, ErrNotOpen
 	}
+	if evidenceSha == r.EvidenceSha {
+		evidenceSha = "" // the same devices as the run began against: said once, in the run
+	}
 	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, Override: override, EvSha: evidenceSha, By: by, Principal: principal}
-	if err := s.append(e); err != nil {
+	p, err := s.appendGet(e)
+	if err != nil {
 		return Result{}, err
 	}
-	rs := r.lastResults[point]
-	return rs[len(rs)-1], nil
+	res, ok := p.(Result)
+	if !ok {
+		return Result{}, ErrUnknown
+	}
+	return res, nil
 }
 
 // StartForce records that a checkout force began on a point of an open run:
@@ -576,10 +677,15 @@ func (s *Store) StartForce(run, point string, value any, seconds int, by, princi
 	if r.standing != nil {
 		return ForceRec{}, ErrForceActive
 	}
-	if err := s.append(entry{Kind: kindForce, Run: run, Point: point, Forced: value, Seconds: seconds, By: by, Principal: principal}); err != nil {
+	p, err := s.appendGet(entry{Kind: kindForce, Run: run, Point: point, Forced: value, Seconds: seconds, By: by, Principal: principal})
+	if err != nil {
 		return ForceRec{}, err
 	}
-	return r.standing.rec, nil
+	rec, ok := p.(ForceRec)
+	if !ok {
+		return ForceRec{}, ErrUnknown
+	}
+	return rec, nil
 }
 
 // EndForce records that the standing checkout force of an open run ended, and
@@ -594,11 +700,30 @@ func (s *Store) EndForce(run, how, by string) error {
 	return s.endForceLocked(r, how, by)
 }
 
+// EndForceOf is EndForce for the force that began at the entry numbered
+// forceSeq (ForceRec.Seq): an end that arrives late, for a force that is gone,
+// does not end the next force on the same point (a timer on the controller
+// that lost the lead, an interrupt written by two leaders in turn). It returns
+// ErrNoForce when that force is not the one standing.
+func (s *Store) EndForceOf(run string, forceSeq int64, how, by string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.runs[run]
+	if r == nil {
+		return ErrNoRun
+	}
+	if r.standing == nil || (forceSeq != 0 && r.standing.rec.Seq != forceSeq) {
+		return ErrNoForce
+	}
+	return s.endForceLocked(r, how, by)
+}
+
 func (s *Store) endForceLocked(r *Run, how, by string) error {
 	if r.standing == nil {
 		return ErrNoForce
 	}
-	return s.append(entry{Kind: kindForceEnd, Run: r.ID, Point: r.standing.rec.Point, Reason: how, By: by})
+	// the end names the force it ends, so apply ends that one and no other
+	return s.append(entry{Kind: kindForceEnd, Run: r.ID, Point: r.standing.rec.Point, PrevSeq: r.standing.rec.Seq, Reason: how, By: by})
 }
 
 // Standing is the checkout force that has begun and not ended, in the open
@@ -620,8 +745,8 @@ func (s *Store) InterruptStanding() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
-	for _, id := range s.ord {
-		if r := s.runs[id]; r.State == StateOpen && r.standing != nil {
+	for _, id := range append([]string(nil), s.ord...) { // a pair's store may change while a proposal commits
+		if r := s.runs[id]; r != nil && r.State == StateOpen && r.standing != nil {
 			if err := s.endForceLocked(r, ForceInterrupted, "controller"); err != nil {
 				return n, err
 			}
@@ -654,10 +779,15 @@ func (s *Store) Abandon(run, reason, by, principal string) (Run, error) {
 			return Run{}, err
 		}
 	}
-	if err := s.append(entry{Kind: kindAbandon, Run: run, Reason: reason, By: by, Principal: principal}); err != nil {
+	p, err := s.appendGet(entry{Kind: kindAbandon, Run: run, Reason: reason, By: by, Principal: principal})
+	if err != nil {
 		return Run{}, err
 	}
-	return r.view(), nil
+	v, ok := p.(Run)
+	if !ok {
+		return Run{}, ErrUnknown
+	}
+	return v, nil
 }
 
 func (r *Run) view() Run { v := *r; v.lastResults = nil; return v }

@@ -272,6 +272,9 @@ func (s *Store) SealedPath(run string) string {
 
 // ReadSealed returns a sealed run's record as it was written.
 func (s *Store) ReadSealed(run string) ([]byte, error) {
+	if s.propose != nil {
+		return s.readSealedLogged(run)
+	}
 	s.mu.Lock()
 	r := s.runs[run]
 	sealed := r != nil && r.State == StateSealed
@@ -289,6 +292,20 @@ func (s *Store) ReadSealed(run string) ([]byte, error) {
 // results in. The record is written and synced before the seal entry is
 // appended, so a seal in the file always has its record beside it.
 func (s *Store) Seal(in SealInput) (SealedRecord, error) {
+	// on a pair another entry may commit between signing and applying: sign again
+	for attempt := 0; ; attempt++ {
+		sr, err := s.sealOnce(in)
+		if errors.Is(err, errSealRaced) && attempt < 3 {
+			continue
+		}
+		if errors.Is(err, errSealRaced) {
+			return sr, refuse("the run kept changing while it was being sealed (results were still being recorded): try again")
+		}
+		return sr, err
+	}
+}
+
+func (s *Store) sealOnce(in SealInput) (SealedRecord, error) {
 	if in.Principal == "" || in.By == "" {
 		return SealedRecord{}, invalid("a seal names the person who signs it off")
 	}
@@ -404,13 +421,7 @@ func (s *Store) Seal(in SealInput) (SealedRecord, error) {
 	}
 	sort.Strings(rec)
 
-	ex := BuildExport(r.view(), in.Sheet, results)
-	ex.Sealed = true
-	ex.Status = "SEALED: signed off by " + in.By + ", see the signature of this record"
-	// the bytes the signature covers: encoded with Go's default escaping of <, >
-	// and &, which is stable through the indented file the record is written as
-	// (an encoder that escaped differently would hash one way and verify another)
-	exc, err := json.Marshal(ex)
+	exc, err := sealedExportBytes(r.view(), in.Sheet, results, in.By)
 	if err != nil {
 		return SealedRecord{}, err
 	}
@@ -432,6 +443,16 @@ func (s *Store) Seal(in SealInput) (SealedRecord, error) {
 	psum := sha256.Sum256(plb)
 	sr := SealedRecord{Format: SealFormat, Payload: plb, Signature: base64.StdEncoding.EncodeToString(sig),
 		PublicKey: base64.StdEncoding.EncodeToString(s.key.pub), Export: exc}
+	if s.propose != nil {
+		// a pair: the entry carries the signed payload and the key; there is no
+		// record file, every replica rebuilds it
+		e := entry{Kind: kindSeal, Run: in.Run, SealSha: hex.EncodeToString(psum[:]), Sig: sr.Signature, Payload: plb, PubKey: sr.PublicKey,
+			PrevSeq: s.seq, Note: in.Note, By: in.By, Principal: in.Principal}
+		if err := s.append(e); err != nil {
+			return SealedRecord{}, err
+		}
+		return sr, nil
+	}
 	body, err := json.MarshalIndent(sr, "", "  ")
 	if err != nil {
 		return SealedRecord{}, err
