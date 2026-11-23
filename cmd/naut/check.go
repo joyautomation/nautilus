@@ -890,6 +890,26 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		fmt.Printf("%s: %d checkout points\n", loc.file, len(sh.Points))
 	}
 
+	// Cameras (#724): each names equipment the plant has, and a camera that
+	// needs credentials has them in the secrets file.
+	camErrs, camWarns := proj.CheckCameras()
+	if len(proj.Cameras) > 0 {
+		sd, _ := controllerStateDir("the camera credentials", proj.AuthStateDir, proj.Name, dir, true, os.Getenv)
+		e2, w2 := checkCameraSecrets(proj, sd, false)
+		camErrs, camWarns = append(camErrs, e2...), append(camWarns, w2...)
+	}
+	for _, m := range camErrs {
+		errs++
+		fmt.Printf("%s: error: %s\n", loc.file, m)
+	}
+	for _, m := range camWarns {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, m)
+	}
+	if n := len(proj.Cameras); n > 0 {
+		fmt.Printf("%s: %d cameras\n", loc.file, n)
+	}
+
 	// Scenes: every *.scene.json at the root really binds struct tags the
 	// manifest declares, and every kind really finds its members on them.
 	// Same offline discipline as alarms; docs/design/spatial-hmi.md §3b.

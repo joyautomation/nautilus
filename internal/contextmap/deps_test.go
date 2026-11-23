@@ -115,6 +115,11 @@ func rules(u universe) []rule {
 			why:  "the checkout record is a sheet of points and a chained file of results; it knows no permission, tag store, alarm or server, which decide before an entry exists",
 		},
 		{
+			from: []string{"camera"},
+			to:   u.allBut(),
+			why:  "a camera is a manifest row, a still, a motion-JPEG relay and a viewer cap; it knows no plant, permission, alarm or server: `server` decides who may view and journals it, and the manifest checks the asset",
+		},
+		{
 			from: []string{"internal/webpush"},
 			to:   u.allBut(),
 			why:  "Web Push is a seam: it encrypts, signs and sends, and knows no principal, session, alarm or store; the server hands it strings and keeps its rows in retain",

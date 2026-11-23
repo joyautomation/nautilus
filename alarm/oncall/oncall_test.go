@@ -151,3 +151,18 @@ func TestCallers(t *testing.T) {
 		t.Fatalf("nil: %v", got)
 	}
 }
+
+// A camera's credentials are the secret camera.<id> (#724): any id of the
+// manifest's alphabet, nothing else under that prefix.
+func TestCameraSecretsAreKeyedByCameraID(t *testing.T) {
+	for _, k := range []string{"camera.bin-top", "camera.dock_2", "camera.A1"} {
+		if !validSecretKey(k) {
+			t.Errorf("%q refused", k)
+		}
+	}
+	for _, k := range []string{"camera.", "camera.a b", "camera.a/b", "camera.a.b", "cameras.x", "camera", "camera." + strings.Repeat("x", 65)} {
+		if validSecretKey(k) {
+			t.Errorf("%q accepted", k)
+		}
+	}
+}
