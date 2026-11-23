@@ -246,9 +246,17 @@ logged-on console desktop. `POST /v1/sessions/{id}/show` then opens a
 block of the session's project in TIA's own editor (§3.4). Such an agent
 refuses every download, dry runs included: a click or a modal dialog in the
 visible Portal could change or stall a load. Restart the agent without
-`TIAD_UI` to download. For a demo, the order is: deploy, `naut siemens
-verify`, then open the saved project and show the block. The verify needs
-the agent free of sessions, and the show keeps one open.
+`TIAD_UI` to download.
+
+`naut siemens show <block> [dir]` (`cmd/naut/siemens_show.go`) drives it.
+It opens the project the last deploy saved and shows the block (TIA's
+name, such as `naut_main`) in TIA's editor. An agent without the window is
+refused before anything opens, and the refusal names `install-tiad.ps1
+-Ui`. The project stays open, so another show reuses it, and `--close`
+closes it. A show of a block the project lacks closes the session only
+when that show opened it. For a demo, the order is: deploy, `naut siemens
+verify`, then `naut siemens show naut_main`. The verify needs the agent
+free of sessions, and the show keeps one open.
 
 ## 2. Codegen
 

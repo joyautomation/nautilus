@@ -25,6 +25,7 @@ const siemensUsage = `naut siemens — a Siemens S7-1500 as a nautilus target (e
 Usage:
   naut siemens deploy [flags] [dir]         compile the project through tiad and download it
   naut siemens verify [flags] [dir]         compare the CPU with its last deploy (TIA's own compare)
+  naut siemens show <block> [dir]           open a block of the deployed program in TIA Portal's editor
   naut siemens serve --host <cpu> [flags]   serve the CPU on the nautilus runtime API
   naut siemens cert  --host <cpu>           print the CPU's certificate SHA-256, to pin
   naut siemens diag  --host <cpu> [flags]   read the CPU's diagnostic buffer
@@ -42,6 +43,8 @@ func runSiemens(args []string) int {
 		return runSiemensDeploy(args[1:])
 	case "verify":
 		return runSiemensVerify(args[1:])
+	case "show":
+		return runSiemensShow(args[1:])
 	case "serve":
 		return runSiemensServe(args[1:])
 	case "cert":

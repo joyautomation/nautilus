@@ -29,6 +29,12 @@ func contractShowRefusedWithoutUI(t *testing.T, start Starter) {
 	if !errors.As(err, &e) || e.Kind != tiad.KindBadRequest || e.Message != ShowNeedsUI || statusOf(err) != http.StatusBadRequest {
 		t.Fatalf("show without UI: %v, want bad_request %q", err, ShowNeedsUI)
 	}
+	// Refused before the session is looked up: a closed one gets the
+	// same answer, not not_found.
+	closeFirst(t, s)
+	if _, err := s.Show(ctx, "naut_Main"); !errors.As(err, &e) || e.Message != ShowNeedsUI {
+		t.Fatalf("show on a closed session without UI: %v, want %q", err, ShowNeedsUI)
+	}
 	if got := a.Shown(t); len(got) != 0 {
 		t.Fatalf("shown without UI: %v, want none", got)
 	}
