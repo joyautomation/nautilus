@@ -125,6 +125,16 @@ func pickCompression(comp string, boxXZ bool) (how, why string) {
 	return "xz", ""
 }
 
+// helperGzipOnlyNote puts the right reason in the plan line of a box whose
+// release helper predates xz: the box may well have xz, but its helper cannot
+// ask for it, so planTransfer's "the box cannot unpack xz" would be untrue.
+func helperGzipOnlyNote(t *transfer) {
+	if i := strings.LastIndex(t.note, " ("); i >= 0 && strings.HasSuffix(t.note, ")") {
+		t.note = t.note[:i]
+	}
+	t.note += " (this box's release helper predates xz)"
+}
+
 // compressRange makes the wire file: bytes [from, end) of src, gzip or xz.
 func compressRange(how, src, dst string, from int64) (int64, string, error) {
 	if how == "xz" {

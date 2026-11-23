@@ -697,9 +697,9 @@ assemble)
 		cur=$(target current)
 		[ -n "$cur" ] || fail "no current release to take the runtime from"
 		head -c "$rsize" "$ROOT/releases/$cur/controller" >"$build" || fail "could not read the current controller's runtime (disk full?)"
-		$unz <"$in/$name.part" >>"$build" || fail "could not unpack the upload $name (damaged, or the disk is full)"
+		$unz <"$in/$name.part" >>"$build" || fail "could not unpack the upload $name (damaged, the disk is full, or this box's decompressor cannot run: naut deploy -compress gzip sends gzip)"
 	else
-		$unz <"$in/$name.part" >"$build" || fail "could not unpack the upload $name (damaged, or the disk is full)"
+		$unz <"$in/$name.part" >"$build" || fail "could not unpack the upload $name (damaged, the disk is full, or this box's decompressor cannot run: naut deploy -compress gzip sends gzip)"
 	fi
 	got=$(sha256sum <"$build" | cut -d' ' -f1)
 	if [ "$got" != "$whole" ]; then

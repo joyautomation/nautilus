@@ -377,3 +377,8 @@ claims:
       - go ./cmd/naut TestABoxWithoutXZGetsGzip
       - go ./cmd/naut TestAWrongRuntimeFallsBackToTheWholeControllerAsXZ
       - go ./cmd/naut TestAHelperFromBeforeXZIsGzipOnly
+      - go ./cmd/naut TestAGzipOnlyHelpersPlanLineNamesTheHelper
+      - go ./cmd/naut TestAnEmptyBoxSaysItHasXZ
+      - go ./cmd/naut TestADamagedXZUploadNeverBecomesAController
+      - go ./cmd/naut TestACompressFlagIsChecked
+      - go ./cmd/naut TestDeployHelperRefusesWhatItIsNotFor

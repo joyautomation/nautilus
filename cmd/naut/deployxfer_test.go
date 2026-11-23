@@ -724,7 +724,7 @@ func TestABoxWithoutXZGetsGzip(t *testing.T) {
 	if got := lb.incoming(t, "plant-g"); !bytes.Equal(got, next) {
 		t.Error("the gzip upload did not rebuild the controller")
 	}
-	// and a box that is told to unpack xz it cannot refuses, with a reason
+	// and a box that is told to unpack xz it cannot refuses (exit 1, the failure of a box, not a damaged upload (4) or a wrong runtime (5))
 	needXZ(t)
 	xzTr, _ := planTransfer(ctl, sum, dir, boxBase{release: base.release, rsize: base.rsize, rsha: base.rsha, xz: true}, true, "xz")
 	if xzTr.comp != "xz" {
@@ -734,8 +734,11 @@ func TestABoxWithoutXZGetsGzip(t *testing.T) {
 	if err := b.uploadResumable(wireName, xzTr.wire, xzTr.wireSize, 0); err != nil {
 		t.Fatal(err)
 	}
-	if code := b.root(os.Stdout, "assemble", wireName, xzTr.wireSha, "plant-x", strconv.FormatInt(xzTr.rsize, 10), xzTr.whole, "xz"); code == 0 {
-		t.Errorf("a box with no xz unpacked an xz upload")
+	if code := b.root(os.Stdout, "assemble", wireName, xzTr.wireSha, "plant-x", strconv.FormatInt(xzTr.rsize, 10), xzTr.whole, "xz"); code != 1 {
+		t.Errorf("a box with no xz was asked for an xz upload: exit %d, want 1", code)
+	}
+	if _, err := os.Stat(filepath.Join(lb.root, "incoming", "plant-x")); err == nil {
+		t.Errorf("a controller was made from an upload the box cannot unpack")
 	}
 }
 
@@ -773,5 +776,84 @@ func TestAWrongRuntimeFallsBackToTheWholeControllerAsXZ(t *testing.T) {
 	}
 	if got := lb.incoming(t, "plant-new"); !bytes.Equal(got, next) {
 		t.Error("the controller on the box is not the one built")
+	}
+}
+
+// A first install asks the box what it can unpack before it sends anything,
+// though there is no release to build on.
+func TestAnEmptyBoxSaysItHasXZ(t *testing.T) {
+	needXZ(t)
+	_, b := newLocalBox(t) // nothing installed
+	base, ok, err := b.base()
+	if err != nil || ok || !base.xz {
+		t.Fatalf("an empty box: %+v ok=%v %v: want xz and no release", base, ok, err)
+	}
+	next := makeController(t, append(randomBytes(256<<10), bytes.Repeat([]byte("runtime text "), 60000)...), projectFiles(5, "A"))
+	dir := t.TempDir()
+	ctl, sum := writeCtl(t, dir, next)
+	tr, err := planTransfer(ctl, sum, dir, base, false, "auto")
+	if err != nil || tr.kind != "full" || tr.comp != "xz" {
+		t.Fatalf("a first install's plan: %+v %v", tr, err)
+	}
+	if code := b.sendController(tr, ctl, "plant-first", 0); code != 0 {
+		t.Fatalf("send: %d", code)
+	}
+}
+
+// A truncated xz stream whose hash was computed over what was cut (the link
+// dropped and the caller assembled the part) never becomes a release; and a
+// damaged one is thrown away (exit 4) before it is unpacked.
+func TestADamagedXZUploadNeverBecomesAController(t *testing.T) {
+	needXZ(t)
+	lb, b := newLocalBox(t)
+	old := makeController(t, append(randomBytes(256<<10), bytes.Repeat([]byte("runtime text "), 60000)...), projectFiles(5, "A"))
+	lb.install(t, "plant-old", old)
+	base, _, _ := b.base()
+	next := makeController(t, append(randomBytes(256<<10), bytes.Repeat([]byte("other runtime "), 60000)...), projectFiles(5, "B"))
+	dir := t.TempDir()
+	ctl, sum := writeCtl(t, dir, next)
+	tr, _ := planTransfer(ctl, sum, dir, base, true, "xz")
+	wire, _ := os.ReadFile(tr.wire)
+	// the stream cut short, with a hash that matches the cut: the unpacker says so
+	cut := filepath.Join(dir, "cut.xz")
+	os.WriteFile(cut, wire[:len(wire)/2], 0o644)
+	h := sha256.Sum256(wire[:len(wire)/2])
+	name := "plant-cut." + hex.EncodeToString(h[:])[:12] + ".wire"
+	if err := b.uploadResumable(name, cut, int64(len(wire)/2), 0); err != nil {
+		t.Fatal(err)
+	}
+	if code := b.root(os.Stdout, "assemble", name, hex.EncodeToString(h[:]), "plant-cut", strconv.FormatInt(tr.rsize, 10), tr.whole, "xz"); code != 1 {
+		t.Errorf("a cut xz stream: exit %d, want 1", code)
+	}
+	if _, err := os.Stat(filepath.Join(lb.root, "incoming", "plant-cut")); err == nil {
+		t.Errorf("a cut xz stream became a controller")
+	}
+	// an upload that does not match the hash the caller computed
+	name2 := "plant-bad." + tr.wireSha[:12] + ".wire"
+	bad := filepath.Join(dir, "bad.xz")
+	flipped := append([]byte(nil), wire...)
+	flipped[len(flipped)/2] ^= 0xff
+	os.WriteFile(bad, flipped, 0o644)
+	if err := b.uploadResumable(name2, bad, int64(len(flipped)), 0); err != nil {
+		t.Fatal(err)
+	}
+	if code := b.root(os.Stdout, "assemble", name2, tr.wireSha, "plant-bad", strconv.FormatInt(tr.rsize, 10), tr.whole, "xz"); code != 4 {
+		t.Errorf("a damaged xz upload: exit %d, want 4", code)
+	}
+}
+
+// A box whose helper predates xz is told so, whatever it may have: the plan
+// line's reason is the helper's, not "the box cannot unpack xz".
+func TestAGzipOnlyHelpersPlanLineNamesTheHelper(t *testing.T) {
+	tr := &transfer{kind: "full", comp: "gzip", note: "the whole controller, gzip-compressed: the box has no controller to build on (-compress xz, but the box has no xzcat, xz or unxz)"}
+	helperGzipOnlyNote(tr)
+	if strings.Contains(tr.note, "no xzcat") || !strings.HasSuffix(tr.note, "(this box's release helper predates xz)") || !strings.Contains(tr.note, "no controller to build on") {
+		t.Errorf("note %q", tr.note)
+	}
+}
+
+func TestACompressFlagIsChecked(t *testing.T) {
+	if code := runDeploy([]string{"update", "-compress", "foo", "user@box"}); code != 2 {
+		t.Errorf("-compress foo: exit %d, want 2", code)
 	}
 }

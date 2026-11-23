@@ -185,6 +185,12 @@ func runDeploy(args []string) int {
 		}
 		*c.to = n
 	}
+	switch xo.compress {
+	case "", "auto", "gzip", "xz":
+	default:
+		fmt.Fprintf(os.Stderr, "naut deploy: -compress %q: want auto, gzip or xz\n", xo.compress)
+		return 2
+	}
 	if ctl != "" && len(pos) > 1 {
 		fmt.Fprintln(os.Stderr, "naut deploy: -controller and a project directory: give one")
 		return 2
@@ -372,6 +378,8 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string, xo xfe
 	} else if t, err = planTransfer(ctl, sum, tmp, base, haveBase, xo.compress); err != nil {
 		fmt.Fprintln(os.Stderr, "naut deploy:", err)
 		return 1
+	} else if b.helperGzipOnly {
+		helperGzipOnlyNote(t)
 	}
 	fmt.Fprintf(os.Stderr, "naut deploy: %s\n", t.summary(xo.bandwidth, xo.limit))
 	if b.helperGzipOnly {
