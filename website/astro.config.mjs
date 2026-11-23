@@ -159,6 +159,7 @@ export default defineConfig({
             { slug: 'guides/plcnext' },
             { slug: 'guides/groov-epic' },
             { slug: 'guides/verdin' },
+            { slug: 'guides/siemens' },
           ],
         },
         {
