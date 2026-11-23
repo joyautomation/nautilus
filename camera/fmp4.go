@@ -112,7 +112,7 @@ func InitSegment(sps, pps []byte, info SPSInfo) ([]byte, error) {
 		unityMatrix, make([]byte, 24), u32(2))
 	trex := fullbox("trex", 0, 0, u32(1), u32(1), u32(0), u32(0), u32(0x01010000))
 	moov := box("moov", mvhd, trak, box("mvex", trex))
-	ftyp := box("ftyp", []byte("isom"), u32(0x200), []byte("isomiso5iso6avc1mp41"))
+	ftyp := box("ftyp", []byte("iso5"), u32(0x200), []byte("iso5iso6mp41"))
 	return append(ftyp, moov...), nil
 }
 
@@ -150,8 +150,20 @@ func Fragment(seq uint32, baseTime uint64, samples []Sample) []byte {
 	}
 	m := build(0)
 	m = build(uint32(len(m)) + 8)
-	// one allocation for the whole fragment: the samples are copied once, into place
-	out := make([]byte, 0, len(m)+8+dataLen)
+	// a segment as a CMAF producer writes it (ffmpeg's hls muxer, which iPhones play):
+	// styp, a sidx for the one fragment, then moof and mdat. One allocation for the
+	// whole segment: the samples are copied once, into place.
+	var dur uint64
+	for _, s := range samples {
+		dur += uint64(s.Duration)
+	}
+	fragLen := len(m) + 8 + dataLen
+	sidx := fullbox("sidx", 1, 0, u32(1), u32(VideoTimescale), u64(baseTime), u64(0), u16(0), u16(1),
+		u32(uint32(fragLen)&0x7fffffff), u32(uint32(dur)), u32(0x90000000)) // a reference to media; it starts with a stream access point of type 1
+	styp := box("styp", []byte("msdh"), u32(0), []byte("msdhmsix"))
+	out := make([]byte, 0, len(styp)+len(sidx)+fragLen)
+	out = append(out, styp...)
+	out = append(out, sidx...)
 	out = append(out, m...)
 	out = binary.BigEndian.AppendUint32(out, uint32(8+dataLen))
 	out = append(out, "mdat"...)

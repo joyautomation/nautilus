@@ -161,7 +161,12 @@ stream in H.264, and a low-resolution one is the right one for a slow link.
 - **The player** is the kit's own (the asset page's "Watch live"): a browser with
   Media Source Extensions (Chrome, Firefox, Edge, Safari on a Mac) plays it through
   them, and measures the bitrate; one without (an iPhone) is given the playlist and
-  plays it natively, with the bitrate not measured. An RTSP camera with no
+  plays it natively, with the bitrate not measured. The segments are written the way
+  ffmpeg's HLS muxer writes them (a `styp` and a `sidx` in front of each `moof`/`mdat`,
+  an `iso5` `ftyp`, `EXT-X-INDEPENDENT-SEGMENTS`), which iPhones play. Chrome's own
+  native HLS player, which is new, is not relied on: it fails on live playlists,
+  ffmpeg's own included (see the maintainers' notes in the PR), so the kit's player
+  is used wherever Media Source Extensions exist. An RTSP camera with no
   `snapshot-url` has no still to show: the page says so and offers Watch live.
   The latency is a few segments, about 4 to 8 seconds; this is not a control view.
 - **Who may view, the caps and the journal** are the same as for motion-JPEG: a

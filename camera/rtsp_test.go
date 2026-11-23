@@ -67,7 +67,7 @@ func TestACameraBecomesAnHLSStreamOverRTSPInterleavedOnTCP(t *testing.T) {
 	for _, au := range clipAUs(t)[:20] {
 		want = append(want, AVCC(au.NALs)...)
 	}
-	if len(fb) != 2 || !bytes.Equal(fb[1].body, want) {
+	if len(fb) != 4 || !bytes.Equal(fb[3].body, want) {
 		t.Error("the first segment is not the clip's first twenty pictures")
 	}
 	if f.Plays.Load() != 1 {
