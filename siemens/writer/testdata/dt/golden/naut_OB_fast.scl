@@ -1,0 +1,22 @@
+ORGANIZATION_BLOCK "naut_OB_fast"
+TITLE = "Cyclic interrupt, 10ms"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_TEMP 
+      elapsed : LReal;
+   END_VAR
+
+BEGIN
+	// The dt-tag: the seconds since this OB last started. RUNTIME runs every scan so it always has
+	// a start time; on the first scan after RUN (and on a counter wrap) the tag gets the interval.
+	#elapsed := RUNTIME(MEM := "naut_Clock"."fast".mem);
+	IF NOT "naut_Clock"."fast".started OR #elapsed <= 0.0 THEN
+		#elapsed := 0.01;
+		"naut_Clock"."fast".started := TRUE;
+	END_IF;
+	"naut_Tags".FastDt := #elapsed;
+	// The tags this task shares with others, copied in: the program works on the copy.
+	"naut_Scan_fast".tags.FastDt := "naut_Tags".FastDt;
+	"naut_Fast_DB"();
+	// What the scan assigned, back into the tags DB, member by member and bit by bit.
+END_ORGANIZATION_BLOCK

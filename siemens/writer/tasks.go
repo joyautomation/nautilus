@@ -42,7 +42,9 @@ import (
 // and the copy and the commit cannot be split by another task's scan. A
 // faster task can wait behind a slower one, which nautilus's tasks never
 // do: different priorities, with the copy under interrupts held off, are
-// the follow-up.
+// the follow-up. That follow-up must count a task OB's own write of its
+// dt-tag (dt.go) as a use: today a dt-tag no other program names is not
+// shared, and is read straight from the tags DB.
 
 // tagUse is what a program does with one manifest tag.
 type tagUse struct {
@@ -296,13 +298,21 @@ func (w *writer) flagType(typ, path, ind string, u *tagUse) (string, string) {
 // obSource writes a task's OB: it calls the program's FB, and when the
 // task shares tags, copies them in first and lands what the scan
 // assigned after.
-func (w *writer) obSource(ob OB, instDB string, sh *share) ([]byte, string) {
+func (w *writer) obSource(ob OB, instDB string, sh *share, dt *dtOf) ([]byte, string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "ORGANIZATION_BLOCK %s\n", quote(ob.Name))
 	fmt.Fprintf(&b, "TITLE = \"Cyclic interrupt, %s\"\n", ob.Cycle)
 	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\n")
 	b.WriteString("VERSION : 0.1\n")
+	if dt != nil {
+		b.WriteString(dt.temps())
+	}
 	b.WriteString("\nBEGIN\n")
+	if dt != nil {
+		// Before the copy-in: nautilus writes the dt-tag into the store
+		// before the scan takes its copy.
+		b.WriteString(dt.statements(w.tagsDB))
+	}
 	if sh == nil {
 		fmt.Fprintf(&b, "\t%s();\n", quote(instDB))
 		b.WriteString("END_ORGANIZATION_BLOCK\n")
