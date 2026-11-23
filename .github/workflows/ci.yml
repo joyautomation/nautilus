@@ -430,10 +430,22 @@ jobs:
           restore-keys: |
             go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-
             go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-
-      - name: go test -race (every package but opcua, opcua/server, cmd/naut)
+      - name: go test -race (every package but opcua, opcua/server, cmd/naut, quorum/node)
         run: |
-          pkgs=$(go list ./... | grep -vxE 'github.com/joyautomation/nautilus/(opcua|opcua/server|cmd/naut)')
+          pkgs=$(go list ./... | grep -vxE 'github.com/joyautomation/nautilus/(opcua|opcua/server|cmd/naut|quorum/node)')
           go test -race -count=1 $pkgs
+      # quorum/node on its own, after the rest (#1120): its loopback tests
+      # run real elections on 500 ms leases, and beside quorum/sim,
+      # hmibuild and project (minutes of CPU each under -race) the runner
+      # stalled the whole test process for 130-400 ms at a time. Both the
+      # peer and the witness timed out in the same window and a leader lost
+      # its lease: 35 of 57 failed race runs in 36 hours, over about 25
+      # tests. Alone it costs about a minute more and gets the four cores
+      # to itself. It runs even when the step above failed, so one red run
+      # shows both.
+      - name: go test -race quorum/node (alone)
+        if: ${{ !cancelled() }}
+        run: go test -race -count=1 ./quorum/node/
       - name: Save the Go build cache (main, once a day)
         if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: actions/cache/save@v4
