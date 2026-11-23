@@ -6,6 +6,8 @@
 	// it is visible again. A failure shows the controller's own words.
 	import { onMount } from 'svelte';
 	import { playHls } from '../hls.js';
+	import { deniedFor } from '../auth.svelte.js';
+	import PtzPad from './PtzPad.svelte';
 	import { CameraClient, formatBps, LIVE_LIMIT, nextState, watchingText, isLive, INITIAL, LIVE_CAPTION, type Camera, type CameraEvent, type CameraState, NO_VIEW } from '../camera.js';
 
 	let { camera, client }: { camera: Camera; client: CameraClient } = $props();
@@ -19,6 +21,8 @@
 	const src = $derived(live ? client.streamUrl(camera.id) : client.snapshotUrl(camera.id, nonce));
 	const hls = $derived(camera.hls);
 	let video = $state<HTMLVideoElement | null>(null);
+	// the pad: a camera that pans, for a person who may move cameras (a controller without auth: shows it)
+	const mayMove = $derived(camera.ptz && deniedFor('ptz') === '');
 	// HLS: the bitrate the player measured (null: none yet), and whether the browser plays it itself
 	let measured = $state<number | null>(null);
 	let native = $state(false);
@@ -124,6 +128,7 @@
 			<button type="button" class="btn" onclick={() => send({ type: 'watch' })}>Watch live</button>
 		{/if}
 	</div>
+	{#if live && mayMove}<PtzPad id={camera.id} {client} />{/if}
 	{#if live}<p class="caption">{LIVE_CAPTION}</p>{/if}
 	<p class="msg" class:bad={st.message !== ''} role="status" aria-live="polite">
 		{#if st.message}{st.mode === 'busy' ? 'Live video is not available right now: ' : 'Camera: '}{st.message}{/if}

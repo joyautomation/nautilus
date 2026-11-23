@@ -61,6 +61,9 @@ type Camera struct {
 	// Profile names the ONVIF media profile (its token or name) to stream; empty
 	// is the device's smallest H.264 picture.
 	Profile string `yaml:"profile" json:"-"`
+	// PTZ says the camera pans, tilts and zooms and that the controller may move
+	// it for people who hold the ptz permission (onvif only).
+	PTZ bool `yaml:"ptz" json:"ptz"`
 	// MaxViewers is how many people may watch this camera live at once.
 	MaxViewers int `yaml:"max-viewers" json:"maxViewers"`
 	// SnapshotOnAlarm keeps a still when an alarm of the asset's equipment
@@ -213,6 +216,9 @@ func Validate(cams []Camera) []error {
 		}
 		if c.Profile != "" && (c.Kind != KindONVIF || !validToken(c.Profile)) {
 			bad("profile names an ONVIF media profile (letters, digits, - _ . :) and only an onvif camera has one")
+		}
+		if c.PTZ && c.Kind != KindONVIF {
+			bad("ptz: true needs kind onvif (pan and tilt are ONVIF's)")
 		}
 		if c.IntervalSeconds != 0 && (c.IntervalSeconds < MinIntervalSeconds || c.IntervalSeconds > MaxIntervalSeconds) {
 			bad("interval is %d seconds: between %d and %d", c.IntervalSeconds, MinIntervalSeconds, MaxIntervalSeconds)

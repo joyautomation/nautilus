@@ -247,7 +247,8 @@
                     "redundancy",
                     "checkout",
                     "signoff",
-                    "camera"
+                    "camera",
+                    "ptz"
                   ]
                 }
               },
@@ -275,7 +276,8 @@
                     "redundancy",
                     "checkout",
                     "signoff",
-                    "camera"
+                    "camera",
+                    "ptz"
                   ]
                 }
               }
@@ -680,6 +682,10 @@
           "snapshot-url": {
             "type": "string",
             "description": "A JPEG URL the controller fetches for the asset page's picture. An onvif camera finds its own."
+          },
+          "ptz": {
+            "type": "boolean",
+            "description": "An onvif camera that pans, tilts and zooms: people who hold the ptz permission get a pad under its live video."
           },
           "profile": {
             "type": "string",

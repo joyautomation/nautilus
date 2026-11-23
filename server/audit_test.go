@@ -293,6 +293,14 @@ func auditRows() []auditRow {
 		camHdr["Cookie"], camHdr["Origin"] = c.Name+"="+c.Value, "http://localhost"
 		return srv
 	}
+	// the camera pan and tilt rows (#724): akhan, an engineer, holds ptz
+	ptzHdr := map[string]string{}
+	ptzSrv := func(t *testing.T) *Server {
+		srv, _, _ := ptzServer(t)
+		c := signIn(t, srv, "akhan")
+		ptzHdr["Cookie"], ptzHdr["Origin"] = c.Name+"="+c.Value, "http://localhost"
+		return srv
+	}
 	ckRun := func(t *testing.T, s *Server) {
 		if _, err := ckOf(s).Store.Begin(false, ckOf(s).Sheet.Hash(), "T", "akhan", "user:akhan"); err != nil {
 			t.Fatal(err)
@@ -343,6 +351,12 @@ func auditRows() []auditRow {
 	none := plain(Options{})
 	tok := plain(Options{AuthToken: "s3cret"})
 	return []auditRow{
+		{name: "camera ptz stop", pattern: "POST /api/cameras/{id}/ptz", server: ptzSrv, person: true, header: ptzHdr,
+			method: "POST", path: "/api/cameras/dome/ptz", body: `{"action":"stop"}`,
+			action: "camera.ptz", target: "dome", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "camera ptz with no credential", pattern: "POST /api/cameras/{id}/ptz", server: ptzSrv, person: true,
+			method: "POST", path: "/api/cameras/dome/ptz", body: `{"action":"stop"}`,
+			action: "camera.ptz", target: "", user: "anonymous", source: "api", result: "refused"},
 		{name: "camera snapshot purge", pattern: "POST /api/camera-snapshots/purge", server: camSrv, person: true, header: camHdr,
 			method: "POST", path: "/api/camera-snapshots/purge", body: `{"all":true}`,
 			action: "camera.snapshot-purge", target: "camera-snapshots", user: "user:akhan", source: "hmi", result: "ok"},

@@ -406,3 +406,35 @@ claims:
       Run against a fake device only; no real ONVIF camera has been tried yet
       (pending: a bench device, one that asks HTTP basic on its snapshot port,
       a Profile-T device).
+
+  - id: CAM-023
+    claim: >-
+      A camera marked ptz: true is moved by people who hold the ptz permission
+      (whole-controller, elevated, the operator role and up, and only with the
+      camera permission too): a move is bounded to ten seconds and told to the
+      device with the same limit, the controller stops it when the time is up and
+      when it shuts down, a stop is never refused for being quick, moves are one at
+      a time per camera, a preset is gone to only if the device lists it, a
+      refused request never reaches the camera, and every request is journalled
+      as camera.ptz.
+    source: "#pan-tilt-and-zoom"
+    tests:
+      - go ./camera TestAMoveIsBoundedToldToTheDeviceAndStoppedOnRequest
+      - go ./camera TestPresetsAreTheDevicesAndOnlyTheDevicesAreGoneTo
+      - go ./camera TestACameraThatIsNotMarkedPTZOrIsNotONVIFCannotBeMoved
+      - go ./server TestACameraIsMovedBoundedStoppedAndJournalled
+      - go ./server TestPTZRefusesWhatItShouldWithoutAskingTheCamera
+      - go ./server TestMovesCannotBeSentFasterThanOneAtATime
+    note: >-
+      Run against a fake device only; pending: a real pan and tilt camera.
+
+  - id: CAM-024
+    claim: >-
+      One elevation covers a session of moves: a browser sign-in whose password
+      is fresh pans again and again inside auth.elevation without being asked,
+      and is asked (401 with elevate) once it lapses, and nothing reaches the
+      camera then.
+    source: "#pan-tilt-and-zoom"
+    tests:
+      - go ./server TestOneElevationCoversASessionOfMoves
+      - go ./auth TestElevatedPermissions

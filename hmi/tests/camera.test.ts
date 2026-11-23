@@ -2,13 +2,13 @@
 // everything else, no cameras shows nothing and no error, and a failure shows
 // the controller's own words.
 import { describe, it, expect } from './harness.js';
-import { CameraClient, formatBps, camerasFor, watchingText, nextState, INITIAL, isLive, type Camera, type CameraState } from '../src/lib/camera.js';
+import { CameraClient, ptzMove, PTZ_HOLD_MS, formatBps, camerasFor, watchingText, nextState, INITIAL, isLive, type Camera, type CameraState } from '../src/lib/camera.js';
 
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
 function fake(answers: Array<Response | Error>) {
-	const sent: Array<{ url: string; signal?: AbortSignal | null }> = [];
+	const sent: Array<{ url: string; signal?: AbortSignal | null; method?: string; body?: string }> = [];
 	const f = (async (url: string, init?: RequestInit) => {
-		sent.push({ url, signal: init?.signal });
+		sent.push({ url, signal: init?.signal, method: init?.method, body: init?.body as string | undefined });
 		const a = answers.shift();
 		if (!a) throw new Error('no more answers');
 		if (a instanceof Error) throw a;
@@ -16,7 +16,7 @@ function fake(answers: Array<Response | Error>) {
 	}) as unknown as typeof fetch;
 	return { sent, client: new CameraClient({ fetch: f }) };
 }
-const cam = (o: Partial<Camera> = {}): Camera => ({ id: 'c1', label: 'Wet well', asset: 'p1', kind: 'mjpeg', interval: 5, maxViewers: 2, view: true, live: true, hls: false, snapshot: true, watching: 0, bps: 0, ...o });
+const cam = (o: Partial<Camera> = {}): Camera => ({ id: 'c1', label: 'Wet well', asset: 'p1', kind: 'mjpeg', interval: 5, maxViewers: 2, view: true, live: true, hls: false, ptz: false, snapshot: true, watching: 0, bps: 0, ...o });
 
 describe('formatBps', () => {
 	it('names the unit', () => {
@@ -110,5 +110,35 @@ describe('CameraClient', () => {
 		expect((await d.client.describe('/x')).status).toBe(429);
 		expect(await fake([new Response('<h1>oops</h1>', { status: 502 })]).client.explain('/x')).toBe('the camera did not answer (502)');
 		expect(await fake([new Error('down')]).client.explain('/x')).toBe('the camera did not answer');
+	});
+});
+
+describe('pan, tilt and zoom', () => {
+	it('a direction is a bounded velocity, held no longer than the controller allows', () => {
+		expect(ptzMove('left', 400)).toEqual({ action: 'move', x: -0.5, y: 0, zoom: 0, ms: 400 });
+		expect(ptzMove('up', 400)).toEqual({ action: 'move', x: 0, y: 0.5, zoom: 0, ms: 400 });
+		expect(ptzMove('out', 400)).toEqual({ action: 'move', x: 0, y: 0, zoom: -0.5, ms: 400 });
+		expect((ptzMove('right', 1e9) as any).ms).toBe(PTZ_HOLD_MS);
+		expect((ptzMove('right', 1) as any).ms).toBe(100);
+	});
+	it('posts the command, and says the controller\'s words when it refuses', async () => {
+		const a = fake([json({ ok: true }), json({ error: 'too fast: one move at a time' }, 429), json({ error: 'no permission' }, 403), new Error('offline')]);
+		expect(await a.client.ptz('c 1', { action: 'stop' })).toEqual({ ok: true, status: 200, message: '' });
+		expect(a.sent[0].url).toBe('/api/cameras/c%201/ptz');
+		expect(a.sent[0].method).toBe('POST');
+		expect(JSON.parse(a.sent[0].body!)).toEqual({ action: 'stop' });
+		expect(await a.client.ptz('c1', ptzMove('left', 400))).toEqual({ ok: false, status: 429, message: 'too fast: one move at a time' });
+		expect((await a.client.ptz('c1', { action: 'preset', preset: '1' })).message).toBe('no permission');
+		expect(await a.client.ptz('c1', { action: 'stop' })).toEqual({ ok: false, status: 0, message: 'The controller did not answer.' });
+	});
+	it('lists presets, and none on any failure', async () => {
+		const a = fake([json({ presets: [{ token: '1', name: 'Home' }, { token: '2' }, { name: 'no token' }, 5] }), json({}, 404), new Error('x')]);
+		expect(await a.client.ptzPresets('c1')).toEqual([{ token: '1', name: 'Home' }, { token: '2', name: '2' }]);
+		expect(await a.client.ptzPresets('c1')).toEqual([]);
+		expect(await a.client.ptzPresets('c1')).toEqual([]);
+	});
+	it('reads whether a camera pans', async () => {
+		const a = fake([json({ cameras: [{ id: 'a', ptz: true }, { id: 'b' }] })]);
+		expect((await a.client.list()).map((c) => c.ptz)).toEqual([true, false]);
 	});
 });

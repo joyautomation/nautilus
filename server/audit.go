@@ -103,6 +103,7 @@ var actionClass = map[string]string{
 	"camera.snapshot":       operator,
 	"camera.snapshot-view":  operator, // a person looking at a kept picture
 	"camera.snapshot-purge": strict,
+	"camera.ptz":            operator, // a move, a stop, a preset: allowed while the journal is down like a tag write
 	"alarm.ack":             operator,
 	"alarm.shelve":          operator,
 	"alarm.unshelve":        operator,
