@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/joyautomation/nautilus/quorum"
 	"os"
 	"path/filepath"
 	"strings"
@@ -325,7 +326,9 @@ func TestPairFlushOfAMovedTermStillHasAnImage(t *testing.T) {
 	r.inSync(t, stand)
 	s := r.nodes[stand].m.stream
 	first, err := s.takeoverFlush()
-	if err != nil || first == nil || first.Cold != "" {
+	// Flushed out of band, with no lease won: the voters' check (#710
+	// S2c-1) says so, and nothing else may refuse the image.
+	if err != nil || first == nil || first.Term == 0 || (first.Cold != "" && first.Cold != coldWhy(quorum.ColdNotLeading)) {
 		t.Fatalf("first flush: %+v, %v; want the image", first, err)
 	}
 	second, err := s.takeoverFlush()

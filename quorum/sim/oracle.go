@@ -52,6 +52,9 @@ type Record struct {
 	// Writes are what the simulated device received (I2): a controller
 	// writes it on each scan while its gate is open.
 	Writes []DeviceWrite
+	// LeadStarts and Takeovers feed the hot oracle (checkHot).
+	LeadStarts []LeadStart
+	Takeovers  []HotTakeover
 	// Requests are every request a candidate sent: who, when, which term,
 	// and whether it was a renewal.
 	Requests []SentRequest
@@ -176,6 +179,24 @@ type Grant struct {
 }
 
 // DeviceWrite is one write the simulated device received.
+// LeadStart is a controller's gate opening on a new lease, in its epoch.
+type LeadStart struct {
+	At    time.Duration
+	Node  Addr
+	Epoch uint64
+}
+
+// HotTakeover is a lease start by a controller that held an image of its
+// peer's state (#710 S2c-1): the image's epoch, the new epoch, and the
+// hot check's verdict.
+type HotTakeover struct {
+	At           time.Duration
+	Node         Addr
+	Image, Epoch uint64
+	Hot          bool
+	Why          string
+}
+
 type DeviceWrite struct {
 	At   time.Duration
 	From Addr
@@ -584,6 +605,9 @@ func Check(r *Record, c Checks) []Violation {
 	for _, v := range r.checkI4(gates) {
 		add(v)
 	}
+	for _, v := range r.checkHot() {
+		add(v)
+	}
 	if c.HealAt > 0 {
 		for _, v := range checkI6(gates, c.HealAt, c.Bound, r.until) {
 			add(v)
@@ -948,6 +972,24 @@ func checkI7(gates []Interval, maxChanges int, settle time.Duration) []Violation
 	}
 	if n > maxChanges {
 		vs = append(vs, Violation{"I7", 0, fmt.Sprintf("%d takeovers, at most %d expected", n, maxChanges)})
+	}
+	return vs
+}
+
+// checkHot is the hot oracle (#710 S2c-1, naut-lead's ruling B): a
+// takeover the voters let go on hot from an image of epoch e into epoch n
+// never skips a leadership: no controller led in an epoch between them.
+func (r *Record) checkHot() []Violation {
+	var vs []Violation
+	for _, h := range r.Takeovers {
+		if !h.Hot {
+			continue
+		}
+		for _, l := range r.LeadStarts {
+			if l.Epoch > h.Image && l.Epoch < h.Epoch {
+				vs = append(vs, Violation{"hot", h.At, fmt.Sprintf("%v went on hot from an image of epoch %d into %d, over %v's lead in epoch %d at %v", h.Node, h.Image, h.Epoch, l.Node, l.Epoch, l.At)})
+			}
+		}
 	}
 	return vs
 }

@@ -47,7 +47,7 @@ func eventOf(e *Elector, k EventKind) (Event, bool) {
 func TestANewerStateFileIsRefusedAndLeftAlone(t *testing.T) {
 	o := testOptions(t, "a", "b")
 	b, _ := quorum.VoterState{Promised: 4, GrantedTo: "a", Incarnation: 9, Spare: true}.MarshalBinary()
-	b[3] = 9 // magic "nqv", then the version: one above the newest (8)
+	b[3] = 10 // magic "nqv", then the version: one above the newest (9)
 	body := b[:len(b)-4]
 	b = binary.BigEndian.AppendUint32(append([]byte(nil), body...), crc32.Checksum(body, crc32.MakeTable(crc32.Castagnoli)))
 	if err := os.WriteFile(o.StatePath, b, 0o600); err != nil {

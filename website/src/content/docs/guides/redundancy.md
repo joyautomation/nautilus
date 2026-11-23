@@ -419,7 +419,9 @@ field) and neither are outputs (the first scan computes them).
 **Hot or cold.** A takeover is **hot** when the standby holds an image of
 every task and of the tags, of the same nautilus build, running the same
 programs (an online edit included), no older than `hot-max-age` when the
-standby wins the election, and its retain file took that image. The new
+standby wins the election, and its retain file took that image. The
+voters must also vouch for it: no leadership came after the image, and
+the old leader's last word was that this standby was in sync. The new
 leader then goes on from it: timers keep running (the image's age, and
 the wait for live inputs, count as elapsed), counters, SFC steps and
 their step times, every program's variables and the carried tags go on
@@ -442,6 +444,21 @@ redundancy:
   # ...
   hot-max-age: 4s   # default 3 × lease + 2 × the stream's interval; 0 = always cold
 ```
+
+**What the voters vouch for.** Each voter records, in the write it makes
+for every election it grants, the latest leadership it granted each
+controller. The standby acknowledges each image it applies to the
+leader, and the leader's lease renewals tell the voters how far the
+standby is: the last image it acknowledged, and whether it was at most
+one image behind. A standby that wins goes hot only when the voters that
+elected it show no leadership after its image's, and say it was in sync.
+Otherwise the takeover is cold, and the warning names why: a later
+leadership, a voter that lost its state (a rebuilt witness) or runs an
+older release, a standby that was behind, or no word from the old leader
+at all. Both voters that elect the standby must know its position. A
+restarted voter learns it again only once its restart wait is over and
+it grants the leader's next renewal, about a lease and a quarter after
+it starts; a takeover before that goes cold.
 
 hot-max-age is judged on the image; each task's state is at most one of
 its own scan periods older than the image. The journal entry and `GET /api/cluster`
@@ -1381,6 +1398,35 @@ go in this order:
 
 Turning peer TLS on or off on a running pair costs the same stop, in the
 same order.
+
+**Upgrading across a change of the vote protocol stops control once.**
+Two members on releases with different vote protocols can't vote with
+each other, and each says so (`redundancy.version-mismatch`). Upgrade
+in this order:
+
+1. **The standby.** The leader keeps leading on the witness's vote.
+2. **The witness.** The leader loses its majority and stops. The
+   upgraded standby takes over once the witness is back and has waited
+   out its restart lease. Control stops for the witness's start time
+   plus up to about a lease. The takeover is cold.
+3. **The former leader.** It rejoins as the standby, with no stop.
+
+Going back to the earlier release has the same stop, in the same order.
+A member whose voter has granted an election on the new release keeps a
+newer state file, which the earlier release refuses to start over: it
+says so and names the release that wrote it. To go back anyway on a
+controller, move its `quorum.state` aside: it re-adopts from the other
+controller within seconds, as after a lost file. On the witness, rebuild
+it (`naut witness --rebuild`, below) with both controllers up.
+
+Any other order stops control for longer, because it waits for a
+controller to start instead of the witness. Upgrading the leader first
+stops control twice. **Keep the time between the first two steps
+short.** In it, the leader rests on the witness alone: if the leader
+fails, control stops until the witness is upgraded too. A release that
+doesn't change the vote protocol needs no order: upgrade the standby
+and the witness, then the leader, and only the leader's restart costs
+a takeover.
 
 **Rebuilding the witness loses nothing while both controllers are up**:
 `naut witness --rebuild`, or a fresh state directory, is a new

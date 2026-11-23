@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,11 @@ type cluster struct {
 	evBy map[quorum.NodeID][]Event
 	// votes is every vote request sent, as it left (faultRT).
 	votes []sentVote
+	// release is the naut release each node runs, for a rolling upgrade
+	// across a vote protocol version: a vote or adopt frame between two
+	// nodes on different releases is refused as the receiver refuses
+	// another version (409 "version"). Unset: one release for all.
+	release map[quorum.NodeID]int
 }
 
 type sentVote struct {
@@ -426,12 +432,21 @@ func (f *faultRT) roundTrip(r *http.Request, to quorum.NodeID) (*http.Response, 
 	if strings.HasSuffix(r.URL.Path, "/hello") {
 		f.c.hellos[f.from]++
 	}
+	mixed := f.c.release[f.from] != f.c.release[to] &&
+		(strings.HasSuffix(r.URL.Path, "/vote") || strings.HasSuffix(r.URL.Path, "/adopt"))
 	mute := f.c.mute[f.from] && strings.HasSuffix(r.URL.Path, "/vote") ||
 		f.c.noHello[f.from] && strings.HasSuffix(r.URL.Path, "/hello") ||
 		(f.c.noAdopt[f.from] || f.c.noAdopt[to]) && strings.HasSuffix(r.URL.Path, "/adopt")
 	f.c.mu.Unlock()
 	if mute {
 		return nil, errCut
+	}
+	if mixed {
+		// What the receiver's release answers a frame of another version
+		// (serveVote, serveAdopt, the witness's serveVote).
+		rec := httptest.NewRecorder()
+		refuse(rec, "version", fmt.Sprintf("%s speaks another vote protocol version", f.from))
+		return rec.Result(), nil
 	}
 	resp, err := f.base.RoundTrip(r)
 	if err == nil && f.c.isCut(to, f.from) {

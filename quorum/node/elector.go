@@ -449,6 +449,9 @@ type Elector struct {
 	// this controller is silent (#1029 3c-2).
 	spareSeq uint64
 	spare    atomic.Bool
+	// markFn: the standby's in-sync mark, asked at each look
+	// (SetSyncMark).
+	markFn func(epoch uint64) (uint64, bool)
 
 	// The operator-intent log's seams and what they decided (logpref.go).
 	logFn     func() LogState
@@ -887,13 +890,21 @@ func (e *Elector) look() time.Duration {
 		return wait
 	}
 	e.mu.Lock()
-	h := e.health
+	h, mf, epoch := e.health, e.markFn, e.c.Term()
 	e.mu.Unlock()
 	healthy := h == nil || h()
 	ls, hasLog := e.logState() // outside mu: the log calls into the election
+	var markSeq uint64
+	var markCur bool
+	if mf != nil && epoch != 0 {
+		markSeq, markCur = mf(epoch) // outside mu, as the health check
+	}
 
 	e.mu.Lock()
 	now := e.now()
+	if mf != nil && e.c.Term() == epoch && e.c.Leading(now) {
+		e.c.SetMark(markSeq, markCur)
+	}
 	from, until := e.v.LeaderSeen()
 	e.unhealthy = !healthy
 	e.maybeYield(now, ls, hasLog)
@@ -2141,6 +2152,32 @@ func (e *Elector) ImageTermOK(term, ownLed, seen uint64) (bool, string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return quorum.ImageTermOK(e.v, e.now(), e.o.Peer, term, ownLed, seen)
+}
+
+// SetSyncMark sets how this leader learns how far its standby is in sync
+// (#710 S2c-1): f(epoch) is the sequence of the last state image the
+// standby acknowledged in that epoch, and whether that is current. Each
+// look asks it, outside the election's lock (f must not call into the
+// election), and the renewals carry it to the voters
+// (quorum.Candidate.SetMark), which keep it for the next takeover's hot
+// check.
+func (e *Elector) SetSyncMark(f func(epoch uint64) (seq uint64, current bool)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.markFn = f
+}
+
+// HotVerdict is the hot takeover's check against the voters (#710 S2c-1,
+// quorum.HotCheck.Verdict) for an image of the peer at (epoch, seq), on
+// the lease this controller holds now: hot, or the cold reason. Not
+// leading, it is cold.
+func (e *Elector) HotVerdict(epoch, seq uint64) (bool, string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.c.Leading(e.now()) {
+		return false, quorum.ColdNotLeading
+	}
+	return e.c.HotCheck().Verdict(epoch, seq)
 }
 
 // Status returns a snapshot.

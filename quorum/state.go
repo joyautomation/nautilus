@@ -81,21 +81,36 @@ type VoterState struct {
 	// marks, the boots an operator's clear retired, the clear
 	// generations. Only a file with a record is written in format 7.
 	Dups []DupRecord
+	// RecordsFrom and Epochs are the voter's epoch records (#710 S2c): the
+	// highest epoch it granted each name in a campaign, written with the
+	// grant, so a hot takeover can tell no leadership came after its
+	// image. The records cover every grant from RecordsFrom on; 0 is none
+	// kept yet. Only a file with records is written in format 9.
+	RecordsFrom uint64
+	Epochs      []EpochRecord
+}
+
+// EpochRecord is the highest epoch a voter granted one name in a
+// campaign (VoterState.Epochs).
+type EpochRecord struct {
+	Name  NodeID
+	Epoch uint64
 }
 
 const stateMagic = "nqv"
 
 // stateVersion is the state file's format: 2 since VoterState.Lease, 3
 // since Owner and Cluster, 4 since Box, 5 since GrantNonce, 6 since Spare,
-// 7 since Dups, 8 since DupRecord.Fence. Only a file with a fence is
-// written as 8, only one with a duplicate record is written as 7, and
+// 7 since Dups, 8 since DupRecord.Fence, 9 since the epoch records. Only
+// a file with epoch records is written as 9, only one with a fence as 8, only one with a duplicate record is written as 7, and
 // only a spare's without one as 6; every other is still 5, so a member
 // with neither can go back to an earlier release. A version-4
 // file still reads (GrantNonce 0, as before it was kept), so an upgrade
 // keeps the voter's promises; a file of any other version reads as
 // ErrVersion, not as corrupt.
 const (
-	stateVersion      = 8
+	stateVersion      = 9
+	stateVersionFence = 8 // a file with a fence but no epoch records
 	stateVersionDups  = 7 // a file with duplicate records but no fence
 	stateVersionSpare = 6 // a spare's file with no duplicate record
 	stateVersionPlain = 5 // what a file without the spare flag is written as
@@ -126,16 +141,20 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	p = putString(p, s.Box)
 	p = binary.BigEndian.AppendUint64(p, s.GrantNonce)
 	version := byte(stateVersionPlain)
-	if s.Spare || len(s.Dups) > 0 || mut("state_always_v6") {
+	epochs := s.RecordsFrom != 0
+	if s.Spare || len(s.Dups) > 0 || epochs || mut("state_always_v6") {
 		version = stateVersionSpare
 		p = append(p, boolByte(s.Spare))
 	}
-	if len(s.Dups) > 0 {
+	if len(s.Dups) > 0 || epochs {
 		version = stateVersionDups
 		for _, r := range s.Dups {
 			if r.Fence != 0 {
-				version = stateVersion
+				version = stateVersionFence
 			}
+		}
+		if epochs {
+			version = stateVersion
 		}
 		p = append(p, byte(len(s.Dups)))
 		for _, r := range s.Dups {
@@ -144,9 +163,17 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 			p = binary.BigEndian.AppendUint64(p, r.Gen)
 			p = putBoots(p, r.Boots)
 			p = putBoots(p, r.Retired)
-			if version >= 8 {
+			if version >= stateVersionFence {
 				p = binary.BigEndian.AppendUint64(p, r.Fence)
 			}
+		}
+	}
+	if epochs {
+		p = binary.BigEndian.AppendUint64(p, s.RecordsFrom)
+		p = append(p, byte(len(s.Epochs)))
+		for _, r := range s.Epochs {
+			p = putString(p, string(r.Name))
+			p = binary.BigEndian.AppendUint64(p, r.Epoch)
 		}
 	}
 	b := append([]byte(stateMagic), version)
@@ -190,16 +217,30 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	}
 	if version >= 7 {
 		k := int(rd.byte1())
-		if k == 0 || k > maxDupRecords {
+		if (k == 0 && version < stateVersion) || k > maxDupRecords {
 			rd.bad = true
 		}
 		for i := 0; i < k && !rd.bad; i++ {
 			r := DupRecord{Name: NodeID(rd.str()), Marked: rd.boolean(), Gen: rd.u64()}
 			r.Boots, r.Retired = rd.boots(), rd.boots()
-			if version >= 8 {
+			if version >= stateVersionFence {
 				r.Fence = rd.u64()
 			}
 			v.Dups = append(v.Dups, r)
+		}
+	}
+	if version >= stateVersion {
+		v.RecordsFrom = rd.u64()
+		k := int(rd.byte1())
+		if v.RecordsFrom == 0 || k > maxEpochRecords {
+			rd.bad = true
+		}
+		for i := 0; i < k && !rd.bad; i++ {
+			r := EpochRecord{Name: NodeID(rd.str()), Epoch: rd.u64()}
+			if r.Name == "" || r.Epoch == 0 {
+				rd.bad = true
+			}
+			v.Epochs = append(v.Epochs, r)
 		}
 	}
 	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 || v.Lease < 0 {

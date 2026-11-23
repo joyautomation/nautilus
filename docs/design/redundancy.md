@@ -389,11 +389,17 @@ redundancy:
       probe at once (`Voter.RelayChanged`), so the witness hears a new promise within a one-way
       delay rather than a look.
     - **Wire:** vote protocol version 2 (`quorum.WireVersion`; 3 since step 1, 4 since 3c-1, 5
-      since 3c-2, below). A frame of another version
+      since 3c-2, 6 since 3c-3b, 7 since 3c-3c-1b, 8 since #710 S2c-1, §4.2). A frame of another version
       is refused whole. A pair or witness that mixes releases across it can't vote, and says
       so (`redundancy.version-mismatch`, either side, and on the witness's log) rather than
       failing to elect in silence. A release before version 2 answers a new frame with 400
-      "bad frame", which the sender reports the same way.
+      "bad frame", which the sender reports the same way. A rolling upgrade across a version
+      stops control once whatever the order: the old leader's majority and the new one share a
+      member, which must restart. The guide's order (the standby, the witness, the former
+      leader) makes it the witness, the quickest to start (`TestRollingUpgradeAcrossAWireVersion`;
+      every order measured by `TestMeasureRollingUpgrade`). No release has shipped the vote
+      protocol yet; from the first that does, a version change must also read the previous
+      version's frames, so a rolling upgrade keeps a leader (naut-lead's release rule).
     - **What it costs:** only refusals. A promise to another node never ends early, and the
       restart wait covers a voter that forgot what it heard. A takeover can lose one refused
       campaign at the witness (§4.5, `R`).
@@ -1580,6 +1586,53 @@ hash matches.
 - **Setting it lower.** A project that would rather restart than re-run up to that much logic
   sets `hot-max-age` lower. The isolation case then becomes cold.
 
+**The voters' word (S2c-1, #710).** The image's own checks can't see a leadership the standby
+never heard of: A leads, its stream to B stops, A's lease lapses and A leads again in a later
+epoch, then dies, and B's image is of the first epoch (naut-lead's ruling B on S2b). So the
+voters vouch too:
+
+- **Epoch records.** Each voter records, per name, the highest epoch it granted in a campaign
+  (never a renewal, a re-term included), in the write the grant already makes, so it costs no
+  extra fsync and the grant leaves only once it is durable. `RecordsFrom` says from which term
+  the records cover every grant: a fresh or rebuilt state covers nothing until its first
+  campaign grant; a file with grants but no records covers what came after its `Promised`; a
+  commissioned controller's voter covers what came after its adoption floor (an earlier life's
+  leaderships are at or below it). A voter covers an image's epoch `e` when `RecordsFrom ≤ e+1`.
+  The state file is format 9 only once records are written.
+- **The in-sync mark.** The standby POSTs `(epoch, seq)` for each image it applied whole. The
+  leader keeps the highest of its own epoch, never above the last image it sent, and resets at
+  every takeover. Current is seq-based: at most one image behind the last sent, the oldest
+  unacknowledged one out no longer than 3 measured send-to-send times. A time-only rule went
+  out of sync whenever a slow task stretched the capture. Every renewal carries the leader's
+  epoch and the mark (wire version 8); a voter keeps the mark of a renewal it granted, once
+  the grant is durable, in memory only (unknown after a restart until the next granted renewal).
+- **The rule** (`quorum.HotCheck.Verdict`), on the replies of the round that won, never an
+  earlier round's: the replies that cover the image's epoch must be a majority, and at least
+  two of them must hold a mark of the old leader (a restarted voter has none, and one voter's
+  word may be stale: the old leader's last lease rested on a renewal a majority granted, so two
+  always include one that heard it); this controller led in no epoch after the image's but the
+  current one (`LedBefore`; a granting voter's record for this controller is always the winning
+  term, so the per-reply own-record check only fires from a refusing voter); then, from every
+  winning reply, covering or not: the highest epoch granted the old leader must be the image's,
+  and the newest mark (by epoch, then seq; of two at one position, the one not current) must be
+  of the image's epoch, current, and not ahead of the image. Each failure is a named cold
+  reason. The leader judges Current on its own sends: in step with the last image only while
+  that went out within 3 send-to-send times (a stream that stopped is not current), and the
+  send-to-send time is never measured across a reconnect. A delayed older renewal never
+  replaces a newer mark from the same boot.
+- **Checked by** a simulator oracle (a hot verdict never skips an epoch someone led in between)
+  and the pair test of the ruling-B sequence.
+- **Cold cases left:** a takeover within about `lease/4` of a takeover, or within about a lease
+  and a quarter of a voter's restart (no mark yet), a voter on an older release, a rebuilt
+  witness until it grants a campaign.
+- **Residuals (Fable, #1345).** The floor-derived `RecordsFrom` inherits the adoption's own
+  residuals: an operator's `Recommission` with a floor set too low, and
+  `EventReadoptOverSwitch`. A rebuilt witness's first campaign grant may reach it before the
+  adoption that raises the controllers' floors, setting its `RecordsFrom` at or below a
+  leadership its old incarnation granted; a wrong hot from it needs that compound history and
+  stays within `hot-max-age`. The simulator's oracle checks epochs only: it sets every mark
+  current.
+
 **The new leader, in order:**
 
 1. keeps the image's frames instead of calling `ResetFrame`;
@@ -1944,6 +1997,11 @@ its own: its last-seen term + 1, marked as an override term in the journal (belo
 frames and on proxied calls. When the override ends, the controller reports that term to the
 voters before it campaigns, so they promise only higher terms, and the next election lands above
 it.
+
+**The override and a hot takeover (S2c-1).** An override takes a term no voter granted, so
+no voter's records can vouch for it: it always takes over cold. When it ends, its report to
+the voters sets their epoch record for its name to the override's term, so a later takeover
+from an image of before it goes cold too. (Not built yet: this is the rule it must follow.)
 
 **The override is the only path to two writers.** It is taken when an engineer asserts
 something that is not true. The record exists for that case. If the other side was in fact

@@ -9,13 +9,14 @@ import (
 )
 
 func TestMessageRoundTrip(t *testing.T) {
-	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond, Dup: "A", DupLeft: 900 * time.Millisecond}, Seq: 1 << 40, Gen: 1<<33 + 5, Fences: Fences{{Name: "B", Fence: 9}}, Uncommissioned: true}
+	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond, Dup: "A", DupLeft: 900 * time.Millisecond}, Seq: 1 << 40, Gen: 1<<33 + 5, Fences: Fences{{Name: "B", Fence: 9}}, Uncommissioned: true, Epoch: 5, MarkSeq: 1<<41 + 3, MarkCurrent: true}
 	b, _ := rq.MarshalBinary()
 	var got Request
 	if err := got.UnmarshalBinary(b); err != nil || got != rq {
 		t.Fatalf("request: %+v %v", got, err)
 	}
-	rp := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "A", Nonce: 0xA0, Left: time.Second}, Marked: true, VoterBoot: 0xB007, HeldBy: 0xA0A0, ClearGen: 3, Gen: 1<<34 + 9, Fence: 1<<35 + 2, Fences: Fences{{Name: "A", Fence: 3}, {Name: "B", Fence: 4}}}
+	rp := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "A", Nonce: 0xA0, Left: time.Second}, Marked: true, VoterBoot: 0xB007, HeldBy: 0xA0A0, ClearGen: 3, Gen: 1<<34 + 9, Fence: 1<<35 + 2, Fences: Fences{{Name: "A", Fence: 3}, {Name: "B", Fence: 4}},
+		RecordsFrom: 1001, Recs: Recs{{Name: "A", Epoch: 1007}, {Name: "B", Epoch: 1005, Mark: Mark{Known: true, Current: true, Term: 1005, Scan: 1 << 42}}}}
 	b, _ = rp.MarshalBinary()
 	var gr Reply
 	if err := gr.UnmarshalBinary(b); err != nil || gr != rp {
@@ -30,7 +31,8 @@ func TestMessageRoundTrip(t *testing.T) {
 // Every truncation and every single-bit flip of a frame is refused whole
 // (F31, the vote half).
 func TestMessageCorruptionRefused(t *testing.T) {
-	b, _ := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "B", Nonce: 3, Left: 9}}.MarshalBinary()
+	b, _ := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "B", Nonce: 3, Left: 9},
+		RecordsFrom: 3, Recs: Recs{{Name: "B", Epoch: 6, Mark: Mark{Known: true, Term: 6, Scan: 2}}}}.MarshalBinary()
 	for n := 0; n < len(b); n++ {
 		var r Reply
 		if err := r.UnmarshalBinary(b[:n]); err == nil {
@@ -65,7 +67,8 @@ func TestMessageCorruptionRefused(t *testing.T) {
 // target untouched (F26, the T1 half).
 func TestStateFileTornAtEveryOffset(t *testing.T) {
 	s := VoterState{Promised: 12, GrantedTo: "B", Incarnation: 42,
-		InSync: Mark{Known: true, Current: true, Term: 12, Scan: 3400}, Owner: "a", Cluster: "0123456789abcdef0123456789abcdef", Box: "m=1 n=2"}
+		InSync: Mark{Known: true, Current: true, Term: 12, Scan: 3400}, Owner: "a", Cluster: "0123456789abcdef0123456789abcdef", Box: "m=1 n=2",
+		RecordsFrom: 9, Epochs: []EpochRecord{{Name: "A", Epoch: 10}, {Name: "B", Epoch: 12}}}
 	b, _ := s.MarshalBinary()
 	var got VoterState
 	if err := got.UnmarshalBinary(b); err != nil || !reflect.DeepEqual(got, s) {

@@ -46,6 +46,15 @@ type Request struct {
 	// handle, #1164 re-check): it may be a wiped old box, a lookalike of
 	// the replacement.
 	Uncommissioned bool
+	// Epoch is the leader's epoch (Candidate.Term, the term it won
+	// leadership in) on a renewal, 0 on a campaign or a probe (#710 S2c).
+	// MarkSeq and MarkCurrent are, on a renewal, how far the leader's
+	// standby is in sync: the last state image it acknowledged, and
+	// whether that was current (Candidate.SetMark). A voter that grants
+	// the renewal keeps them in memory as the leader's mark (Voter.Marks).
+	Epoch       uint64
+	MarkSeq     uint64
+	MarkCurrent bool
 }
 
 // Fences are a voter's fences on the pair's names (Voter.Fence), as its
@@ -155,6 +164,87 @@ type Reply struct {
 	Fence uint64
 	// Fences are the voter's fences (Request.Fences).
 	Fences Fences
+	// RecordsFrom and Recs say which leaderships this voter knows of
+	// (#710 S2c): the highest epoch it granted each name in a campaign,
+	// and the mark of each name's last renewal it granted. A voter knows
+	// of every epoch it granted from RecordsFrom on (0: none yet, a fresh
+	// or rebuilt state). A hot takeover reads them from its winning
+	// round's replies (HotVerdict).
+	RecordsFrom uint64
+	Recs        Recs
+}
+
+// Rec is what a voter knows of one name (Reply.Recs): the highest epoch
+// it granted the name in a campaign, and the mark of the name's last
+// renewal it granted (Mark.Term is that renewal's epoch, Mark.Scan its
+// image sequence; unknown after the voter restarts).
+type Rec struct {
+	Name  NodeID
+	Epoch uint64
+	Mark  Mark
+}
+
+// Recs are a voter's records of a pair's two names. A zero entry is none.
+type Recs [2]Rec
+
+// Of returns name's record, and whether there is one.
+func (rs Recs) Of(name NodeID) (Rec, bool) {
+	for _, r := range rs {
+		if r.Name == name && name != "" {
+			return r, true
+		}
+	}
+	return Rec{}, false
+}
+
+func (rs Recs) put(b []byte) []byte {
+	n := 0
+	for _, r := range rs {
+		if r.Name != "" {
+			n++
+		}
+	}
+	b = append(b, byte(n))
+	for _, r := range rs {
+		if r.Name == "" {
+			continue
+		}
+		b = putString(b, string(r.Name))
+		b = binary.BigEndian.AppendUint64(b, r.Epoch)
+		b = append(b, markFlags(r.Mark))
+		b = binary.BigEndian.AppendUint64(b, r.Mark.Term)
+		b = binary.BigEndian.AppendUint64(b, r.Mark.Scan)
+	}
+	return b
+}
+
+func (r *reader) recs() Recs {
+	var rs Recs
+	n := int(r.byte1())
+	if n > len(rs) {
+		r.bad = true
+		return rs
+	}
+	for i := 0; i < n && !r.bad; i++ {
+		rs[i] = Rec{Name: NodeID(r.str()), Epoch: r.u64()}
+		f := r.byte1()
+		rs[i].Mark = Mark{Known: f&1 != 0, Current: f&2 != 0, Term: r.u64(), Scan: r.u64()}
+		if rs[i].Name == "" || f&^3 != 0 || (!rs[i].Mark.Known && f != 0) {
+			r.bad = true
+		}
+	}
+	return rs
+}
+
+func markFlags(m Mark) byte {
+	f := byte(0)
+	if m.Known {
+		f |= 1
+	}
+	if m.Current {
+		f |= 2
+	}
+	return f
 }
 
 // AdoptKind is what an Adopt message says.
@@ -225,10 +315,11 @@ type Adopt struct {
 // (#1029 step 1), version 4 a request's Seq and a reply's Marked and
 // VoterBoot (#1029 3c), version 5 a reply's HeldBy (#1029 3c-2), version 6
 // a reply's ClearGen (#1029 3c-3b), version 7 a request's and a reply's
-// Gen and a reply's Fence (#1029 3c-3c-1b): a pair
+// Gen and a reply's Fence (#1029 3c-3c-1b), version 8 a request's Epoch
+// and mark and a reply's RecordsFrom and Recs (#710 S2c): a pair
 // that mixes releases across one can't vote, and says so
 // (redundancy.version-mismatch) rather than failing in silence.
-const WireVersion = 7
+const WireVersion = 8
 
 // FrameVersion returns the version byte a frame carries (0 when empty).
 func FrameVersion(b []byte) byte {
@@ -280,6 +371,9 @@ func (r Request) MarshalBinary() ([]byte, error) {
 	b = binary.BigEndian.AppendUint64(b, r.Gen)
 	b = r.Fences.put(b)
 	b = append(b, boolByte(r.Uncommissioned))
+	b = binary.BigEndian.AppendUint64(b, r.Epoch)
+	b = binary.BigEndian.AppendUint64(b, r.MarkSeq)
+	b = append(b, boolByte(r.MarkCurrent))
 	return sealCRC(b), nil
 }
 
@@ -334,6 +428,8 @@ func (r Reply) MarshalBinary() ([]byte, error) {
 	b = binary.BigEndian.AppendUint64(b, r.Gen)
 	b = binary.BigEndian.AppendUint64(b, r.Fence)
 	b = r.Fences.put(b)
+	b = binary.BigEndian.AppendUint64(b, r.RecordsFrom)
+	b = r.Recs.put(b)
 	return sealCRC(b), nil
 }
 
@@ -431,6 +527,7 @@ func (r *Request) UnmarshalBinary(b []byte) error {
 	v.Gen = rd.u64()
 	v.Fences = rd.fences()
 	v.Uncommissioned = rd.boolean()
+	v.Epoch, v.MarkSeq, v.MarkCurrent = rd.u64(), rd.u64(), rd.boolean()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}
@@ -458,6 +555,8 @@ func (r *Reply) UnmarshalBinary(b []byte) error {
 	v.Gen = rd.u64()
 	v.Fence = rd.u64()
 	v.Fences = rd.fences()
+	v.RecordsFrom = rd.u64()
+	v.Recs = rd.recs()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}

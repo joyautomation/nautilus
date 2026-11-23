@@ -129,6 +129,12 @@ type Voter struct {
 	// later count in the same Handle can overwrite.
 	marks      uint64
 	lastMarked NodeID
+	// syncMarks: per name, the in-sync mark of its last granted renewal,
+	// in memory only (epochs.go); syncMarkFrom: the boot nonce and Seq of
+	// the renewal each came from (setMark).
+	syncMarks    map[NodeID]Mark
+	syncMarkFrom map[NodeID][2]uint64
+
 	// pushedTo, pushedNonce: the promise RelayChanged last reported.
 	pushedTo    NodeID
 	pushedNonce uint64
@@ -670,6 +676,7 @@ const (
 type heldGrant struct {
 	need  uint64
 	reply Reply
+	req   Request // the request granted: a renewal's mark is kept once the grant leaves
 }
 
 // NewVoter starts a voter at now from the state its file held: st is the
@@ -1029,6 +1036,9 @@ func YieldTo(now Instant, v *Voter, c *Candidate, r Request) bool {
 // answered at once, unless an earlier change is still unconfirmed.
 func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	p, rs := v.handle(now, r)
+	if mut("mark_from_refused_renewal") {
+		v.setMark(r) // a refused renewal's too
+	}
 	if p == nil {
 		// No write of its own: the one the duplicate records are owed, if
 		// any (a mark this very frame made). Its replies don't wait on it.
@@ -1118,6 +1128,12 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 	// Grant. The promise runs from when the request was RECEIVED.
 	v.promiseUntil = now.Add(v.lease)
 	v.grantNonce = r.Nonce
+	// A campaign's grant records its epoch, in the grant's own write and
+	// before the state takes its term (recordsFrom reads the old one).
+	if !r.Renewal && v.recordGrant(r.From, r.Term) {
+		v.dirty++
+		v.need = v.dirty
+	}
 	if r.Term != v.st.Promised || r.From != v.st.GrantedTo || v.st.Lease != v.lease || (r.Nonce != v.st.GrantNonce && !mut("grant_nonce_unwritten")) {
 		// Past the restart wait every promise made under a longer lease
 		// has run out, so the state now records this voter's own. The
@@ -1132,12 +1148,17 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 		need = v.dirty
 	}
 	if v.durable >= need {
+		v.setMark(r)
 		return nil, []Reply{g}
 	}
 	if mut("answer_before_fsync") {
+		v.setMark(r)
 		return &Persist{Seq: v.dirty, State: v.st}, []Reply{g}
 	}
-	v.held = append(v.held, heldGrant{need: need, reply: g})
+	if mut("reply_mark_after_grant") {
+		v.setMark(r) // before the grant is durable: a failed write leaves it
+	}
+	v.held = append(v.held, heldGrant{need: need, reply: g, req: r})
 	return &Persist{Seq: v.dirty, State: v.st}, nil
 }
 
@@ -1152,6 +1173,10 @@ func (v *Voter) Persisted(seq uint64, ok bool) []Reply {
 		switch {
 		case ok && h.need <= seq:
 			out = append(out, h.reply)
+			// The grant exists now: the renewal's mark with it.
+			if !mut("reply_mark_after_grant") {
+				v.setMark(h.req)
+			}
 		case !ok && h.need <= seq:
 			// dropped
 		default:
@@ -1197,7 +1222,7 @@ func (v *Voter) reply(now Instant, r Request, granted bool) Reply {
 	return Reply{From: v.self, To: r.From, Term: r.Term, Nonce: r.Nonce, ID: r.ID, Granted: granted,
 		Promised: max(v.st.Promised, v.st.Floor), Incarnation: v.witnessIncarnation(),
 		Marked: v.marked[r.From] && !mut("marked_not_told"), ClearGen: v.gens[r.From], VoterBoot: v.boot, HeldBy: v.HeldBy(now, r.From, r.Nonce),
-		Gen: v.st.Gen, Fences: v.Fences()}
+		Gen: v.st.Gen, Fences: v.Fences(), RecordsFrom: v.recordsFrom(), Recs: v.recs(r.From)}
 }
 
 // Spare reports whether this voter's state says its controller demoted

@@ -3,6 +3,7 @@ package quorum
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -72,6 +73,9 @@ type round struct {
 	replies map[NodeID]bool
 	// campaign: a request for a new term, not a renewal.
 	campaign bool
+	// recs: each reply's records, by voter (#710 S2c): a campaign that
+	// wins hands its own round's to the takeover (HotCheck).
+	recs map[NodeID]WonReply
 }
 
 // Candidate is a controller's campaign and lease state machine (design
@@ -86,6 +90,19 @@ type Candidate struct {
 	// it alone, so writes posted under it stay valid across one lease.
 	epoch     uint64
 	renewTerm uint64 // the term renewals go out at while leading
+	// markSeq, markCurrent: the standby's in-sync mark, as the driver last
+	// set it (SetMark); every renewal carries it (#710 S2c).
+	markSeq     uint64
+	markCurrent bool
+	// won: the records the replies of the round that won the current
+	// lease carried, and this boot's campaigns, the ones it led in and the
+	// rest (HotCheck, #710 S2c).
+	// ledBefore is the highest epoch this boot led in before the current
+	// one; campaigns its last maxCampaigns campaign terms (an older one a
+	// reply records goes cold: unknown).
+	won       []WonReply
+	campaigns []uint64
+	ledBefore uint64
 	// reterm: a voter refused a renewal at a term it had promised to
 	// another (a standby's lost campaign); the next renewal asks for a
 	// higher term, which that voter can grant once its promise runs out.
@@ -615,11 +632,27 @@ func (c *Candidate) send(now Instant, term uint64) *Request {
 	if rd.campaign {
 		c.term = term
 		c.pending = rd
+		c.campaigns = append(c.campaigns, term)
+		if len(c.campaigns) > maxCampaigns {
+			c.campaigns = slices.Delete(c.campaigns, 0, len(c.campaigns)-maxCampaigns)
+		}
 	}
 	c.rounds = append(c.rounds, rd)
 	c.seq++
-	return &Request{From: c.cfg.Self, Term: term, Nonce: c.cfg.Nonce, ID: c.nextID, Renewal: !rd.campaign, Seq: c.seq, Gen: c.gen(), Fences: c.fences(), Uncommissioned: c.commissioned != nil && !c.commissioned()}
+	q := &Request{From: c.cfg.Self, Term: term, Nonce: c.cfg.Nonce, ID: c.nextID, Renewal: !rd.campaign, Seq: c.seq, Gen: c.gen(), Fences: c.fences(), Uncommissioned: c.commissioned != nil && !c.commissioned()}
+	if q.Renewal {
+		q.Epoch, q.MarkSeq, q.MarkCurrent = c.epoch, c.markSeq, c.markCurrent
+	}
+	return q
 }
+
+// SetMark is how far this leader's standby is in sync (#710 S2c): the
+// sequence of the last state image it acknowledged in this epoch, and
+// whether that was current. Every renewal from then on carries it, and a
+// voter that grants one keeps it as this leader's mark. The driver sets
+// it; a new lease starts from none (a leader's standby has acknowledged
+// nothing of its new epoch yet).
+func (c *Candidate) SetMark(seq uint64, current bool) { c.markSeq, c.markCurrent = seq, current }
 
 // OnReply takes a voter's reply, received at now. Only the three voters
 // count: this controller, its peer, and the witness at the accepted
@@ -681,6 +714,14 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		discounted = true
 	}
 	rd.replies[r.From] = true
+	if rd.campaign && !discounted {
+		// A discounted voter's word (two processes cast it) never vouches
+		// for a hot takeover either.
+		if rd.recs == nil {
+			rd.recs = map[NodeID]WonReply{}
+		}
+		rd.recs[r.From] = WonReply{From: r.From, RecordsFrom: r.RecordsFrom, Recs: r.Recs}
+	}
 	if r.Granted {
 		if !quiet {
 			rd.grants[r.From] = true
@@ -738,7 +779,12 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		}
 		c.leading = true
 		c.leaseEnd = end
+		if c.epoch != 0 {
+			c.ledBefore = max(c.ledBefore, c.epoch)
+		}
 		c.epoch, c.renewTerm = rd.term, rd.term
+		c.markSeq, c.markCurrent = 0, false
+		c.won = c.wonFrom(rd)
 		c.reterm = false // a refusal from before this lease means nothing to it
 		// Renew at once, not at the next look: a slow vote (a voter's
 		// fsync, a long link) may have left less of this lease than a look.
