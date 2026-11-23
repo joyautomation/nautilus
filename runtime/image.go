@@ -244,7 +244,7 @@ func (r *Runtime) takeTags(img *Image, progs []namedProgram) {
 	if r.carried == nil {
 		return
 	}
-	img.TagsLayout, img.TagsNowMs = r.carried.layout, r.tags.NowMs()
+	img.TagsLayout, img.TagsNowMs = r.carried.layout(), r.tags.NowMs()
 	rest := r.restIdx()
 	var idxs [][]int // read before the store's lock: a scan takes p.mu, then it
 	if mutRuntime("image_tags_at_take") {

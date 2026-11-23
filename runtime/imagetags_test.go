@@ -1,3 +1,5 @@
+//go:build !js
+
 package runtime
 
 import (
@@ -253,7 +255,7 @@ func TestShadowTagWrittenByTwoTasksTakesTheLaterCopy(t *testing.T) {
 	one := func(v int64) TagValues {
 		return TagValues{Idx: []int{c}, Ends: []int{1}, Leaves: leavesOf(ir.IntVal(v))}
 	}
-	img := &Image{Format: imageFormat, TagsLayout: cs.layout, Tasks: []TaskImage{
+	img := &Image{Format: imageFormat, TagsLayout: cs.layout(), Tasks: []TaskImage{
 		{Task: "main", NowMs: 200, Tags: one(2)},
 		{Task: "aux", NowMs: 100, Tags: one(1)},
 	}}

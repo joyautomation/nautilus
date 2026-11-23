@@ -158,7 +158,7 @@ func (s *Shadow) applyTagsLocked(img *Image, rep *ShadowReport, firstErr *error)
 	case img.Format < 2:
 		rep.TagsMissing = true
 		return
-	case img.TagsLayout != cs.layout && !mutRuntime("shadow_tags_layout_unchecked"):
+	case img.TagsLayout != cs.layout() && !mutRuntime("shadow_tags_layout_unchecked"):
 		rep.TagsDiffer = true
 		return
 	}
