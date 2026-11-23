@@ -97,6 +97,30 @@ func (s *session) projectBlocks() []projectBlock {
 	return l
 }
 
+// foreignBlocks is Ownership.Foreign: every program block outside group,
+// the project's and other's, by group path ("" the root first) and then
+// name. Never nil.
+func foreignBlocks(blocks []projectBlock, other []tiad.ForeignBlock, group string) []tiad.ForeignBlock {
+	out := []tiad.ForeignBlock{}
+	for _, b := range blocks {
+		if !owned(b.group, group) {
+			out = append(out, tiad.ForeignBlock{Name: b.name, Kind: b.kind, Number: b.number, Group: b.group})
+		}
+	}
+	for _, b := range other {
+		if !owned(b.Group, group) {
+			out = append(out, b)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Group != out[j].Group {
+			return out[i].Group < out[j].Group
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
 func (b projectBlock) label() string {
 	return fmt.Sprintf("%q [%s%d]", b.name, b.kind, b.number)
 }

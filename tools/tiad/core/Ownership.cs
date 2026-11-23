@@ -238,6 +238,33 @@ namespace Tiad
                 string.Compare(blockGroup, 0, group, 0, group.Length, StringComparison.OrdinalIgnoreCase) == 0;
         }
 
+        // Foreign is every program block outside group, by group path
+        // ("" the root first) and then name: what a download loads besides
+        // the group's own blocks (#1326).
+        public static List<ProjectBlock> Foreign(List<ProjectBlock> blocks, string group)
+        {
+            var l = new List<ProjectBlock>();
+            foreach (var b in blocks)
+            {
+                if (!Owned(b.Group, group)) l.Add(b);
+            }
+            l.Sort(delegate(ProjectBlock a, ProjectBlock b)
+            {
+                int c = string.CompareOrdinal(a.Group ?? "", b.Group ?? "");
+                return c != 0 ? c : string.CompareOrdinal(a.Name, b.Name);
+            });
+            return l;
+        }
+
+        // KindOf is a project block's kind as the agent reports blocks
+        // (OB, FB, FC, DB, UDT), or its Openness type name for one tiad has
+        // no kind for: never left out.
+        public static string KindOf(ProjectBlock b)
+        {
+            string k = TiaNames.BlockKind(b.Type);
+            return k != "" ? k : b.Type;
+        }
+
         // Conflicts is every program block outside group that a declared
         // block (not a data type) names, in TIA's case-insensitive block
         // names (OrdinalIgnoreCase: assumed to be TIA's rule, not proven),

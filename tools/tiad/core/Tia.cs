@@ -93,6 +93,10 @@ namespace Tiad
         // Obs is what the import did for each cyclic interrupt OB the
         // request asked for (CyclicObs.Plan), the agent's own.
         public List<OBStep> Obs = new List<OBStep>();
+        // Foreign is every program block outside the group after the
+        // import (Ownership.Foreign): what a download loads besides
+        // nautilus's own (#1326). The agent sets it, never TIA's side.
+        public List<ProjectBlock> Foreign = new List<ProjectBlock>();
 
         public Obj ToJson()
         {
@@ -100,9 +104,20 @@ namespace Tiad
             foreach (var r in Results) rs.Add(r.ToJson());
             var bs = new List<object>();
             foreach (var b in Blocks) bs.Add(b.ToJson());
+            var fs = new List<object>();
+            foreach (var b in Foreign)
+            {
+                var f = new Obj();
+                f["name"] = b.Name;
+                f["kind"] = Ownership.KindOf(b);
+                f["number"] = b.Number;
+                f["group"] = b.Group ?? "";
+                fs.Add(f);
+            }
             var o = new Obj();
             o["results"] = rs;
             o["blocks"] = bs;
+            o["foreign"] = fs;
             if (Obs.Count > 0)
             {
                 var os = new List<object>();

@@ -59,9 +59,9 @@ type siemensShowOptions struct {
 	dir, block, agentFlag string
 	close, online         bool
 	// attest is the operator's device attestation (#1325), nil without.
-	attest *tiad.DeviceAttestation
-	getenv                func(string) string
-	stdout, stderr        io.Writer
+	attest         *tiad.DeviceAttestation
+	getenv         func(string) string
+	stdout, stderr io.Writer
 }
 
 func runSiemensShow(args []string) int {

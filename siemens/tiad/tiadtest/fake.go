@@ -87,6 +87,13 @@ type Fake struct {
 	// identity online, as tiad.Openness cannot yet: online calls to a
 	// pinned CPU then fail with device_unverified.
 	NoIdentify bool
+	// OtherBlocks are program blocks every project holds outside any
+	// group nautilus imports into, besides Main at the root (a
+	// customer's group, a probe): a software import reports them with
+	// Main in its foreign list (#1326). OmitForeign makes the import
+	// report no foreign list at all, as an agent older than #1326.
+	OtherBlocks []tiad.ForeignBlock
+	OmitForeign bool
 
 	// policy is the projects' password policy for local users (nil:
 	// TIA's default), uploadAccess the access control an upload brings
@@ -1478,6 +1485,9 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 		if owned(s.groups[strings.ToLower(b.Name)], req.Group) {
 			res.Blocks = append(res.Blocks, b)
 		}
+	}
+	if !f.OmitForeign {
+		res.Foreign = foreignBlocks(s.projectBlocks(), f.OtherBlocks, req.Group)
 	}
 	return res, nil
 }

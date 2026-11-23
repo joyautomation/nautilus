@@ -802,6 +802,11 @@ func contractSoftwareCyclicOBs(t *testing.T, start Starter) {
 	if got := blockNames(r.Blocks); got != "FB:naut_Main,DB:naut_Main_DB,OB:naut_OB_main" {
 		t.Fatalf("blocks = %s", got)
 	}
+	// Every program block outside the group, which a download loads too
+	// (#1326): here the project's own Main at the root, never the group's.
+	if want := []tiad.ForeignBlock{{Name: "Main", Kind: "OB", Number: 1, Group: ""}}; !reflect.DeepEqual(r.Foreign, want) {
+		t.Fatalf("foreign = %+v, want %+v", r.Foreign, want)
+	}
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}

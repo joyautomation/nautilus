@@ -340,6 +340,64 @@ func TestSiemensDeployAsksBeforeItLoads(t *testing.T) {
 	}
 }
 
+// TestSiemensDeployPlanListsForeignBlocks (#1326): the plan names every
+// program block outside nautilus's group, which the download loads too,
+// grouped and counted, the root first; whether they are on the CPU only
+// when a compare in this deploy covered them; and an agent that does not
+// report them says so, never an empty list.
+func TestSiemensDeployPlanListsForeignBlocks(t *testing.T) {
+	plan := func(r *deployRig) string {
+		t.Helper()
+		out, code := r.run("", false, "--download")
+		if code != 1 || !strings.Contains(out, "PLAN") || len(r.downloads()) != 0 {
+			t.Fatalf("exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+		}
+		return out[strings.Index(out, "PLAN"):]
+	}
+	r := newDeployRig(t)
+	r.adopt()
+	r.fake.OtherBlocks = []tiad.ForeignBlock{
+		{Name: "probe_OB", Kind: "OB", Number: 35, Group: "probe"},
+		{Name: "probe_FB", Kind: "FB", Number: 7, Group: "probe"},
+		{Name: "probe_DB", Kind: "DB", Number: 8, Group: "probe"},
+		{Name: "Pump", Kind: "FB", Number: 3, Group: "plant/pumps"},
+		{Name: "naut_Inner", Kind: "FB", Number: 9, Group: "nautilus/inner"},
+	}
+	p := plan(r)
+	for _, want := range []string{
+		"  also loads, not nautilus's: the program blocks' root (1 block: Main [OB1])\n" +
+			"  also loads, not nautilus's: group plant/pumps (1 block: Pump [FB3])\n" +
+			"  also loads, not nautilus's: group probe (3 blocks: probe_DB [DB8], probe_FB [FB7], probe_OB [OB35])\n" +
+			"    on the CPU as they are: the adopted project compared equal with it before the import, which changes no block outside group nautilus\n",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("the plan lacks %q:\n%s", want, p)
+		}
+	}
+	if strings.Contains(p, "naut_Inner") {
+		t.Errorf("a block in a user group under nautilus's is listed as not nautilus's:\n%s", p)
+	}
+
+	// No adopt compare in this deploy: the plan does not say where they are.
+	r = newDeployRig(t)
+	r.adopt()
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+		t.Fatalf("first download: exit %d:\n%s", code, out)
+	}
+	r.base = len(r.fake.Downloads())
+	p = plan(r)
+	if !strings.Contains(p, "  also loads, not nautilus's: the program blocks' root (1 block: Main [OB1])\n    not compared with the CPU before this download") {
+		t.Errorf("a deploy with no compare before the import:\n%s", p)
+	}
+
+	r.fake.OmitForeign = true
+	p = plan(r)
+	if !strings.Contains(p, "other program blocks: this agent does not report the blocks outside group nautilus, which the download loads too (an agent older than #1326)") ||
+		strings.Contains(p, "also loads") {
+		t.Errorf("an agent that reports no foreign list:\n%s", p)
+	}
+}
+
 // TestSiemensDeployRefusesAStopItWasNotAllowed: when the dry run shows TIA
 // stops the CPU, a deploy without --allow-stop refuses before asking,
 // and a reinitialize of a DB not named in --reinit too.

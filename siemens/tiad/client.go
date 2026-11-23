@@ -850,6 +850,28 @@ type SoftwareResult struct {
 	Blocks  []Block        `json:"blocks"`
 	// OBs is what the import did for each cyclic interrupt OB asked for.
 	OBs []OBStep `json:"obs,omitempty"`
+	// Foreign is every program block outside the group after the import,
+	// by group path (the root, "", first) and then name: what a download
+	// loads besides nautilus's own (#1326). It is nil from an agent that
+	// does not report them (older than #1326), never from one that does.
+	Foreign []ForeignBlock `json:"foreign"`
+}
+
+// ForeignBlock is a program block outside the group a software import
+// went into. Group is its path from the program blocks' root ("" for the
+// root, "a/b" for user group b in user group a). Kind is OB, FB, FC, DB or
+// UDT, or the block's Openness type name for one the agent has no kind
+// for.
+type ForeignBlock struct {
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	Number int    `json:"number"`
+	Group  string `json:"group"`
+}
+
+// Label is the block as TIA labels it: "Main [OB1]".
+func (b ForeignBlock) Label() string {
+	return b.Name + " [" + b.Kind + strconv.Itoa(b.Number) + "]"
 }
 
 func (s *Session) Software(ctx context.Context, req SoftwareRequest) (SoftwareResult, error) {

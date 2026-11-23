@@ -474,6 +474,11 @@ type siemensDeployer struct {
 	// adoption is the record of the project this deploy builds on when
 	// it was adopted (this deploy or an earlier one), nil otherwise.
 	adoption *siemensAdoption
+	// adoptedEqual is set when this deploy compared the adopted project
+	// equal with the CPU before the import (compareAdopted).
+	adoptedEqual bool
+	// group is the block group nautilus imports into.
+	group string
 }
 
 // siemensStationRecord is where a successful deploy leaves the station
@@ -799,6 +804,7 @@ func (d *siemensDeployer) compareAdopted(ctx context.Context, s *tiad.Session, a
 			return 1
 		}
 		d.say("  equal: the adopted project is what the CPU runs")
+		d.adoptedEqual = true
 	}
 	return 0
 }
@@ -1178,6 +1184,7 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 	if group == "" {
 		group = project.DefaultSiemensGroup
 	}
+	d.group = group
 	req := tiad.SoftwareRequest{Group: group, Prune: true, TagTables: []string{}}
 	byWork := map[string]string{}
 	for _, f := range out.Files {
@@ -1505,6 +1512,7 @@ func (d *siemensDeployer) printPlan(address string, last lastDeploy, sw tiad.Sof
 	for _, ob := range sw.OBs {
 		d.say("  cyclic interrupt OB %s", describeOB(ob))
 	}
+	d.sayForeign(sw.Foreign)
 	if d.o.dryRun {
 		d.say("  after your yes: a dry run first (--dry-run). It reaches the CPU, and a TIA that asks no check LOADS during it; what it shows the answers below refuse stops the deploy there")
 	} else {
@@ -1517,6 +1525,46 @@ func (d *siemensDeployer) printPlan(address string, last lastDeploy, sw tiad.Sof
 	d.say("  the download answers:")
 	for _, p := range plan {
 		d.say("    - %s", p)
+	}
+}
+
+// sayForeign is the plan's lines for the program blocks outside
+// nautilus's group, which the download loads too (#1326), one line per
+// group, the root first. Whether they are on the CPU already is said only
+// when a compare in this deploy covered them.
+func (d *siemensDeployer) sayForeign(foreign []tiad.ForeignBlock) {
+	switch {
+	case foreign == nil:
+		d.say("  other program blocks: this agent does not report the blocks outside group %s, which the download loads too (an agent older than #1326): check the TIA project for them", d.group)
+		return
+	case len(foreign) == 0:
+		d.say("  other program blocks: none outside group %s", d.group)
+		return
+	}
+	var groups []string
+	byGroup := map[string][]string{}
+	for _, b := range foreign {
+		if _, ok := byGroup[b.Group]; !ok {
+			groups = append(groups, b.Group)
+		}
+		byGroup[b.Group] = append(byGroup[b.Group], b.Label())
+	}
+	for _, g := range groups {
+		where := "group " + g
+		if g == "" {
+			where = "the program blocks' root"
+		}
+		n := len(byGroup[g])
+		noun := "blocks"
+		if n == 1 {
+			noun = "block"
+		}
+		d.say("  also loads, not nautilus's: %s (%d %s: %s)", where, n, noun, strings.Join(byGroup[g], ", "))
+	}
+	if d.adoptedEqual {
+		d.say("    on the CPU as they are: the adopted project compared equal with it before the import, which changes no block outside group %s", d.group)
+	} else {
+		d.say("    not compared with the CPU before this download, so new or changed ones are not shown (the compare after it covers every block)")
 	}
 }
 
