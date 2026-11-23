@@ -899,54 +899,58 @@ func TestAPairOfMembersSharesTheCheckout(t *testing.T) {
 	_ = filepath.Join
 }
 
-// The checkout duties follow the lead by term, in any state of the store: a lead
-// lost, or lost and won again between two steps, lets the force go at once; a
-// halted store still lets it go; a leader reconciles and a standby does not.
+// The checkout duties follow the lead by term, in any state of the store: every
+// step off the lead lets a force go (so one started and lost between two steps
+// is not missed), a lead lost and won again in another term lets it go, a halted
+// store still lets it go, and a leader reconciles only while it still leads.
 func TestCheckoutDutiesFollowTheLeadByTerm(t *testing.T) {
 	var demotions, reconciles, announces int
 	var halt string
+	stillLeads := true
 	conds := map[string]string{}
-	d := &checkoutDuty{halted: func() string { return halt }, announce: func(string) error { announces++; return nil }, name: "a", reconcile: func() (int, error) { reconciles++; return 0, nil }, demoted: func() { demotions++ },
+	d := &checkoutDuty{halted: func() string { return halt }, announce: func(string) error { announces++; return nil }, name: "a",
+		stillLeads: func() bool { return stillLeads },
+		reconcile:  func() (int, error) { reconciles++; return 0, nil }, demoted: func() { demotions++ },
 		condition: func(k, m string) { conds[k] = m }}
 
-	d.step(false, 1) // a standby: nothing to let go, nothing to end
-	if demotions != 0 || reconciles != 0 {
-		t.Fatalf("a standby acted: demotions %d, reconciles %d", demotions, reconciles)
+	d.step(false, 1) // a standby: lets any force go (none), ends nothing
+	d.step(false, 1)
+	if demotions != 2 || reconciles != 0 {
+		t.Fatalf("a standby: demotions %d (want 2: every step off the lead), reconciles %d (want 0)", demotions, reconciles)
 	}
 	d.step(true, 2) // leads in term 2
 	d.step(true, 2)
-	if demotions != 0 || reconciles != 2 {
-		t.Fatalf("the leader: demotions %d, reconciles %d (want 0, 2)", demotions, reconciles)
+	if demotions != 2 || reconciles != 2 {
+		t.Fatalf("the leader: demotions %d, reconciles %d (want 2, 2)", demotions, reconciles)
 	}
 	d.step(true, 3) // lost and won again inside one tick: another term
-	if demotions != 1 {
+	if demotions != 3 {
 		t.Fatalf("a re-won lead in a new term did not let the force go: demotions %d", demotions)
 	}
-	d.step(false, 3) // lost for good
-	if demotions != 2 {
-		t.Fatalf("losing the lead did not let the force go: demotions %d", demotions)
+	// the lead is lost while announce was blocked: no reconcile on the stale read
+	stillLeads = false
+	before := reconciles
+	d.step(true, 3)
+	if reconciles != before {
+		t.Fatalf("reconciled after the lead was lost (a standby's end would end the force the leader drives)")
 	}
+	stillLeads = true
 	d.step(false, 3)
-	if demotions != 2 {
-		t.Fatalf("a standby let a force go again: demotions %d", demotions)
-	}
-	// a halted store: still lets the force go, and neither announces nor reconciles
 	d.step(true, 4)
-	before, announced := reconciles, announces
+	// a halted store: still lets the force go, and neither announces nor reconciles
+	before, announced, dem := reconciles, announces, demotions
 	halt = "an entry from a newer build"
 	d.step(true, 4)
 	if conds["checkout-halted"] == "" || reconciles != before || announces != announced {
 		t.Fatalf("a halted store: condition %q, reconciles %d (before %d), announces %d (before %d)", conds["checkout-halted"], reconciles, before, announces, announced)
 	}
+	d.step(false, 4)
+	if demotions != dem+1 {
+		t.Fatalf("a halted controller that lost the lead did not let its force go: demotions %d (was %d)", demotions, dem)
+	}
 	halt = ""
-	d.step(true, 4)
+	d.step(true, 5)
 	if conds["checkout-halted"] != "" || reconciles != before+1 {
 		t.Fatalf("a store that is no longer halted: condition %q, reconciles %d", conds["checkout-halted"], reconciles)
-	}
-	halt = "an entry from a newer build"
-	d.step(true, 4)
-	d.step(false, 4)
-	if demotions != 3 {
-		t.Fatalf("a halted controller that lost the lead did not let its force go: demotions %d", demotions)
 	}
 }

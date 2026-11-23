@@ -257,6 +257,13 @@ func (a *checkoutAPI) watchLoop(f *ckForce) {
 				a.endCheckoutForce(f, checkout.ForceReplaced, "controller")
 				return
 			}
+			// the record was ended by someone else (an operator abandoning the run on
+			// the other controller's screen, a reconcile): this controller drives an
+			// output the log says is released, so let it go
+			if rec, ok := a.co.Store.Standing(); !ok || rec.Seq != f.recSeq {
+				a.dropForceLocally(f)
+				return
+			}
 		}
 	}
 }
@@ -368,7 +375,7 @@ func (co *CheckoutOptions) ReconcileForces() (int, error) {
 	}
 	co.ck.mu.Lock()
 	f := co.ck.force
-	drives := f != nil && f.run == rec.Run && f.point == rec.Point
+	drives := f != nil && f.run == rec.Run && f.point == rec.Point && (f.recSeq == 0 || f.recSeq == rec.Seq)
 	co.ck.mu.Unlock()
 	if drives {
 		return 0, nil

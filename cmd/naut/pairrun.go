@@ -1224,7 +1224,7 @@ var _ server.Commissioner = (*leader.Quorum)(nil)
 // checkoutDuties are what a pair's controller does about the I/O checkout (#719
 // slice 5) besides serving it, once a second until ctx ends (see checkoutDuty).
 func (m *pairMember) checkoutDuties(ctx context.Context, st *checkout.Store, reconcile func() (int, error), demoted func()) {
-	d := &checkoutDuty{halted: st.Halted, announce: st.AnnounceKey, name: string(m.o.Self), reconcile: reconcile, demoted: demoted, condition: m.q.SetCondition}
+	d := &checkoutDuty{stillLeads: m.q.IsLeader, halted: st.Halted, announce: st.AnnounceKey, name: string(m.o.Self), reconcile: reconcile, demoted: demoted, condition: m.q.SetCondition}
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
@@ -1255,12 +1255,13 @@ func (m *pairMember) checkoutDuties(ctx context.Context, st *checkout.Store, rec
 //     start whose answer was lost, once its log has synced); on a standby it would
 //     propose ends for a force the leader is driving.
 type checkoutDuty struct {
-	halted    func() string
-	announce  func(controller string) error
-	name      string
-	reconcile func() (int, error)
-	demoted   func()
-	condition func(key, msg string)
+	stillLeads func() bool // read again just before reconcile: announce can block for seconds
+	halted     func() string
+	announce   func(controller string) error
+	name       string
+	reconcile  func() (int, error)
+	demoted    func()
+	condition  func(key, msg string)
 
 	led      bool
 	term     uint64
@@ -1270,7 +1271,10 @@ type checkoutDuty struct {
 
 func (d *checkoutDuty) step(lead bool, term uint64) {
 	// leadership first, in any state of the store
-	if d.led && (!lead || term != d.term) {
+	if !lead || (d.led && term != d.term) {
+		// every step off the lead, not only the first: a lead won, a force started and
+		// the lead lost between two steps was never seen as led; demoted is a no-op
+		// when no force stands here
 		d.demoted()
 		d.led = false
 	}
@@ -1291,8 +1295,8 @@ func (d *checkoutDuty) step(lead bool, term uint64) {
 	if err := d.announce(d.name); err != nil {
 		slog.Debug("checkout: the key is not announced yet", "error", err)
 	}
-	if !lead {
-		return
+	if !lead || (d.stillLeads != nil && !d.stillLeads()) {
+		return // a standby proposing an end would end the force the leader is driving
 	}
 	switch n, err := d.reconcile(); {
 	case err != nil:

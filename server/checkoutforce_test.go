@@ -767,3 +767,33 @@ func TestDemotionDuringAStartLetsTheForceGo(t *testing.T) {
 		t.Error("the force's slot is still taken")
 	}
 }
+
+// A force whose record was ended by someone else (an operator abandoning the run
+// on the other controller's screen) is let go by the controller that drives it:
+// it must not stay forced until its timer under a log that says it is released.
+func TestCheckoutForceEndedInTheRecordElsewhereIsLetGoHere(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	run, _ := r.st.Standing()
+	// the end arrives through the log, not through this controller's API
+	if err := r.st.EndForceOf(run.Run, run.Seq, checkout.ForceReleased, "operator"); err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for r.forced("Out") && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if r.forced("Out") {
+		t.Fatal("the output stays forced after the record was ended elsewhere")
+	}
+	co := ckOf(r.srv)
+	co.ck.mu.Lock()
+	still := co.ck.force != nil
+	co.ck.mu.Unlock()
+	if still {
+		t.Error("the force's slot is still taken")
+	}
+}

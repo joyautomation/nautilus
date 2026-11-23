@@ -635,8 +635,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 				}
 			}
 		}
-		// a standing force is let go, and recorded as interrupted, when the
-		// controller shuts down: no timer or watch outlives it
+		// a standing force is let go in the table, and recorded as interrupted, when
+		// the controller shuts down: no timer or watch outlives it. This runs after
+		// the last scan, so the field is not written from here: a pair's new leader
+		// takes the outputs over, and a single controller's device holds what it was
+		// last given until the program runs again (the same as any stop)
 		defer co.Stop()
 		co.Install(&sopts)
 	}
