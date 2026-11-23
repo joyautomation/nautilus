@@ -67,6 +67,25 @@ func waitSnaps(t *testing.T, st *camera.SnapStore, occ string, want int) []camer
 	return nil
 }
 
+// waitIdle waits until no fetch is running for any camera: the picture is stored before the
+// fetch's bookkeeping ends, and an event that arrives in between joins that fetch and gets
+// its picture whatever its own time is (the design: a flood shares one), which is not what a
+// test that wants a fresh capture means to ask.
+func waitIdle(t *testing.T, co *CameraOptions) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		co.mu.Lock()
+		n := len(co.inflight)
+		co.mu.Unlock()
+		if n == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("a fetch was still running after 5 s")
+}
+
 func TestAnAlarmActivationKeepsTheStillOfTheCamerasThatWatchItsEquipment(t *testing.T) {
 	var hits atomic.Int64
 	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); w.Write(camJPEG(t)) }))
@@ -243,6 +262,7 @@ func TestNoPicturesAreKeptWhileTheDiskIsNearlyFull(t *testing.T) {
 	now := time.Now().UnixMilli()
 	n.Notify(context.Background(), active("PumpFault", "occ-ok", now))
 	waitSnaps(t, st, "occ-ok", 1)
+	waitIdle(t, co) // the next event must find no fetch to join: it needs a fresh write, which the floor refuses
 	free.Store(50 << 20)
 	n.Notify(context.Background(), active("PumpFault", "occ-full", now+60000))
 	deadline := time.Now().Add(5 * time.Second)
