@@ -255,6 +255,16 @@ that was still running at both cores' full use after a minute and a half (it tak
 about four seconds on a desktop); build the controller on a faster machine
 (`naut build`) and run the binary.
 
+### A real stream, once
+
+The relay and the player have been run once on live video from a real camera: a USB
+webcam, encoded to H.264 at 1280x720, 15 frames a second and about 1.5 Mbit/s, and
+served as RTSP on the same machine. The controller relayed it and Chrome played it for
+four minutes with no stall: the picture started within a few seconds, the buffer held
+2 to 4 seconds, and the browser dropped 15 of 1703 frames. The meter read 1.7 to
+2.2 Mbit/s. That was a webcam behind a stand-in RTSP server, not an IP camera with
+its own: such a camera's address, credentials and quirks have not been tried.
+
 ### In the playground
 
 The playground has the pieces of a simulated camera but **no page that shows it yet**.

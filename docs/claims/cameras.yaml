@@ -246,8 +246,12 @@ claims:
       - go ./camera TestDialErrorsNameNeitherTheAddressNorTheURL
     note: >-
       Tested against a fake camera serving a real H.264 clip (camera/cameratest),
-      not a real camera: the first real camera is the webcam the maintainers will
-      attach, and the numbers a real camera gives are not claimed here.
+      and once against a real camera: a USB webcam (1280x720, 15 frames a second,
+      H.264 encoded by ffmpeg's libx264 at about 1.5 Mbit/s) served as RTSP on the
+      loopback address by a small live source, relayed by the controller and played in
+      Chrome for four minutes (see CAM-021). That run was by hand, is not a test, and
+      was one webcam, not an IP camera: a camera's own RTSP server, its credentials
+      and its quirks were not exercised.
 
   - id: CAM-016
     claim: >-
@@ -367,7 +371,14 @@ claims:
       in hmi/tests/hls.test.ts, which this inventory does not run. The player was
       run in Chrome against a controller and a fake RTSP camera serving a real
       H.264 clip: it plays through MSE and measures the bitrate. Not run: Safari
-      or an iPhone (the managed and native paths), Firefox, a hidden tab, and a real camera.
+      or an iPhone (the managed and native paths), Firefox and a hidden tab. It was
+      also run once for four minutes against live H.264 from a USB webcam (1280x720,
+      15 frames a second, about 1.5 Mbit/s, encoded by ffmpeg and served as RTSP on the
+      loopback address): the video played from the first segment at full size, the
+      playback clock kept pace with the wall clock, the buffer held 2 to 4 seconds, no
+      stall was seen, 15 of 1703 frames were dropped by the browser (0.9%), and the
+      meter read 1.7 to 2.2 Mbit/s. That was by hand and is not repeatable by this
+      inventory; the stream came from a webcam, not from an IP camera with its own RTSP server.
 
   - id: CAM-021
     claim: >-
