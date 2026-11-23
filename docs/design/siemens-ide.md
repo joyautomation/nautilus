@@ -90,7 +90,8 @@ the TIA project is not saved. The steps:
    `NAUTILUS_SIEMENS_CONFIG_PASSWORD`, `NAUTILUS_SIEMENS_FULL_ACCESS_PASSWORD`,
    `NAUTILUS_SIEMENS_PROTECTION_PASSWORD`, and
    `NAUTILUS_SIEMENS_WEB_PASSWORD_<USER>` for each web user
-   (`NAUTILUS_SIEMENS_PASSWORD` for `online.user`).
+   (`NAUTILUS_SIEMENS_PASSWORD`, or `NAUTILUS_SIEMENS_PASSWORD_FILE`, for
+   `online.user`, and for `naut siemens diag` and `serve`).
 3. **With `--download`, the CPU's deploy record first.** The newest record
    that may have loaded is verified (`POST /v1/deploys/verify`) before the
    deploy opens its own session. A CPU that compares different, or a

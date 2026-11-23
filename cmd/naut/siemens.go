@@ -71,7 +71,8 @@ running CPU. Point the extension at it with the nautilus.runtimeUrl setting.
 
 The CPU's web server must be on, with a user that may read (and, to set
 values, write); the station spec in target.siemens turns both on. The
-password is never a flag: set NAUTILUS_SIEMENS_PASSWORD.
+password is never a flag: set NAUTILUS_SIEMENS_PASSWORD, or
+NAUTILUS_SIEMENS_PASSWORD_FILE to a file holding it.
 
 A write from the editor goes to the CPU, and the value you then see is what
 the next poll read back. Force is refused: the Web API writes but does not
@@ -163,7 +164,12 @@ type siemensServeConfig struct {
 func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root, poll time.Duration, listen string,
 	getenv func(string) string) (siemensServeConfig, error) {
 	c := siemensServeConfig{host: host, user: user, pin: pin, roots: roots, poll: poll, listen: listen,
-		password: getenv("NAUTILUS_SIEMENS_PASSWORD"), token: getenv("NAUTILUS_TOKEN")}
+		token: getenv("NAUTILUS_TOKEN")}
+	pass, err := siemensSecret(getenv, "NAUTILUS_SIEMENS_PASSWORD")
+	if err != nil {
+		return c, err
+	}
+	c.password = pass
 	var tlsCfg *project.TLSConfig // server.tls, when the project has one
 	var tlsState, tlsName string
 	prefix := project.DefaultSiemensBlockPrefix // the project's block-prefix, below
@@ -241,7 +247,7 @@ func checkSiemensOnline(host, user, password, pin string) error {
 	case user == "":
 		return errors.New("--user is required: the Web API serves nothing anonymously here")
 	case password == "":
-		return errors.New("set NAUTILUS_SIEMENS_PASSWORD to the web user's password (it is never a flag)")
+		return errors.New("set NAUTILUS_SIEMENS_PASSWORD (or NAUTILUS_SIEMENS_PASSWORD_FILE) to the web user's password (it is never a flag)")
 	case pin == "":
 		return fmt.Errorf("--cert-sha256 is required to trust the CPU's self-signed certificate: run naut siemens cert --host %s and compare it with the CPU's", host)
 	}

@@ -248,3 +248,20 @@ func TestSiemensServeEnforcesTheAuthBlock(t *testing.T) {
 		t.Fatalf("the facade's server options: auth %v, service tokens %v", o.Server.Auth != nil, len(o.Server.ServiceTokens))
 	}
 }
+
+func TestSiemensServeReadsThePasswordFromAFile(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "pw")
+	if err := os.WriteFile(f, []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := resolveSiemensServe("192.0.2.10", "naut", "ab", t.TempDir(), nil, time.Second, "127.0.0.1:0",
+		env(map[string]string{"NAUTILUS_SIEMENS_PASSWORD_FILE": f}))
+	if err != nil || c.password != "from-file" {
+		t.Fatalf("password %q, err %v", c.password, err)
+	}
+	_, err = resolveSiemensServe("192.0.2.10", "naut", "ab", t.TempDir(), nil, time.Second, "127.0.0.1:0",
+		env(map[string]string{"NAUTILUS_SIEMENS_PASSWORD_FILE": f + ".missing"}))
+	if err == nil || !strings.Contains(err.Error(), "NAUTILUS_SIEMENS_PASSWORD_FILE") {
+		t.Fatalf("a missing file must name the variable: %v", err)
+	}
+}

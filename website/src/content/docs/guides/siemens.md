@@ -79,6 +79,7 @@ with `_FILE` added:
 | `NAUTILUS_SIEMENS_CONFIG_PASSWORD` | the CPU's configuration-protection password |
 | `NAUTILUS_SIEMENS_FULL_ACCESS_PASSWORD` | the CPU user `nautilus` |
 | `NAUTILUS_SIEMENS_WEB_PASSWORD_<USER>` | each web server user |
+| `NAUTILUS_SIEMENS_PASSWORD` | the web user that `target.siemens.online.user` names; also what `naut siemens diag` and `serve` log in with |
 | `NAUTILUS_SIEMENS_PROTECTION_PASSWORD` | a protected CPU's password |
 
 A refusal names the variable it is missing.
