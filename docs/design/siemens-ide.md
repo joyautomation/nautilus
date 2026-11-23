@@ -516,7 +516,7 @@ closes forgotten sessions. `fatal: true` means the session is gone.
 | `not_compiled` | 409 | A download of a project not fully compiled since its last change. Nothing reached TIA |
 | `operation_failed` | 500 | Openness threw (the message carries its text), or a device pin file is unreadable (§3.8) |
 | `device_changed` | 409 | The CPU's identity differs from its device pin (§3.8). The message names both; nothing was loaded and the pin stands |
-| `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked (§3.8) |
+| `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked, and the request carries no device attestation that can stand in for it (§3.8). The message names the attestation |
 | `cpu_mismatch` | 409 | An apply's spec does not name the project's CPU (name, order, firmware), or a device of the spec's shares a name or an address with one the project keeps (§3.3). `data.cpu` is the project's CPU; nothing was changed. A deploy verify whose archived project's CPU is not at the record's address (§3.5, "Verifying a deploy"): `data.recordAddress`, `data.projectAddress`; nothing went online |
 | `unclean_session` | 409 | An apply or an upload failed part-way on this session, so its project matches no spec: a later apply or save refuses. Close the session without saving (§3.3). Also every save, deploy archive (so every download) and import after a software import changed blocks outside its group (§3.4) |
 | `foreign_block` | 409 | A software import's sources declare a program block that exists outside the import's group, which TIA would replace (§3.4). The message names each block, its number and its group. Nothing was imported |
@@ -954,19 +954,19 @@ The client checks each path and the agent checks again.
 | `GET /v1/sessions` | → `{sessions: [{session, project, idleSeconds}]}` |
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
 | `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, the Full access user made or found, devices kept as found). On the first apply to an opened or uploaded project, `changes` compares the spec with the project as found (`CpuReuse.Found`, #1272): each interface node value that differs (address, subnet mask, router, PROFINET name, a name TIA generated), the configuration protection step, and whether the access and web steps wrote anything (a user, role, right, password or web server switch); empty is "no change". A node the agent could not read counts as a change, never none |
-| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune, obs?: [{name, number, cycleMs}]}` → `{results: [{path, ok, messages}], blocks: [{name, kind}], obs?: [{name, action, was?, now?}]}`. Generates blocks into the group named `group`; `blocks` lists that group's. `obs` are the cyclic interrupt OBs the agent makes first (see "Cyclic interrupt OBs" below). With `prune`, blocks in that group that no source produced are deleted. An import never touches a block outside the group: see "Blocks outside the group" below |
+| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune, obs?: [{name, number, cycleMs}]}` → `{results: [{path, ok, messages}], blocks: [{name, kind}], obs?: [{name, action, was?, now?}], foreign: [{name, kind, number, group}]}`. Generates blocks into the group named `group`; `blocks` lists that group's. `foreign` lists every program block outside the group after the import, by group path (`""`, the root, first) and then name: what a download loads besides nautilus's own, for the deploy plan (#1326). `kind` is OB, FB, FC, DB or UDT, or the block's Openness type name for one tiad has no kind for. An agent older than #1326 sends no `foreign`, which naut says in the plan rather than showing none `obs` are the cyclic interrupt OBs the agent makes first (see "Cyclic interrupt OBs" below). With `prune`, blocks in that group that no source produced are deleted. An import never touches a block outside the group: see "Blocks outside the group" below |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text, path?}]}`. Each message is a leaf of TIA's message tree; `path` is its parents, outermost first. For an error in an SCL block, `object` is the line in the block's body (1 is the `BEGIN` line) and the block is the last parent: `{object: "4", path: ["PLC_1", "Program blocks", "nautilus", "naut_Main (FB1)"]}` (measured on TIA V21, #789) |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
-| `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}}` (§3.9) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null`. A project opened as found, with no spec applied yet (an adopted one), compares with its own CPU at the address the project holds; still only a target. `address` is the CPU compared with, which naut checks is the deploy's |
-| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
+| `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}, deviceAttestation?: {by, order, firmware}}` (§3.9, §3.8) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null`. A project opened as found, with no spec applied yet (an adopted one), compares with its own CPU at the address the project holds; still only a target. `address` is the CPU compared with, which naut checks is the deploy's |
+| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
 | `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
-| `POST /v1/sessions/{id}/online` | `{online, secrets?: {fullAccessPassword}}` → `{online, address, state?}`. Holds the session's project online to its CPU (`OnlineProvider.GoOnline`) and keeps it online, so TIA's window shows the CPU's state and its own online/offline compare; `{online: false}` takes it offline (`address` is then the CPU it was held to, `""` if none). Refused (`bad_request`) unless the agent runs with `TIAD_UI=1`. The CPU is the spec's (or, for a project opened as found, the project's own), a target, pin checked; TIA's questions are answered as a compare's (§3.9), with no blind trust. It loads, compares and writes nothing. While held online, compare, fingerprint and upload on the session are `busy`; a close goes offline first, and an offline step that fails keeps the project held (the close fails and keeps the session, to be closed again), so no close drops a live connection unasked. tiad's question handler stays attached while held, so a question TIA asks then (say, from something a person starts in the window) gets tiad's answer, never a dialog. A second `{online: true}` to the same CPU changes nothing |
+| `POST /v1/sessions/{id}/online` | `{online, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{online, address, state?}`. Holds the session's project online to its CPU (`OnlineProvider.GoOnline`) and keeps it online, so TIA's window shows the CPU's state and its own online/offline compare; `{online: false}` takes it offline (`address` is then the CPU it was held to, `""` if none). Refused (`bad_request`) unless the agent runs with `TIAD_UI=1`. The CPU is the spec's (or, for a project opened as found, the project's own), a target, pin checked; TIA's questions are answered as a compare's (§3.9), with no blind trust. It loads, compares and writes nothing. While held online, compare, fingerprint and upload on the session are `busy`; a close goes offline first, and an offline step that fails keeps the project held (the close fails and keeps the session, to be closed again), so no close drops a live connection unasked. tiad's question handler stays attached while held, so a question TIA asks then (say, from something a person starts in the window) gets tiad's answer, never a dialog. A second `{online: true}` to the same CPU changes nothing |
 | `POST /v1/sessions/{id}/show` | `{block}` → `{block, type, number, group}`. Opens the program block named `block` (compared without case) in TIA Portal's editor, with Openness's `ShowInEditor`. Refused (`bad_request`) unless the agent runs with `TIAD_UI=1`, before TIA is asked anything; a block the project lacks is `not_found`. It changes nothing in the project. `group` is the block's group path (`""` for the root) |
-| `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
-| `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, outsideChanges?, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
-| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
+| `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; every other online call (verify, compare, download, online, fingerprint) checks the pin first, on the operator's `deviceAttestation` while tiad cannot read a CPU's identity online |
+| `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, outsideChanges?, tia, archive, attestation, deviceAttestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
+| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
 
 **Blocks outside the group (#789).** TIA's generate-from-source does not
 stop at the group it is given. On the TIA VM a source declaring
@@ -1063,7 +1063,8 @@ Request:
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" },
   "source": { "commit": "<git commit id>", "hash": "sha256:<hash of the sources sent>" },
   "outsideChanges": { "by": "<who>", "verdict": "different", "deploy": "<the verified deploy's id>" },
-  "fingerprint": { "trustUnverifiedCertificate": true }
+  "fingerprint": { "trustUnverifiedCertificate": true },
+  "deviceAttestation": { "by": "<who>", "order": "<order number off the CPU>", "firmware": "<firmware off the CPU>" }
 }
 ```
 
@@ -1772,15 +1773,47 @@ and the audit line names the fields the pin holds. From then on:
   and before TIA's download begins;
 - a different identity fails with `device_changed`, naming the pinned and
   the new values. The pin stands;
-- an identity that cannot be read fails with `device_unverified`.
-  `tiad.Openness` has no proven online read yet (a read-only probe is
-  planned on #789). **So today, once a CPU is pinned, its compare and
-  download are refused** until an online read is proven: that is the
-  fail-closed design (decided on #789, 2026-11-20). A re-pin records a new
-  identity but does not lift this, and no call removes a pin. A CPU can
-  be compared before its first upload and cannot after it: going online
-  and comparing ask no TLS question on the bench CPU (#789 stage 1b), so
-  nothing but the pin refuses them.
+- an identity that cannot be read fails with `device_unverified`, unless
+  the request carries the operator's **device attestation** (below).
+  `tiad.Openness` has no proven online read yet (#789), so today every
+  online call to a pinned CPU (verify, compare, download and dry run,
+  online, fingerprint read) reads no identity. The fail-closed design
+  (decided on #789, 2026-11-20) refused them all, so an `--adopt upload`
+  locked its CPU against every later download, the restore path included
+  (#1325). A re-pin records a new identity but does not lift this, and no
+  call removes a pin.
+
+**The device attestation (#1325, a loosening to tighten later on #616).**
+Where tiad cannot read the identity, a request may carry
+`deviceAttestation: {by, order, firmware}`: the CPU's order number and
+firmware as the operator read them off the device itself (its label or
+display), and who did. naut sends it with `--attest-order` and
+`--attest-firmware` (deploy, verify, show --online). Decided by the
+coordinator on 2026-11-23 under the rule that a refusal of our own that
+blocks a needed load is loosened narrowly, audited, and named here.
+
+- It is used only on the "identity cannot be read" branch. An identity
+  tiad does read wins: a read that differs is `device_changed` whatever
+  is attested. To an unpinned CPU it is not used.
+- It is compared with the pin at the pin's precision: the order number
+  without whitespace or case, the firmware on the pin's parts (a `V3.1`
+  pin matches `3.1.3`, `V3.1.3`, `V3.01`; not `V3.10.1`). A difference is
+  `device_changed`, named as the attestation's, and nothing is sent.
+- It cannot stand in for every pin: a pin holding a serial number or a
+  MAC (an attestation states neither), or a firmware stated less
+  precisely than the pin's (`V3` against `V3.1`), is `device_unverified`.
+- It never adds or changes a pin: no call that takes one writes the pins
+  directory, and the upload, which pins on first trust, does not take it.
+- Every use is audited (`audit pin attested call=... pinned=...
+  attestation={by=... order=... firmware=...}`, and a refused one as
+  `device-changed` or `unverified`). A download's response and its deploy
+  record keep it as `deviceAttestation: {by, order, firmware, pinned, at}`.
+- A malformed one (`by`, `order` or `firmware` empty, a control character,
+  a field over its cap, a firmware that is not `V3.1.3` or `3.1.3`) is
+  `bad_request` on every call that takes it.
+
+It is weaker than a read: it trusts what a person says the label shows.
+It goes once an online identity read is proven.
 
 **What it catches, and what it does not.** The device pin catches a
 different model, or firmware of another major.minor version, at the

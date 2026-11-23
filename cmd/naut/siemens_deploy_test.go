@@ -1075,6 +1075,17 @@ func TestSiemensDeployAfterAnAdoptedUploadOfAPinnedCPU(t *testing.T) {
 			if err != nil || len(l.Deploys) == 0 || l.Deploys[0].DeviceAttestation == nil || l.Deploys[0].DeviceAttestation.Order != "6ES7510-1DK03-0AB0" {
 				t.Fatalf("the deploy record does not keep the attestation: %+v %v", l.Deploys, err)
 			}
+			// The next deploy verifies the CPU against that record first: an
+			// online call to the pinned CPU too.
+			next := []string{"--download", "--yes", "--allow-stop"}
+			out, code = r.run("", false, next...)
+			if code != 1 || !strings.Contains(out, "verify of the last deploy") || !strings.Contains(out, "device_unverified") || len(r.downloads()) != 1 {
+				t.Fatalf("the next deploy with no attestation: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
+			out, code = r.run("", false, append(next, "--attest-order", "6ES7 510-1DK03-0AB0", "--attest-firmware", "V3.1.3")...)
+			if code != 0 || len(r.downloads()) != 2 {
+				t.Fatalf("the next deploy, attested: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+			}
 		})
 	}
 }
