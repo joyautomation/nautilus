@@ -78,7 +78,7 @@ func siemensWriterInput(dir, manifestName string) (swriter.Input, error) {
 		if err != nil {
 			return swriter.Input{}, err
 		}
-		task := swriter.Task{Name: t.Name, Program: name, Interval: time.Duration(t.Scan)}
+		task := swriter.Task{Name: t.Name, Program: name, Interval: time.Duration(t.Scan), DtTag: t.DtTag}
 		if i == 0 {
 			task.Name = runtime.MainTaskName
 		} else {
