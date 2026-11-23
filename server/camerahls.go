@@ -41,6 +41,7 @@ type hlsLease struct {
 	from     string
 	session  string
 	endedWhy string
+	begun    bool // the first playlist was served: the view is journalled from here
 }
 
 // leaseFor refreshes (or takes) the request's person's lease on c. It reports
@@ -87,9 +88,21 @@ func (a *cameraAPI) leaseFor(w http.ResponseWriter, r *http.Request, c camera.Ca
 		go co.reapLeases(a)
 	}
 	co.leaseMu.Unlock()
-	a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: who, Source: audit.SourceHMI, Result: audit.ResultOK, From: l.from, Session: l.session,
-		Detail: map[string]any{"event": "start", "asset": c.Asset, "protocol": "hls"}})
 	return l, true
+}
+
+// begin journals the start of a view once its first playlist has been served: a
+// camera that cannot be opened is one error row, not a start and a stop for every
+// retry of the player.
+func (a *cameraAPI) begin(l *hlsLease) {
+	a.co.leaseMu.Lock()
+	first := !l.begun
+	l.begun = true
+	a.co.leaseMu.Unlock()
+	if first {
+		a.s.audit.record(audit.Entry{Action: "camera.view", Target: l.camera.ID, User: l.who, Source: audit.SourceHMI, Result: audit.ResultOK, From: l.from, Session: l.session,
+			Detail: map[string]any{"event": "start", "asset": l.camera.Asset, "protocol": "hls"}})
+	}
 }
 
 // dropLease gives a lease back at once (the camera could not be opened).
@@ -112,6 +125,14 @@ func (a *cameraAPI) dropLease(r *http.Request, c camera.Camera, why string) {
 func (co *CameraOptions) endLeaseLocked(a *cameraAPI, key string, l *hlsLease) {
 	delete(co.leases, key)
 	l.release()
+	if !l.begun {
+		// the view never started: one error row says why, if there is a reason
+		if l.endedWhy != "" {
+			a.s.audit.record(audit.Entry{Action: "camera.view", Target: l.camera.ID, User: l.who, Source: audit.SourceHMI, Result: audit.ResultError, From: l.from, Session: l.session,
+				Detail: map[string]any{"event": "start", "asset": l.camera.Asset, "protocol": "hls", "error": l.endedWhy}})
+		}
+		return
+	}
 	d := map[string]any{"event": "stop", "asset": l.camera.Asset, "protocol": "hls", "seconds": int(time.Since(l.started).Seconds()), "bytes": l.bytes}
 	if l.endedWhy != "" {
 		d["ended"] = l.endedWhy
@@ -186,6 +207,7 @@ func (a *cameraAPI) hls(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "the camera's stream ended"})
 			return
 		}
+		a.begin(l)
 		a.hlsReply(w, l, "application/vnd.apple.mpegurl", []byte(pl))
 		return
 	}

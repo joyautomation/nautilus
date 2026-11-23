@@ -62,8 +62,8 @@ func readReal(t *testing.T, rt *runtime.Runtime, name string) float64 {
 func TestGVLComposesIntoEveryProgram(t *testing.T) {
 	rt := loadRuntime(t, map[string]string{
 		"nautilus.yaml": "tasks:\n  - program: a.st\n  - name: b\n    program: b.st\ntags: []\n",
-		"gvl.st": "(* the Codesys GVL *)\nVAR_GLOBAL\n    StartPB : BOOL;\n    Count : DINT;\n    Level : REAL;\nEND_VAR\n",
-		"a.st": "PROGRAM A\nIF NOT StartPB THEN Count := Count + 1; END_IF;\nEND_PROGRAM\n",
+		"gvl.st":        "(* the Codesys GVL *)\nVAR_GLOBAL\n    StartPB : BOOL;\n    Count : DINT;\n    Level : REAL;\nEND_VAR\n",
+		"a.st":          "PROGRAM A\nIF NOT StartPB THEN Count := Count + 1; END_IF;\nEND_PROGRAM\n",
 		// The explicit IEC form names a GVL global again: legal, same type.
 		"b.st": "PROGRAM B\nVAR_EXTERNAL\n    Count : DINT;\nEND_VAR\nLevel := INT_TO_REAL(Count) * 2.0;\nEND_PROGRAM\n",
 	})

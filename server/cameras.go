@@ -58,20 +58,22 @@ type CameraOptions struct {
 	// Alarm pictures (#724 slice 2): Snaps keeps them, Equipment names an
 	// alarm's equipment (an alarm id to its key), Leads says this controller
 	// leads (nil: it does).
-	Snaps     *camera.SnapStore
-	Equipment func(alarmID string) string
-	Leads     func() bool
-	snapSem   chan struct{}
-	semOnce   sync.Once
-	inflight  map[string][]alarm.Event
-	snapSeen  map[string]time.Time
-	snapSwept time.Time
-	hub       *camera.HLSHub
-	leaseMu   sync.Mutex
-	leases    map[string]*hlsLease
-	leasing   bool
-	lowWarned atomic.Bool
-	api       *cameraAPI
+	// LiveBudgetMB is the memory all live HLS streams may hold together (0: 64 MB).
+	LiveBudgetMB int
+	Snaps        *camera.SnapStore
+	Equipment    func(alarmID string) string
+	Leads        func() bool
+	snapSem      chan struct{}
+	semOnce      sync.Once
+	inflight     map[string][]alarm.Event
+	snapSeen     map[string]time.Time
+	snapSwept    time.Time
+	hub          *camera.HLSHub
+	leaseMu      sync.Mutex
+	leases       map[string]*hlsLease
+	leasing      bool
+	lowWarned    atomic.Bool
+	api          *cameraAPI
 }
 
 // Install adds the cameras to the server's options: its routes.
@@ -111,7 +113,7 @@ func (co *CameraOptions) mount(s *Server, mux *http.ServeMux) {
 		co.snaps = map[string]*snapCache{}
 	}
 	if co.hub == nil {
-		co.hub = camera.NewHLSHub(co.Fetcher)
+		co.hub = camera.NewHLSHub(co.Fetcher, camera.NewMemBudget(int64(co.LiveBudgetMB)<<20))
 	}
 	co.api = a
 	co.mu.Unlock()
@@ -205,7 +207,7 @@ func (a *cameraAPI) camera(w http.ResponseWriter, r *http.Request) (camera.Camer
 	if !a.mayView(r) {
 		// a refused live view is journalled; the still the page asks for every few
 		// seconds is not (a refusal flood is coalesced by the recorder either way)
-		if strings.HasSuffix(r.URL.Path, "/stream") {
+		if strings.HasSuffix(r.URL.Path, "/stream") || strings.HasSuffix(r.URL.Path, "/hls/index.m3u8") {
 			a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: a.s.principalOf(r), Source: audit.SourceHMI, Result: audit.ResultRefused,
 				From: a.s.clientAddr(r), Session: a.s.sessionOfEntry(r), Detail: map[string]any{"event": "start", "asset": c.Asset, "reason": noView, "class": audit.ClassAuth}})
 		}

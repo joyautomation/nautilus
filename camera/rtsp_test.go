@@ -19,7 +19,7 @@ func rtspCam(f *cameratest.Server, creds bool) Camera {
 
 func hubFor(t *testing.T, secret string) *HLSHub {
 	t.Helper()
-	h := NewHLSHub(&Fetcher{Secret: secrets(map[string]string{"camera.gate": secret})})
+	h := NewHLSHub(&Fetcher{Secret: secrets(map[string]string{"camera.gate": secret})}, nil)
 	t.Cleanup(h.Stop)
 	return h
 }
@@ -218,5 +218,87 @@ func TestDialErrorsNameNeitherTheAddressNorTheURL(t *testing.T) {
 	noLeak(t, "dial", err, addr)
 	if _, err := dialRTSP(context.Background(), "http://x/y", "", ""); err == nil || strings.Contains(err.Error(), "x/y") {
 		t.Errorf("a URL that is not RTSP: %v", err)
+	}
+}
+
+// A camera's 401 with a WWW-Authenticate that is not UTF-8 once crashed the
+// controller (an index into the lower-cased header sliced the original): it is an
+// error now, and the pipeline survives anything.
+func TestAChallengeThatIsNotUTF8DoesNotCrashTheController(t *testing.T) {
+	f := cameratest.Start(t, cameratest.Opts{Misbehave: "bad-challenge"})
+	_, err := wait(t, hubFor(t, "viewer:hunter2"), rtspCam(f, true))
+	if err == nil {
+		t.Fatal("a camera with a hostile challenge gave a stream")
+	}
+	noLeak(t, "bad challenge", err)
+	d, basic := pickChallenge([]string{"\xff\xff\xff\xff\xff\xff\xff\xff\xff digest realm=x", "\xffBasic"})
+	if d == "" || basic {
+		t.Errorf("pickChallenge: %q %v", d, basic)
+	}
+}
+
+func TestADigestCameraIsNotDowngradedToBasicMidSession(t *testing.T) {
+	f := cameratest.Start(t, cameratest.Opts{Auth: "digest", User: "viewer", Pwd: "hunter2", Misbehave: "downgrade"})
+	_, err := wait(t, hubFor(t, "viewer:hunter2"), rtspCam(f, true))
+	if err == nil || !strings.Contains(err.Error(), "not sending the password") {
+		t.Errorf("a camera that asked for digest and then for basic: %v", err)
+	}
+	if f.Basic.Load() != 0 {
+		t.Errorf("the password went out in basic %d times", f.Basic.Load())
+	}
+}
+
+func TestAContentBaseOnAnotherHostIsIgnoredAndAControlWithSpacesIsNot(t *testing.T) {
+	f := cameratest.Start(t, cameratest.Opts{Misbehave: "content-base", Loops: 2})
+	if _, err := wait(t, hubFor(t, ""), rtspCam(f, false)); err != nil {
+		t.Fatalf("a camera naming another host as its base: %v", err)
+	}
+	c := &rtspClient{base: "rtsp://10.0.0.5/stream"}
+	if got := c.trackURL("track 1\r\nX: y"); got != "rtsp://10.0.0.5/stream" {
+		t.Errorf("a control with whitespace: %q", got)
+	}
+}
+
+// A camera that fails is not opened again at once, and a person who asks for every
+// camera cannot hold more sessions than the cap.
+func TestAFailingCameraIsNotRedialledAtOnceAndSessionsAreCapped(t *testing.T) {
+	f := cameratest.Start(t, cameratest.Opts{SDP: "h265"})
+	h := hubFor(t, "")
+	c := rtspCam(f, false)
+	if _, err := wait(t, h, c); err == nil {
+		t.Fatal("an H.265 camera played")
+	}
+	plays := f.Requests.Load()
+	for i := 0; i < 5; i++ {
+		if _, err := h.Session(c); err == nil {
+			t.Fatal("a failed camera was reopened inside the backoff")
+		}
+	}
+	if f.Requests.Load() != plays {
+		t.Errorf("a failed camera was redialled: %d requests, was %d", f.Requests.Load(), plays)
+	}
+	good := cameratest.Start(t, cameratest.Opts{Loops: 2})
+	h2 := hubFor(t, "")
+	opened := 0
+	for i := 0; i < MaxLive+3; i++ {
+		cam := Camera{ID: "c" + string(rune('a'+i)), Asset: "A", Kind: KindRTSP, URL: good.URL("/s")}
+		if _, err := h2.Session(cam); err == nil {
+			opened++
+		} else if err != ErrTooManyStreams {
+			t.Fatal(err)
+		}
+	}
+	if opened != MaxLive {
+		t.Errorf("%d sessions opened, want the cap %d", opened, MaxLive)
+	}
+}
+
+// What a camera's challenge says is echoed back in the Authorization header: a line
+// break in it must not become a header or a request of its own.
+func TestAChallengeWithALineBreakInItIsRefused(t *testing.T) {
+	for _, ch := range []string{"Digest realm=\"a\rb\", nonce=\"n\"", "Digest realm=\"a\", nonce=\"n\r\nX: y\"", "Digest realm=\"a\", nonce=\"n\", opaque=\"o\x00\""} {
+		if _, err := digest(ch, "viewer", "pw", "GET", "/x"); err == nil {
+			t.Errorf("%q was answered", ch)
+		}
 	}
 }

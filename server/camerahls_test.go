@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -122,8 +123,18 @@ func TestAnRTSPCameraThatCannotBeRelayedIsAnErrorInWordsAndGivesBackItsPlace(t *
 	if co.limit.Watching("gate") != 0 {
 		t.Error("a view that never started holds a place")
 	}
-	if n, d := viewEntries(srv, "gate", "stop"); n != 1 || !strings.Contains(strings.Join([]string{d["ended"].(string)}, ""), "another video codec") {
-		t.Errorf("the failed view's journal: %d %v", n, d)
+	// a view that never started is one error row, with the reason, and no start or stop
+	errRows := 0
+	for _, e := range srv.audit.ring.Recent() {
+		if e.Action == "camera.view" && e.Target == "gate" {
+			if e.Result != "error" || !strings.Contains(fmt.Sprint(e.Detail["error"]), "another video codec") {
+				t.Errorf("a journal row for the failed view: %+v", e)
+			}
+			errRows++
+		}
+	}
+	if errRows != 1 {
+		t.Errorf("%d journal rows for a view that never started, want 1", errRows)
 	}
 }
 

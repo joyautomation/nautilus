@@ -355,6 +355,14 @@ func (s *Server) serve(c net.Conn) {
 			}
 		}
 		switch s.opts.Misbehave {
+		case "bad-challenge": // a 401 whose WWW-Authenticate is not UTF-8
+			reply(401, "WWW-Authenticate: \xff\xff\xff\xff\xff\xff\xff\xff digest x\r\n", "")
+			continue
+		case "downgrade": // digest to DESCRIBE, then a basic-only challenge to SETUP
+			if method == "SETUP" && !strings.HasPrefix(hdr["authorization"], "Basic ") {
+				reply(401, `WWW-Authenticate: Basic realm="cam"`+"\r\n", "")
+				continue
+			}
 		case "huge-body":
 			io.WriteString(c, "RTSP/1.0 200 OK\r\nCSeq: "+cseq+"\r\nContent-Length: 999999999\r\n\r\n")
 			return
@@ -381,7 +389,11 @@ func (s *Server) serve(c net.Conn) {
 				reply(200, "", "")
 				continue
 			}
-			reply(200, "Content-Base: rtsp://"+s.ln.Addr().String()+"/stream/\r\n", SDP(s.opts.SDP))
+			base := "rtsp://" + s.ln.Addr().String() + "/stream/"
+			if s.opts.Misbehave == "content-base" {
+				base = "rtsp://evil.example:554/steal/"
+			}
+			reply(200, "Content-Base: "+base+"\r\n", SDP(s.opts.SDP))
 		case "SETUP":
 			if s.opts.Misbehave == "no-session" {
 				reply(200, "Transport: RTP/AVP/TCP;unicast;interleaved=0-1\r\n", "")

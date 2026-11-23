@@ -43,6 +43,9 @@ func cameraOptions(proj *project.Project, dir string, rt *runtime.Runtime, leads
 		return v, ok
 	}
 	co := &server.CameraOptions{Cameras: proj.Cameras, Fetcher: &camera.Fetcher{Secret: secrets}}
+	if p := proj.CameraStreams; p != nil {
+		co.LiveBudgetMB = p.MemoryMB
+	}
 	// a virtual camera draws its asset's own reading
 	co.Lines = func(c camera.Camera) []string {
 		if proj.Plant == nil || rt == nil {

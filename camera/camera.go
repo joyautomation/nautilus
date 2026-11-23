@@ -77,6 +77,23 @@ type SnapshotPolicy struct {
 	MaxMB    int `yaml:"max-mb"`    // default 200
 }
 
+// StreamPolicy is the manifest's camera-streams: section: the memory all live
+// video streams of the controller may hold together.
+type StreamPolicy struct {
+	MemoryMB int `yaml:"memory-mb"` // default 64
+}
+
+// Validate checks the policy's bound.
+func (p *StreamPolicy) Validate() error {
+	if p == nil {
+		return nil
+	}
+	if p.MemoryMB < 0 || (p.MemoryMB > 0 && p.MemoryMB < 8) || p.MemoryMB > 4096 {
+		return fmt.Errorf("camera-streams.memory-mb is %d: between 8 and 4096 (a stream reserves up to 5 MB before it has a picture)", p.MemoryMB)
+	}
+	return nil
+}
+
 // DefaultKeepDays is how long alarm pictures are kept unless the policy says.
 const DefaultKeepDays = 30
 

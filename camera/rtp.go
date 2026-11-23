@@ -78,6 +78,7 @@ type Depacketizer struct {
 	seq     uint16
 	seqOK   bool
 	damaged bool // a packet was lost in this picture: it is dropped
+	synced  bool // a whole keyframe has been seen since the start or the last loss
 	Dropped int  // pictures dropped for loss or for being too large
 }
 
@@ -186,8 +187,18 @@ func (d *Depacketizer) finish(emit func(AccessUnit)) {
 	au, bad := d.au, d.damaged
 	d.au, d.have, d.damaged = AccessUnit{}, false, false
 	if bad {
+		// a lost packet: this picture is dropped, and so is everything after it
+		// until a whole keyframe, which the pictures after it were coded against
 		d.Dropped++
+		d.synced = false
 		return
+	}
+	if !d.synced {
+		if !au.Key || !au.startsCleanly() {
+			d.Dropped++
+			return
+		}
+		d.synced = true
 	}
 	emit(au)
 }

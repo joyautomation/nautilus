@@ -20,8 +20,8 @@ const (
 	nalAUD      = 9
 	nalSTAPA    = 24
 	nalFUA      = 28
-	maxNALBytes = 2 << 20 // one NAL unit; a camera that sends more is refused
-	maxAUBytes  = 4 << 20 // one access unit (a picture)
+	maxNALBytes = 1 << 20 // one NAL unit; a camera that sends more is refused
+	maxAUBytes  = 2 << 20 // one access unit (a picture)
 )
 
 func nalType(b byte) int { return int(b & 0x1f) }
@@ -199,4 +199,35 @@ func ParseSPS(nal []byte) (SPSInfo, error) {
 	}
 	info.Width, info.Height = w, h
 	return info, nil
+}
+
+// sliceFirstMB is first_mb_in_slice of a slice NAL unit (header byte included): 0
+// starts a picture. A NAL too short to say returns a number that is not 0.
+func sliceFirstMB(nal []byte) uint {
+	if len(nal) < 2 {
+		return 1 << 31
+	}
+	r := &bitReader{b: unescape(nal[1:])}
+	v := r.ue()
+	if r.err != nil {
+		return 1 << 31
+	}
+	return v
+}
+
+// startsCleanly reports whether a picture's first NAL unit is where a picture
+// begins (a parameter set, delimiter or SEI, or the first slice of an IDR): a
+// keyframe that lost its first packets is not one a player can begin at.
+func (a AccessUnit) startsCleanly() bool {
+	if len(a.NALs) == 0 || len(a.NALs[0]) == 0 {
+		return false
+	}
+	n := a.NALs[0]
+	switch nalType(n[0]) {
+	case nalSPS, nalPPS, nalSEI, nalAUD:
+		return true
+	case nalIDR:
+		return sliceFirstMB(n) == 0
+	}
+	return false
 }

@@ -165,14 +165,7 @@ func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, 
 		ch := resp.Header.Values("Www-Authenticate")
 		resp.Body.Close()
 		var authz string
-		var dig string
-		for _, h := range ch {
-			// a header may offer both ("Basic ..., Digest ..."): digest is preferred
-			if i := strings.Index(strings.ToLower(h), "digest "); i >= 0 {
-				dig = h[i:]
-				break
-			}
-		}
+		dig, basicOK := pickChallenge(ch)
 		learned, _ := f.learned.Load(c.ID)
 		switch {
 		case dig != "":
@@ -186,14 +179,9 @@ func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, 
 			// a camera that asked for digest is never sent the password in basic,
 			// whoever answers in its place
 			return nil, errors.New("the camera asked for digest before and now asks for basic: not sending the password")
-		default:
-			for _, h := range ch {
-				if strings.HasPrefix(strings.ToLower(h), "basic") {
-					authz = basic(user, pass)
-					f.learned.Store(c.ID, "basic")
-					break
-				}
-			}
+		case basicOK:
+			authz = basic(user, pass)
+			f.learned.Store(c.ID, "basic")
 		}
 		if authz != "" {
 			if resp, err = do(authz); err != nil {
@@ -269,6 +257,15 @@ func digest(challenge, user, pass, method, uri string) (string, error) {
 		k, v, ok := strings.Cut(part, "=")
 		if ok {
 			p[strings.ToLower(strings.TrimSpace(k))] = strings.Trim(strings.TrimSpace(v), `"`)
+		}
+	}
+	// what the camera says is echoed back in the Authorization header: no control
+	// character or quote may go with it
+	for _, k := range []string{"realm", "nonce", "opaque"} {
+		for _, r := range p[k] {
+			if r < ' ' || r == 0x7f || r == '"' || r == '\\' {
+				return "", errors.New("the camera's authentication challenge is malformed")
+			}
 		}
 	}
 	if alg := strings.ToLower(p["algorithm"]); alg != "" && alg != "md5" {
@@ -372,4 +369,35 @@ func (f *Fetcher) credentials(c Camera) (user, pass string, err error) {
 		return "", "", fmt.Errorf("secret %q: %w", key, err)
 	}
 	return user, pass, nil
+}
+
+// asciiLower lower-cases ASCII letters and leaves every other byte alone, so an
+// index into the result is an index into the original (strings.ToLower rewrites
+// each invalid UTF-8 byte as three, which moves every index after it).
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
+// pickChallenge reads a camera's WWW-Authenticate headers: the digest challenge
+// (from its "Digest " on, wherever it is in a header that offers several), and
+// whether basic is offered. Digest is preferred by the callers.
+func pickChallenge(headers []string) (digestChallenge string, basicOffered bool) {
+	for _, h := range headers {
+		l := asciiLower(h)
+		if digestChallenge == "" {
+			if i := strings.Index(l, "digest "); i >= 0 {
+				digestChallenge = h[i:]
+			}
+		}
+		if strings.HasPrefix(strings.TrimSpace(l), "basic") {
+			basicOffered = true
+		}
+	}
+	return
 }

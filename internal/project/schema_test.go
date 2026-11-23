@@ -564,7 +564,7 @@ func TestSchemaAlarmKeysAreAccepted(t *testing.T) {
 		"shelve": "false", "enable": "RTU9__Online",
 		"consequence": "Line over-pressure", "response": "Stop P101",
 		"rationalization": "{state: approved, by: alice, at: 2026-11-20}",
-		"suppress-when": "P101.Stopped", "suppress-reason": "pump stopped",
+		"suppress-when":   "P101.Stopped", "suppress-reason": "pump stopped",
 		"equipment": "P101",
 	}
 	for _, key := range schemaKeys(props) {

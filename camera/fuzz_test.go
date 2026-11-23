@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"strings"
 	"testing"
 
 	"github.com/joyautomation/nautilus/camera/cameratest"
@@ -176,4 +177,22 @@ func itoa(n uint64) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// FuzzChallenge feeds the authentication-challenge reading what a camera's 401 could
+// say: a hostile header once crashed the controller (an index taken in the lower-cased
+// copy and used on the original), so this is where the fuzzer is pointed.
+func FuzzChallenge(f *testing.F) {
+	f.Add(`Digest realm="cam", nonce="abc", qop="auth"`, `Basic realm="cam"`)
+	f.Add("\xff\xff\xff\xff\xff\xff\xff\xff digest x", "")
+	f.Add(`Basic realm="a", Digest realm="b", nonce="c", algorithm=SHA-256`, `DIGEST nonce=`)
+	f.Fuzz(func(t *testing.T, a, b string) {
+		d, _ := pickChallenge([]string{a, b})
+		if d != "" {
+			// answering whatever it says must not panic, and never puts a line break in a header
+			if out, err := digest(d, "viewer", "pw", "GET", "/x"); err == nil && strings.ContainsAny(out, "\r\n") {
+				t.Fatalf("a header with a line break: %q", out)
+			}
+		}
+	})
 }

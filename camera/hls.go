@@ -17,24 +17,98 @@ import (
 // HLS (RFC 8216) of one camera's H.264, in fragmented MP4: a sliding playlist of
 // whole-GOP segments cut at keyframes, an init segment, no transcoding.
 //
-// Memory is bounded per stream whatever a camera sends: the finished segments
-// are at most hlsWindow of them and hlsMaxWindowBytes in all; the segment being
-// built is at most hlsMaxSegBytes (beyond that the picture run is dropped and the
-// stream waits for the next keyframe); the depacketiser holds at most one access
-// unit (maxAUBytes) and one fragmented NAL (maxNALBytes).
+// Memory is bounded per stream whatever a camera sends, and counted against a
+// budget shared by every live stream of the controller (MemBudget): what a stream
+// holds is the finished segments (hlsWindow of them, hlsMaxWindowBytes in all), the
+// segment being built (hlsMaxSegBytes and hlsMaxSegSamples, counting each picture's
+// bookkeeping as well as its bytes), the picture waiting for its duration, and a
+// fixed reservation for the depacketiser's buffers (one picture, one fragmented NAL
+// unit) and the frames read before PLAY is answered. A stream that would pass its
+// own bound or the controller's ends with a reason.
 
 const (
 	hlsTarget         = 2 * time.Second // segments are cut at the first keyframe after this
 	hlsWindow         = 6               // finished segments listed
-	hlsMaxWindowBytes = 24 << 20
-	hlsMaxSegBytes    = 8 << 20
-	hlsMaxSegDur      = 20 * time.Second // a run with no keyframe this long is dropped
-	hlsReadyAfter     = 2                // segments before a playlist is served
+	hlsMaxWindowBytes = 16 << 20
+	// hlsMaxSegBytes is the most one segment holds: a whole group of pictures. At a
+	// two-second keyframe interval that is 16 Mbit/s, at four seconds 8 Mbit/s, which
+	// is more than 1080p needs in H.264.
+	hlsMaxSegBytes   = 4 << 20
+	hlsMaxSegSamples = 1500
+	hlsMaxSegDur     = 20 * time.Second // a run with no keyframe this long is dropped
+	hlsReadyAfter    = 2                // segments before a playlist is served
+	sampleOverhead   = 64               // bookkeeping counted for each picture (the Sample, its trun entry)
+	nalOverhead      = 32
+	// preplayFrames is how many interleaved frames read before PLAY is answered are kept.
+	preplayFrames = 32
 )
 
-// StreamMemoryBound is the most memory one stream's buffers hold: the window, the
-// segment being built, one access unit and one reassembled NAL unit.
-const StreamMemoryBound = hlsMaxWindowBytes + hlsMaxSegBytes + maxAUBytes + maxNALBytes
+// StreamFixedBytes is what each stream reserves up front for the buffers the
+// depacketiser and the RTSP reader use: one picture, one fragmented NAL unit and the
+// frames read before PLAY.
+const StreamFixedBytes = maxAUBytes + maxNALBytes + preplayFrames*65536
+
+// StreamMemoryBound is the most memory one stream holds at the very most: the
+// fixed buffers, the window, the segment being built and the picture waiting for
+// its duration.
+const StreamMemoryBound = StreamFixedBytes + hlsMaxWindowBytes + hlsMaxSegBytes + maxAUBytes
+
+// DefaultLiveBudget is the memory all live streams of a controller may hold
+// together unless the manifest says otherwise.
+const DefaultLiveBudget = 64 << 20
+
+// ErrStreamTooLarge ends a stream that would hold more memory than the controller
+// allows its live streams.
+var ErrStreamTooLarge = errors.New("camera stream too large for this controller: it would use more memory than the live-video budget allows")
+
+// ErrKeyframes ends a stream whose groups of pictures do not fit a segment.
+var ErrKeyframes = errors.New("the camera's keyframes are too far apart for its bitrate (a segment would pass 4 MB): set its keyframe interval to 2 seconds, or a lower bitrate")
+
+// MemBudget is the memory the live streams of a controller share.
+type MemBudget struct {
+	mu          sync.Mutex
+	limit, used int64
+}
+
+// NewMemBudget makes a budget of limit bytes (DefaultLiveBudget when 0).
+func NewMemBudget(limit int64) *MemBudget {
+	if limit <= 0 {
+		limit = DefaultLiveBudget
+	}
+	return &MemBudget{limit: limit}
+}
+
+func (b *MemBudget) reserve(n int64) bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used+n > b.limit {
+		return false
+	}
+	b.used += n
+	return true
+}
+
+func (b *MemBudget) release(n int64) {
+	if b == nil || n <= 0 {
+		return
+	}
+	b.mu.Lock()
+	b.used -= n
+	if b.used < 0 {
+		b.used = 0
+	}
+	b.mu.Unlock()
+}
+
+// Used is what the streams hold now.
+func (b *MemBudget) Used() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used
+}
 
 type hlsSeg struct {
 	seq  uint64
@@ -55,39 +129,69 @@ type HLSStream struct {
 	closed   bool
 	failed   error
 
+	budget *MemBudget
+	held   int64 // what this stream has reserved in the budget
+
 	// the segment being built
 	cur        []Sample
-	curBytes   int
-	curStart   time.Duration // by RTP timestamp, since the stream began
-	curKey     bool
+	curBytes   int // the pictures' bytes and their bookkeeping
+	curTicks   uint64
 	pendingAU  *AccessUnit
-	baseTS     uint32
-	haveBase   bool
+	pendingCnt int64 // what the pending picture was counted as
 	lastDur    uint32
 	decodeTime uint64
 	fragSeq    uint32
 	dropped    int
+	overflows  int
 }
 
-// NewHLSStream returns a stream with no parameter sets yet: SetParams makes its
-// init segment, and pictures fed before that are dropped.
-func NewHLSStream() *HLSStream {
-	return &HLSStream{ready: make(chan struct{}), nextSeq: 1, lastDur: VideoTimescale / 10}
+// NewHLSStream returns a stream whose memory is counted in budget (nil: not
+// counted) and which has no parameter sets yet: SetParams makes its init segment,
+// and pictures fed before that are dropped.
+func NewHLSStream(budget *MemBudget) *HLSStream {
+	s := &HLSStream{ready: make(chan struct{}), nextSeq: 1, lastDur: VideoTimescale / 10, budget: budget}
+	if !s.reserveLocked(StreamFixedBytes) {
+		s.closeLocked(ErrStreamTooLarge)
+	}
+	return s
+}
+
+// reserveLocked takes n bytes of the budget for this stream, false when there are none.
+func (s *HLSStream) reserveLocked(n int64) bool {
+	if !s.budget.reserve(n) {
+		return false
+	}
+	s.held += n
+	return true
+}
+
+func (s *HLSStream) giveBackLocked(n int64) {
+	if n > s.held {
+		n = s.held
+	}
+	s.held -= n
+	s.budget.release(n)
 }
 
 // SetParams makes the init segment from the stream's sequence and picture
 // parameter sets. Called again with the same sets it does nothing; with different
-// ones (the camera changed its size or profile) it ends the stream: a player's
-// buffers cannot follow that.
+// ones before any picture has been taken (the description's sets against the
+// stream's own) it replaces them; with different ones later (the camera changed its
+// size or profile) it ends the stream: a player's buffers cannot follow that.
 func (s *HLSStream) SetParams(sps, pps []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return s.failed
+	}
 	if s.init != nil {
 		if bytes.Equal(sps, s.sps) && bytes.Equal(pps, s.pps) {
 			return nil
 		}
-		s.closeLocked(errors.New("the camera changed its picture settings: reopen the stream"))
-		return s.failed
+		if s.nextSeq != 1 || len(s.cur) > 0 || s.pendingAU != nil {
+			s.closeLocked(errors.New("the camera changed its picture settings: reopen the stream"))
+			return s.failed
+		}
 	}
 	info, err := ParseSPS(sps)
 	if err != nil {
@@ -101,8 +205,10 @@ func (s *HLSStream) SetParams(sps, pps []byte) error {
 	return nil
 }
 
+func auCost(au AccessUnit) int64 { return int64(au.Size) + int64(len(au.NALs))*nalOverhead }
+
 // Feed takes the next access unit. Pictures before the first keyframe, and runs
-// that cannot be segmented (too big, too long without a keyframe), are dropped.
+// that cannot be segmented, are dropped.
 func (s *HLSStream) Feed(au AccessUnit) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,22 +225,25 @@ func (s *HLSStream) Feed(au AccessUnit) {
 			d = s.lastDur
 		}
 		s.lastDur = d
+		s.pendingAU = nil
+		s.giveBackLocked(s.pendingCnt)
+		s.pendingCnt = 0
 		s.addSample(*prev, d)
+		if s.closed {
+			return
+		}
+	}
+	cost := auCost(au)
+	if !s.reserveLocked(cost) {
+		s.closeLocked(ErrStreamTooLarge)
+		return
 	}
 	cp := au
-	s.pendingAU = &cp
+	s.pendingAU, s.pendingCnt = &cp, cost
 	// a keyframe is where a finished segment is cut
-	if au.Key && len(s.cur) > 0 && s.curDuration() >= hlsTarget {
+	if au.Key && len(s.cur) > 0 && time.Duration(s.curTicks)*time.Second/VideoTimescale >= hlsTarget {
 		s.cut()
 	}
-}
-
-func (s *HLSStream) curDuration() time.Duration {
-	var t uint64
-	for _, sm := range s.cur {
-		t += uint64(sm.Duration)
-	}
-	return time.Duration(t) * time.Second / VideoTimescale
 }
 
 // addSample puts a picture in the segment being built, starting one at a keyframe.
@@ -147,16 +256,35 @@ func (s *HLSStream) addSample(au AccessUnit, dur uint32) {
 	if len(data) == 0 {
 		return
 	}
-	if s.curBytes+len(data) > hlsMaxSegBytes || s.curDuration() > hlsMaxSegDur {
-		// a stream that cannot be cut: drop the run and wait for the next keyframe
-		s.cur, s.curBytes = nil, 0
+	cost := int64(len(data) + sampleOverhead)
+	over := s.curBytes+int(cost) > hlsMaxSegBytes || len(s.cur) >= hlsMaxSegSamples ||
+		time.Duration(s.curTicks+uint64(dur))*time.Second/VideoTimescale > hlsMaxSegDur
+	if over {
+		// a group of pictures that does not fit a segment: drop the run and wait for the
+		// next keyframe; a camera that does it twice never will fit
+		s.dropRunLocked()
 		s.dropped++
+		s.overflows++
+		if s.overflows >= 2 {
+			s.closeLocked(ErrKeyframes)
+			return
+		}
 		if !au.Key {
 			return
 		}
 	}
+	if !s.reserveLocked(cost) {
+		s.closeLocked(ErrStreamTooLarge)
+		return
+	}
 	s.cur = append(s.cur, Sample{Data: data, Duration: dur, Key: au.Key})
-	s.curBytes += len(data)
+	s.curBytes += int(cost)
+	s.curTicks += uint64(dur)
+}
+
+func (s *HLSStream) dropRunLocked() {
+	s.giveBackLocked(int64(s.curBytes))
+	s.cur, s.curBytes, s.curTicks = nil, 0, 0
 }
 
 // cut finishes the segment being built.
@@ -164,23 +292,28 @@ func (s *HLSStream) cut() {
 	if len(s.cur) == 0 {
 		return
 	}
-	// the sample list belongs to the segment now; the pending picture (the keyframe
-	// that triggered the cut) starts the next one when it is added
-	var dur uint64
-	for _, sm := range s.cur {
-		dur += uint64(sm.Duration)
-	}
 	s.fragSeq++
 	data := Fragment(s.fragSeq, s.decodeTime, s.cur)
-	s.decodeTime += dur
-	seg := hlsSeg{seq: s.nextSeq, data: data, dur: float64(dur) / VideoTimescale}
+	// the segment's bytes replace the pictures' (the fragment is built once, so for a
+	// moment both exist: that is the transient the fixed reservation does not cover,
+	// and is at most hlsMaxSegBytes)
+	if !s.reserveLocked(int64(len(data))) {
+		s.closeLocked(ErrStreamTooLarge)
+		return
+	}
+	s.decodeTime += s.curTicks
+	seg := hlsSeg{seq: s.nextSeq, data: data, dur: float64(s.curTicks) / VideoTimescale}
 	s.nextSeq++
 	s.segs = append(s.segs, seg)
 	s.bytes += len(data)
-	s.cur, s.curBytes = nil, 0
+	s.dropRunLocked()
 	for len(s.segs) > hlsWindow || (s.bytes > hlsMaxWindowBytes && len(s.segs) > 2) {
-		s.bytes -= len(s.segs[0].data)
-		s.segs = s.segs[1:]
+		old := s.segs[0]
+		s.bytes -= len(old.data)
+		s.giveBackLocked(int64(len(old.data)))
+		// the slot is cleared and the list copied, so the dropped segment is not kept
+		// alive by the backing array
+		s.segs = append([]hlsSeg(nil), s.segs[1:]...)
 	}
 	if len(s.segs) >= hlsReadyAfter && s.ready != nil {
 		close(s.ready)
@@ -189,7 +322,8 @@ func (s *HLSStream) cut() {
 }
 
 // Close ends the stream: readers are told it is over (err says why, nil for a
-// stop). Playlist and Segment answer nothing after it.
+// stop). Playlist and Segment answer nothing after it, and what it held is given
+// back to the budget.
 func (s *HLSStream) Close(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -201,6 +335,8 @@ func (s *HLSStream) closeLocked(err error) {
 		return
 	}
 	s.closed, s.failed = true, err
+	s.cur, s.curBytes, s.curTicks, s.pendingAU, s.segs, s.bytes = nil, 0, 0, nil, nil, 0
+	s.giveBackLocked(s.held)
 	if s.ready != nil {
 		close(s.ready)
 		s.ready = nil
@@ -283,6 +419,13 @@ func (s *HLSStream) Stats() (segments, bytes, dropped int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.segs), s.bytes + s.curBytes, s.dropped
+}
+
+// Held is what this stream has reserved in the budget.
+func (s *HLSStream) Held() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.held
 }
 
 // ParseSegName reads "seg-<n>.m4s"; anything else is not a segment name.

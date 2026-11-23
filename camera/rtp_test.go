@@ -58,12 +58,32 @@ func TestThePacketsOfARealClipBecomeItsPicturesAgainAtAnyPacketSize(t *testing.T
 	}
 }
 
-func TestALostPacketDropsItsPictureAndNoOther(t *testing.T) {
+// resyncs checks what a loss must do: nothing emitted after the first missing
+// picture is a picture coded against a damaged one, so the next emitted is a
+// whole keyframe, and from there every picture is emitted again.
+func resyncs(t *testing.T, got, want []AccessUnit, lostAt int) {
+	t.Helper()
+	next := -1
+	for i, au := range want {
+		if i > lostAt && au.Key {
+			next = i
+			break
+		}
+	}
+	// emitted: all before the loss, then from the next keyframe on
+	var exp []AccessUnit
+	exp = append(exp, want[:lostAt]...)
+	if next >= 0 {
+		exp = append(exp, want[next:]...)
+	}
+	sameAUs(t, got, exp)
+}
+
+func TestALostPacketDropsItsPictureAndEverythingUntilAWholeKeyframe(t *testing.T) {
 	want := clipAUs(t)
 	pkts := clipPackets(want, 100)
-	// drop a packet from the middle of the second keyframe's slices
-	var drop int
-	var in int
+	// drop a packet from the middle of the second keyframe's slices (picture 10)
+	var drop, in int
 	for i, p := range pkts {
 		if p.TS == want[10].TS {
 			in++
@@ -74,16 +94,11 @@ func TestALostPacketDropsItsPictureAndNoOther(t *testing.T) {
 	}
 	lossy := append(append([]RTPPacket{}, pkts[:drop]...), pkts[drop+1:]...)
 	d, got := collect(t, lossy)
-	if len(got) != len(want)-1 || d.Dropped != 1 {
-		t.Fatalf("%d pictures out, %d dropped: want %d and 1", len(got), d.Dropped, len(want)-1)
+	resyncs(t, got, want, 10)
+	if d.Dropped == 0 {
+		t.Error("nothing was counted as dropped")
 	}
-	for _, au := range got {
-		if au.TS == want[10].TS {
-			t.Error("the damaged picture was emitted")
-		}
-	}
-	// a whole picture lost between pictures: the next is dropped too (it may
-	// have lost its first packets), the rest are whole
+	// a whole picture lost between pictures (4): the pictures after it were coded against it
 	var lossy2 []RTPPacket
 	for _, p := range pkts {
 		if p.TS != want[4].TS {
@@ -91,8 +106,39 @@ func TestALostPacketDropsItsPictureAndNoOther(t *testing.T) {
 		}
 	}
 	_, got2 := collect(t, lossy2)
-	if len(got2) < len(want)-2 || len(got2) > len(want)-1 {
-		t.Errorf("a lost picture left %d of %d", len(got2), len(want))
+	resyncs(t, got2, want, 4)
+}
+
+// A keyframe that lost its first slice is not one a player can begin at: it is
+// never emitted, whatever packet's loss it follows.
+func TestAKeyframeThatLostItsFirstPacketsIsNeverEmitted(t *testing.T) {
+	want := clipAUs(t)
+	pkts := clipPackets(want, 1400)
+	// lose the marker packet of picture 9 and the first slice of the keyframe (10)
+	var out []RTPPacket
+	firstOf10 := true
+	for _, p := range pkts {
+		if p.TS == want[9].TS && p.Marker {
+			continue
+		}
+		if p.TS == want[10].TS && firstOf10 && nalType(p.Payload[0]) == nalSTAPA {
+			firstOf10 = false // the parameter sets
+			continue
+		}
+		if p.TS == want[10].TS && !firstOf10 && nalType(p.Payload[0]) == nalIDR && sliceFirstMB(p.Payload) == 0 {
+			continue // the first slice
+		}
+		out = append(out, p)
+	}
+	_, got := collect(t, out)
+	for _, au := range got {
+		if au.TS == want[10].TS {
+			t.Fatal("a keyframe missing its first slice was emitted")
+		}
+	}
+	// the next whole keyframe (20) is
+	if len(got) == 0 || got[len(got)-1].TS != want[len(want)-1].TS {
+		t.Error("the stream never resumed")
 	}
 }
 
@@ -107,8 +153,13 @@ func TestFragmentsOfANALWhoseStartWasLostAreNeverAssembled(t *testing.T) {
 		}
 	}
 	_, got := collect(t, pkts)
-	if len(got) != len(want)-1 {
-		t.Errorf("%d pictures out, want %d (the first, damaged, is dropped)", len(got), len(want)-1)
+	for _, au := range got {
+		if au.TS == want[0].TS {
+			t.Error("the damaged first picture was emitted")
+		}
+	}
+	if len(got) == 0 {
+		t.Error("nothing resumed at the next keyframe")
 	}
 }
 

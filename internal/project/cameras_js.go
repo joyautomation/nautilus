@@ -10,4 +10,6 @@ type CameraRows = []yaml.Node
 
 type CameraSnapshotsCfg = *yaml.Node
 
-func validateCameras(CameraRows, CameraSnapshotsCfg) error { return nil }
+type CameraStreamsCfg = *yaml.Node
+
+func validateCameras(CameraRows, CameraSnapshotsCfg, CameraStreamsCfg) error { return nil }

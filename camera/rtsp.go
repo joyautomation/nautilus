@@ -134,17 +134,18 @@ func readLine(r *bufio.Reader) (string, error) {
 
 // rtspClient is one session.
 type rtspClient struct {
-	conn    net.Conn
-	r       *bufio.Reader
-	base    string // the request URL, without credentials
-	host    string // for the Host-less error scrub only
-	user    string
-	pass    string
-	cseq    int
-	session string
-	timeout time.Duration
-	authz   func(method, uri string) string
-	rtpCh   byte
+	conn      net.Conn
+	r         *bufio.Reader
+	base      string // the request URL, without credentials
+	host      string // for the Host-less error scrub only
+	user      string
+	pass      string
+	cseq      int
+	session   string
+	timeout   time.Duration
+	authz     func(method, uri string) string
+	sawDigest bool
+	rtpCh     byte
 	// frames that arrive while a response is awaited (after PLAY) are kept for run
 	pending []*rtspFrame
 }
@@ -227,7 +228,7 @@ func (c *rtspClient) do(ctx context.Context, method, uri string, hdr map[string]
 				return nil, scrubRTSP(err)
 			}
 			if fr != nil {
-				if len(c.pending) < 256 {
+				if len(c.pending) < preplayFrames {
 					c.pending = append(c.pending, fr)
 				}
 				continue
@@ -237,34 +238,24 @@ func (c *rtspClient) do(ctx context.Context, method, uri string, hdr map[string]
 		if resp.Code != 401 || c.user == "" || attempt == 1 {
 			return resp, nil
 		}
-		// the camera asks: answer in digest if it offers it, else basic (but never
-		// after it asked for digest)
-		var dig string
-		for _, h := range resp.Auth {
-			if i := strings.Index(strings.ToLower(h), "digest "); i >= 0 {
-				dig = h[i:]
-				break
-			}
-		}
+		// the camera asks: answer in digest if it offers it, else basic; but a
+		// camera that asked for digest once is never sent the password in basic
+		dig, basicOK := pickChallenge(resp.Auth)
 		switch {
 		case dig != "":
 			if _, err := digest(dig, c.user, c.pass, method, uri); err != nil {
 				return nil, err
 			}
 			ch := dig
+			c.sawDigest = true
 			c.authz = func(m, u string) string { a, _ := digest(ch, c.user, c.pass, m, u); return a }
-		default:
-			ok := false
-			for _, h := range resp.Auth {
-				if strings.HasPrefix(strings.ToLower(h), "basic") {
-					ok = true
-				}
-			}
-			if !ok {
-				return resp, nil
-			}
+		case c.sawDigest:
+			return nil, errors.New("rtsp: the camera asked for digest before and now asks for basic: not sending the password")
+		case basicOK:
 			a := basic(c.user, c.pass)
 			c.authz = func(string, string) string { return a }
+		default:
+			return resp, nil
 		}
 	}
 	return nil, errors.New("rtsp: the camera refused the controller's credentials")
@@ -289,10 +280,15 @@ func (c *rtspClient) describe(ctx context.Context) (Media, error) {
 	if resp.Code != 200 {
 		return Media{}, statusErr("DESCRIBE", resp)
 	}
+	// the camera's Content-Base is taken only if it is the camera's own address: a
+	// base on another host would have every later request, with its credentials,
+	// name that host
 	if b := resp.Header["content-base"]; b != "" {
-		if u, err := url.Parse(b); err == nil && u.Host != "" {
-			u.User = nil
-			c.base = u.String()
+		if u, err := url.Parse(b); err == nil {
+			if o, err := url.Parse(c.base); err == nil && u.Host == o.Host && (u.Scheme == o.Scheme) {
+				u.User = nil
+				c.base = u.String()
+			}
 		}
 	}
 	return ParseSDP(string(resp.Body))
@@ -313,6 +309,13 @@ func (c *rtspClient) trackURL(control string) string {
 			}
 		}
 		return c.base
+	}
+	// a relative control is a path: anything that could break the request line
+	// (whitespace, control characters) means the base is used instead
+	for _, r := range control {
+		if r <= ' ' || r == 0x7f {
+			return c.base
+		}
 	}
 	base := c.base
 	if !strings.HasSuffix(base, "/") {

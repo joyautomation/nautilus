@@ -5,6 +5,7 @@ package camera
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -26,13 +27,37 @@ type HLSSession struct {
 // idle. Sessions are at most one per camera.
 type HLSHub struct {
 	f        *Fetcher
+	budget   *MemBudget
 	mu       sync.Mutex
 	sessions map[string]*HLSSession
+	failed   map[string]hlsFailure
 	reaping  bool
 }
 
-// NewHLSHub makes a hub that opens cameras through f (its credentials).
-func NewHLSHub(f *Fetcher) *HLSHub { return &HLSHub{f: f, sessions: map[string]*HLSSession{}} }
+type hlsFailure struct {
+	err   error
+	until time.Time
+}
+
+// HLSRetry is how long a camera that failed is not opened again: a viewer's
+// player asking again every second must not redial a broken camera that often.
+var HLSRetry = 5 * time.Second
+
+// ErrTooManyStreams says the controller already has as many camera sessions open as
+// it will.
+var ErrTooManyStreams = errors.New("this controller already has as many camera streams open as it will: try again in a moment")
+
+// NewHLSHub makes a hub that opens cameras through f (its credentials). Their
+// streams' memory is counted in budget (DefaultLiveBudget when nil).
+func NewHLSHub(f *Fetcher, budget *MemBudget) *HLSHub {
+	if budget == nil {
+		budget = NewMemBudget(0)
+	}
+	return &HLSHub{f: f, budget: budget, sessions: map[string]*HLSSession{}, failed: map[string]hlsFailure{}}
+}
+
+// Budget is the memory the hub's streams share.
+func (h *HLSHub) Budget() *MemBudget { return h.budget }
 
 // Session returns camera c's session, starting it if there is none or the last one
 // ended, and marks it used.
@@ -46,6 +71,12 @@ func (h *HLSHub) Session(c Camera) (*HLSSession, error) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if f, ok := h.failed[c.ID]; ok {
+		if time.Now().Before(f.until) {
+			return nil, f.err
+		}
+		delete(h.failed, c.ID)
+	}
 	if s := h.sessions[c.ID]; s != nil {
 		select {
 		case <-s.done: // ended (the camera stopped or failed): the next request starts afresh
@@ -55,13 +86,31 @@ func (h *HLSHub) Session(c Camera) (*HLSSession, error) {
 			return s, nil
 		}
 	}
+	// sessions linger for HLSIdle after their last viewer: the number open is capped,
+	// so one person walking every camera cannot hold every camera open
+	if len(h.sessions) >= MaxLive {
+		return nil, ErrTooManyStreams
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &HLSSession{Stream: NewHLSStream(), cancel: cancel, done: make(chan struct{}), last: time.Now()}
+	s := &HLSSession{Stream: NewHLSStream(h.budget), cancel: cancel, done: make(chan struct{}), last: time.Now()}
 	h.sessions[c.ID] = s
 	go func() {
 		defer close(s.done)
+		// what a camera sends must never take the controller down: a panic in the
+		// pipeline ends this stream, not the process
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("camera: an RTSP session panicked", "camera", c.ID, "panic", r)
+				s.Stream.Close(errors.New("the camera sent something the controller could not relay"))
+			}
+		}()
 		err := runRTSPHLS(ctx, c.URL, user, pass, s.Stream)
 		s.Stream.Close(err)
+		if err != nil && ctx.Err() == nil {
+			h.mu.Lock()
+			h.failed[c.ID] = hlsFailure{err: err, until: time.Now().Add(HLSRetry)}
+			h.mu.Unlock()
+		}
 	}()
 	if !h.reaping {
 		h.reaping = true

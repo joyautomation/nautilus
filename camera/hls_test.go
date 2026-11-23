@@ -53,7 +53,7 @@ func clipStream(t *testing.T) (*HLSStream, []AccessUnit) {
 			pps = n
 		}
 	}
-	s := NewHLSStream()
+	s := NewHLSStream(nil)
 	if err := s.SetParams(sps, pps); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestFFprobeReadsTheSegmentsWhenItIsThere(t *testing.T) {
 	}
 }
 
-func TestPicturesBeforeTheFirstKeyframeAreDroppedAndAHugeRunIsBounded(t *testing.T) {
+func TestPicturesBeforeTheFirstKeyframeAreDroppedAndAGroupThatDoesNotFitEndsTheStream(t *testing.T) {
 	s, aus := clipStream(t)
 	// start in the middle of a GOP
 	for _, au := range aus[5:] {
@@ -141,21 +141,95 @@ func TestPicturesBeforeTheFirstKeyframeAreDroppedAndAHugeRunIsBounded(t *testing
 	if _, _, dropped := s.Stats(); dropped == 0 {
 		t.Error("pictures before a keyframe were kept")
 	}
-	// no keyframe for ever: the run is dropped at the bound, not grown
+	// a group of pictures bigger than a segment, twice: the stream ends and says why
 	s2, aus2 := clipStream(t)
-	big := AccessUnit{NALs: [][]byte{append([]byte{nalIDR | 0x60}, make([]byte, 3<<20)...)}, Key: true}
-	pic := AccessUnit{NALs: [][]byte{append([]byte{nalSlice | 0x60}, make([]byte, 3<<20)...)}}
+	big := AccessUnit{NALs: [][]byte{append([]byte{nalIDR | 0x60}, make([]byte, 1<<20)...)}, Key: true}
+	pic := AccessUnit{NALs: [][]byte{append([]byte{nalSlice | 0x60}, make([]byte, 1<<20)...)}}
 	big.TS = aus2[0].TS
-	s2.Feed(big)
-	for i := 1; i < 50; i++ {
-		pic.TS = uint32(i) * 9000
-		s2.Feed(pic)
-		if _, held, _ := s2.Stats(); held > hlsMaxSegBytes+8<<20 {
+	for i := 0; i < 60 && s2.Err() == nil; i++ {
+		if i%5 == 0 {
+			big.TS = uint32(i) * 9000
+			s2.Feed(big)
+		} else {
+			pic.TS = uint32(i) * 9000
+			s2.Feed(pic)
+		}
+		if _, held, _ := s2.Stats(); held > hlsMaxSegBytes+2<<20 {
 			t.Fatalf("held %d bytes of one segment", held)
 		}
 	}
-	if _, _, dropped := s2.Stats(); dropped == 0 {
-		t.Error("a run that cannot be segmented was never dropped")
+	if err := s2.Err(); err != ErrKeyframes {
+		t.Errorf("a camera whose groups never fit a segment: %v", err)
+	}
+}
+
+// Pictures of one byte, a tick apart, never reach the two-second cut: the segment
+// is bounded by its picture count, the work does not grow with the count, and the
+// bookkeeping of each picture is counted.
+func TestAFloodOfTinyPicturesIsBoundedInCountAndTime(t *testing.T) {
+	s, aus := clipStream(t)
+	b := NewMemBudget(DefaultLiveBudget)
+	s.budget = b
+	s.Feed(AccessUnit{TS: 0, Key: true, NALs: [][]byte{{nalIDR | 0x60, 0x88}}, Size: 2})
+	start := time.Now()
+	for i := 1; i < 200000; i++ {
+		s.Feed(AccessUnit{TS: uint32(i), NALs: [][]byte{{nalSlice | 0x60, 1}}, Size: 2})
+		if s.Err() != nil {
+			break
+		}
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("200,000 tiny pictures took %v: the work is not linear", time.Since(start))
+	}
+	_, held, _ := s.Stats()
+	if held > hlsMaxSegBytes || held/sampleOverhead > hlsMaxSegSamples+1 {
+		t.Errorf("%d bytes held for tiny pictures", held)
+	}
+	_ = aus
+}
+
+// The streams of a controller share a budget: one that would pass it ends with the
+// reason, and what a stream held goes back when it ends.
+func TestTheLiveStreamsShareOneMemoryBudget(t *testing.T) {
+	aus := clipAUs(t)
+	var sps, pps []byte
+	for _, n := range aus[0].NALs {
+		switch nalType(n[0]) {
+		case nalSPS:
+			sps = n
+		case nalPPS:
+			pps = n
+		}
+	}
+	b := NewMemBudget(2*StreamFixedBytes + 1<<20)
+	mk := func() *HLSStream {
+		s := NewHLSStream(b)
+		if s.Err() == nil {
+			s.SetParams(sps, pps)
+		}
+		return s
+	}
+	a, c := mk(), mk()
+	if a.Err() != nil || c.Err() != nil {
+		t.Fatalf("two streams in a budget of two: %v %v", a.Err(), c.Err())
+	}
+	if third := mk(); third.Err() != ErrStreamTooLarge {
+		t.Errorf("a third stream: %v, want ErrStreamTooLarge", third.Err())
+	}
+	if b.Used() != 2*StreamFixedBytes {
+		t.Errorf("the budget holds %d, want the two streams' %d", b.Used(), 2*StreamFixedBytes)
+	}
+	// pictures count too: feed one until it passes what is left
+	for i := 0; i < 300 && a.Err() == nil; i++ {
+		a.Feed(AccessUnit{TS: uint32(i) * 9000, Key: i == 0, NALs: [][]byte{append([]byte{nalIDR | 0x60}, make([]byte, 400<<10)...)}, Size: 400 << 10})
+	}
+	if a.Err() != ErrStreamTooLarge {
+		t.Errorf("a stream that outgrew the budget: %v", a.Err())
+	}
+	a.Close(nil)
+	c.Close(nil)
+	if b.Used() != 0 {
+		t.Errorf("%d bytes still reserved after both ended", b.Used())
 	}
 }
 
@@ -227,5 +301,40 @@ func TestSegmentNamesAreOnlyTheOnesThePlaylistMakes(t *testing.T) {
 		if _, ok := ParseSegName(bad); ok {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// The sets in a camera's description and the ones in its stream may differ: before
+// any picture the stream's are taken, after one the stream ends (a player's buffers
+// cannot follow a change of settings).
+func TestParameterSetsFromTheStreamReplaceTheDescriptionsBeforeAnyPicture(t *testing.T) {
+	s, aus := clipStream(t)
+	var sps, pps []byte
+	for _, n := range aus[0].NALs {
+		switch nalType(n[0]) {
+		case nalSPS:
+			sps = n
+		case nalPPS:
+			pps = n
+		}
+	}
+	other := append([]byte(nil), sps...)
+	other[3]++ // another level: a different, valid set
+	if err := s.SetParams(other, pps); err != nil {
+		t.Fatalf("before any picture: %v", err)
+	}
+	if !bytes.Contains(s.Init(), other[1:4]) {
+		t.Error("the init segment was not remade from the stream's sets")
+	}
+	for _, au := range aus[:3] {
+		s.Feed(au)
+	}
+	s.SetParams(other, pps) // the same again: nothing
+	if s.Err() != nil {
+		t.Fatalf("the same sets again ended the stream: %v", s.Err())
+	}
+	s.SetParams(sps, pps) // changed after pictures were taken
+	if s.Err() == nil || !strings.Contains(s.Err().Error(), "changed its picture settings") {
+		t.Errorf("a change after the first pictures: %v", s.Err())
 	}
 }
