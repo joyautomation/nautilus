@@ -11,7 +11,7 @@ type Config struct {
 	Self    NodeID
 	Peer    NodeID // the other controller
 	Witness NodeID
-	// Lease is how long a grant promises (design: default 2 s).
+	// Lease is how long a grant promises (design: default 1 s).
 	Lease time.Duration
 	// Rho bounds the RELATIVE rate of any two voters' clocks (default
 	// 0.01). The leader's lease is shortened by it, so it ends before any

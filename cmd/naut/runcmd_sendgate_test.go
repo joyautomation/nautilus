@@ -62,19 +62,23 @@ func (d timedDriver) OutputNames() []string                   { return []string{
 
 // #1040 review: naut check warns, on a pair, for each source that takes
 // writes whose request timeout is longer than the send budget (as little
-// as 3/4 lease minus the net delay: 1.45 s at the default 2 s lease),
-// through a Multi too; not without a pair.
+// as 3/4 lease minus the net delay: 1.45 s at a 2 s lease, 0.7 s at the
+// default 1 s), through a Multi too; not without a pair.
 func TestSendBudgetWarnings(t *testing.T) {
 	slow := timedDriver{nio.NewMemory(), map[string]time.Duration{"plc1": 3 * time.Second, "plc2": time.Second}}
 	m, err := nio.NewMulti(nio.NamedDriver{Name: "field", Driver: slow})
 	if err != nil {
 		t.Fatal(err)
 	}
-	proj := &project.Project{Redundancy: &project.RedundancyConfig{Peers: map[string]string{"a": "a:1", "b": "b:1"}, Witness: "w:1", Experimental: true}}
+	proj := &project.Project{Redundancy: &project.RedundancyConfig{Peers: map[string]string{"a": "a:1", "b": "b:1"}, Witness: "w:1", Experimental: true, Lease: "2s"}}
 	proj.Runtime.Driver = m
 	w := sendBudgetWarnings(proj)
 	if len(w) != 1 || !strings.Contains(w[0], "field: source plc1") || !strings.Contains(w[0], "1.45s") {
 		t.Fatalf("warnings %q; want one, for plc1 (3 s against 1.45 s), naming its driver", w)
+	}
+	proj.Redundancy.Lease = "" // the default 1 s: plc2's 1 s is over its 0.7 s budget too
+	if w := sendBudgetWarnings(proj); len(w) != 2 || !strings.Contains(w[1], "source plc2") || !strings.Contains(w[1], "700ms") {
+		t.Fatalf("at the default lease: %q; want plc1 and plc2 against 700ms", w)
 	}
 	proj.Redundancy = nil
 	if w := sendBudgetWarnings(proj); len(w) != 0 {

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -375,6 +376,7 @@ func (p *witnessPair) persisted(seq uint64, err error) {
 }
 
 func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Set(VoterLeaseHeader, strconv.FormatInt(int64(w.o.Lease), 10))
 	name := r.PathValue("cluster")
 	if !ValidCluster(name) {
 		http.NotFound(rw, r)

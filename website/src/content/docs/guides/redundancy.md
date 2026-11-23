@@ -360,7 +360,6 @@ redundancy:
     a: ctl-a:9450         # each controller's peer port
     b: ctl-b:9450
   witness: witness-host:9460
-  lease: 2s
   state-dir: /var/lib/nautilus   # optional: default $STATE_DIRECTORY (systemd)
 ```
 
@@ -462,18 +461,78 @@ takeover is the standby's, from its own file. Anything but in sync (after a star
 first two leases) is also a warning, which holds a leader's OPC UA
 ServiceLevel at 200.
 
-**The lease and the takeover time.** At the default 2 s lease a killed
-leader is replaced in about 2.0 s (2.8 s at p99, measured on loopback
-with peer TLS); a 1 s lease halves that (1.0 s, 1.3 s at p99) and is
-fine where the controllers renew well inside it: on an armv7 groov EPIC
-leading with 1 s, a renewal took 4.8 ms at p99. The takeover's flush
+**The lease and the takeover time.** The default lease is 1 s. From
+the fault to the new leader, on loopback with peer TLS (100 runs a row):
+
+| Lease | Leader killed, p50 / p99 | Leader isolated, p50 / p99 |
+|---|---|---|
+| 2 s | 2.01 / 2.77 s | 1.99 / 2.53 s |
+| 1 s (default) | 1.02 / 1.27 s | 0.89 / 1.24 s |
+| 500 ms | 0.57 / 0.70 s | 0.51 / 0.77 s |
+
+On ARM controllers, an armv7 groov EPIC and a Verdin AM62 (PREEMPT_RT
+Yocto image) each led a pair at 1 s for about 30 minutes, with the
+standby and the witness on a PC, a 100 ms scan and the state on flash:
+no lapse, renewals took 4.3 ms and 8.0 ms at p99, and at the worst
+renewal about 720 ms of the lease was still left. The takeover's flush
 adds a few milliseconds of flash write (11 ms at p99 for a 2 kB retain
 file on that EPIC).
+
+**What a lease tolerates.** The leader renews every quarter lease, a
+lease runs 99 % of its length from the send of the renewal that won it,
+and the write gate closes the fence margin (70 ms, below) before it
+ends.
+
+- **A stalled leader** (a hung host, a slow disk): its write gate closes,
+  and its outputs stop, once the stall passes about 0.67 s at 1 s (up to
+  0.92 s, by where it falls between two renewals), or 1.41 s at 2 s. The
+  lease and a takeover follow shortly after.
+- **A link outage** to both voters costs less: a lost renewal is tried
+  again only at the next quarter lease, so an outage of just over half
+  the lease (0.5 s at 1 s, 1 s at 2 s) can cost the lease. A vote round
+  trip longer than an eighth of the lease always fails.
+
+Choose 2 s for:
+
+- devices that answer a write slower than about 0.7 s (a BMC, a slow
+  gateway): the write budget is below;
+- a WAN or VPN link to the witness: a vote waits an eighth of the lease
+  for its answer, 125 ms at 1 s;
+- a heavily loaded host.
+
+`naut check` warns of a lease under 1 s, the shortest measured on ARM.
+
+**The witness's lease.** `naut witness --lease` defaults to 1 s too, and
+the witness refuses a vote with a longer lease. A pair with a lease of
+its own gives its witness the same `--lease`, before the witness is
+upgraded to this release (a witness that serves several pairs takes the
+longest of their leases). If it doesn't, the pair runs on its two
+controllers alone: if either stops, control stops. Each controller the
+witness refuses says `no fault tolerance: the witness refuses this
+controller's votes` with the fix (`naut redundancy status`,
+`/api/cluster`, the dashboard), the leader's OPC UA ServiceLevel drops
+to 200, and a project with `alarms:` raises the system alarm
+`nautilus.witness-lease`. All of it clears once the witness takes the
+lease. A witness lease longer than the pair's is safe but slows a
+takeover toward it: a witness left at `--lease 2s` keeps a 1 s pair's
+takeover near 2 s.
+
+**Upgrading across the change of the default (2 s to 1 s).** A pair
+without `lease:` moves to 1 s with this release. Upgrade the standby,
+then the leader, the witness last: a 1 s witness would refuse the old
+2 s pair. While the two controllers differ, the upgraded standby says
+`this controller refuses controller <name>'s votes`, and the old leader
+keeps leading on the witness's vote alone: don't restart the witness
+until both controllers are upgraded, since losing it then costs a
+takeover, and keep that window short. It clears once both run the new
+release (the upgraded controller shows it, and its leader a ServiceLevel
+of 200, until the old one's first vote after its restart). A pair that keeps
+2 s sets `lease: 2s` and starts the witness with `--lease 2s`.
 
 **Writes leave in time.** The leader stops writing a little before its
 lease ends, not at the end: the fence margin, `net-delay` (the plant
 network's delivery time) plus `send-margin` (scheduling slack), 70 ms at
-the default 2 s lease. Every write to a device checks leadership just
+the default 1 s lease (and at 2 s). Every write to a device checks leadership just
 before it goes out and must be done within the lease left minus
 `net-delay`; a write still unanswered then has its connection reset, so
 nothing it queued arrives late. Modbus TCP, EtherNet/IP, Redfish, SNMP
@@ -491,8 +550,8 @@ and keep their sum under a quarter of the lease (a longer one is
 refused).
 
 **A slow device costs a write.** A write may take as little as three
-quarters of the lease minus `net-delay` (1.45 s at the default 2 s
-lease). A device that answers slower than that has the write abandoned
+quarters of the lease minus `net-delay` (0.7 s at the default 1 s
+lease, 1.45 s at 2 s). A device that answers slower than that has the write abandoned
 and its connection reset, even with the leader healthy. A Modbus or
 EtherNet/IP write is sent again after the reconnect: a Modbus write sets
 a value and EtherNet/IP writes a tag, so a second one does the same. An
@@ -605,8 +664,8 @@ operator can commission the pair again.
 #### Re-commissioning a controller by hand
 
 A controller that lost its state normally re-adopts from the other one
-within seconds: 1.3 s after it is back, 2.5 s at most, at the default
-2 s lease (the other controller takes it once its previous process has
+within seconds: 1.3 s after it is back, 2.5 s at most, at a 2 s lease
+(it scales with the lease; the other controller takes it once its previous process has
 gone quiet there for a lease and a quarter, so a wiped old box switched
 on beside its running replacement is not taken). When it can't (the alarm says "re-commission by hand":
 the other controller is down too, or its witness incarnation is gone),
@@ -949,10 +1008,10 @@ release.
 
 **What the check costs:** one more vote round, at most, on a takeover
 after the leader dies. That is at most 0.95 s plus one round trip
-between the controller and the witness at the default 2 s lease
-(`MaxRho × lease + 3/8 × lease + RTT`). In our measurements it came to
-0.3 s at worst on a LAN, 0.6 s with 100 ms links, and 1.2 s with links
-near the largest delay a 2 s lease allows.
+between the controller and the witness at a 2 s lease, 0.48 s at the
+default 1 s (`MaxRho × lease + 3/8 × lease + RTT`). In our measurements
+at 2 s it came to 0.3 s at worst on a LAN, 0.6 s with 100 ms links, and
+1.2 s with links near the largest delay a 2 s lease allows.
 
 :::danger[What the voters can't catch]
 - **A clone booted on the far side of a split that already exists** is
@@ -1255,7 +1314,8 @@ go in this order:
 2. **The standby.** When it stops, the leader holds only its own vote
    and fences itself. Control stops until the standby is back, has
    waited out its restart lease, and has won the election with the
-   witness: about 5 to 10 seconds at the default 2 s lease, plus the
+   witness: about 5 to 10 seconds at a 2 s lease (less at the default
+   1 s), plus the
    standby's own start time. The takeover is cold, as after any restart.
 3. **The former leader.** It rejoins as the standby.
 

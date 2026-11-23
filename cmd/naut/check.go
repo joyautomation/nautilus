@@ -24,6 +24,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/logix/writer"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
+	"github.com/joyautomation/nautilus/quorum/node"
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 	swriter "github.com/joyautomation/nautilus/siemens/writer"
@@ -570,6 +571,10 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
 	for _, w := range sendBudgetWarnings(proj) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
+	}
+	for _, w := range leaseWarnings(proj) {
 		warns++
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
@@ -1295,6 +1300,36 @@ func caseOnlyBindings(tags []runtime.TagDef, d nio.Driver) []caseMismatch {
 		out = append(out, caseMismatch{tag: t.Name, binding: b, never: never})
 	}
 	return out
+}
+
+// shortestMeasuredLease is the shortest pair lease measured on ARM-class
+// controllers under normal scan load with no lapse (#710's soak): naut
+// check warns below it.
+const shortestMeasuredLease = time.Second
+
+// leaseWarnings: a pair's explicit lease under shortestMeasuredLease.
+func leaseWarnings(proj *project.Project) []string {
+	r := proj.Redundancy
+	if !r.Pair() || r.Lease == "" {
+		return nil
+	}
+	lease := r.LeaseTime()
+	if lease >= shortestMeasuredLease || mutNaut("lease_check_unwarned") {
+		return nil
+	}
+	dn, ms := r.FenceParts()
+	return []string{fmt.Sprintf("redundancy.lease %s is under %s, the shortest lease measured on ARM controllers: a leader stalled over about %s (a busy host, a slow disk) stops writing its outputs and loses its lease, and a link outage to the peer and the witness of about %s costs the lease and the plant a takeover. Use it only where the hosts and the links have been measured at it; the witness takes the same --lease", lease, shortestMeasuredLease, stallTolerance(lease, dn+ms).Round(time.Millisecond), (lease / 2).Round(time.Millisecond))}
+}
+
+// stallTolerance is the shortest stall of a leader that closes its write
+// gate (its lease follows): a lease runs lease×(1-ρ) from the send of the
+// round that renewed it, the gate closes the fence margin before its end,
+// and a renewal goes every quarter lease, so a stall that starts just
+// before a renewal was due has the rest. One that starts just after has a
+// quarter lease more. A link outage costs less: a lost renewal is retried
+// only at the next quarter lease, so about half a lease can cost it.
+func stallTolerance(lease, fence time.Duration) time.Duration {
+	return time.Duration(float64(lease)*(1-node.DefaultRho)) - fence - lease/4
 }
 
 // sendBudgetWarnings names, on a redundant pair, each source that takes

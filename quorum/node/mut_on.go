@@ -91,6 +91,9 @@ var mutations = []string{
 	"peer_api_guessed",               // node: a standby names the leader's tag API as the peer's host and its OWN API port (#710 demo finding 1)
 	"peer_api_unbound",               // node: the announced tag API is outside the hello's InfoMAC, so whoever answers can name it
 	"peer_api_self",                  // node: a peer that announces this controller's own tag API is proxied to: the standby proxies to itself
+	"lease_mismatch_never_clears",    // node: a lease refusal stays raised after the voter takes the lease again (#710 1 s lease)
+	"lease_clear_on_wait",            // node: a voter's restart wait, which still takes a lease it refuses after, clears a lease refusal (#710 1 s lease review)
+	"lease_refusal_one_way",          // node: a refusal given and one received share one report, so a pair whose leases differ flaps (#710 1 s lease)
 }
 
 // guessPeerAPI is what a standby named before the hello announced the
