@@ -274,10 +274,11 @@ claims:
       - go ./server TestAControllerThatWasAwayCatchesUpTheRuns
       - go ./server TestCheckoutLogHandsOtherKindsOn
       - go ./server TestARealisticCheckoutRunIsAFewMegabytesOfLog
-    partial: true
+      - go ./server TestAPairsServersAnswerTheCheckoutAndShowBothKeys
+      - go ./cmd/naut TestAPairOfMembersSharesTheCheckout
     note: >-
-      The store, the log adapter and the oplog kind are built and tested on
-      real oplog nodes; naut run does not use them yet (a pair still answers
-      that the checkout is not available): that wiring, the takeover's end of
-      a standing force, the two keys' fingerprints on the page and the refusal
-      to enable it beside an older controller are the next step.
+      naut run composes the log's apply, attach and supersede reset for a
+      project with a checkout section and auth users (tested through two pair
+      members); the leader's reconcile loop and the halted condition are
+      goroutine and condition wiring tested at their parts, not as a timed
+      run. Not exercised on bench hardware.

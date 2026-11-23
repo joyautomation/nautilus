@@ -1235,7 +1235,21 @@ func (m *pairMember) checkoutDuties(st *checkout.Store, reconcile func() (int, e
 	name := string(m.o.Self)
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
+	shown := ""
 	for range t.C {
+		// a checkout that stopped on an entry from a newer build is a standing
+		// condition of the pair (naut redundancy status, /api/cluster), with its fix
+		if why := st.Halted(); why != shown {
+			shown = why
+			if why == "" {
+				m.q.SetCondition("checkout-halted", "")
+			} else {
+				m.q.SetCondition("checkout-halted", "the I/O checkout has stopped on this controller: "+why+". Bring this controller up to the build the other one runs, then restart it; the oplog, notes, alarms and substitutes are unaffected")
+			}
+		}
+		if shown != "" {
+			continue // its checkout state is stale: it neither announces nor ends forces from it
+		}
 		if err := st.AnnounceKey(name); err != nil {
 			slog.Debug("checkout: the key is not announced yet", "error", err)
 		}

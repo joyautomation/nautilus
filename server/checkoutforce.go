@@ -353,8 +353,8 @@ func (a *checkoutAPI) guarded(fn func()) {
 // it, and it would block abandon and seal for good. It is for the controller
 // that runs the program, and returns how many it ended.
 func (co *CheckoutOptions) ReconcileForces() (int, error) {
-	if co.Store == nil {
-		return 0, nil
+	if co.Store == nil || co.Store.Halted() != "" {
+		return 0, nil // a halted store's standing force is stale: nothing is ended from it
 	}
 	rec, ok := co.Store.Standing()
 	if !ok {
