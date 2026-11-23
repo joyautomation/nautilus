@@ -5,8 +5,8 @@
 // person sees TIA's own online view: the CPU's state and the project
 // tree's online/offline compare. It loads nothing and writes nothing; such
 // an agent refuses every download. While a session is held online nothing
-// else on it goes online (compare, fingerprint, upload, download), and a
-// close goes offline first.
+// else on it goes online (compare, fingerprint, upload; a download is
+// refused on such an agent anyway), and a close goes offline first.
 
 using System;
 
@@ -49,6 +49,8 @@ namespace Tiad
                     string was = OnSession(s, delegate(ITia t)
                     {
                         string held = s.HeldOnline;
+                        // Cleared only once the release returned: one that
+                        // throws leaves the session held, so it is retried.
                         if (held != "") t.ReleaseOnline(s.Handle);
                         s.HeldOnline = "";
                         return held;

@@ -636,18 +636,15 @@ namespace Tiad.Openness
             {
                 OpenProject o = Of(project);
                 if (o.Held == null) return true;
-                OnlineProvider op = o.Held;
+                // Held until TIA says offline: a GoOffline that throws
+                // leaves the project held, so a retried release (or the
+                // retried close of the session it broke) tries again, and
+                // no close drops a live connection unasked.
+                o.Held.GoOffline();
                 OnlineAsks asks = o.HeldAsks;
                 o.Held = null;
                 o.HeldAsks = null;
-                try
-                {
-                    op.GoOffline();
-                }
-                finally
-                {
-                    asks.Stop();
-                }
+                asks.Stop();
                 return true;
             });
         }

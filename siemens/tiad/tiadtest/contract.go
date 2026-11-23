@@ -38,6 +38,9 @@ type Target interface {
 	// OnlineEvents lists every hold online and release, "online <address>"
 	// and "offline <address>", in order.
 	OnlineEvents(t testing.TB) []string
+	// SetReleaseOnlineFails makes taking a project offline fail inside
+	// TIA's side with msg ("" releases again).
+	SetReleaseOnlineFails(t testing.TB, msg string)
 	// SetDevice scripts the CPU's identity, as an upload and an online
 	// read report it, and with noIdentify a TIA side that cannot read it
 	// online (tiad.Openness today).
@@ -136,8 +139,11 @@ func (g goFake) SetAccess(_ testing.TB, a AccessScript) { g.f.SetAccess(a) }
 func (g goFake) SetFingerprint(_ testing.TB, fs FingerprintScript) {
 	g.f.SetFingerprint(fs)
 }
-func (g goFake) Shown(testing.TB) []string                { return g.f.Shown() }
-func (g goFake) OnlineEvents(testing.TB) []string         { return g.f.OnlineEvents() }
+func (g goFake) Shown(testing.TB) []string        { return g.f.Shown() }
+func (g goFake) OnlineEvents(testing.TB) []string { return g.f.OnlineEvents() }
+func (g goFake) SetReleaseOnlineFails(_ testing.TB, msg string) {
+	g.f.SetReleaseOnlineFails(msg)
+}
 func (g goFake) SetArchiveFails(_ testing.TB, msg string) { g.f.SetArchiveFails(msg) }
 func (g goFake) SetLogon(_ testing.TB, l LogonScript)     { g.f.SetLogon(l) }
 func (g goFake) SetImportReplacesForeign(_ testing.TB, on bool) {

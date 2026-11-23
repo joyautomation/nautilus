@@ -48,6 +48,10 @@ type Fake struct {
 	Token string
 	// Targets are the CPU addresses downloads may go to (TIAD_TARGETS).
 	Targets []string
+	// ReleaseOnlineFails makes taking a project offline fail inside TIA's
+	// side with this message: the project stays held online, and a close
+	// fails, leaving the session (the agent's broken close).
+	ReleaseOnlineFails string
 	// VerifyCloseError makes a verify fail to close its session: the
 	// session is kept and the reply's closeError says so (the verdict
 	// stands), as the agent's does when TIA is busy closing it.
@@ -1117,8 +1121,11 @@ func (f *Fake) closeSession(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
-	// As the agent: a project held online goes offline first.
-	f.releaseOnline(s)
+	// As the agent: a project held online goes offline first, and a close
+	// whose offline step fails keeps the session.
+	if _, fl := f.releaseOnline(s); fl != nil {
+		return nil, fl
+	}
 	delete(f.sessions, s.id)
 	for addr, id := range f.claims {
 		if id == s.id {

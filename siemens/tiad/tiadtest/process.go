@@ -414,6 +414,26 @@ func (p *Process) SetFingerprint(t testing.TB, fs FingerprintScript) {
 	p.SetScript(t, s)
 }
 
+// SetReleaseOnlineFails makes taking a project offline fail inside TIA's
+// side with msg ("" releases again).
+func (p *Process) SetReleaseOnlineFails(t testing.TB, msg string) {
+	t.Helper()
+	p.mu.Lock()
+	var failures []ScriptedCall
+	for _, f := range p.script.Failures {
+		if f.Call != "ReleaseOnline" {
+			failures = append(failures, f)
+		}
+	}
+	if msg != "" {
+		failures = append(failures, ScriptedCall{Call: "ReleaseOnline", Message: msg})
+	}
+	p.script.Failures = failures
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
 // SetArchiveFails makes every archive for a deploy record fail inside
 // TIA's side with msg ("" archives again).
 func (p *Process) SetArchiveFails(t testing.TB, msg string) {

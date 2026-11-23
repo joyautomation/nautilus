@@ -60,13 +60,24 @@ func heldOnlineRefuses(s *session, call string) *failure {
 	return fail(http.StatusConflict, tiad.KindBusy, "the session is held online to %s in TIA's window: take it offline first (POST /v1/sessions/%s/online {\"online\": false}), then %s", s.heldOnline, s.id, call)
 }
 
-func (f *Fake) releaseOnline(s *session) string {
+func (f *Fake) releaseOnline(s *session) (string, *failure) {
 	was := s.heldOnline
-	if was != "" {
-		f.online = append(f.online, "offline "+was)
-		s.heldOnline = ""
+	if was == "" {
+		return "", nil
 	}
-	return was
+	if f.ReleaseOnlineFails != "" {
+		return "", fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", f.ReleaseOnlineFails)
+	}
+	f.online = append(f.online, "offline "+was)
+	s.heldOnline = ""
+	return was, nil
+}
+
+// SetReleaseOnlineFails is the ReleaseOnlineFails knob ("" releases again).
+func (f *Fake) SetReleaseOnlineFails(msg string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ReleaseOnlineFails = msg
 }
 
 // OnlineEvents is every hold and release, "online <address>" and
@@ -92,7 +103,10 @@ func (f *Fake) goOnline(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	if !req.Online {
-		was := f.releaseOnline(s)
+		was, fl := f.releaseOnline(s)
+		if fl != nil {
+			return nil, fl
+		}
 		return tiad.OnlineResult{Online: false, Address: was}, nil
 	}
 	addr := ""
