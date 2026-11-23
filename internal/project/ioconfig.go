@@ -429,6 +429,58 @@ func needsRestart(checks []IOCheck) bool {
 	return failed
 }
 
+// restartLoads is what makes a candidate fit to be saved for a restart: it
+// loads as a whole project (programs, tags, every section, not only the I/O
+// ones this validation looked at), and it changes nothing outside the I/O
+// sections (a save writes the whole manifest, which a live apply never does).
+// Either failing takes NeedsRestart back and says why.
+func (io *IOConfig) restartLoads(c *IOCandidate, v *IOValidation) {
+	var problems []string
+	if p, err := Load(c.fsys, ""); err != nil {
+		problems = append(problems, err.Error())
+	} else if _, err := runtime.New(p.Runtime); err != nil {
+		problems = append(problems, err.Error())
+	}
+	v.Checks = append(v.Checks, IOCheck{Name: "load", OK: len(problems) == 0, Detail: strings.Join(problems, "; ")})
+	if len(problems) > 0 {
+		v.NeedsRestart = false
+		return
+	}
+	if io.changesBeyondIO(c) {
+		v.NeedsRestart = false
+		v.Notes = append(v.Notes, "the candidate also changes sections outside the I/O configuration (drivers: and devices:): make that change in the repository, so it is reviewed there, and restart; it is not saved from this screen")
+	}
+}
+
+// changesBeyondIO says whether the candidate's manifest text differs from the
+// booted one anywhere but the I/O sections (driver:, drivers:, devices:). It
+// compares the documents themselves, not the parsed manifests: a parsed
+// manifest carries what its devices derive (tags, types), which differs
+// whenever a device does. Unreadable text counts as different.
+func (io *IOConfig) changesBeyondIO(c *IOCandidate) bool {
+	name := io.manifest
+	if name == "" {
+		name = ManifestName
+	}
+	rest := func(fsys fs.FS) (map[string]any, bool) {
+		b, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return nil, false
+		}
+		var doc map[string]any
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			return nil, false
+		}
+		delete(doc, "driver")
+		delete(doc, "drivers")
+		delete(doc, "devices")
+		return doc, true
+	}
+	was, ok1 := rest(io.bootFS)
+	now, ok2 := rest(c.fsys)
+	return !ok1 || !ok2 || !reflect.DeepEqual(was, now)
+}
+
 // ChangedFiles is what the candidate reads that differs from the files the
 // controller booted from: path to content.
 func (c *IOCandidate) ChangedFiles() map[string]string {
@@ -584,6 +636,9 @@ func (io *IOConfig) validate(c *IOCandidate, probes bool) *IOValidation {
 			v.Valid = v.Valid && ck.OK
 		}
 		v.NeedsRestart = needsRestart(v.Checks)
+		if v.NeedsRestart {
+			io.restartLoads(c, v)
+		}
 		base := map[string]string{}
 		for k, u := range running {
 			base[k] = u.hash
@@ -619,6 +674,9 @@ func (io *IOConfig) validate(c *IOCandidate, probes bool) *IOValidation {
 	}
 	if len(topo) > 0 {
 		check("topology", append(topo, "the drivers and devices are fixed while the runtime runs: restart to apply this"))
+		// What needs no running baseline still runs: two tags commanding one
+		// point is as wrong at the next restart as now.
+		check("outputs", newOutputConflicts(running, c.units))
 		return finish()
 	}
 	check("topology", nil)

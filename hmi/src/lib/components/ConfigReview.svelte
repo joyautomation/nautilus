@@ -101,7 +101,8 @@
 			setTimeout(() => URL.revokeObjectURL(url), 10_000);
 		} finally { busy = false; }
 	}
-	const stage = () => step(() => client.stage(overlay.files));
+	// a new candidate: ids restart from 1 with the controller, so a saved note must not outlive its candidate
+	const stage = () => { savedHere = null; return step(() => client.stage(overlay.files)); };
 	const validate = () => staged && step(() => client.validate(staged!.id), stagedFor);
 	const apply = () => staged && step(() => client.apply(staged!.id, revert.trim() || undefined), stagedFor);
 </script>

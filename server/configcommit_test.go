@@ -253,3 +253,25 @@ func TestConfigSaveRouteRefuses(t *testing.T) {
 		})
 	}
 }
+
+// A validate that lands between the check and the commit means what was
+// checked is not what would be saved: refuse, and ask for another validate.
+func TestConfigSaveRefusesACandidateThatMovedWhileSaving(t *testing.T) {
+	var srv *Server
+	f := &fakeIO{valid: false, drivers: []string{"modbus"}}
+	f.restart = func(any) (bool, map[string]string) {
+		// the candidate is validated again while the save looks at it
+		call(t, srv, "POST", "/api/io/staged/1/validate", ``)
+		return true, map[string]string{"nautilus.yaml": "x"}
+	}
+	f.save = func(IOSave) (IOCommitted, error) { return IOCommitted{Commit: "c0ffee"}, nil }
+	srv = commitServer(t, f)
+	ioStaged(true)(t, srv)
+	rec := call(t, srv, "POST", "/api/config/save", `{"id":"1"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "changed while it was being saved") {
+		t.Fatalf("%d %s, want a 409 naming the move", rec.Code, rec.Body)
+	}
+	if len(f.saves) != 0 {
+		t.Fatal("a moved candidate was committed")
+	}
+}

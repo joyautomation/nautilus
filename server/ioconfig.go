@@ -794,9 +794,9 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	s.staging.mu.Lock()
 	st := s.staging.all[req.ID]
 	var cand any
-	state := ""
+	state, gen := "", 0
 	if st != nil {
-		cand, state = st.cand, st.State
+		cand, state, gen = st.cand, st.State, st.gen
 	}
 	s.staging.mu.Unlock()
 	switch {
@@ -810,6 +810,15 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 	needs, files := s.io.Restart(cand)
 	if !needs {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + req.ID + " is invalid for a reason a restart would not fix: fix what the validation names and review again"})
+		return
+	}
+	// A validate or stage that moved the candidate while this was checked
+	// means what was checked is not what would be saved.
+	s.staging.mu.Lock()
+	moved := s.staging.all[req.ID] == nil || s.staging.all[req.ID].gen != gen
+	s.staging.mu.Unlock()
+	if moved {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + req.ID + " changed while it was being saved: validate it again, then save"})
 		return
 	}
 	by := s.requester(r)

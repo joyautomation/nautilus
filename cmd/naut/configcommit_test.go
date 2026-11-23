@@ -388,3 +388,44 @@ func TestConfigSaveForRestartRefusals(t *testing.T) {
 		})
 	}
 }
+
+// A second candidate, staged from what runs (which lacks the first saved
+// change), must not overwrite the first while it waits for a restart; nor may
+// a live commit. A restart (a new committer) clears the wait (#711).
+func TestConfigSaveWaitsForARestartBeforeAnotherWrite(t *testing.T) {
+	dir := gitProject(t, "a: 1\nb: 2\n")
+	g := committer(t, dir)
+	first, err := g.save(server.IOSave{By: "user:akhan", ID: "1", Files: map[string]string{"modbus.yaml": "a: 1\nb: 3\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := gitIn(t, dir, "rev-parse", "HEAD")
+	_, err = g.save(server.IOSave{By: "user:akhan", ID: "2", Files: map[string]string{"modbus.yaml": "a: 7\nb: 2\n"}})
+	if err == nil || !errors.Is(err, server.ErrIOCommitRefused) || !strings.Contains(err.Error(), "waiting for a restart") || !strings.Contains(err.Error(), first.Commit[:12]) {
+		t.Fatalf("a second save over a pending one: %v, want a refusal naming the first commit", err)
+	}
+	if _, err := g.commit(ioState("a: 1\nb: 3\n", "a: 1\nb: 5\n"), server.IOCommit{By: "user:akhan", ID: "3"}); err == nil || !strings.Contains(err.Error(), "waiting for a restart") {
+		t.Fatalf("a live commit over a pending save: %v", err)
+	}
+	if gitIn(t, dir, "rev-parse", "HEAD") != head || readFile(t, dir, "modbus.yaml") != "a: 1\nb: 3\n" {
+		t.Fatal("a refused write changed the pending change")
+	}
+	// after a restart the file is the committed one, and a new candidate is staged from it
+	g2 := committer(t, dir)
+	if _, err := g2.save(server.IOSave{By: "user:akhan", ID: "4", Files: map[string]string{"modbus.yaml": "a: 1\nb: 4\n"}}); err != nil {
+		t.Fatalf("after a restart: %v", err)
+	}
+}
+
+// A candidate that brings a file the project's manifest does not name (a new
+// profile) is refused with the way out for a save, not for naut pull.
+func TestConfigSaveNamesTheWayOutForANewFile(t *testing.T) {
+	dir := gitProject(t, "a: 1\nb: 2\n")
+	_, err := committer(t, dir).save(server.IOSave{By: "user:akhan", ID: "1", Files: map[string]string{
+		"nautilus.yaml":         "name: x\ndevices:\n  - { name: D, profile: newprof, endpoint: 127.0.0.1 }\n",
+		"profiles/newprof.yaml": "profile: newprof\n",
+	}})
+	if err == nil || !errors.Is(err, server.ErrIOCommitRefused) || !strings.Contains(err.Error(), "naut devices add") || strings.Contains(err.Error(), "naut pull") {
+		t.Fatalf("err = %v, want the save's way out (vendor the profile in the repository), not naut pull", err)
+	}
+}

@@ -1428,9 +1428,13 @@ refuses it, like an apply.
 A device or driver added or removed, the tag set and a device's struct are
 fixed while the runtime runs, so a candidate that changes them fails
 validation (`topology`, `tags`, `device-type` or `fields`, with *restart to
-apply this*) and cannot be applied. If that is the **only** thing wrong with it
-(it loads, and a restart would apply it), the validation says
-`"needsRestart": true` and the change can still be saved:
+apply this*) and cannot be applied. If that is the **only** thing wrong with it,
+the validation says `"needsRestart": true` and the change can still be saved.
+"Only" is checked: the output-conflict check still runs (two tags commanding
+one point), the candidate is loaded as a whole project (programs, tags, every
+section: a `load` check), and nothing may change outside `driver:`, `drivers:`
+and `devices:` in the manifest, so a candidate that also edits anything else is
+made in the repository instead:
 
 - **`POST /api/config/save`** with `{"id": "<validated candidate>", "message": "<subject, optional>"}`
   writes the candidate's files into the checkout and commits exactly those
@@ -1441,7 +1445,11 @@ apply this*) and cannot be applied. If that is the **only** thing wrong with it
   changes**: it applies when the controller next restarts, which stops the scan
   while it starts again from the committed files. On a redundant pair, restart
   the standby first, then switch over, then restart the former leader. The
-  controller never restarts itself for this. A candidate invalid for any other
+  controller never restarts itself for this. A save writes only files the
+  manifest already names, so vendor a new profile or driver manifest in the
+  repository first (`naut devices add <profile>`), commit it, then save the
+  change; while a saved change waits for a restart, another save or commit to
+  the same file is refused, so it cannot be undone by accident. A candidate invalid for any other
   reason is refused (`409`); the journal records `config.save`. A valid
   candidate is applied and then committed, not saved this way.
 
