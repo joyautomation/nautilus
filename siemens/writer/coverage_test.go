@@ -448,7 +448,13 @@ func TestDivergencesAreWarnedWhereTheyBite(t *testing.T) {
 	}
 	var lines []int
 	for _, w := range out.Warnings {
-		if w.Rule != "siemens/divergence" || w.Path != "p.st" || !strings.Contains(w.Message, " can differ if ") || !strings.Contains(w.Message, ": nautilus faults the scan; on Siemens ") {
+		// MUX and shifts stand at their line; TRUNC and REAL → integer
+		// are the CLI's per-program summary.
+		rule := map[int]string{3: "siemens/divergence", 5: "siemens/divergence", 6: "siemens/divergence"}[w.Line]
+		if rule == "" {
+			rule = ConversionRangeRule
+		}
+		if w.Rule != rule || w.Path != "p.st" || !strings.Contains(w.Message, " can differ if ") || !strings.Contains(w.Message, ": nautilus faults the scan; on Siemens ") {
 			t.Errorf("warning %v", w)
 		}
 		lines = append(lines, w.Line)

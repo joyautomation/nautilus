@@ -317,3 +317,43 @@ func TestCheckSiemensTargetWarnsWhereTheCPUDiffers(t *testing.T) {
 		t.Fatalf("no divergence warning at main.st:3:\n%s", out)
 	}
 }
+
+// TestCheckSiemensTargetSummarizesConversions: REAL → integer conversions
+// that can differ on the CPU are one summary line per program, the sites
+// listed under -v; a MUX keeps its own line either way.
+func TestCheckSiemensTargetSummarizesConversions(t *testing.T) {
+	prog := "PROGRAM main\nVAR d : DINT; i : INT; k : INT; x : REAL; END_VAR\nd := REAL_TO_DINT(Level);\ni := REAL_TO_INT(Level * 2.0);\nd := REAL_TO_DINT(2.5);\nx := MUX(k, Level, 0.0);\nEND_PROGRAM\n"
+	files := map[string]string{"nautilus.yaml": goodSiemensManifest, "main.st": prog}
+	out, code := checkIn(t, files)
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"main.st: warning: siemens target: 2 REAL → integer conversions can differ on Siemens if a value exceeds its range (nautilus faults the scan; Siemens sets ENO FALSE and continues): see the Siemens target guide; -v lists them [siemens/conversion-range]",
+		"main.st:6:1: warning: siemens target: MUX can differ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "main.st:3:1: warning") {
+		t.Errorf("a conversion site listed without -v:\n%s", out)
+	}
+	dir := writeProject(t, files)
+	out, code = capture(t, func() int { return runCheck([]string{"-v", dir}) })
+	if code != 0 {
+		t.Fatalf("-v exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"2 REAL → integer conversions can differ on Siemens if a value exceeds its range (nautilus faults the scan; Siemens sets ENO FALSE and continues): see the Siemens target guide [siemens/conversion-range]",
+		"main.st:3:1: warning: siemens target: REAL_TO_DINT can differ",
+		"main.st:4:1: warning: siemens target: REAL_TO_INT can differ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("-v: missing %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "main.st:5:1") {
+		t.Errorf("the constant 2.5 warned:\n%s", out)
+	}
+}

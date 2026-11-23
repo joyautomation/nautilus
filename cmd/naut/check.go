@@ -35,16 +35,21 @@ import (
 //
 //	path/to/program.st:12:5: undeclared identifier "y" ...
 //
+// checkVerbose is naut check -v.
+var checkVerbose bool
+
 // Exit code 0 = clean, 1 = diagnostics found, 2 = usage/IO error.
 func runCheck(args []string) int {
 	fset := flag.NewFlagSet("check", flag.ContinueOnError)
 	manifest := fset.String("m", "", manifestFlagUsage)
 	render := fset.Bool("render", true, "render the operator screen in the browser on this machine (Chrome, Chromium or Edge; NAUT_BROWSER names one) and report a page that throws or is blank, a pipe that draws nothing, a drawing far outside its box, sideways scroll on a phone")
 	target := fset.String("target", "", "also check the sources against a deploy target (experimental): \"logix\" runs the Allen-Bradley writer's rules and \"siemens\" the S7-1500 SCL writer's, so a construct the target's writer cannot express is a diagnostic here, not a download failure")
+	verbose := fset.Bool("v", false, "verbose: list every site behind a summary warning (the Siemens target's REAL → integer conversions)")
 	if err := fset.Parse(args); err != nil {
 		return 2
 	}
 	renderScreens = *render
+	checkVerbose = *verbose
 	if *target != "" && *target != "logix" && *target != "siemens" {
 		fmt.Fprintf(os.Stderr, "naut check: unknown target %q (the targets are: logix, siemens)\n", *target)
 		return 2
@@ -517,10 +522,15 @@ func checkSiemensTarget(dir, manifestName, manifestFile string) int {
 	for _, d := range diags {
 		report(d, "")
 	}
-	// Where the CPU behaves differently from nautilus (writer.Output
-	// Warnings): a warning at the use site, not an error.
-	for _, d := range out.Warnings {
-		report(d, "warning: ")
+	// Where the CPU can behave differently from nautilus (writer.Output
+	// Warnings): warnings, not errors.
+	for _, l := range siemensWarningLines(out.Warnings, func(p string) string {
+		if p == "" || p == project.ManifestName {
+			return manifestFile
+		}
+		return p
+	}, checkVerbose) {
+		fmt.Println(l)
 	}
 	return len(diags)
 }

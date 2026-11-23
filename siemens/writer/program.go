@@ -300,7 +300,17 @@ func (pw *progWriter) diag(rule string, line int, msg string) {
 // nautilus faults the scan and the CPU carries on (Output.Warnings). The
 // callers leave out what is provably in range (a constant).
 func (pw *progWriter) diverges(line int, what, cond, onSiemens string) {
-	pw.w.warnings = append(pw.w.warnings, Diag{Rule: "siemens/divergence", Path: pw.path, Line: line,
+	pw.divergesAs("siemens/divergence", line, what, cond, onSiemens)
+}
+
+// ConversionRangeRule tags the REAL → integer conversion warnings (TRUNC
+// included). They are common and seldom provably in range, so check and
+// the deploy summarize them per program and list the sites on request,
+// while a MUX or shift warning stands at its line.
+const ConversionRangeRule = "siemens/conversion-range"
+
+func (pw *progWriter) divergesAs(rule string, line int, what, cond, onSiemens string) {
+	pw.w.warnings = append(pw.w.warnings, Diag{Rule: rule, Path: pw.path, Line: line,
 		Message: fmt.Sprintf("%s can differ if %s: nautilus faults the scan; on Siemens %s and the scan carries on", what, cond, onSiemens)})
 }
 

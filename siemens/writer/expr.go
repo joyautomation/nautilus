@@ -310,7 +310,7 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			return ""
 		}
 		if !realConstFits(argExprs[0], "LINT", math.Trunc) {
-			pw.diverges(line, "TRUNC", "the value exceeds the 64-bit range (or is NaN)", "TRUNC_LINT sets ENO FALSE")
+			pw.divergesAs(ConversionRangeRule, line, "TRUNC", "the value exceeds the 64-bit range (or is NaN)", "TRUNC_LINT sets ENO FALSE")
 		}
 		return "TRUNC_LINT(" + args[0] + ")"
 	case strings.HasPrefix(name, "TRUNC_") || strings.HasPrefix(name, "REAL_TRUNC_") || strings.HasPrefix(name, "LREAL_TRUNC_"):
@@ -320,7 +320,7 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			return ""
 		}
 		if !realConstFits(argExprs[0], to, math.Trunc) {
-			pw.diverges(line, name, "the value exceeds "+to+"'s range (or is NaN)", "TRUNC_"+to+" sets ENO FALSE")
+			pw.divergesAs(ConversionRangeRule, line, name, "the value exceeds "+to+"'s range (or is NaN)", "TRUNC_"+to+" sets ENO FALSE")
 		}
 		return "TRUNC_" + to + "(" + args[0] + ")"
 	case mathFuncs[name]:
@@ -440,7 +440,7 @@ func (pw *progWriter) conversion(name, from, to string, arg st.Expression, args 
 	// Both round half to even (lang/ir conversions.go; TIA's CONVERT and
 	// ROUND by its documentation): only the out-of-range case differs.
 	if isReal(from) && isInt(to) && !realConstFits(arg, to, math.RoundToEven) {
-		pw.diverges(line, name, "the value exceeds "+to+"'s range (or is NaN)", name+" sets ENO FALSE")
+		pw.divergesAs(ConversionRangeRule, line, name, "the value exceeds "+to+"'s range (or is NaN)", name+" sets ENO FALSE")
 	}
 	return name + "(" + args[0] + ")"
 }

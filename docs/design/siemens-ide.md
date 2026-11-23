@@ -342,21 +342,24 @@ The rules:
     it as, as the runtime does (it used to take its init's REAL).
 - **Known divergences, documented rather than refused:** where nautilus
   faults the scan the CPU sets ENO FALSE and carries on. Each is a
-  `naut check --target siemens` (and deploy) **warning at its use site**
-  (`[siemens/divergence]`, `writer.Output.Warnings`), never silent:
+  `naut check --target siemens` (and deploy) **warning**, never silent
+  (`writer.Output.Warnings`): a MUX or shift at its use site
+  (`[siemens/divergence]`); REAL → integer conversions, common and seldom
+  provably in range, as ONE summary line per program
+  (`[siemens/conversion-range]`, naut-lead 11-23) whose sites `-v` lists:
 
   | Construct | Warned unless | nautilus | S7-1500 |
   |---|---|---|---|
   | `MUX(K, IN0, …)` | K is a constant in range | K out of range faults the scan | MUX sets ENO FALSE, the scan carries on |
   | `SHL`/`SHR`/`ROL`/`ROR` | the count N is unsigned or a constant | a negative N faults the scan | N is converted to TIA's unsigned count, beyond the width |
-  | `TRUNC`, `TRUNC_<int>` | the argument is a constant in range | a value beyond the integer (or NaN) faults the scan | the conversion sets ENO FALSE, the scan carries on |
-  | `REAL_TO_<int>`, `TO_<int>` of a REAL | the same | the same | the same |
+  | `TRUNC`, `TRUNC_<int>` (summarized per program) | the argument is a constant in range | a value beyond the integer (or NaN) faults the scan | the conversion sets ENO FALSE, the scan carries on |
+  | `REAL_TO_<int>`, `TO_<int>` of a REAL (summarized per program) | the same | the same | the same |
 
   Only the out-of-range case differs: the rounding is the same (REAL →
   integer half to even in nautilus, as TIA documents CONVERT and ROUND;
   TRUNC toward zero in both; TIA's side from its documentation, not yet
-  measured on a CPU). A REAL source is seldom provably in range, so
-  these warnings fire on most REAL → integer conversions.
+  measured on a CPU). A REAL source is seldom provably in range, which is
+  why those are a per-program count, not a line each.
 
 - Temps have no start value in TIA. nautilus re-sets a temp to its init on
   every scan (#203), so the body starts by assigning each one.
