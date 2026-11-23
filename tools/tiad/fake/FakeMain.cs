@@ -288,7 +288,49 @@ namespace Tiad.Fake
         string uploadAccess = UploadedAccessControl;
         bool uploadWeb;
         bool uploadAnonymous;
+        List<AnonymousRole> uploadAnonymousRoles = new List<AnonymousRole>();
+        List<string> uploadUsers = new List<string>();
+        bool rightsOnlyWhenOn;
+
+        // RightsOnlyWhenOn: TIA reads every custom role as holding no
+        // runtime right while the CPU's access control is off.
+        public bool RightsOnlyWhenOn
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return rightsOnlyWhenOn;
+                }
+            }
+        }
         string accessRecords = "";
+
+        // UploadAnonymousRoles are the roles an upload's anonymous user
+        // holds: a custom role with its runtime rights, or (Rights null) a
+        // system role, whose rights tiad cannot read. UploadUsers are the
+        // local users an upload brings besides any the project held.
+        public List<AnonymousRole> UploadAnonymousRoles
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadAnonymousRoles;
+                }
+            }
+        }
+
+        public List<string> UploadUsers
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadUsers;
+                }
+            }
+        }
 
         // UploadAnonymous is whether an upload brings a project whose
         // anonymous user is active.
@@ -816,6 +858,16 @@ namespace Tiad.Fake
             string upAccess = r.Str("uploadAccessControl");
             bool upWeb = r.Bool("uploadWebServer");
             bool upAnon = r.Bool("uploadAnonymous");
+            var upAnonRoles = new List<AnonymousRole>();
+            foreach (var x in r.Children("uploadAnonymousRoles"))
+            {
+                var ar = new AnonymousRole { Name = x.Str("name") };
+                List<string> rights = x.Strs("rights");
+                if (!x.Bool("system")) ar.Rights = rights;
+                upAnonRoles.Add(ar);
+            }
+            List<string> upUsers = r.Strs("uploadUsers");
+            bool onlyOn = r.Bool("rightsOnlyWhenOn");
             string records = r.Str("accessRecords");
             if (upAccess == "") upAccess = UploadedAccessControl;
             var qs = new List<Question>();
@@ -860,6 +912,9 @@ namespace Tiad.Fake
                 uploadAccess = upAccess;
                 uploadWeb = upWeb;
                 uploadAnonymous = upAnon;
+                uploadAnonymousRoles = upAnonRoles;
+                uploadUsers = upUsers;
+                rightsOnlyWhenOn = onlyOn;
                 accessRecords = records;
             }
             return new Obj();
@@ -977,6 +1032,9 @@ namespace Tiad.Fake
         public Dictionary<string, FakeUser> Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
         public Dictionary<string, HashSet<string>> Roles = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         public bool AnonymousActive;
+        // AnonymousRoles are the roles the anonymous user holds: a custom
+        // one is in Roles; any other is a system role.
+        public List<string> AnonymousRoles = new List<string>();
         public Dictionary<string, string> RoleComments = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // CompileError is what a hardware compile of this project fails
@@ -1037,6 +1095,7 @@ namespace Tiad.Fake
             Roles = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
             foreach (var kv in from.Roles) Roles[kv.Key] = new HashSet<string>(kv.Value, StringComparer.Ordinal);
             AnonymousActive = from.AnonymousActive;
+            AnonymousRoles = new List<string>(from.AnonymousRoles);
             RoleComments = new Dictionary<string, string>(from.RoleComments, StringComparer.Ordinal);
         }
     }
@@ -1520,7 +1579,7 @@ namespace Tiad.Fake
         // as TIA makes one, or keeps the project's, as the agent decided;
         // then it applies cpu.configurationProtection through the agent's
         // ProtectionSteps over a configurator that behaves like TIA's.
-        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made)
+        public void ApplyStation(object project, Station next, string decision, Secrets secrets, bool turnOn, List<string> notes, AccessMade made)
         {
             script.Enter("ApplyStation");
             var p = (FakeProject)project;
@@ -1556,13 +1615,35 @@ namespace Tiad.Fake
             p.Station = null;
             ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
             var access = new FakeAccess(p, script.Policy);
-            AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+            AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, turnOn, made, notes);
             WebSteps.Run(new FakeWeb(p), access, next.WebServer, secrets, decision == CpuReuse.Create, made, notes);
             p.Station = next;
             List<string> ch = decision == CpuReuse.Reuse && prev == null
                 ? CpuReuse.Found(found, next, protection, made.Writes != writes)
                 : CpuReuse.Changes(decision, prev, next);
             p.Changed = was || ch.Count > 0;
+        }
+
+        // ReadTurnOn reads the project's users and anonymous user as
+        // tiad.Openness does: a system role's rights are unreadable.
+        public TurnOnFacts ReadTurnOn(object project)
+        {
+            script.Enter("ReadTurnOn");
+            var p = (FakeProject)project;
+            if (p.Cpu == null) throw new TiaException("the project holds no CPU");
+            var f = new TurnOnFacts { Users = new List<string>(p.Users.Keys), AnonymousActive = p.AnonymousActive };
+            foreach (string r in p.AnonymousRoles)
+            {
+                var ar = new AnonymousRole { Name = r };
+                HashSet<string> rights;
+                if (p.Roles.TryGetValue(r, out rights))
+                {
+                    ar.Rights = script.RightsOnlyWhenOn && p.AccessControl != AccessRule.Enabled ? new List<string>() : new List<string>(rights);
+                    ar.Rights.Sort(StringComparer.Ordinal);
+                }
+                f.AnonymousRoles.Add(ar);
+            }
+            return f;
         }
 
         public PasswordPolicy ReadPolicy(object project)
@@ -2166,6 +2247,16 @@ namespace Tiad.Fake
             up.WebHttpsOnly = false;
             up.AnonymousActive = script.UploadAnonymous;
             up.DropGrants();
+            up.AnonymousRoles = new List<string>();
+            foreach (AnonymousRole ar in script.UploadAnonymousRoles)
+            {
+                up.AnonymousRoles.Add(ar.Name);
+                if (ar.Rights != null) up.Roles[ar.Name] = new HashSet<string>(ar.Rights, StringComparer.Ordinal);
+            }
+            foreach (string u in script.UploadUsers)
+            {
+                if (!up.Users.ContainsKey(u)) up.Users[u] = new FakeUser();
+            }
             DeviceIdentity d = script.Device;
             up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };
             up.CpuAddress = address;
@@ -2353,6 +2444,10 @@ namespace Tiad.Fake
         {
             script.Enter("Archive");
             var p = (FakeProject)project;
+            // As tiad.Openness: Openness archives the saved project, so the
+            // project is saved in place first.
+            File.WriteAllText(p.Full, "fake TIA project");
+            saved[p.Full] = SavedCopy(p);
             string f = Path.Combine(dir, Path.GetFileNameWithoutExtension(p.Full) + ".zap21");
             int n = System.Threading.Interlocked.Increment(ref archives);
             if (script.ArchiveSame)
@@ -2453,6 +2548,7 @@ namespace Tiad.Fake
             foreach (var kv in p.RoleComments) rc[kv.Key] = kv.Value;
             o["roleComments"] = rc;
             o["anonymousActive"] = p.AnonymousActive;
+            o["anonymousRoles"] = new List<object>(p.AnonymousRoles.ConvertAll(delegate(string x) { return (object)x; }));
             File.WriteAllText(f, Json.Write(o));
         }
 
@@ -2563,6 +2659,11 @@ namespace Tiad.Fake
                 }
                 foreach (var kv in (IDictionary<string, object>)o["roleComments"]) p.RoleComments[kv.Key] = (string)kv.Value;
                 p.AnonymousActive = (bool)o["anonymousActive"];
+                object ar;
+                if (o.TryGetValue("anonymousRoles", out ar) && ar != null)
+                {
+                    foreach (object x in (System.Collections.IList)ar) p.AnonymousRoles.Add((string)x);
+                }
             }
             return p;
         }

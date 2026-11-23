@@ -628,6 +628,66 @@ func TestSiemensDeployLoadsHardwareOnlyAttested(t *testing.T) {
 	}
 }
 
+// TestSiemensDeployTurnsAccessControlOnOnlyAsked: an adopted CPU whose
+// access control is off is never turned on from the default
+// access-control (full-access-user): the refusal names
+// --turn-on-access-control. With it, a build says what it turned on and
+// saves nothing, and a download prints it in the PLAN and loads it by a
+// hardware load that resets user management, attested disabled.
+func TestSiemensDeployTurnsAccessControlOnOnlyAsked(t *testing.T) {
+	r := newDeployRig(t)
+	r.cpuRuns(false)
+	r.setStation(", configuration-protection: keep")
+	out, code := r.run("", false, "--adopt", "upload")
+	if code != 1 || !strings.Contains(out, "naut: --turn-on-access-control") || !strings.Contains(out, "never from the spec's default") {
+		t.Fatalf("the default over an adopted CPU without access control: exit %d:\n%s", code, out)
+	}
+	// Only with the Full access user.
+	manifest := filepath.Join(r.dir, "nautilus.yaml")
+	swap := func(from, to string) {
+		t.Helper()
+		m, err := os.ReadFile(manifest)
+		if err != nil || !strings.Contains(string(m), from) {
+			t.Fatalf("manifest: %v", err)
+		}
+		if err := os.WriteFile(manifest, []byte(strings.Replace(string(m), from, to, 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	swap("configuration-protection: keep}", "configuration-protection: keep, access-control: keep}")
+	out, code = r.run("", false, "--adopt", "upload", "--turn-on-access-control")
+	if code != 1 || !strings.Contains(out, "--turn-on-access-control turns access control on with the user \"nautilus\": it needs target.siemens.station.cpu.access-control full-access-user") {
+		t.Fatalf("the flag with access-control keep: exit %d:\n%s", code, out)
+	}
+	swap("configuration-protection: keep, access-control: keep}", "configuration-protection: keep}")
+	out, code = r.run("", false, "--adopt", "upload", "--turn-on-access-control")
+	if code != 0 || !strings.Contains(out, "station note: "+tiadtest.TurnedOnNote) || !strings.Contains(out, "station note: the project's anonymous user is not active") {
+		t.Fatalf("a build that turns it on: exit %d:\n%s", code, out)
+	}
+	hw := []string{"--download", "--yes", "--allow-stop", "--hardware", "--attest-hardware=as intended", "--cpu-access-control=disabled"}
+	// The download without the flag: the adopted project as found, with
+	// the default spec, is refused again.
+	out, code = r.run("", false, hw...)
+	if code != 1 || !strings.Contains(out, "naut: --turn-on-access-control") || len(r.downloads()) != 0 {
+		t.Fatalf("a download without the flag: exit %d:\n%s", code, out)
+	}
+	out, code = r.run("", false, append(hw, "--turn-on-access-control")...)
+	if code != 0 {
+		t.Fatalf("the turn-on download: exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{"  access control: " + tiadtest.TurnedOnNote, "  access control: the project's anonymous user is not active",
+		`  access control: the project holds no local user besides "nautilus"`,
+		"user management: RESET the CPU's to the project's (deletes the CPU's users), resting on your observation that its access control is disabled now"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	dl := r.downloads()
+	if len(dl) != 1 || !dl[0].Request.Hardware || dl[0].Request.Attestation == nil || dl[0].Request.Attestation.CPUAccessControl != tiad.AttestCPUAccessDisabled {
+		t.Fatalf("downloads: %+v", dl)
+	}
+}
+
 // TestSiemensDeployFlagsGoTogether: an acting flag without --download, a
 // hardware load without the operator's statement, and an access control
 // that is not one of the two words are refused before anything is read.
@@ -657,6 +717,10 @@ func TestSiemensDeployFlagsGoTogether(t *testing.T) {
 		{siemensDeployOptions{adopt: "latest"}, "want a project archive"},
 		{siemensDeployOptions{trustUnverified: true}, "--trust-unverified-certificate goes with --adopt upload"},
 		{siemensDeployOptions{adopt: "x.zap21", trustUnverified: true}, "--trust-unverified-certificate goes with --adopt upload"},
+		{dl(siemensDeployOptions{turnOnAccess: true}), "--turn-on-access-control with --download needs --hardware and --cpu-access-control disabled"},
+		{dl(siemensDeployOptions{turnOnAccess: true, dryRun: true, hardware: true, attest: "x", cpuAccess: "disabled", by: "op"}), "--turn-on-access-control goes without --dry-run"},
+		{dl(siemensDeployOptions{turnOnAccess: true, hardware: true, attest: "x", by: "op"}), "--turn-on-access-control with --download needs"},
+		{dl(siemensDeployOptions{turnOnAccess: true, hardware: true, attest: "x", cpuAccess: "enabled", by: "op"}), "--turn-on-access-control with --download needs"},
 	} {
 		if err := c.o.flagsError(); err == nil || !strings.Contains(err.Error(), c.says) {
 			t.Errorf("case %d: %v, want %q", i, err, c.says)
@@ -665,7 +729,8 @@ func TestSiemensDeployFlagsGoTogether(t *testing.T) {
 	for i, o := range []siemensDeployOptions{{}, dl(siemensDeployOptions{yes: true, dryRun: true, allowStop: true}),
 		{download: true, noStart: true}, dl(siemensDeployOptions{hardware: true, attest: "x", cpuAccess: "enabled", by: "op"}),
 		dl(siemensDeployOptions{acceptOutside: true, by: "op"}), {adopt: "Line 3.ZAP21"}, {adopt: "upload", trustUnverified: true},
-		dl(siemensDeployOptions{adopt: "last-deploy"})} {
+		dl(siemensDeployOptions{adopt: "last-deploy"}), {turnOnAccess: true}, {adopt: "upload", turnOnAccess: true},
+		dl(siemensDeployOptions{turnOnAccess: true, hardware: true, attest: "x", cpuAccess: "disabled", by: "op"})} {
 		if err := o.flagsError(); err != nil {
 			t.Errorf("ok case %d: %v", i, err)
 		}

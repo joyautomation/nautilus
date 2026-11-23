@@ -298,12 +298,14 @@ namespace Tiad
 
         // Plan refuses, before any write, what an apply cannot do: a Full
         // access user needs its password, and on a CPU the apply keeps
-        // (reuse), access control must already be on, since tiad never
-        // turns it on for a CPU it did not make. keep never refuses: it
-        // changes nothing, and a new CPU without a Full access user fails
-        // its compile, which says why. current is the kept CPU's state, or
-        // null for a CPU the apply makes.
-        public static void Plan(string current, string want, bool havePassword)
+        // (reuse), access control must already be on, unless it reads
+        // exactly Disabled and the apply asked accessControlTurnOn
+        // (TurnOnRule): tiad never turns it on for a CPU it did not make
+        // unasked. keep never refuses: it changes nothing, and a new CPU
+        // without a Full access user fails its compile, which says why.
+        // current is the kept CPU's state, or null for a CPU the apply
+        // makes.
+        public static void Plan(string current, string want, bool havePassword, bool turnOn)
         {
             if (want == StationRules.AccessKeep) return;
             if (want != StationRules.AccessFullAccessUser)
@@ -315,9 +317,181 @@ namespace Tiad
                 throw TiadException.BadRequest("{0}", "cpu.accessControl is fullAccessUser, and secrets.fullAccessPassword is empty (it comes from the secret store, never the spec)");
             }
             if (current == null || current == Enabled) return;
+            if (current == TurnOnRule.Disabled)
+            {
+                if (turnOn) return;
+                throw TiadException.BadRequest("{0}", TurnOnRule.NotAsked);
+            }
             throw TiadException.BadRequest(
-                "the project's CPU has its access control {0}, and tiad turns access control on only for a CPU it makes: to keep the CPU as found, set cpu.accessControl to keep",
+                "the project's CPU has its access control {0}, and tiad turns access control on only for a CPU it makes, or one it keeps whose access control reads \"Disabled\" (accessControlTurnOn): to keep the CPU as found, set cpu.accessControl to keep",
                 current == Absent ? "not available (no such setting)" : "set to " + Json.Quote(current));
+        }
+
+        // After is the kept CPU's access control once an apply with want
+        // and turnOn has run, for the checks that rest on it (WebRule.Plan):
+        // current, or Enabled when the apply turns it on.
+        public static string After(string current, string want, bool turnOn)
+        {
+            if (current == TurnOnRule.Disabled && turnOn && want == StationRules.AccessFullAccessUser) return Enabled;
+            return current;
+        }
+    }
+
+    // TurnOnFacts is what TurnOnRule.Check reads of the project before an
+    // apply turns a kept CPU's access control on (ITia.ReadTurnOn): the
+    // project's local users, and its anonymous user, whose rights anyone
+    // gets without a password once access control is on.
+    public sealed class TurnOnFacts
+    {
+        public List<string> Users = new List<string>();
+        public bool AnonymousActive;
+        public List<AnonymousRole> AnonymousRoles = new List<AnonymousRole>();
+    }
+
+    // AnonymousRole is a role the anonymous user holds and the runtime
+    // rights it holds on the CPU; Rights is null when tiad cannot read them
+    // (TIA reads only a custom role's).
+    public sealed class AnonymousRole
+    {
+        public string Name = "";
+        public List<string> Rights;
+    }
+
+    // TurnOnRule is accessControlTurnOn (K, naut-lead 2026-11-23): an
+    // apply may turn access control on for a CPU it keeps only when the
+    // CPU's access control reads exactly Disabled and the request asks it,
+    // never from the spec's default; the project as turned on loads only
+    // by a hardware download that resets the CPU's user management to the
+    // project's, with attestation.cpuAccessControl "disabled" (the
+    // attestation route), and is not saved before that loads it. A
+    // loosening on an operator's word (#616 tighten-later): tiad cannot
+    // read a CPU's access control online.
+    public static class TurnOnRule
+    {
+        // Disabled is PlcAccessControlConfiguration's name for access
+        // control off, exactly.
+        public const string Disabled = "Disabled";
+
+        public const string NotAsked = "the project's CPU has its access control set to \"Disabled\", and tiad turns access control on for a CPU it keeps only when the apply asks it (accessControlTurnOn; naut: --turn-on-access-control), never from the spec's default; the project as turned on then loads only by a hardware download that resets the CPU's user management with attestation.cpuAccessControl \"disabled\": to keep the CPU as found, set cpu.accessControl to keep";
+        public const string NeedsFullAccessUser = "accessControlTurnOn goes with cpu.accessControl fullAccessUser";
+        public const string NothingNote = "accessControlTurnOn: the CPU's access control was not \"Disabled\" in the project before this apply, so it turned nothing on";
+        public const string TurnedOnNote = "TURNED ON the kept CPU's access control (\"Disabled\" -> \"EnabledWithAccessControl\", accessControlTurnOn): this project loads only by a hardware download that resets the CPU's user management to the project's, with attestation.cpuAccessControl \"disabled\", and is not saved before that load";
+        public const string SaveRefused = "an apply on this session turned the kept CPU's access control on (accessControlTurnOn), or the session opened a project marked turn-on pending, and the project is not saved before a download on this session loads it: a saved project would carry access control on to a later session without the opt-in; download it (hardware, userManagementResetToProject, attestation.cpuAccessControl \"disabled\"), or close the session without saving";
+        public const string PendingNote = "this project is marked turn-on pending: an earlier download that turned its CPU's access control on was not verified loaded (the deploy record's archive saved the project before TIA's download), so it loads only by a hardware download that resets the CPU's user management, with attestation.cpuAccessControl \"disabled\", or \"enabled\" with tiad logged on as \"nautilus\" if that download did load";
+
+        // MarkerSuffix names the file beside a project (<project>.ap21 +
+        // it) that marks it turn-on pending: written before a gated
+        // download's deploy record saves the project (tiad.Openness's
+        // archive saves it in place), removed on a verified load; an open
+        // of a marked project, or an adopt of an unverified turn-on
+        // deploy's archive, re-arms the gate.
+        public const string MarkerSuffix = ".turn-on-pending";
+        public const string MarkerFileRefused = "files ending in .turn-on-pending are tiad's marks of a project whose CPU access control was turned on and not verified loaded: the file API neither writes nor deletes them (a verified load, an apply that finds the project's access control off, or a create or adopt of the project removes one)";
+        public const string ClearedNote = "the turn-on pending mark is removed: the project's access control reads \"Disabled\", so no load of it turns the CPU's on";
+        public const string LateRefusal = "; the apply had written, so the session is unclean: close it without saving";
+
+        // IsMarker reports whether a work-dir path names a turn-on pending
+        // mark, as Windows resolves it (case, trailing dots and spaces).
+        public static bool IsMarker(string path)
+        {
+            return path.TrimEnd('.', ' ').EndsWith(MarkerSuffix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // ReadOnly are the runtime rights that let nobody change the CPU
+        // or its values: an active anonymous user holding only these gets
+        // a warning, not a refusal. The protection levels are not among
+        // them: HMI access, and Read access with it, let an HMI write tags.
+        static readonly string[] ReadOnly = { "WebReadTags", "WebAllowDiagnostics", "WebReadSyslog", "WebReadWatchTables" };
+
+        // Check refuses, before any write, a turn-on that would look
+        // protected and not be: an active anonymous user holding any right
+        // but a read-only one, one tiad does not know, or a role whose
+        // rights it cannot read. Otherwise it adds what the turn-on makes
+        // count: the project's other local users, and the anonymous user.
+        public static void Check(TurnOnFacts f, List<string> notes)
+        {
+            if (f.AnonymousActive)
+            {
+                var bad = new List<string>();
+                var read = new List<string>();
+                foreach (AnonymousRole r in f.AnonymousRoles)
+                {
+                    if (r.Rights == null)
+                    {
+                        bad.Add("role " + Json.Quote(r.Name) + ": rights tiad cannot read (TIA reads only a custom role's: give the anonymous user a custom role instead)");
+                        continue;
+                    }
+                    var w = new List<string>();
+                    foreach (string x in r.Rights)
+                    {
+                        if (Array.IndexOf(ReadOnly, x) >= 0) read.Add(x);
+                        else w.Add(x);
+                    }
+                    if (w.Count > 0) bad.Add("role " + Json.Quote(r.Name) + ": " + string.Join(", ", w.ToArray()));
+                }
+                if (bad.Count > 0)
+                {
+                    throw TiadException.BadRequest(
+                        "accessControlTurnOn is refused: the project's anonymous user is active and holds rights beyond reading ({0}): once access control is on anyone who reaches the CPU gets them without a password, so the CPU would look protected and not be; remove the anonymous user's write rights in the project, or do not turn access control on (set cpu.accessControl to keep)",
+                        string.Join("; ", bad.ToArray()));
+                }
+                read.Sort(StringComparer.Ordinal);
+                notes.Add(read.Count == 0
+                    ? "WARNING: the project's anonymous user is active and holds no runtime right: once access control is on it gets nothing, but anyone who reaches the CPU is let in as it"
+                    : "WARNING: the project's anonymous user is active: once access control is on anyone who reaches the CPU gets, without a password, " + string.Join(", ", Distinct(read).ToArray()));
+            }
+            else
+            {
+                notes.Add("the project's anonymous user is not active");
+            }
+            var others = new List<string>();
+            foreach (string u in f.Users)
+            {
+                if (u != AccessSteps.UserName) others.Add(Json.Quote(u));
+            }
+            others.Sort(StringComparer.Ordinal);
+            notes.Add(others.Count == 0
+                ? "the project holds no local user besides \"nautilus\""
+                : "once access control is on, the project's local users besides \"nautilus\" may log on to the CPU with their own rights: " + string.Join(", ", others.ToArray()));
+        }
+
+        static List<string> Distinct(List<string> sorted)
+        {
+            var l = new List<string>();
+            foreach (string x in sorted)
+            {
+                if (l.Count == 0 || l[l.Count - 1] != x) l.Add(x);
+            }
+            return l;
+        }
+
+        // DownloadRefusal is why a download on a session whose apply
+        // turned access control on (and that no download on it loaded
+        // yet) is refused before anything reaches the CPU, or null: only a
+        // hardware download that resets the CPU's user management, with
+        // attestation.cpuAccessControl "disabled", loads it. A dry run
+        // too: it reaches the CPU.
+        // tried (Session.AccessTurnOnTried): a gated download may already
+        // have loaded it, so "enabled" (the logon route) is let too.
+        public static string DownloadRefusal(DownloadRequest req, bool tried)
+        {
+            var why = new List<string>();
+            if (req.DryRun) why.Add("it is a dry run, which reaches the CPU");
+            if (!req.Hardware) why.Add("it loads no hardware");
+            if (req.Decisions.UserManagementResetToProject != true) why.Add("it does not answer decisions.userManagementResetToProject yes");
+            bool attested = req.Attestation != null && req.Attestation.Given &&
+                (req.Attestation.CpuAccessControl == Attestation.CpuAccessDisabled || tried && req.Attestation.CpuAccessControl == Attestation.CpuAccessEnabled);
+            if (!attested)
+            {
+                why.Add(tried
+                    ? "it does not attest attestation.cpuAccessControl \"disabled\" or \"enabled\" (with attestation.by and attestation.text)"
+                    : "it does not attest attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text)");
+            }
+            if (why.Count == 0) return null;
+            string head = tried
+                ? "the project's CPU access control was turned on (accessControlTurnOn) and a download that may have loaded it was not verified, so tiad loads it only by a hardware download that resets the CPU's user management to the project's, with attestation.cpuAccessControl \"disabled\" (the CPU still off), or \"enabled\" (that download did load: the logon route, tiad logged on as \"nautilus\"); this download is refused: "
+                : "an apply on this session turned the kept CPU's access control on (accessControlTurnOn), and tiad loads that only by a hardware download that resets the CPU's user management to the project's, with attestation.cpuAccessControl \"disabled\", the operator's own observation of the CPU; this download is refused: ";
+            return head + string.Join("; ", why.ToArray());
         }
     }
 
@@ -467,12 +641,25 @@ namespace Tiad
         // what this run made in the project's users and roles, as soon as
         // it is made, so a failure part-way still leaves it on the session.
         // A found user's password is Prepare's, never Run's.
-        public static void Run(IAccessControl c, string want, string password, AccessRecords records, bool madeCpu, AccessMade into, List<string> notes)
+        public static void Run(IAccessControl c, string want, string password, AccessRecords records, bool madeCpu, bool turnOn, AccessMade into, List<string> notes)
         {
             if (want == StationRules.AccessKeep) return;
             if (records == null) throw new TiaException("no access record key: the agent sets one for every apply");
             string current = c.State();
-            AccessRule.Plan(madeCpu ? null : current, want, password != "");
+            AccessRule.Plan(madeCpu ? null : current, want, password != "", turnOn);
+            if (!madeCpu && current == TurnOnRule.Disabled)
+            {
+                // Plan let it: only on accessControlTurnOn.
+                c.Enable();
+                into.Writes++;
+                string now = c.State();
+                if (now != AccessRule.Enabled)
+                {
+                    throw new TiaException("after turning the kept CPU's access control on it reads " + (now == AccessRule.Absent ? "absent" : now) + ", not " + AccessRule.Enabled);
+                }
+                Log.Line("audit access-turn-on: the kept CPU's access control {0} -> {1} (accessControlTurnOn)", Json.Quote(current), Json.Quote(now));
+                notes.Add(TurnOnRule.TurnedOnNote);
+            }
             if (madeCpu && current != AccessRule.Enabled)
             {
                 if (current == AccessRule.Absent)

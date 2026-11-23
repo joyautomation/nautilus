@@ -737,10 +737,49 @@ The rules for applying a spec:
     - On a CPU the apply makes, tiad sets access control on (TIA's
       default already is) and reads it back.
     - On a CPU the apply keeps, access control must already be on: tiad
-      never turns it on for a CPU it did not make. Anything else
+      never turns it on for a CPU it did not make unasked. Anything else
       (`Disabled`, as the S2a upload found the bench CPU, the legacy
       access levels, a CPU without the setting) refuses before any write,
       naming `keep`.
+    - **Turning it on for a kept CPU (`accessControlTurnOn`, K,
+      naut-lead 2026-11-23).** Only a request flag on `PUT .../station`
+      (naut: `--turn-on-access-control`), never the spec: `access-control`
+      defaults to `full-access-user`, so an adopted project is never
+      turned on by the default. It goes with `fullAccessUser` only, and
+      turns on exactly `Disabled` (any other state still refuses). Before
+      any write tiad reads the project's anonymous user and local users:
+      an active anonymous user holding any runtime right beyond reading
+      (the protection levels count as writing: HMI access lets an HMI
+      write tags), a right tiad does not know, or a role whose rights it
+      cannot read (a system role) refuses, since the CPU would look
+      protected and not be; read rights only, or no role, give a warning
+      note; the other local users are listed (they may log on once it is
+      on). tiad turns it on, reads it back, and journals it. Until a
+      download on the same session loads it, that session downloads only
+      by a hardware load that resets user management with
+      `attestation.cpuAccessControl` `"disabled"` (the attestation route;
+      software only, `"enabled"`, no attestation and dry runs, which reach
+      the CPU, are refused before anything reaches it), and
+      `POST .../save` refuses. A turn-on after an upload on the same
+      session re-arms a spent gate. tiad.Openness archives the saved
+      project, so the deploy record's archive, made just before TIA's
+      download, saves it in place: before that, tiad marks the project
+      turn-on pending (a file `<project>.ap21.turn-on-pending` beside it,
+      and `accessTurnOn` on the deploy's intent line), and removes the
+      mark only on a verified load. Opening a marked project, or adopting
+      the archive of a turn-on deploy whose record is not `loaded`,
+      re-arms the gate (the open and the adopt say so in `notes`), which
+      then also lets `"enabled"`: that download may have loaded it, and
+      the logon route needs tiad logged on as `nautilus`. The file API
+      neither writes nor deletes a mark; an apply that finds the
+      project's access control off (the archive failed before it saved,
+      or an upload brought the CPU's off state back) removes it. After the
+      apply, tiad reads the anonymous user again with access control on
+      (TIA may read a role's runtime rights only then); a refusal there
+      leaves the session unclean. A project archive the operator brings
+      (`--adopt FILE.zap21`) carries no mark. A loosening on the
+      operator's word: tiad cannot read a CPU's access control online
+      (#616 tighten-later).
     - The user and the role are found or made, by name. tiad takes over
       neither unasked: a found role must carry tiad's comment, and a
       found user tiad's record (below), or the apply refuses before any
@@ -811,7 +850,9 @@ The rules for applying a spec:
     without a login (only a project administrator does that, which tiad
     never makes).
   - In `nautilus.yaml` the field is `access-control`: `full-access-user`
-    (the default, left out) or `keep`.
+    (the default, left out) or `keep`. Turning a kept CPU's access
+    control on is `naut siemens deploy --turn-on-access-control`, never a
+    value here (above).
   - A download raises TIA's `UserManagementDownload` (keep the CPU's
     users, update them but keep its passwords, or load the project's).
     tiad answers it with keep (`user-management`,

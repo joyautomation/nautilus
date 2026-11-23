@@ -280,12 +280,12 @@ namespace Tiad.Test
         {
             foreach (string st in new[] { AccessRule.Enabled, "Disabled", AccessRule.Absent, "EnabledWithAccessControlViaAccessLevel" })
             {
-                AccessRule.Plan(st, StationRules.AccessKeep, false);
+                AccessRule.Plan(st, StationRules.AccessKeep, false, false);
             }
-            AccessRule.Plan(null, StationRules.AccessKeep, false);
-            AccessRule.Plan(null, StationRules.AccessFullAccessUser, true);
-            AccessRule.Plan(AccessRule.Enabled, StationRules.AccessFullAccessUser, true);
-            var e = Throws<TiadException>(delegate { AccessRule.Plan(null, StationRules.AccessFullAccessUser, false); }, "no password");
+            AccessRule.Plan(null, StationRules.AccessKeep, false, false);
+            AccessRule.Plan(null, StationRules.AccessFullAccessUser, true, false);
+            AccessRule.Plan(AccessRule.Enabled, StationRules.AccessFullAccessUser, true, false);
+            var e = Throws<TiadException>(delegate { AccessRule.Plan(null, StationRules.AccessFullAccessUser, false, false); }, "no password");
             if (e != null) Contains(e.Message, "secrets.fullAccessPassword is empty", "no password");
             foreach (var c in new[]
             {
@@ -294,13 +294,30 @@ namespace Tiad.Test
                 new[] { AccessRule.Absent, "not available (no such setting)" },
             })
             {
-                e = Throws<TiadException>(delegate { AccessRule.Plan(c[0], StationRules.AccessFullAccessUser, true); }, c[0]);
+                e = Throws<TiadException>(delegate { AccessRule.Plan(c[0], StationRules.AccessFullAccessUser, true, false); }, c[0]);
                 if (e == null) continue;
                 Eq(e.Status, 400, c[0] + " status");
                 Contains(e.Message, "the project's CPU has its access control " + c[1], c[0]);
                 Contains(e.Message, "set cpu.accessControl to keep", c[0] + " names the fix");
+                if (c[0] == "Disabled") Contains(e.Message, "accessControlTurnOn; naut: --turn-on-access-control", "Disabled names the opt-in");
             }
-            Throws<TiadException>(delegate { AccessRule.Plan(null, "open", true); }, "an unknown mode");
+            // accessControlTurnOn lets exactly "Disabled", and nothing for
+            // keep; any other state still refuses.
+            AccessRule.Plan("Disabled", StationRules.AccessFullAccessUser, true, true);
+            AccessRule.Plan("Disabled", StationRules.AccessKeep, false, true);
+            AccessRule.Plan(AccessRule.Enabled, StationRules.AccessFullAccessUser, true, true);
+            foreach (string st in new[] { AccessRule.Absent, "EnabledWithAccessControlViaAccessLevel", "disabled" })
+            {
+                e = Throws<TiadException>(delegate { AccessRule.Plan(st, StationRules.AccessFullAccessUser, true, true); }, "turn-on over " + st);
+                if (e != null) Contains(e.Message, "or one it keeps whose access control reads \"Disabled\" (accessControlTurnOn)", "turn-on over " + st);
+            }
+            e = Throws<TiadException>(delegate { AccessRule.Plan("Disabled", StationRules.AccessFullAccessUser, false, true); }, "turn-on, no password");
+            if (e != null) Contains(e.Message, "secrets.fullAccessPassword is empty", "turn-on, no password");
+            Eq(AccessRule.After("Disabled", StationRules.AccessFullAccessUser, true), AccessRule.Enabled, "after a turn-on");
+            Eq(AccessRule.After("Disabled", StationRules.AccessFullAccessUser, false), "Disabled", "no turn-on asked");
+            Eq(AccessRule.After("Disabled", StationRules.AccessKeep, true), "Disabled", "keep turns nothing on");
+            Eq(AccessRule.After(AccessRule.Absent, StationRules.AccessFullAccessUser, true), AccessRule.Absent, "absent stays absent");
+            Throws<TiadException>(delegate { AccessRule.Plan(null, "open", true, false); }, "an unknown mode");
         }
 
         // AccessStepsNewCpu: a CPU the apply made gets access control on
@@ -311,7 +328,7 @@ namespace Tiad.Test
             var off = new ScriptedAccess { State_ = "Disabled" };
             var made = new AccessMade();
             var notes = new List<string>();
-            AccessSteps.Run(off, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, made, notes);
+            AccessSteps.Run(off, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, false, made, notes);
             Eq(Calls(off), "enable,make-role,grant,make-user,comment,add-role", "a new CPU with access control off");
             Eq(off.State_, AccessRule.Enabled, "access control on");
             Eq(off.RoleComments[AccessSteps.RoleName], AccessSteps.RoleComment, "the role is marked tiad's");
@@ -321,19 +338,88 @@ namespace Tiad.Test
             Eq(string.Join("|", notes.ToArray()), AccessSteps.MadeNote, "the note says it was made");
 
             var fresh = new ScriptedAccess();
-            AccessSteps.Run(fresh, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, new AccessMade(), new List<string>());
+            AccessSteps.Run(fresh, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, false, new AccessMade(), new List<string>());
             Eq(Calls(fresh), "make-role,grant,make-user,comment,add-role", "TIA's default needs no write");
 
             var keep = new ScriptedAccess { State_ = "Disabled" };
             var none = new AccessMade();
-            AccessSteps.Run(keep, StationRules.AccessKeep, "", null, true, none, new List<string>());
+            AccessSteps.Run(keep, StationRules.AccessKeep, "", null, true, false, none, new List<string>());
             Eq(keep.Calls.Count, 0, "keep calls nothing, even on a new CPU");
             True(!none.Any, "keep makes nothing");
 
             var absent = new ScriptedAccess { State_ = AccessRule.Absent };
-            var e = Throws<TiaException>(delegate { AccessSteps.Run(absent, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, new AccessMade(), new List<string>()); }, "no setting");
+            var e = Throws<TiaException>(delegate { AccessSteps.Run(absent, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, false, new AccessMade(), new List<string>()); }, "no setting");
             if (e != null) Contains(e.Message, "set cpu.accessControl to keep", "no setting names the fix");
             Eq(absent.Calls.Count, 0, "nothing written on a CPU without the setting");
+        }
+
+        // TurnOnCheck: a turn-on refuses an active anonymous user holding
+        // any right beyond reading (the protection levels let an HMI
+        // write), a right tiad does not know, or a role whose rights it
+        // cannot read; otherwise it lists the anonymous user and the other
+        // local users. Its download gate lets only a hardware download that
+        // resets user management, attested "disabled".
+        static void TurnOnCheck()
+        {
+            Func<bool, AnonymousRole[], string[], List<string>> check = delegate(bool active, AnonymousRole[] roles, string[] users)
+            {
+                var notes = new List<string>();
+                TurnOnRule.Check(new TurnOnFacts { AnonymousActive = active, AnonymousRoles = new List<AnonymousRole>(roles), Users = new List<string>(users) }, notes);
+                return notes;
+            };
+            var n = check(false, new AnonymousRole[0], new[] { AccessSteps.UserName });
+            Eq(string.Join("|", n.ToArray()), "the project's anonymous user is not active|the project holds no local user besides \"nautilus\"", "nothing to warn of");
+            // An inactive anonymous user's rights never count.
+            check(false, new[] { new AnonymousRole { Name = "all", Rights = new List<string> { "ProtectionLevelFullAccess" } } }, new string[0]);
+            n = check(false, new AnonymousRole[0], new[] { "op2", AccessSteps.UserName, "op1" });
+            Contains(n[1], "may log on to the CPU with their own rights: \"op1\", \"op2\"", "the other users, sorted");
+            n = check(true, new AnonymousRole[0], new string[0]);
+            Contains(n[0], "WARNING: the project's anonymous user is active and holds no runtime right", "active, no role");
+            n = check(true, new[] { new AnonymousRole { Name = "view", Rights = new List<string> { "WebReadTags", "WebAllowDiagnostics" } }, new AnonymousRole { Name = "v2", Rights = new List<string> { "WebReadTags" } } }, new string[0]);
+            Eq(n[0], "WARNING: the project's anonymous user is active: once access control is on anyone who reaches the CPU gets, without a password, WebAllowDiagnostics, WebReadTags", "read-only rights warn");
+            foreach (string w in new[] { "ProtectionLevelFullAccess", "ProtectionLevelReadAccess", "ProtectionLevelHMIAccess", "WebWriteTags", "WebChangeOperatingMode", "WebWriteWatchTables", "SomethingNew" })
+            {
+                string right = w;
+                var e = Throws<TiadException>(delegate { check(true, new[] { new AnonymousRole { Name = "ops", Rights = new List<string> { "WebReadTags", right } } }, new string[0]); }, "anonymous with " + w);
+                if (e == null) continue;
+                Eq(e.Status, 400, w + " status");
+                Contains(e.Message, "holds rights beyond reading (role \"ops\": " + w + ")", w + " named");
+                Contains(e.Message, "remove the anonymous user's write rights in the project, or do not turn access control on", w + " names the fix");
+            }
+            var u = Throws<TiadException>(delegate { check(true, new[] { new AnonymousRole { Name = "Engineer" } }, new string[0]); }, "a role tiad cannot read");
+            if (u != null) Contains(u.Message, "role \"Engineer\": rights tiad cannot read", "unreadable named");
+
+            Func<DownloadRequest> ok = delegate
+            {
+                var r = new DownloadRequest { Address = "192.0.2.10", Hardware = true, Software = true, Announced = true };
+                r.Decisions.UserManagementResetToProject = true;
+                r.Attestation = new Attestation { By = "op", Text = "as found", CpuAccessControl = Attestation.CpuAccessDisabled };
+                return r;
+            };
+            Eq(TurnOnRule.DownloadRefusal(ok(), false), null, "the attestation route");
+            var sw = ok();
+            sw.Hardware = false;
+            Contains(TurnOnRule.DownloadRefusal(sw, false) ?? "", "it loads no hardware", "software only");
+            var noReset = ok();
+            noReset.Decisions.UserManagementResetToProject = null;
+            Contains(TurnOnRule.DownloadRefusal(noReset, false) ?? "", "does not answer decisions.userManagementResetToProject yes", "no reset");
+            var enabled = ok();
+            enabled.Attestation.CpuAccessControl = Attestation.CpuAccessEnabled;
+            Contains(TurnOnRule.DownloadRefusal(enabled, false) ?? "", "does not attest attestation.cpuAccessControl \"disabled\"", "attested enabled");
+            var noBy = ok();
+            noBy.Attestation.By = "";
+            Contains(TurnOnRule.DownloadRefusal(noBy, false) ?? "", "does not attest", "attestation without who");
+            // A dry run reaches the CPU: refused even shaped as the route.
+            var dry = ok();
+            dry.DryRun = true;
+            Contains(TurnOnRule.DownloadRefusal(dry, false) ?? "", "it is a dry run", "a dry run too");
+            Contains(TurnOnRule.DownloadRefusal(dry, true) ?? "", "it is a dry run", "a dry run, tried");
+            // After a download that may have loaded it: "enabled" (the
+            // logon route) too, never unattested.
+            Eq(TurnOnRule.DownloadRefusal(enabled, true), null, "attested enabled once tried");
+            Eq(TurnOnRule.DownloadRefusal(ok(), true), null, "attested disabled once tried");
+            Contains(TurnOnRule.DownloadRefusal(noBy, true) ?? "", "\"disabled\" or \"enabled\"", "unattested once tried");
+            Contains(TurnOnRule.DownloadRefusal(sw, true) ?? "", "may have loaded it was not verified", "the tried refusal says why");
         }
 
         // AccessStepsKeptCpu: on a CPU the apply kept, access control is
@@ -341,14 +427,33 @@ namespace Tiad.Test
         static void AccessStepsKeptCpu()
         {
             var off = new ScriptedAccess { State_ = "Disabled" };
-            var e = Throws<TiadException>(delegate { AccessSteps.Run(off, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, false, new AccessMade(), new List<string>()); }, "kept CPU, access control off");
+            var e = Throws<TiadException>(delegate { AccessSteps.Run(off, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, false, false, new AccessMade(), new List<string>()); }, "kept CPU, access control off");
             if (e != null) Contains(e.Message, "set cpu.accessControl to keep", "kept CPU names the fix");
             Eq(off.Calls.Count, 0, "nothing written on a kept CPU with access control off");
+
+            // accessControlTurnOn: the kept CPU's "Disabled" is turned on,
+            // read back, then the user and role as on a new CPU.
+            var turn = new ScriptedAccess { State_ = "Disabled" };
+            var tm = new AccessMade();
+            var tn = new List<string>();
+            AccessSteps.Run(turn, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, false, true, tm, tn);
+            Eq(Calls(turn), "enable,make-role,grant,make-user,comment,add-role", "a kept Disabled CPU turned on");
+            Eq(turn.State_, AccessRule.Enabled, "turned on");
+            True(tm.User && tm.Role && tm.Writes > 0, "made and written");
+            Eq(string.Join("|", tn.ToArray()), TurnOnRule.TurnedOnNote + "|" + AccessSteps.MadeNote, "the notes say it was turned on");
+            // Turn-on asked over a CPU already on writes no state.
+            var on = new ScriptedAccess { State_ = AccessRule.Enabled };
+            AccessSteps.Run(on, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, false, true, new AccessMade(), new List<string>());
+            Eq(Calls(on), "make-role,grant,make-user,comment,add-role", "turn-on over a CPU already on");
+            // A read-back that is not on refuses.
+            var stuckOff = new ScriptedAccess { State_ = "Disabled", EnableLeaves = "Disabled" };
+            var re = Throws<TiaException>(delegate { AccessSteps.Run(stuckOff, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, false, true, new AccessMade(), new List<string>()); }, "turn-on that does not read back");
+            if (re != null) Contains(re.Message, "after turning the kept CPU's access control on it reads Disabled", "turn-on read-back");
 
             var held = Found("Old-access-1", TestRecords);
             var made = new AccessMade();
             var notes = new List<string>();
-            AccessSteps.Run(held, StationRules.AccessFullAccessUser, "New-access-22", TestRecords, false, made, notes);
+            AccessSteps.Run(held, StationRules.AccessFullAccessUser, "New-access-22", TestRecords, false, false, made, notes);
             Eq(held.Calls.Count, 0, "found with its role and grant: nothing written");
             Eq(held.Users[AccessSteps.UserName], "Old-access-1", "Run never sets a found user's password (Prepare does)");
             True(!made.Any, "nothing recorded as made: an upload must not remove it");
@@ -359,7 +464,7 @@ namespace Tiad.Test
             roleOnly.Granted.Clear();
             roleOnly.UserRoles[AccessSteps.UserName].Clear();
             var m2 = new AccessMade();
-            AccessSteps.Run(roleOnly, StationRules.AccessFullAccessUser, "Old-access-1", TestRecords, false, m2, new List<string>());
+            AccessSteps.Run(roleOnly, StationRules.AccessFullAccessUser, "Old-access-1", TestRecords, false, false, m2, new List<string>());
             True(m2.Role && !m2.User, "only the role is recorded as made");
             Eq(Calls(roleOnly), "make-role,grant,add-role", "a found user is never made again");
         }
@@ -461,7 +566,7 @@ namespace Tiad.Test
                 var re = Throws<TiadException>(delegate { AccessSteps.Prepare(fr, StationRules.AccessFullAccessUser, "Same-access-1", TestRecords, ro, w, new List<string>()); }, "a foreign role");
                 if (re != null) Eq(re.Message, AccessSteps.ForeignRole, "a foreign role names keep");
                 Eq(fr.Calls.Count, 0, "nothing written for a foreign role");
-                Throws<TiaException>(delegate { AccessSteps.Run(fr, StationRules.AccessFullAccessUser, "Same-access-1", TestRecords, false, new AccessMade(), new List<string>()); }, "Run refuses a foreign role too");
+                Throws<TiaException>(delegate { AccessSteps.Run(fr, StationRules.AccessFullAccessUser, "Same-access-1", TestRecords, false, false, new AccessMade(), new List<string>()); }, "Run refuses a foreign role too");
             }
         }
 
@@ -471,12 +576,12 @@ namespace Tiad.Test
         {
             var c = new ScriptedAccess { GrantIgnored = true };
             var made = new AccessMade();
-            var e = Throws<TiaException>(delegate { AccessSteps.Run(c, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, made, new List<string>()); }, "grant ignored");
+            var e = Throws<TiaException>(delegate { AccessSteps.Run(c, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, false, made, new List<string>()); }, "grant ignored");
             if (e != null) Contains(e.Message, "lacks Full access", "grant ignored");
             True(made.User && made.Role, "made before the refusal, still recorded");
 
             var stuck = new ScriptedAccess { State_ = "Disabled", EnableLeaves = "Disabled" };
-            e = Throws<TiaException>(delegate { AccessSteps.Run(stuck, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, new AccessMade(), new List<string>()); }, "enable ignored");
+            e = Throws<TiaException>(delegate { AccessSteps.Run(stuck, StationRules.AccessFullAccessUser, "Full-access-1", TestRecords, true, false, new AccessMade(), new List<string>()); }, "enable ignored");
             if (e != null) Contains(e.Message, "after turning access control on the CPU reads Disabled, not EnabledWithAccessControl", "enable ignored");
             Eq(Calls(stuck), "enable", "nothing after an ignored enable");
         }

@@ -63,7 +63,9 @@ target:
   spec. Two projects aimed at one CPU would erase each other.
 - `cpu.configuration-protection` and `cpu.access-control` have defaults
   (a password, and access control on with one user, `nautilus`).
-  `keep` leaves the setting of an adopted project as found.
+  `keep` leaves the setting of an adopted project as found. The default
+  never turns on access control that an adopted project has off: that
+  takes `naut siemens deploy --turn-on-access-control` (below).
 - The station can also list local `modules` and a `profinet` section with
   devices.
 
@@ -153,6 +155,7 @@ Answers are never implied. Each acting answer has its own flag:
 | `--reinit DB,...` | the DBs TIA may reinitialize. Their values go back to start values, retained ones too |
 | `--start` or `--no-start` | one of them is required: whether TIA starts the CPU after the load |
 | `--hardware` | load the hardware configuration too. Needs `--attest-hardware "<statement>"`; `--cpu-access-control disabled\|enabled` is your observation of the CPU's access control now |
+| `--turn-on-access-control` | turn on the access control of a CPU whose project has it off (below). With `--download`, needs `--hardware` and `--cpu-access-control disabled` |
 | `--trust-certificate SHA256` | the CPU certificate TIA may trust |
 
 **First deploy to a CPU that already runs a program.** A new project built
@@ -177,6 +180,32 @@ project comes from. It is never guessed:
 `--adopt` is for a first deploy. Once a download took the adopted
 project, later deploys build on it and `--adopt` is refused. Blocks,
 users and devices that are not nautilus's stay as found.
+
+**Turning access control on for an adopted CPU.** If the adopted
+project's access control is off, the default `access-control` is refused,
+and the refusal names the flag. `--turn-on-access-control` turns it on:
+the user `nautilus` gets Full access, with its password from the secret
+store. Turning it on also gives these a say:
+
+- the project's other local users: they can log on with their own rights.
+  The plan lists them.
+- the project's anonymous user: once access control is on, anyone who
+  reaches the CPU gets this user's rights without a password. If it is
+  active and holds anything beyond reading (write, mode change, HMI or
+  read access, Full access, or rights tiad cannot read), the deploy is
+  refused: remove those rights in the project, or leave access control
+  off. If it holds read rights only, the plan prints a warning.
+
+Without `--download` it only builds, and saves nothing. With `--download`
+it needs `--hardware` and `--cpu-access-control disabled`: the project
+loads only by a hardware load that resets the CPU's user management,
+resting on your observation that the CPU's access control is off now. It
+does not go with `--dry-run`. Run it once. Later deploys find access
+control on and need no flag. tiad journals the turn-on, and refuses to
+save the project before that load. If that download ends in doubt, the
+project stays marked "turn-on pending" (the deploy prints a NOTE) and
+loads only with `--hardware`: pass `--cpu-access-control disabled` if the
+CPU still asks no password, or `enabled` if the load went through.
 
 `--keep DIR` keeps the generated SCL sources.
 

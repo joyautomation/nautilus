@@ -681,6 +681,9 @@ namespace Tiad
             line["attestation"] = req.Hardware ? req.Attestation.ToJson() : null;
             line["deviceAttestation"] = req.DeviceAttested == null ? null : req.DeviceAttested.ToJson();
             line["keptDevices"] = KeptDevice.ToJson(s.Kept);
+            // A turn-on download: an adopt of this archive stays gated
+            // unless the record says loaded (TurnOnRule.MarkerSuffix).
+            if (s.AccessTurnOn && !s.AccessTurnOnLoaded) line["accessTurnOn"] = true;
             line["blindTrust"] = rode == null ? null : rode.ToJson();
             try
             {

@@ -252,8 +252,12 @@ type Deploy struct {
 	DeviceAttestation *DeviceAttestationRecord `json:"deviceAttestation"`
 	KeptDevices       []KeptDevice             `json:"keptDevices"`
 	BlindTrust        *BlindTrust              `json:"blindTrust"`
-	Outcome           *DeployOutcome           `json:"outcome"`
-	Status            string                   `json:"status"`
+	// AccessTurnOn: the download loaded a project an apply turned access
+	// control on in (accessControlTurnOn); an adopt of its archive is
+	// marked turn-on pending unless Status is loaded.
+	AccessTurnOn bool           `json:"accessTurnOn,omitempty"`
+	Outcome      *DeployOutcome `json:"outcome"`
+	Status       string         `json:"status"`
 }
 
 // DeployList is GET /v1/deploys: the records, newest first, and how many

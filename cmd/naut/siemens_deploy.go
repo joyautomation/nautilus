@@ -88,6 +88,16 @@ Answers are never implied: each acting one has its own flag.
                       --cpu-access-control disabled|enabled is your
                       observation of the CPU's access control now, which a
                       user-management reset rests on
+  --turn-on-access-control     turn the CPU's access control on, for a
+                      project whose CPU's access control reads Disabled
+                      (an adopted one): the user "nautilus" gets Full
+                      access, and the project's other users and its
+                      anonymous user count from then on (printed in the
+                      plan; an anonymous user with more than read rights
+                      is refused). Never from the default
+                      access-control: full-access-user. With --download
+                      it needs --hardware and --cpu-access-control
+                      disabled; without, it only builds (nothing saved)
   --trust-certificate SHA256   the CPU certificate TIA may trust
   --accept-outside-changes     download although the CPU was changed
                       outside nautilus since its last deploy (or the
@@ -157,6 +167,7 @@ type siemensDeployOptions struct {
 	reinit                []string
 	hardware              bool
 	attest, cpuAccess     string
+	turnOnAccess          bool // --turn-on-access-control: accessControlTurnOn on the apply
 	trustCertificate      string
 	acceptOutside         bool
 	adopt                 string // "", last-deploy, upload or a .zap21 path
@@ -207,6 +218,7 @@ func parseSiemensDeployFlags(o *siemensDeployOptions, args []string, stderr io.W
 	fs.BoolVar(&o.hardware, "hardware", false, "load the hardware configuration too")
 	fs.StringVar(&o.attest, "attest-hardware", "", "your statement that the CPU's hardware configuration is what you intend to load")
 	fs.StringVar(&o.cpuAccess, "cpu-access-control", "", "the CPU's access control now, as you observed it: disabled or enabled")
+	fs.BoolVar(&o.turnOnAccess, "turn-on-access-control", false, "turn the kept CPU's access control on (it reads Disabled in the project); a download then needs --hardware --cpu-access-control disabled")
 	fs.StringVar(&o.trustCertificate, "trust-certificate", "", "the CPU certificate's SHA-256 TIA may trust")
 	fs.BoolVar(&o.acceptOutside, "accept-outside-changes", false, "download although the CPU changed outside nautilus")
 	fs.StringVar(&o.keep, "keep", "", "directory to keep the generated sources in")
@@ -285,6 +297,10 @@ func (o siemensDeployOptions) flagsError() error {
 		return errors.New("--hardware needs --attest-hardware \"<your statement that the CPU's hardware configuration is what you intend to load>\": tiad cannot verify hardware online")
 	case o.download && (o.hardware || o.acceptOutside) && strings.TrimSpace(o.by) == "":
 		return errors.New("the operator's name (the local user) could not be read, and an attestation or an accept of outside changes must name who gives it")
+	case o.turnOnAccess && o.dryRun:
+		return errors.New("--turn-on-access-control goes without --dry-run: a dry run reaches the CPU, and the project as turned on reaches it only by the hardware load that resets its user management")
+	case o.turnOnAccess && o.download && (!o.hardware || o.cpuAccess != tiad.AttestCPUAccessDisabled):
+		return errors.New("--turn-on-access-control with --download needs --hardware and --cpu-access-control disabled: the project as turned on loads only by a hardware load that resets the CPU's user management, resting on your observation that the CPU's access control is off now (a project marked turn-on pending needs no flag: drop it, and pass what you observe)")
 	case o.cpuAccess != "" && o.cpuAccess != tiad.AttestCPUAccessDisabled && o.cpuAccess != tiad.AttestCPUAccessEnabled:
 		return fmt.Errorf("--cpu-access-control %q: want disabled or enabled, as you observed the CPU", o.cpuAccess)
 	case len(o.attest) > tiad.MaxAttestationText:
@@ -463,6 +479,10 @@ type siemensDeployer struct {
 	// hardware differs from what the CPU was last loaded with.
 	created bool
 	changes []string
+	// turnOnNotes are the apply's notes on --turn-on-access-control: what
+	// it turned on, the project's anonymous user and its other local
+	// users, repeated in the PLAN.
+	turnOnNotes []string
 	// stationSame says whether the spec is the one the last successful
 	// deploy loaded (its copy in the agent's work dir); nil when there is
 	// no copy to compare with.
@@ -766,6 +786,9 @@ func (d *siemensDeployer) adopt(ctx context.Context, name string, st tiad.Statio
 	rec.SHA256 = res.Source.SHA256
 	rec.Complete = true
 	d.say("adopted %s as %s", rec.describe(), res.Project)
+	for _, n := range res.Notes {
+		d.say("  NOTE: %s", n)
+	}
 	d.say("  its CPU: %s %s %s at %s", res.CPU.Name, res.CPU.Order, res.CPU.Firmware, res.CPUAddress)
 	if names := keptDeviceNames(res.KeptDevices); len(names) > 0 {
 		d.say("  its devices besides the CPU, kept as found: %s", strings.Join(names, ", "))
@@ -1112,6 +1135,13 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 		} else {
 			d.say("opened %s as last saved", saved)
 		}
+		for _, n := range s.Notes {
+			d.say("  NOTE: %s", n)
+		}
+		if o.turnOnAccess && st.CPU.AccessControl != tiad.AccessFullAccessUser {
+			d.fail("--turn-on-access-control turns access control on with the user \"nautilus\": it needs target.siemens.station.cpu.access-control full-access-user (the default), not %s", st.CPU.AccessControl)
+			return 1
+		}
 		// An adopted project no download took yet is compared with the
 		// CPU as adopted, before the spec touches it.
 		if o.download && d.adoption != nil && !d.adoption.Downloaded {
@@ -1119,12 +1149,15 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 				return code
 			}
 		}
-		r, err := s.ApplyStation(ctx, st, sec)
+		r, err := s.ApplyStationWith(ctx, st, sec, tiad.ApplyOptions{AccessControlTurnOn: o.turnOnAccess})
 		if err != nil {
 			return d.tiadErr("station", err)
 		}
 		kept = r.KeptDevices
 		d.changes = r.Changes
+		if o.turnOnAccess {
+			d.turnOnNotes = turnOnNotes(r.Notes)
+		}
 		if raw, err := d.client.GetFile(ctx, siemensStationRecord(name)); err == nil {
 			want, _ := json.Marshal(st)
 			same := bytes.Equal(bytes.TrimSpace(raw), want)
@@ -1461,6 +1494,22 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 	return code
 }
 
+// turnOnNotes picks the apply's notes about turning access control on
+// (tiad's TurnOnRule words): what it turned on, or that it turned nothing
+// on, the anonymous user, the other local users.
+func turnOnNotes(notes []string) []string {
+	var out []string
+	for _, n := range notes {
+		switch {
+		case strings.HasPrefix(n, "TURNED ON "), strings.HasPrefix(n, "accessControlTurnOn: "),
+			strings.Contains(n, "the project's anonymous user"),
+			strings.Contains(n, `the project's local users besides "nautilus"`), strings.Contains(n, `no local user besides "nautilus"`):
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func (d *siemensDeployer) printPlan(address string, last lastDeploy, sw tiad.SoftwareResult, plan []string) {
 	d.say("")
 	d.say("PLAN for the CPU at %s:", address)
@@ -1470,6 +1519,9 @@ func (d *siemensDeployer) printPlan(address string, last lastDeploy, sw tiad.Sof
 	}
 	for _, c := range d.changes {
 		d.say("  station: %s", c)
+	}
+	for _, n := range d.turnOnNotes {
+		d.say("  access control: %s", n)
 	}
 	if a := d.adoption; a != nil {
 		if a.Downloaded {

@@ -655,6 +655,55 @@ func resetRoutes(uploadRoute bool) string {
 	return s
 }
 
+// TurnOnDownloadRefusal is the agent's TurnOnRule.DownloadRefusal: why a
+// download on a session whose apply turned a kept CPU's access control on
+// (accessControlTurnOn), before any download on it loaded, is refused
+// before anything reaches the CPU, or "": only a hardware download that
+// resets the CPU's user management to the project's, with
+// attestation.cpuAccessControl "disabled", loads it. A dry run too.
+//
+// tried is whether a gated download on the session reached the deploy
+// record, or the session opened a project marked turn-on pending: TIA may
+// have loaded it, so "enabled" (the logon route) is let too.
+func TurnOnDownloadRefusal(r DownloadRequest, tried bool) string {
+	var why []string
+	if r.DryRun {
+		why = append(why, "it is a dry run, which reaches the CPU")
+	}
+	if !r.Hardware {
+		why = append(why, "it loads no hardware")
+	}
+	if !isYes(r.Decisions.UserManagementResetToProject) {
+		why = append(why, "it does not answer decisions.userManagementResetToProject yes")
+	}
+	attested := r.Attestation.given() && (r.Attestation.CPUAccessControl == AttestCPUAccessDisabled || tried && r.Attestation.CPUAccessControl == AttestCPUAccessEnabled)
+	switch {
+	case attested:
+	case tried:
+		why = append(why, `it does not attest attestation.cpuAccessControl "disabled" or "enabled" (with attestation.by and attestation.text)`)
+	default:
+		why = append(why, `it does not attest attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text)`)
+	}
+	if len(why) == 0 {
+		return ""
+	}
+	if tried {
+		return TurnOnDownloadRefusedTried + strings.Join(why, "; ")
+	}
+	return TurnOnDownloadRefused + strings.Join(why, "; ")
+}
+
+// TurnOnDownloadRefusedTried starts the refusal once a download may have
+// loaded it.
+const TurnOnDownloadRefusedTried = `the project's CPU access control was turned on (accessControlTurnOn) and a download that may have loaded it was not verified, so tiad loads it only by a hardware download that resets the CPU's user management to the project's, with attestation.cpuAccessControl "disabled" (the CPU still off), or "enabled" (that download did load: the logon route, tiad logged on as "nautilus"); this download is refused: `
+
+// TurnOnPendingNote is what an open or adopt says of a project marked
+// turn-on pending (the agent's TurnOnRule.PendingNote).
+const TurnOnPendingNote = `this project is marked turn-on pending: an earlier download that turned its CPU's access control on was not verified loaded (the deploy record's archive saved the project before TIA's download), so it loads only by a hardware download that resets the CPU's user management, with attestation.cpuAccessControl "disabled", or "enabled" with tiad logged on as "nautilus" if that download did load`
+
+// TurnOnDownloadRefused starts TurnOnDownloadRefusal's refusal.
+const TurnOnDownloadRefused = `an apply on this session turned the kept CPU's access control on (accessControlTurnOn), and tiad loads that only by a hardware download that resets the CPU's user management to the project's, with attestation.cpuAccessControl "disabled", the operator's own observation of the CPU; this download is refused: `
+
 // UserManagementResetQuestion is the question a refused reset lists.
 func UserManagementResetQuestion(why string) Question {
 	return Question{ID: QuestionUserManagement, Message: why, Detail: "UserManagementDownload"}

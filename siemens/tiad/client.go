@@ -589,6 +589,9 @@ type Session struct {
 	ID          string `json:"session"`
 	Project     string `json:"project"`
 	IdleSeconds int    `json:"idleSeconds,omitempty"`
+	// Notes are what an open says besides the session (a project marked
+	// turn-on pending).
+	Notes []string `json:"notes,omitempty"`
 
 	c *Client
 }
@@ -655,6 +658,9 @@ type AdoptResult struct {
 	// record's CPU, for a deploy source.
 	CPUAddress string `json:"cpuAddress"`
 	Address    string `json:"address,omitempty"`
+	// Notes: an adopt of an unverified turn-on deploy marks the project
+	// turn-on pending.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // AdoptProject places an archive as a deploy's saved project; nothing
@@ -767,6 +773,14 @@ type ApplyOptions struct {
 	// caller: naut sends it only on an operator's explicit action, never
 	// as a retry default.
 	FullAccessRecordOnly bool
+	// AccessControlTurnOn turns the kept CPU's access control on when it
+	// reads "Disabled" (cpu.accessControl fullAccessUser only): never
+	// from the spec's default. The session then downloads only by a
+	// hardware load that resets the CPU's user management with
+	// attestation.cpuAccessControl "disabled" (TurnOnDownloadRefusal), and
+	// is not saved before that loads it. naut sends it only on
+	// --turn-on-access-control.
+	AccessControlTurnOn bool
 }
 
 // ApplyStationWith is ApplyStation with options.
@@ -781,6 +795,9 @@ func (s *Session) ApplyStationWith(ctx context.Context, st Station, sec Secrets,
 	body := map[string]any{"station": st, "secrets": sec}
 	if o.FullAccessRecordOnly {
 		body["fullAccessRecordOnly"] = true
+	}
+	if o.AccessControlTurnOn {
+		body["accessControlTurnOn"] = true
 	}
 	_, err := s.c.doJSON(ctx, http.MethodPut, s.path("station"), body, &r)
 	return r, err

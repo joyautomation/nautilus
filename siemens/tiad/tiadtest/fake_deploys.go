@@ -53,6 +53,15 @@ const deployTrustFix = "to read it with the download, trust the CPU's certificat
 // recordIntent is the agent's Record: the project archived, then the
 // intent line, just before TIA's download.
 func (f *Fake) recordIntent(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord) (*tiad.Deploy, *failure) {
+	// As the agent: a gated turn-on download marks the project turn-on
+	// pending before Record (the archive step).
+	turning := s.turnOn && !s.turnOnLoaded
+	if turning {
+		if f.turnOnPending == nil {
+			f.turnOnPending = map[string]bool{}
+		}
+		f.turnOnPending[s.project] = true
+	}
 	if s.unclean {
 		return nil, uncleanFailure("archiving it for the deploy record")
 	}
@@ -71,13 +80,20 @@ func (f *Fake) recordIntent(s *session, req tiad.DownloadRequest, attested *tiad
 	f.archives[sha] = b
 	f.archived[sha] = archivedProject{address: s.station.CPU.Address, cpu: s.station.CPU.Name, project: s.snapshot()}
 	s.archive = sha
+	// As tiad.Openness: Openness archives the saved project, so the
+	// project is saved in place first; a gated turn-on download marks it
+	// turn-on pending before that.
+	if f.saved == nil {
+		f.saved = map[string]savedProject{}
+	}
+	f.saved[s.project] = s.snapshot()
 	d := &tiad.Deploy{
 		ID: newDeployID(), At: fakeNow(), Session: s.id, Project: s.project, Address: req.Address,
 		Hardware: req.Hardware, Software: req.Software,
 		TIA:         tiad.DeployTIA{Version: "V21", Openness: "V21", Agent: "fake"},
 		Archive:     tiad.DeployArchive{File: "archives/" + sha + ".zap21", SHA256: sha, Bytes: int64(len(b))},
 		Attestation: attested, DeviceAttestation: s.deviceAttested, KeptDevices: keptList(s.kept), BlindTrust: f.blindTrust,
-		Status: tiad.DeployInDoubt,
+		Status: tiad.DeployInDoubt, AccessTurnOn: turning,
 	}
 	if req.Source != nil {
 		d.Source = &tiad.DeploySourceRecord{Commit: req.Source.Commit, Hash: req.Source.Hash, ClaimedBy: "caller"}
@@ -86,6 +102,10 @@ func (f *Fake) recordIntent(s *session, req tiad.DownloadRequest, attested *tiad
 		d.OutsideChanges = &tiad.OutsideChangesRecord{By: o.By, Verdict: o.Verdict, Deploy: o.Deploy, ClaimedBy: "caller"}
 	}
 	f.deployRecs = append(f.deployRecs, d)
+	if turning {
+		// Recorded: TIA's download comes next, and may load.
+		s.turnOnTried = true
+	}
 	return d, nil
 }
 
