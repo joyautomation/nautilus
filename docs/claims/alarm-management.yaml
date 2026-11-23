@@ -700,8 +700,9 @@ claims:
       operator-intent log, which records only an episode's start and end):
       the controller that continues it writes its end row under its start
       and id, ends it one window after the restore unless activations keep
-      it going, ends at once one whose window passed while stopped, and an
-      unsynced takeover carries none.
+      it going, ends at once one whose window passed while stopped (for a
+      pair, dated by the last time it heard a live leader, so a cold start
+      ends stale ones), and an unsynced takeover carries none.
     source: "#chattering-and-floods-live"
     tests:
       - go ./alarm TestChatterCarriedOverARestart
@@ -716,4 +717,7 @@ claims:
       - go ./server TestTakeoverContinuesTheViewsEpisodes
       - go ./server TestDetectEntriesNameWhatTheyEnd
       - go ./server TestDroppedViewCarriesNoEpisode
+      - go ./server TestColdStartTakeoverEndsStaleEpisodes
+      - go ./alarm TestCarriedChatterDoesNotSplitWhileTheRingRefills
+      - go ./runtime TestDropRetainedIntent
       - go ./cmd/naut TestPairEpisodesCarryAcrossTheLeadersDeath

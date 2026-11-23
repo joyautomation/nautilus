@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -74,13 +75,19 @@ func detectBody(t *testing.T, e oplog.Entry) detectEntry {
 	return b
 }
 
-func detectApply(t *testing.T, al *AlarmLog, b detectEntry) {
+// detectApply applies body b as an entry the leader stamped ts (epoch
+// ms; omitted: 0).
+func detectApply(t *testing.T, al *AlarmLog, b detectEntry, ts ...int64) {
 	t.Helper()
 	v, err := json.Marshal(b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if done, err := al.Apply(oplog.Entry{Kind: oplog.KindAlarmDetect, Value: v, By: "system"}); !done || err != nil {
+	e := oplog.Entry{Kind: oplog.KindAlarmDetect, Value: v, By: "system"}
+	if len(ts) > 0 {
+		e.TS = ts[0]
+	}
+	if done, err := al.Apply(e); !done || err != nil {
 		t.Fatalf("apply: %v %v", done, err)
 	}
 }
@@ -187,7 +194,7 @@ func TestTakeoverContinuesTheViewsEpisodes(t *testing.T) {
 		old := now.Add(-5 * time.Minute).UnixMilli()
 		detectApply(t, al, detectEntry{V: detectEntryVersion,
 			Flood:   &retain.AlarmFlood{ID: "flood-1", SinceMs: old, OverMs: old, Total: 20, Peak: 15, FirstOut: []retain.AlarmFloodAct{{ID: "LoFlow", Ms: old}}},
-			Chatter: []chatterEpisode{{ID: "HiTemp", SinceMs: old, Acts: 5, Episodes: 2}}})
+			Chatter: []chatterEpisode{{ID: "HiTemp", SinceMs: old, Acts: 5, Episodes: 2}}}, now.UnixMilli()) // a live leader's entry, just now
 		if eng.Flood() != nil {
 			t.Fatal("applying an entry touched the engine")
 		}
@@ -286,5 +293,44 @@ func TestPairAlarmsCarryNoFloodThroughTheStore(t *testing.T) {
 	}
 	if _, ok := any(&alarm.Engine{}).(retain.AlarmFloodRetainer); !ok {
 		t.Fatal("the engine is no retain.AlarmFloodRetainer: a standalone restart would carry no flood")
+	}
+}
+
+// Both controllers come back hours after a flood (a cold start): the view
+// replayed from the log still holds the episodes, but nobody vouched for
+// them since the last entry. The takeover dates them by that entry, so
+// they end on the new leader's first scan, journalled when they ended,
+// instead of reading as live for a window.
+func TestColdStartTakeoverEndsStaleEpisodes(t *testing.T) {
+	cond := map[string]any{"HiTempAlm": false, "LoFlowAlm": false}
+	eng, clk := detectAlarms(t, cond)
+	var lead atomic.Bool
+	al := NewAlarmLog(eng, lead.Load, noTerm)
+	then := clk.now().Add(-8 * time.Hour).UnixMilli()
+	detectApply(t, al, detectEntry{V: detectEntryVersion,
+		Flood:   &retain.AlarmFlood{ID: "flood-1", SinceMs: then, OverMs: then, Total: 11, Peak: 11},
+		Chatter: []chatterEpisode{{ID: "HiTemp", SinceMs: then, Acts: 3, Episodes: 1}}}, then)
+	lead.Store(true)
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
+	eng.Evaluate()
+	hi, _ := eng.Lookup("HiTemp")
+	if f := eng.Flood(); f != nil || hi.Chatter != nil {
+		t.Fatalf("stale episodes read as live: flood %+v chatter %+v", f, hi.Chatter)
+	}
+	rows, err := eng.Journal(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindFloodEnd, alarm.KindChatterEnd}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("end rows %+v", rows)
+	}
+	for _, r := range rows {
+		w := int64(60000)
+		if r.Kind == alarm.KindFloodEnd {
+			w = 600000
+		}
+		if r.TS != then+w || !strings.Contains(r.Reason, "ended while this controller was stopped") {
+			t.Errorf("end row %+v; want it at the episode's end (%d), saying it ended while stopped", r, then+w)
+		}
 	}
 }

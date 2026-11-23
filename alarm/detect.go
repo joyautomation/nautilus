@@ -170,7 +170,12 @@ func (c *chatterState) add(ms, window int64) (started bool) {
 	switch {
 	case c.on:
 		c.acts++
-		if qualifies && !mutAlarm("chatter_no_merge") {
+		// A carried episode's ring started empty at the restore: until it
+		// holds count activations again, one within a window of the
+		// episode's last continues it, so a carry does not split an
+		// alarm that kept bouncing into an end and a new start.
+		carriedOn := c.carried != 0 && c.n < k && ms-c.last <= window && !mutAlarm("carried_chatter_splits")
+		if (qualifies || carriedOn) && !mutAlarm("chatter_no_merge") {
 			c.last = ms
 		}
 		return false
@@ -779,7 +784,8 @@ func (e *Engine) resetDetect() {
 // carried: the controller that continues an episode counts from the
 // restore. An episode continues until one window after the latest instant
 // the carrier knows it was going (LastMs, OverMs), unless new activations
-// keep it going; one whose window passed before the restore ends on the
+// keep it going (for a chattering one, until the new ring fills, any
+// activation within a window of its last); one whose window passed before the restore ends on the
 // first scan, journalled at the instant it ended. Either way the end row
 // is written here, with the episode's start and (a flood) its id, and
 // says it was carried. Carried times come from another clock: none is

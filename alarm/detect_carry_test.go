@@ -251,3 +251,25 @@ func TestCarriedEpisodesResetAndReplace(t *testing.T) {
 		t.Fatalf("reset kept a carried episode: %d", s.Chattering)
 	}
 }
+
+// A carried episode's ring starts empty: an alarm that keeps bouncing at
+// under a window apart, slower than count per window from a cold ring,
+// continues the carried episode rather than ending it and starting
+// another.
+func TestCarriedChatterDoesNotSplitWhileTheRingRefills(t *testing.T) {
+	r := detectRig(t, nil, def("A", "a"))
+	r.tags["a"] = false
+	restore := r.clk.now()
+	ms := restore.UnixMilli()
+	r.RestoreAlarms(map[string]retain.AlarmRetain{"A": {ChatterSinceMs: ms - 30000, ChatterLastMs: ms, ChatterActs: 3, ChatterEpisodes: 1}})
+	r.Evaluate()
+	for range 4 {
+		r.bounce("a", 29*time.Second)
+	}
+	if rows := r.rows(t, KindChatter, KindChatterEnd); len(rows) != 0 {
+		t.Fatalf("the carried episode split: %+v", rows)
+	}
+	if c := r.chatter(t, "A"); c == nil || c.SinceMs != ms-30000 || c.Activations != 7 || c.LastMs != restore.Add(116*time.Second).UnixMilli() {
+		t.Fatalf("chatter = %+v", c)
+	}
+}

@@ -642,6 +642,10 @@ type Node struct {
 	syncedTerm  uint64 // the term this leader last caught up for
 	file        *os.File
 	lastContact map[string]time.Time
+	// leaderHeard is when a leader's replication last matched here
+	// (epoch ms). Atomic: read without mu, so a caller holding a lock
+	// that Apply takes (Apply runs under mu) can read it.
+	leaderHeard atomic.Int64
 	mark        Mark                // with Options.Mark
 	pending     bool                // Options.Pending, until Rebind
 	peers       map[string]peerInfo // what each peer last said of itself
@@ -1237,6 +1241,18 @@ func (n *Node) SupersededAtStart() bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.supersededAtStart
+}
+
+// LeaderHeard is when a leader's replication (an entry or a heartbeat)
+// last reached this replica and matched its log; zero if none has in this
+// process's life. It says a leader was alive then, not what it held.
+// It takes no lock: safe to call from inside Options.Apply's callers'
+// own locks.
+func (n *Node) LeaderHeard() time.Time {
+	if ms := n.leaderHeard.Load(); ms != 0 {
+		return time.UnixMilli(ms)
+	}
+	return time.Time{}
 }
 
 // Synced reports whether this replica's log is known to hold every
@@ -3317,6 +3333,9 @@ func (n *Node) Handler() http.Handler {
 		commit := n.commit
 		if l := n.leaderAddr(); l != "" {
 			n.lastContact[l] = n.o.Now()
+		}
+		if err == nil {
+			n.leaderHeard.Store(n.o.Now().UnixMilli())
 		}
 		n.mu.Unlock()
 		if err != nil {

@@ -72,13 +72,14 @@ func TestDropRetainedIntent(t *testing.T) {
 	store := retainedAt(clk)
 	store.state.Tags = map[string]any{"SP": 3.0}
 	store.state.Alarms = map[string]retain.AlarmRetain{"Trip": {ShelfUntilMs: clk.Now().Add(time.Hour).UnixMilli(), ShelfBy: "op"}}
+	store.state.AlarmFlood = &retain.AlarmFlood{ID: "flood-1", SinceMs: 1, OverMs: 1} // the old history's too
 	rt, _ := newRetainSubRig(t, lead(false), store, clk)
 	k, err := rt.DropRetainedIntent()
 	if err != nil || k != 2 {
 		t.Fatalf("dropped %d, %v", k, err)
 	}
 	st, _ := store.Load()
-	if st.Substitutes == nil || len(st.Substitutes.Entries) != 0 || st.Substitutes.HighID != 5 || st.Tags["SP"] != 3.0 || len(st.Alarms) != 0 {
+	if st.Substitutes == nil || len(st.Substitutes.Entries) != 0 || st.Substitutes.HighID != 5 || st.Tags["SP"] != 3.0 || len(st.Alarms) != 0 || st.AlarmFlood != nil {
 		t.Fatalf("store after the drop: %+v", st)
 	}
 	if k, err := rt.DropRetainedIntent(); err != nil || k != 0 {

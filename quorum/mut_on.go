@@ -302,6 +302,8 @@ var Mutations = []string{
 	"carry_detect_unclamped",            // alarm: a carried chatter or flood time ahead of the clock is kept, so the episode outlives a window after the restore (#1249)
 	"takeover_drops_episodes",           // server: a synced takeover carries no flood or chattering episode (#1249)
 	"episodes_not_synced",               // server: the leader proposes no alarm-detect entry (#1249)
+	"episodes_stamped_now",              // server: a takeover dates the view's episodes now, so a cold start shows hours-old ones as live (#1249 review)
+	"carried_chatter_splits",            // alarm: a carried chatter episode ends and starts again while its empty ring refills (#1249 review)
 	"flood_end_any",                     // server: a flood end naming another flood ends the view's (#1249)
 	"ack_clear_keeps_occurrence",        // server: an ack-clear leaves the ended occurrence in the view (#715)
 	"takeover_drops_occurrences",        // server: a synced takeover continues no occurrence (#715)

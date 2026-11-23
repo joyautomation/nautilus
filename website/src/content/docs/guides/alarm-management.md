@@ -567,12 +567,17 @@ episode writes its end row, with the episode's start and, for a flood,
 its id, and with the reason "carried over a restart or takeover". It
 counts activations again from the restore, because the activations
 before it are not carried. So a carried flood ends one window after the
-restore unless the plant floods again, and its `total` and `peak` are
+restore (for a pair, after the last time the new leader heard from a live
+leader) unless the plant floods again, and its `total` and `peak` are
 at least what was carried. A `-sliding` report, which reads every
 activation in the journal, can end it at a different time. An episode
 whose window passed while the controller was stopped ends at its first
 scan, with its end row at the time the episode ended and the reason
-"ended while this controller was stopped or taking over". The record
+"ended while this controller was stopped or taking over". The same holds
+when both controllers of a pair were down: the log dates the episode no
+later than its last entry. A standalone controller saves every 2 seconds,
+so one killed within 2 seconds of an episode's end can write that end
+row again after the restart. The record
 and the summary carry `carriedMs` for a carried episode. The new
 leader's journal has the end row but not the start row, which is in the
 old leader's journal.
