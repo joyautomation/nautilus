@@ -63,6 +63,7 @@ import "os"
 //   - hot_late_flush_installs: a takeover waits out a late flush and installs what it hands over (#710 S2b).
 //   - hot_failed_flush_installs: a takeover whose flush failed (not on an unreadable own store) still goes hot (#710 S2b).
 //   - hot_ticket_carried: a hot takeover keeps a READ/WRITE ticket of the old controller (#710 S2b).
+//   - hot_retain_before_checks: a takeover over an unreadable own store loads the image's retained values before its checks, and keeps them when one fails (#710 S2b).
 //   - retain_memory_only_forgotten: a hot takeover over an unreadable own store does not say its retained values are only in memory, or a failed save clears it (#710 S2b).
 var mutOn = os.Getenv("QUORUM_MUT")
 

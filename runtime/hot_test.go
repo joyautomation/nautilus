@@ -92,6 +92,7 @@ func hotOptions(clk Clock, main string, store retain.Store, coord Coordinator) O
 			State("Latch", int64(0)),
 			State("Mode", int64(0)),
 			State("Talk", false),
+			Input("Level", Init(0.0)),
 		},
 		Tasks:       []Task{{Name: "aux", Program: hotAux, Scan: time.Hour}},
 		Scan:        time.Hour,
@@ -235,6 +236,14 @@ func TestHotTakeoverGoesOnFromTheImage(t *testing.T) {
 	if err := r.lead.Tags().WriteGlobal("Mode", ir.IntVal(3)); err != nil { // an operator's
 		t.Fatal(err)
 	}
+	// A field input, as each controller's own driver reads it: never
+	// carried, the new leader keeps its own reading.
+	if err := r.lead.Tags().WriteGlobal("Level", ir.RealVal(9)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.stby.Tags().WriteGlobal("Level", ir.RealVal(1)); err != nil {
+		t.Fatal(err)
+	}
 	// A READ the old leader left BUSY with its ticket 7.
 	mp := r.lead.TaskProgram(MainTaskName)
 	scanBoth(t, r.lead, r.lc, 1)
@@ -291,6 +300,9 @@ func TestHotTakeoverGoesOnFromTheImage(t *testing.T) {
 	}
 	if v := globalI(t, r.stby, "Mode"); v != 3 {
 		t.Errorf("Mode %d, want the 3 an operator wrote on the old leader", v)
+	}
+	if v, _ := r.stby.Tags().ReadGlobal("Level"); v.F != 1 {
+		t.Errorf("input Level %v after the hot takeover, want the new leader's own reading 1: a field input is never carried", v.F)
 	}
 	if tk := fbSlot(t, sp, "rd", "_ticket").I; tk != 0 {
 		t.Errorf("READ ticket %d after the hot takeover, want 0: the old controller's ticket names nothing here", tk)
@@ -482,5 +494,37 @@ func TestHotTakeoverOverAnUnreadableStore(t *testing.T) {
 	}
 	if r.stby.RetainOnlyInMemory() {
 		t.Fatal("RetainOnlyInMemory still set after a save succeeded")
+	}
+}
+
+// Over an unreadable own store, the image's retained values are for a hot
+// takeover only (naut-lead): when a check fails (here aux runs another
+// source) the takeover is the plain cold one, on initial values, held
+// (RetainLoadFailed: it streams nothing over the standby's good file),
+// with nothing of the image's loaded.
+func TestHotTakeoverOverAnUnreadableStoreGoesColdOnAFailedCheck(t *testing.T) {
+	r := newHotRig(t, hotMain, hotMain)
+	edited := strings.Replace(hotAux, "k := k + 1;", "k := k + 1; (* edited *)", 1)
+	if _, err := r.stby.TaskProgram("aux").SwapWarm(edited); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.lead.Tags().WriteGlobal("Setpoint", ir.RealVal(61.5)); err != nil {
+		t.Fatal(err)
+	}
+	r.stream(t, 30)
+	r.store.set(true, true)
+	r.flush = r.take(10*time.Second, fmt.Errorf("carry: %w", ErrRetainUnreadable))
+	rep := r.takeOver(t)
+	if rep.Hot || rep.RetainFromImage || !strings.Contains(rep.Reason, "another source") {
+		t.Fatalf("takeover: %+v, want cold on the source check, with nothing of the image's", rep)
+	}
+	if v, _ := r.stby.Tags().ReadGlobal("Setpoint"); v.F != 4.5 {
+		t.Errorf("Setpoint %v, want its initial 4.5: the image's 61.5 is a hot takeover's only", v.F)
+	}
+	if !r.stby.RetainLoadFailed() {
+		t.Error("RetainLoadFailed false: a cold leader on initial values must hold its stream")
+	}
+	if r.stby.RetainOnlyInMemory() {
+		t.Error("RetainOnlyInMemory set on a cold takeover that loaded nothing of the image's")
 	}
 }

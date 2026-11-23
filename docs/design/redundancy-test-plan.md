@@ -218,6 +218,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a hot takeover leaves FIRST_SCAN() FALSE on a box that led before (`hot_keeps_first_scan_false`) | #1273, until S2 (b) | S2b (#710) |
 | a flush that ends late (`hot_late_flush_installs`) or fails on anything but an unreadable own store (`hot_failed_flush_installs`) still goes hot | design §4.2 | S2b (#710) |
 | a READ/WRITE ticket of the old controller survives a hot takeover (`hot_ticket_carried`) | design §4.2 | S2b (#710) |
+| a takeover over an unreadable own store loads the image's retained values before its checks and keeps them when one fails (`hot_retain_before_checks`); an input is carried across a hot takeover (`image_tags_carry_io`, through `TestHotTakeoverGoesOnFromTheImage`) | Q3 ruling, design §4.1 | S2b (#710) |
 | a hot takeover over an unreadable own store does not warn that its retained values are only in memory, or a failed save clears it (`retain_memory_only_forgotten`) | Q3 ruling | S2b (#710) |
 | the cold-takeover warning stays after a standby follows again (`hot_cold_condition_never_clears`) | naut-lead ruling | S2b (#710) |
 | the gate is checked once per batch, not before each send (as `hw/base.go` did) | design §3.4 | 3b-3a (`gate_per_batch`) |

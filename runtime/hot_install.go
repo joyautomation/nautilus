@@ -53,13 +53,21 @@ func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 	case h.Age > h.MaxAge && !mutRuntime("hot_no_age_check"):
 		return cold(fmt.Sprintf("the image was %s old at the election, over hot-max-age %s", h.Age.Round(time.Millisecond), h.MaxAge))
 	}
-	// This controller's own store could not be read (#710 S2 Q3): its
-	// retained values come from the image, which is the newer state, and
-	// a carried online edit swaps in before the checks below.
+	// This controller's own store could not be read (#710 S2 Q3): a hot
+	// takeover's retained values come from the image, which is the newer
+	// state. Only a hot one's (naut-lead): every check is made first, on
+	// the source the image's retain would run, and a takeover that fails
+	// one is the plain cold one, on initial values and held, with nothing
+	// of the image's.
 	if r.strm.loadFailed.Load() && h.Retain != nil {
 		var lead retain.State
 		if err := json.Unmarshal(h.Retain, &lead); err != nil {
 			return cold("the image's retain section: " + err.Error())
+		}
+		if !mutRuntime("hot_retain_before_checks") {
+			if bad := r.hotPrecheck(h, lead); bad != "" {
+				return cold(bad)
+			}
 		}
 		if err := r.applyRetained(retain.Carry(retain.State{}, lead)); err != nil {
 			r.noteRetainError(err)
@@ -74,6 +82,16 @@ func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 	progs := r.namedPrograms()
 	for _, np := range progs {
 		np.prog.mu.Lock()
+	}
+	if rep.RetainFromImage {
+		// Checked already, on the source the image's retain runs (above);
+		// a check that fails only now (its online edit did not swap in) is
+		// cold, with the image's values in memory and said so.
+		defer func() {
+			if !rep.Hot {
+				slog.Error("runtime: a takeover that loaded the state image's retained values went cold after all: they stay, only in memory")
+			}
+		}()
 	}
 	unlock := func() {
 		for _, np := range progs {
@@ -157,4 +175,32 @@ func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 	slog.Info("runtime: hot takeover: the old leader's frames and tags go on from its newest image",
 		"term", h.Term, "seq", h.Seq, "age", h.Age.Round(time.Millisecond), "since_arrival", time.Duration(since)*time.Millisecond)
 	return true
+}
+
+// hotPrecheck is the hot checks before a takeover over an unreadable own
+// store loads the image's retain section (lead): the image has every task
+// this controller runs, and each runs the image's source once lead's
+// online edits are applied as loadRetained would apply them (an edit
+// made on this build swaps in; the shadow's layout check covers the
+// layout of what ran the image). "" when all pass, else why not. Called
+// before any program lock is taken.
+func (r *Runtime) hotPrecheck(h *HotImage, lead retain.State) string {
+	progs := r.namedPrograms()
+	if len(h.tasks) != len(progs) {
+		return fmt.Sprintf("the image has %d tasks, this controller runs %d", len(h.tasks), len(progs))
+	}
+	for _, np := range progs {
+		t, ok := h.tasks[np.name]
+		if !ok {
+			return "the image has no frame of task " + np.name
+		}
+		run, build := np.prog.Hash(), np.prog.BootHash()
+		if src, ok := lead.Programs[np.name]; ok && lead.ProgramBases[np.name] == build {
+			run = sourceHash(src) // loadRetained swaps it in (or already runs it)
+		}
+		if run != t.source && !mutRuntime("hot_source_unchecked") {
+			return "task " + np.name + " runs another source than the image's (an online edit not streamed yet?)"
+		}
+	}
+	return ""
 }
