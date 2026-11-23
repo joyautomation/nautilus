@@ -4,6 +4,7 @@ import (
 	"math/rand/v2"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -194,5 +195,57 @@ func TestTagsLayout(t *testing.T) {
 	}
 	if ir.TagsLayout([]string{"A", "B"}, []*ir.Type{ir.IntT, ir.RealT}) != base {
 		t.Error("the same tags hash differently")
+	}
+}
+
+// ForgetHost zeroes a READ's and a WRITE's ticket at any depth (an array
+// of them in a struct) and leaves every other slot alone: a carried
+// ticket names another controller's request (#710 S2).
+func TestForgetHostZeroesTickets(t *testing.T) {
+	for _, name := range []string{"READ", "WRITE"} {
+		def := ir.FBs[name]
+		if len(def.HostLocal) != 1 || def.Slot(def.HostLocal[0]).Name != "_ticket" {
+			t.Fatalf("%s HostLocal %v, want its _ticket", name, def.HostLocal)
+		}
+		inst := ir.NewFBInstance(def)
+		tk := def.HostLocal[0]
+		for i := range inst.Slots {
+			if inst.Slots[i].Kind == ir.TypeInt {
+				inst.Slots[i] = ir.IntVal(int64(40 + i))
+			}
+		}
+		busy := ir.BoolVal(true)
+		for i, s := range def.AllSlots() {
+			if s.Name == "BUSY" {
+				inst.Slots[i] = busy
+			}
+		}
+		before := plainValue(ir.Value{Kind: ir.TypeFB, FB: inst})
+		arr := ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{{Kind: ir.TypeFB, FB: inst}}}
+		f := &ir.Frame{Slots: []ir.Value{{Kind: ir.TypeStruct, Fld: []ir.Value{arr}}}}
+		ir.ForgetHost(f)
+		if inst.Slots[tk].I != 0 {
+			t.Fatalf("%s ticket %d after ForgetHost, want 0", name, inst.Slots[tk].I)
+		}
+		inst.Slots[tk] = ir.IntVal(int64(40 + tk))
+		if after := plainValue(ir.Value{Kind: ir.TypeFB, FB: inst}); !reflect.DeepEqual(before, after) {
+			t.Fatalf("%s: ForgetHost changed a slot other than the ticket", name)
+		}
+	}
+}
+
+// Every built-in with a ticket slot marks it HostLocal: a new comm block
+// that forgets would carry a ticket across a hot takeover.
+func TestEveryTicketIsHostLocal(t *testing.T) {
+	for name, def := range ir.FBs {
+		local := map[int]bool{}
+		for _, i := range def.HostLocal {
+			local[i] = true
+		}
+		for i, s := range def.AllSlots() {
+			if strings.Contains(strings.ToLower(s.Name), "ticket") && !local[i] {
+				t.Errorf("%s slot %s holds a ticket but is not in HostLocal", name, s.Name)
+			}
+		}
 	}
 }

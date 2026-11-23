@@ -467,6 +467,13 @@ type FBDef struct {
 	// two clocks and fails on a slot that differs by the offset unlisted.
 	TimeBase []TimeBaseSlot
 
+	// HostLocal lists the internal slots that hold a handle into this
+	// host's own tables (a READ or WRITE request's ticket), 0 meaning
+	// none. On another controller the number names nothing, or another
+	// request: a pair's hot takeover zeroes them (ForgetHost), and the
+	// block reports its request lost.
+	HostLocal []int
+
 	// Body is the lowered body Step runs, nil for a built-in. Introspection
 	// only (the VM runs Step): it is how Program.ReadBeforeWrite follows a
 	// call into the block in scan order, and how GlobalUses reaches the

@@ -302,14 +302,26 @@ func (r *Runtime) takeover() {
 	// or this one's before a spell as standby (substitute_expiry.go).
 	r.retimeSubstitutes()
 	r.intentAfterTakeover() // a failed log catch-up: the fault, and a retry
-	r.prog.ResetFrame()
-	for _, tr := range r.tasks {
-		tr.prog.ResetFrame()
+	// A pair's takeover goes on from its standby's copy of the old
+	// leader's state when it may (hot.go, #710 S2): the image's frames,
+	// by value, timers moved to this clock, and its tags over the retain
+	// load. Otherwise it is cold, as below.
+	hot := false
+	if r.strm.flush.Load() != nil {
+		h, why := r.strm.hot, r.strm.hotWhy
+		r.strm.hot, r.strm.hotWhy = nil, ""
+		hot = r.hotTakeover(h, why)
 	}
-	// Process state re-derives from the field, except what a program
-	// declared VAR RETAIN: it goes back into the fresh frames.
-	if err := r.restoreLocals(); err != nil {
-		r.noteRetainError(err)
+	if !hot {
+		r.prog.ResetFrame()
+		for _, tr := range r.tasks {
+			tr.prog.ResetFrame()
+		}
+		// Process state re-derives from the field, except what a program
+		// declared VAR RETAIN: it goes back into the fresh frames.
+		if err := r.restoreLocals(); err != nil {
+			r.noteRetainError(err)
+		}
 	}
 	// This replica has never written to the field, whatever its predecessor
 	// left in the store: the first scan as leader pushes the FULL output set
@@ -364,6 +376,12 @@ func (r *Runtime) loadRetained() error {
 		r.strm.loadFailed.Store(!mutRuntime("stream_failed_load_streams"))
 		return err
 	}
+	return r.applyRetained(st)
+}
+
+// applyRetained is loadRetained's application of a state: the store's,
+// or a hot takeover's image's when the store could not be read (hot.go).
+func (r *Runtime) applyRetained(st retain.State) error {
 	allowed := make(map[string]bool, len(r.retainTags))
 	for _, n := range r.retainTags {
 		allowed[n] = true
@@ -633,6 +651,9 @@ func (r *Runtime) saveRetainedErr(lastSaved []byte) ([]byte, error) {
 	if err := r.retainStore.Save(st); err != nil {
 		r.noteRetainError(err)
 		return lastSaved, err
+	}
+	if !mutRuntime("retain_memory_only_forgotten") {
+		r.strm.memOnly.Store(false) // the store holds this leadership's values now
 	}
 	if k := r.ioKeeper(); k != nil {
 		k.IOSaved(st.IO) // durable now: its sequence is the store's

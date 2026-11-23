@@ -34,7 +34,7 @@ func TestCarryRetainedTakesOnlyNewerImages(t *testing.T) {
 	store := &fakeStore{state: retain.State{Tags: map[string]any{"SP": 1.0}, Stream: &retain.StreamPos{Term: 5, Seq: 3}}}
 	coord := &keepTerm{}
 	rt := newRetained(t, store, coord)
-	rt.SetTakeoverFlush(func() error { return nil })
+	rt.SetTakeoverFlush(func() (*HotImage, error) { return nil, nil })
 	runWith(t, rt)
 	ctx := context.Background()
 	img := []byte(`{"tags":{"SP":9}}`)
@@ -91,11 +91,11 @@ func TestTakeoverFlushesTheNewestImageBeforeItLoads(t *testing.T) {
 	rt.SetIO(&fakeKeeper{current: true})
 	release := make(chan struct{})
 	var flushes atomic.Int32
-	rt.SetTakeoverFlush(func() error {
+	rt.SetTakeoverFlush(func() (*HotImage, error) {
 		flushes.Add(1)
 		<-release
 		_, err := rt.CarryRetained(context.Background(), []byte(`{"tags":{"SP":42}}`), 3, 7)
-		return err
+		return nil, err
 	})
 	runWith(t, rt)
 	coord.term.Store(3)
@@ -143,7 +143,7 @@ func TestTakeoverFlushIsBounded(t *testing.T) {
 	rt := newRetained(t, store, coord)
 	stuck := make(chan struct{})
 	t.Cleanup(func() { close(stuck) })
-	rt.SetTakeoverFlush(func() error { <-stuck; return nil })
+	rt.SetTakeoverFlush(func() (*HotImage, error) { <-stuck; return nil, nil })
 	runWith(t, rt)
 	coord.term.Store(3)
 	coord.lead.Store(true)
@@ -160,7 +160,7 @@ func TestATakeoverFlushesAgainForANewTerm(t *testing.T) {
 	k := &fakeKeeper{release: make(chan struct{})}
 	rt.SetIO(k) // its restore holds the edge after the flush
 	var flushes atomic.Int32
-	rt.SetTakeoverFlush(func() error { flushes.Add(1); return nil })
+	rt.SetTakeoverFlush(func() (*HotImage, error) { flushes.Add(1); return nil, nil })
 	runWith(t, rt)
 	coord.term.Store(3)
 	coord.lead.Store(true)

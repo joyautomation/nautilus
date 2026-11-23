@@ -53,6 +53,17 @@ import "os"
 //   - image_source_unhashed: a task's image names no running source (#710 S2a).
 //   - shadow_tags_layout_unchecked: the shadow applies the tags of a leader that carries another set (#710 S2a).
 //   - image_tags_retained_twice: an image's store section carries the retained tags the retain section already carries (#710 S2a).
+//   - hot_no_age_check: a takeover goes hot on an image older than hot-max-age, or with hot-max-age 0 (#710 S2b).
+//   - hot_source_unchecked: a takeover goes hot with a task running another source than the image's (#710 S2b).
+//   - hot_partial_tasks: a takeover installs the tasks that fit and resets the rest, not all or none (#710 S2b).
+//   - hot_globals_not_carried: a hot takeover installs the frames but not the image's tags (#710 S2b).
+//   - hot_timer_not_rebased: a hot takeover keeps the timers on the old leader's clock (#710 S2b).
+//   - hot_age_not_elapsed: a hot takeover rebases the timers to the image's arrival, not counting its age and the inputs wait (#710 S2b).
+//   - hot_keeps_first_scan_false: a hot takeover leaves FIRST_SCAN() FALSE on a box that led before (#710 S2b).
+//   - hot_late_flush_installs: a takeover waits out a late flush and installs what it hands over (#710 S2b).
+//   - hot_failed_flush_installs: a takeover whose flush failed (not on an unreadable own store) still goes hot (#710 S2b).
+//   - hot_ticket_carried: a hot takeover keeps a READ/WRITE ticket of the old controller (#710 S2b).
+//   - retain_memory_only_forgotten: a hot takeover over an unreadable own store does not say its retained values are only in memory, or a failed save clears it (#710 S2b).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutRuntime(name string) bool { return name == mutOn }

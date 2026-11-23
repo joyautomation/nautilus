@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +30,12 @@ var ErrStaleImage = errors.New("runtime: the image is older than what the retain
 // a leader's store holds its own state, never an image's.
 var ErrLeadingNoCarry = errors.New("runtime: this controller leads; it carries no image into its retain store")
 
+// ErrRetainUnreadable is CarryRetained's error when this controller's own
+// retain store cannot be read: the image is not in the file, but a hot
+// takeover may still go on from it, loading its retain section in memory
+// (#710 S2 Q3).
+var ErrRetainUnreadable = errors.New("runtime: this controller's retain store could not be read")
+
 // takeoverFlushWait bounds how long a takeover waits for the flush: a
 // store that hangs must not hold the new leadership's first scan past it.
 // A variable for tests.
@@ -36,15 +43,28 @@ var takeoverFlushWait = 2 * time.Second
 
 // streamSide is the runtime's state for the stream.
 type streamSide struct {
-	flush atomic.Pointer[func() error]
+	flush atomic.Pointer[func() (*HotImage, error)]
 	// The edge's flush, guarded by leadMu: ch while it runs, done once
 	// this edge's flush ended, for the term it ran for (until the edge is
 	// taken or abandoned).
-	ch       chan error
+	ch       chan flushResult
 	chTerm   uint64 // the term the running flush is for
 	done     bool
 	doneTerm uint64
 	since    time.Time
+	// hot is the candidate this edge's flush handed over in time, nil
+	// when none; hotWhy says why there is none (the flush failed or was
+	// late). Taken by takeover, cleared by flushReset (hot.go).
+	hot    *HotImage
+	hotWhy string
+
+	// report is the last takeover's (hot.go), memOnly that its retained
+	// values are held only in memory until a save succeeds, onTakeover
+	// the pair's hook for each report.
+	reportMu   sync.Mutex
+	report     TakeoverReport
+	memOnly    atomic.Bool
+	onTakeover atomic.Pointer[func(TakeoverReport)]
 
 	// loadFailed: this leadership's takeover could not read the retain
 	// store, so it runs on initial values (RetainLoadFailed). storeBad: a
@@ -54,6 +74,12 @@ type streamSide struct {
 	loadFailed, storeBad atomic.Bool
 
 	carryOnce atomic.Pointer[chan *carryReq]
+}
+
+// flushResult is what a takeover flush returned.
+type flushResult struct {
+	hot *HotImage
+	err error
 }
 
 // carryReq is one CarryRetained, handed to the retain saver.
@@ -68,11 +94,15 @@ type carryReq struct {
 // start of every takeover (a leadership edge that is not the same term
 // resumed), off the scan, and the takeover reads the retain store only
 // once it has returned (or takeoverFlushWait has passed, with a warning).
-// The pair's f stops its stream follower and carries the newest image's
-// retain section into the store (CarryRetained). Call it before Run. A
-// runtime with a flush registered also records, in every save it makes as
-// leader, the term it leads in (retain.State.Stream).
-func (r *Runtime) SetTakeoverFlush(f func() error) {
+// The pair's f stops its stream follower, carries the newest image's
+// retain section into the store (CarryRetained) and returns that image as
+// its shadow held it (Shadow.Take), the candidate for a hot takeover
+// (#710 S2): nil when it has none. A flush that fails (other than on an
+// unreadable own store, ErrRetainUnreadable) or ends late gives no hot
+// takeover. Call it before Run. A runtime with a flush registered also
+// records, in every save it makes as leader, the term it leads in
+// (retain.State.Stream).
+func (r *Runtime) SetTakeoverFlush(f func() (*HotImage, error)) {
 	if f == nil {
 		r.strm.flush.Store(nil)
 		return
@@ -103,19 +133,30 @@ func (r *Runtime) flushReady(term uint64) bool {
 		r.strm.done = false // a new term since: its own flush
 	}
 	if r.strm.ch == nil {
-		ch := make(chan error, 1)
+		ch := make(chan flushResult, 1)
 		fn := *f
-		go func() { ch <- fn() }()
+		go func() {
+			hot, err := fn()
+			ch <- flushResult{hot, err}
+		}()
 		r.strm.ch, r.strm.chTerm, r.strm.since = ch, term, time.Now()
+		r.strm.hot, r.strm.hotWhy = nil, ""
 	}
 	select {
-	case err := <-r.strm.ch:
+	case res := <-r.strm.ch:
 		r.strm.ch, r.strm.done, r.strm.doneTerm = nil, true, r.strm.chTerm
-		if err != nil {
-			slog.Warn("runtime: the takeover's flush of the newest state image failed; taking over on what the retain store holds", "error", err)
+		r.strm.hot, r.strm.hotWhy = res.hot, ""
+		if res.err != nil {
+			slog.Warn("runtime: the takeover's flush of the newest state image failed; taking over on what the retain store holds", "error", res.err)
+			if !errors.Is(res.err, ErrRetainUnreadable) && !mutRuntime("hot_failed_flush_installs") {
+				// Only this controller's own store being unreadable keeps
+				// the image hot (#710 S2 Q3): the file did not take it.
+				r.strm.hot, r.strm.hotWhy = nil, "the takeover's flush of the newest image failed: "+res.err.Error()
+			}
 		}
 		if r.strm.doneTerm != term && !mutRuntime("stream_flush_term_unkeyed") {
 			r.strm.done = false // it ran for an earlier term: the next look flushes for this one
+			r.strm.hot, r.strm.hotWhy = nil, ""
 			return false
 		}
 		return true
@@ -128,15 +169,24 @@ func (r *Runtime) flushReady(term uint64) bool {
 		return false
 	}
 	slog.Warn("runtime: the takeover's flush of the newest state image has not finished; taking over on what the retain store holds", "waited", time.Since(r.strm.since).Round(time.Millisecond))
+	late := r.strm.ch
 	r.strm.ch, r.strm.done, r.strm.doneTerm = nil, true, r.strm.chTerm
+	// Late: whatever it hands over afterwards is never installed (the
+	// channel is dropped), and this takeover is cold.
+	r.strm.hot, r.strm.hotWhy = nil, fmt.Sprintf("the takeover's flush of the newest image did not finish within %s", takeoverFlushWait)
+	if mutRuntime("hot_late_flush_installs") {
+		res := <-late // waits it out, and takes what it hands over
+		r.strm.hot, r.strm.hotWhy = res.hot, ""
+	}
 	return r.strm.doneTerm == term
 }
 
 // flushReset forgets the edge's flush: this replica stands by, or the
-// edge has been taken. A flush still running finishes on its own. Under
-// leadMu.
+// edge has been taken. A flush still running finishes on its own, and
+// its candidate is never installed. Under leadMu.
 func (r *Runtime) flushReset() {
 	r.strm.ch, r.strm.done = nil, false
+	r.strm.hot, r.strm.hotWhy = nil, ""
 }
 
 // RetainLoadFailed reports whether this runtime's last takeover could not
@@ -208,7 +258,7 @@ func (r *Runtime) carry(req *carryReq) error {
 	own, err := r.retainStore.Load()
 	if err != nil {
 		r.strm.storeBad.Store(true)
-		return fmt.Errorf("reading this controller's retain store: %w", err)
+		return fmt.Errorf("%w: %w", ErrRetainUnreadable, err)
 	}
 	if !own.Stream.Before(req.term, req.seq) && !mutRuntime("stream_old_image_carried") {
 		if own.Stream.Term == req.term && own.Stream.Seq == req.seq {

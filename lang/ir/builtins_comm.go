@@ -125,6 +125,7 @@ func registerRead() {
 		Outputs:   []FBSlot{{Name: "NDR", Type: BoolT}, {Name: "ERROR", Type: BoolT}, {Name: "BUSY", Type: BoolT}, {Name: "STATUS", Type: statusT}},
 		InOuts:    []FBSlot{{Name: "RD_1", Type: AnyT}},
 		Internals: []FBSlot{{Name: "_prevREQ", Type: BoolT}, {Name: "_ticket", Type: IntT}, {Name: AnyTypeSlot("RD_1"), Type: StringT}},
+		HostLocal: []int{rdTicket},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			s := inst.Slots
 			edge := s[rdREQ].B && !s[rdPrevREQ].B
@@ -183,6 +184,7 @@ func registerWrite() {
 		Inputs:    []FBSlot{{Name: "REQ", Type: BoolT}, {Name: "ID", Type: StringT}, {Name: "VAR_1", Type: StringT}, {Name: "SD_1", Type: AnyT}},
 		Outputs:   []FBSlot{{Name: "DONE", Type: BoolT}, {Name: "ERROR", Type: BoolT}, {Name: "BUSY", Type: BoolT}, {Name: "STATUS", Type: statusT}},
 		Internals: []FBSlot{{Name: "_prevREQ", Type: BoolT}, {Name: "_ticket", Type: IntT}, {Name: AnyTypeSlot("SD_1"), Type: StringT}},
+		HostLocal: []int{wrTicket},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			s := inst.Slots
 			edge := s[wrREQ].B && !s[wrPrevREQ].B

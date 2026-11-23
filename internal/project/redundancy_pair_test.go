@@ -87,7 +87,10 @@ func TestPairSectionRefusals(t *testing.T) {
 		{"relative state dir", pairOK + "  state-dir: state\n", "absolute path"},
 		{"witness without peers", "redundancy:\n  witness: wit:9460\n", "needs peers"},
 		{"state dir without peers", "redundancy:\n  state-dir: /srv/naut\n", "needs peers"},
-		{"a pair without the opt-in", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n", "a takeover is cold"},
+		{"a pair without the opt-in", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n", "a takeover goes on hot"},
+		{"a negative hot-max-age", pairOK + "  hot-max-age: -1s\n", "want 0"},
+		{"a hot-max-age that is not a time", pairOK + "  hot-max-age: soon\n", "bad duration"},
+		{"a hot-max-age without peers", "redundancy:\n  hot-max-age: 2s\n", "hot-max-age applies to a redundant pair"},
 		{"a stream budget that is not a rate", pairOK + "  stream-budget: fast\n", "redundancy.stream-budget"},
 		{"a stream budget too small", pairOK + "  stream-budget: 1kB/s\n", "at least 10kB/s"},
 		{"a stream budget without peers", "redundancy:\n  stream-budget: 1MB/s\n", "applies to a redundant pair"},
@@ -258,5 +261,22 @@ func TestStreamBudget(t *testing.T) {
 	}
 	if got := (*RedundancyConfig)(nil).StreamBudgetBytes(); got != DefaultStreamBudget {
 		t.Errorf("no section: %d, want the default", got)
+	}
+}
+
+// redundancy.hot-max-age: unset is the caller's default, 0 is 0 (every
+// takeover cold), a time is that time (#710 S2).
+func TestHotMaxAge(t *testing.T) {
+	if got := (*RedundancyConfig)(nil).HotMaxAgeOr(-1); got != -1 {
+		t.Errorf("nil config: %v, want the default", got)
+	}
+	for in, want := range map[string]time.Duration{"": -1, "  hot-max-age: 0s\n": 0, "  hot-max-age: 4s\n": 4 * time.Second} {
+		p, err := Load(pairFS(pairOK+in), "")
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got := p.Redundancy.HotMaxAgeOr(-1); got != want {
+			t.Errorf("%q: hot-max-age %v, want %v", in, got, want)
+		}
 	}
 }

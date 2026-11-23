@@ -385,12 +385,13 @@ with mapped ports, whose `peers:` entry is where the others reach it
 rather than an address it has, sets `NAUTILUS_PEER_LISTEN` (for example
 `:9450`) in its own environment to bind that instead.
 
-:::caution[A takeover is cold]
-The pair keeps the leader's **retained** values across a takeover (below),
-but not its program state: timers, counters and SFC steps restart from
-the field, as after a restart. A pair without `experimental: true` is
-refused for that reason until hot takeover lands, and `naut run` says so
-at every start. Live I/O applies are refused on a pair.
+:::caution[Redundancy is experimental]
+A takeover goes on **hot** from the old leader's state when the standby
+was in sync with it, and is **cold** otherwise (below). On every
+takeover, hot or cold, `FIRST_SCAN()` is TRUE on the new leader's first
+scan, so `IF FIRST_SCAN()` start-up code runs again. A pair without
+`experimental: true` is refused, and `naut run` says so at every start.
+Live I/O applies are refused on a pair.
 :::
 
 **What a takeover keeps.** The leader streams its state to the standby
@@ -412,10 +413,39 @@ pair's operator-intent log instead, and are not taken from the stream.
 
 Each image also carries every program's variables and the value of every
 tag the field does not provide (state and memory tags, whoever wrote
-them, retained or not), ready for the hot takeover that will continue
-from them. Until then a takeover is cold, and only the retained values
-above come through it: anything that must survive a cold takeover, or a
-restart, belongs in `retain`.
+them, retained or not). Inputs are not carried (they come back from the
+field) and neither are outputs (the first scan computes them).
+
+**Hot or cold.** A takeover is **hot** when the standby holds an image of
+every task and of the tags, of the same nautilus build, running the same
+programs (an online edit included), no older than `hot-max-age` when the
+standby wins the election, and its retain file took that image. The new
+leader then goes on from it: timers keep running (the image's age, and
+the wait for live inputs, count as elapsed), counters, SFC steps and
+their step times, every program's variables and the carried tags go on
+where the old leader left them. A READ or WRITE that was waiting for an
+answer reports its request lost (`ERROR`). The old leader's last
+outputs are not reused: the first scan computes them and sends the full
+set.
+
+Otherwise the takeover is **cold**: program state restarts from the
+field as after a restart, and only the retained values above come
+through. A tag an operator set that is not retained goes back to its
+initial value. Anything that must survive a cold takeover, or a
+restart, belongs in `retain`. A cold takeover where the standby did
+hold an image is a warning on the new leader, with the reason, until a
+standby follows it again; every takeover is in the audit journal
+(`redundancy.takeover`, hot or cold, and why).
+
+```yaml
+redundancy:
+  # ...
+  hot-max-age: 4s   # default 3 × lease + 2 × the stream's interval; 0 = always cold
+```
+
+The default covers a crash, a kill and a cut-off leader. Set it lower if
+re-running up to that much of the logic after a takeover is worse for
+your process than a cold start; 0 makes every takeover cold.
 
 **What a takeover can lose.** A setpoint the leader accepted in the last
 stream interval before it crashed (about 100 ms) never reached the
@@ -455,6 +485,8 @@ the retain file already stands after the leader's images), `not-persisted`
 with the newest image's place (term, seq), its age on the standby's
 clock, its lag from the leader's copy, and the image the retain file
 holds. On the leader: `sending`, `no-standby`, `too-big`, or `held`.
+Both show the controller's last takeover (`takeover`: `hot` or `cold`,
+and `takeoverCold`, why).
 
 **A leader that could not read its retain file streams nothing.** When
 a takeover finds its retain file unreadable, the file is kept aside and
@@ -466,7 +498,14 @@ takes over. To keep values set on that leader instead, stop the standby,
 restart the leader (it takes over again from its own file, which its
 saves made readable), then start the standby: it follows from there.
 Setting values on the held leader alone is not enough, since the next
-takeover is the standby's, from its own file. Anything but in sync (after a start's
+takeover is the standby's, from its own file.
+
+A hot takeover does not need the file: when the standby's own retain
+file cannot be read but it holds a good image, it takes over hot and
+takes its retained values from the image. Those are then only in
+memory until a save succeeds, and the leader warns of it
+(`stream.retainInMemory` on `GET /api/cluster`) until one does: a power
+cycle before that loses them. Check the disk the retain file is on. Anything but in sync (after a start's
 first two leases) is also a warning, which holds a leader's OPC UA
 ServiceLevel at 200.
 

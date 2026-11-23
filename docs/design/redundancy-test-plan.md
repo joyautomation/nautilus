@@ -210,8 +210,16 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a task's tags are copied when the image is taken, not with its frame at the end of the same scan (`image_tags_at_take`) | design §4.1, one instant | S2a (#710) |
 | a task's image names no running source (`image_source_unhashed`); the shadow applies the tags of a leader that carries another set (`shadow_tags_layout_unchecked`) | I5, design §4.1 | S2a (#710) |
 | a leader sends its newest image format to a standby that reads only an older one (`stream_format_ignored`) | design §4.1, rolling update | S2a (#710) |
-| hot takeover with no image-age check | I5 | 4 |
-| hot takeover on an image with a different build hash | I5 | 4 |
+| hot takeover with no image-age check, or with hot-max-age 0 (`hot_no_age_check`) | I5, design §4.2 | S2b (#710) |
+| hot takeover on an image with a different build hash (`hot_build_unchecked`) | I5 | S2b (#710) |
+| hot takeover with a task running another source than the image's (`hot_source_unchecked`), or some tasks installed and the rest reset (`hot_partial_tasks`) | I5, design §4.2 | S2b (#710) |
+| a hot takeover installs the frames but not the carried tags (`hot_globals_not_carried`) | design §4.1, the carried tags | S2b (#710) |
+| the timers stay on the old leader's clock (`hot_timer_not_rebased`), or do not count the image's age and the inputs wait (`hot_age_not_elapsed`) | design §4.2 step 4 | S2b (#710) |
+| a hot takeover leaves FIRST_SCAN() FALSE on a box that led before (`hot_keeps_first_scan_false`) | #1273, until S2 (b) | S2b (#710) |
+| a flush that ends late (`hot_late_flush_installs`) or fails on anything but an unreadable own store (`hot_failed_flush_installs`) still goes hot | design §4.2 | S2b (#710) |
+| a READ/WRITE ticket of the old controller survives a hot takeover (`hot_ticket_carried`) | design §4.2 | S2b (#710) |
+| a hot takeover over an unreadable own store does not warn that its retained values are only in memory, or a failed save clears it (`retain_memory_only_forgotten`) | Q3 ruling | S2b (#710) |
+| the cold-takeover warning stays after a standby follows again (`hot_cold_condition_never_clears`) | naut-lead ruling | S2b (#710) |
 | the gate is checked once per batch, not before each send (as `hw/base.go` did) | design §3.4 | 3b-3a (`gate_per_batch`) |
 | a command queued under one term of the lease is sent after the replica lost it and won it again | design §3.4, `io.SendGate` term | 3b-3a (`old_term_sent`, #1040 review) |
 | a send split into requests (Write Tag Fragmented) reads the gate once, not before each request | design §3.4, every request | 3b-3b-2 (`fragments_unchecked`) |
