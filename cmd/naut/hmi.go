@@ -73,7 +73,7 @@ func slowBoxNotice(goarch string) string {
 	if goarch != "arm" && goarch != "arm64" {
 		return ""
 	}
-	return "naut run: building the screens first; on a small ARM board this takes minutes of every core before anything is served. " +
+	return "naut run: building the screens first; on a small ARM board this can take minutes of every core before anything is served. " +
 		"Build off the board instead: `naut build` (or `naut deploy`, which does it for you) ships the screens built and the controller never rebuilds them."
 }
 

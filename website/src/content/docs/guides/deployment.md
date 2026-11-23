@@ -47,9 +47,9 @@ anything that is not an executable.
 
 `naut build` also builds the project's operator screens and ships them inside the
 controller, built. The controller serves them at boot and never builds them, and
-`naut deploy` builds this way too, so a box you deploy to never rebuilds its screens.
+`naut deploy` builds this way too, so a box you deploy to rebuilds nothing (a controller you hand it with `-controller` is whatever you built, so build that one with `naut build` too).
 `naut run` is different: it builds the screens every time it starts. That is about
-four seconds on a desktop, and on a small ARM board it takes minutes of every core before
+four seconds on a desktop, and on a small ARM board it can take minutes of every core before
 anything is served (still running after a minute and a half on a two-core Cortex-A53
 board). On an ARM board `naut run` says so before it starts. Use `naut build` or `naut
 deploy` from a faster machine, and run the controller it makes.
