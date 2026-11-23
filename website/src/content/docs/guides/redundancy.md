@@ -498,16 +498,18 @@ takes over. To keep values set on that leader instead, stop the standby,
 restart the leader (it takes over again from its own file, which its
 saves made readable), then start the standby: it follows from there.
 Setting values on the held leader alone is not enough, since the next
-takeover is the standby's, from its own file.
+takeover is the standby's, from its own file. Anything but in sync (after a start's
+first two leases) is also a warning, which holds a leader's OPC UA
+ServiceLevel at 200.
 
 A hot takeover does not need the file: when the standby's own retain
 file cannot be read but it holds a good image, it takes over hot and
 takes its retained values from the image. Those are then only in
 memory until a save succeeds, and the leader warns of it
 (`stream.retainInMemory` on `GET /api/cluster`) until one does: a power
-cycle before that loses them. Check the disk the retain file is on. Anything but in sync (after a start's
-first two leases) is also a warning, which holds a leader's OPC UA
-ServiceLevel at 200.
+cycle before that loses them. Check the disk the retain file is on. A
+takeover over an unreadable file that cannot go hot takes nothing from
+the image: it runs on initial values and holds its stream, as above.
 
 **The lease and the takeover time.** The default lease is 1 s. From
 the fault to the new leader, on loopback with peer TLS (100 runs a row):
