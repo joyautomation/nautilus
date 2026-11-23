@@ -36,6 +36,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/auth"
@@ -385,6 +387,45 @@ type shelveRequest struct {
 	Until   string  `json:"until"`
 	Seconds float64 `json:"seconds"`
 	By      string  `json:"by"`
+	// Reason is one line saying why (kept in the audit entry), and Via how
+	// the shelve was reached: "chatter" is the one-click fix on a chattering
+	// alarm's badge (#1249), which must say why. Both are optional otherwise.
+	Reason string `json:"reason"`
+	Via    string `json:"via"`
+}
+
+// shelveReasonMax is the longest shelve reason, in characters.
+const shelveReasonMax = 200
+
+// checkShelveWhy says what is wrong with a shelve's reason and via, or "".
+func checkShelveWhy(req shelveRequest) string {
+	reason := strings.TrimSpace(req.Reason)
+	switch req.Via {
+	case "", "chatter":
+	default:
+		return `via: "` + capText(req.Via, byMax) + `" is not one of: chatter`
+	}
+	// One printable line: no breaks, controls (an escape sequence would ride
+	// into a terminal view of the audit log) or invisible-only text.
+	visible := false
+	for _, c := range reason {
+		if unicode.IsControl(c) || c == '\u2028' || c == '\u2029' {
+			return "reason: one line of text, no line breaks or control characters"
+		}
+		if !unicode.IsSpace(c) && !unicode.Is(unicode.Cf, c) {
+			visible = true
+		}
+	}
+	if reason != "" && !visible {
+		return "reason: say it in words, not invisible characters"
+	}
+	if utf8.RuneCountInString(reason) > shelveReasonMax {
+		return "reason: at most 200 characters"
+	}
+	if req.Via == "chatter" && reason == "" {
+		return `reason: shelving a chattering alarm needs a one-line reason (say what you saw or will do)`
+	}
+	return ""
 }
 
 func (s *Server) handleAlarmShelve(w http.ResponseWriter, r *http.Request) {
@@ -402,6 +443,10 @@ func (s *Server) handleAlarmShelve(w http.ResponseWriter, r *http.Request) {
 	}
 	if code, msg := s.authorize(r, PermShelve, s.alarmTag(req.ID)); code != 0 {
 		http.Error(w, msg, code)
+		return
+	}
+	if why := checkShelveWhy(req); why != "" {
+		http.Error(w, why, http.StatusBadRequest)
 		return
 	}
 	var until time.Time

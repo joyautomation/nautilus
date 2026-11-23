@@ -708,3 +708,31 @@ func TestJournalHidesNotifyFromAnOldJournal(t *testing.T) {
 		t.Fatalf("default journal over an old Journal = %+v, want only the activation", out.Events)
 	}
 }
+
+// A shelve's reason is one short line; a chatter shelve must have one (#1249).
+func TestCheckShelveWhy(t *testing.T) {
+	long := strings.Repeat("é", shelveReasonMax+1)
+	for _, c := range []struct {
+		name string
+		req  shelveRequest
+		bad  string // a piece of the refusal, "" for accepted
+	}{
+		{"a plain shelve needs no reason", shelveRequest{}, ""},
+		{"a reason alone is fine", shelveRequest{Reason: "seal"}, ""},
+		{"chatter with a reason", shelveRequest{Via: "chatter", Reason: "seal weeping"}, ""},
+		{"chatter with no reason", shelveRequest{Via: "chatter"}, "needs a one-line reason"},
+		{"chatter with a blank reason", shelveRequest{Via: "chatter", Reason: "  \t"}, "needs a one-line reason"},
+		{"an unknown via", shelveRequest{Via: "bulk", Reason: "x"}, "not one of: chatter"},
+		{"a line break", shelveRequest{Reason: "a\nb"}, "one line"},
+		{"a unicode line separator", shelveRequest{Reason: "a\u2028b"}, "one line"},
+		{"an escape sequence", shelveRequest{Reason: "a\x1b[31mb"}, "control characters"},
+		{"only zero-width characters", shelveRequest{Via: "chatter", Reason: "\u200b\u200b"}, "invisible"},
+		{"exactly the limit", shelveRequest{Reason: strings.Repeat("é", shelveReasonMax)}, ""},
+		{"one over, counted in characters", shelveRequest{Reason: long}, "at most 200"},
+	} {
+		got := checkShelveWhy(c.req)
+		if (c.bad == "") != (got == "") || !strings.Contains(got, c.bad) {
+			t.Errorf("%s: got %q, want it to contain %q", c.name, got, c.bad)
+		}
+	}
+}

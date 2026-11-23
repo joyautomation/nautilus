@@ -24,7 +24,7 @@
 </script>
 
 {#if onclick}
-	<button type="button" class="chatter" title={text} data-chatter={chatter.activations} {onclick}>
+	<button type="button" class="chatter" title={text} data-chatter={chatter.activations} aria-haspopup="dialog" onclick={(e) => { e.stopPropagation(); onclick?.(); }}>
 		{chatterBadge(chatter)}
 	</button>
 {:else}
