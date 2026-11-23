@@ -28,6 +28,11 @@ import (
 // characters (a name must not move a terminal's cursor or rewrite its title), at most
 // MaxFound devices, and each address checked against where the answer came from.
 
+// MaxPerSource bounds how many devices one address may answer for (a bridge or an
+// NVR answering for its cameras is a few; a host sending hundreds is not a camera).
+// A variable so a test can lift it to reach MaxFound from one loopback address.
+var MaxPerSource = 16
+
 const (
 	// DiscoveryGroup is WS-Discovery's multicast address.
 	DiscoveryGroup = "239.255.255.250:3702"
@@ -75,18 +80,18 @@ func Discover(ctx context.Context, o DiscoverOptions) ([]Found, error) {
 	var conns []net.PacketConn
 	var send []func() error
 	probe := probeMessage()
-	close := func() {
+	closeAll := func() {
 		for _, c := range conns {
 			c.Close()
 		}
 	}
-	defer close()
+	defer closeAll()
 	if o.Target != "" {
-		c, err := net.ListenPacket("udp4", "127.0.0.1:0")
+		dst, err := net.ResolveUDPAddr("udp4", o.Target)
 		if err != nil {
 			return nil, err
 		}
-		dst, err := net.ResolveUDPAddr("udp4", o.Target)
+		c, err := net.ListenPacket("udp4", "127.0.0.1:0")
 		if err != nil {
 			return nil, err
 		}
@@ -98,6 +103,7 @@ func Discover(ctx context.Context, o DiscoverOptions) ([]Found, error) {
 			return nil, err
 		}
 		group, _ := net.ResolveUDPAddr("udp4", DiscoveryGroup)
+		var lastErr error
 		for _, ifc := range ifs {
 			ifc := ifc
 			if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagMulticast == 0 || ifc.Flags&net.FlagLoopback != 0 {
@@ -112,11 +118,13 @@ func Discover(ctx context.Context, o DiscoverOptions) ([]Found, error) {
 			}
 			c, err := net.ListenPacket("udp4", ip.String()+":0")
 			if err != nil {
+				lastErr = err
 				continue
 			}
 			pc := ipv4.NewPacketConn(c)
 			if err := pc.SetMulticastInterface(&ifc); err != nil {
 				c.Close()
+				lastErr = err
 				continue
 			}
 			_ = pc.SetMulticastTTL(1) // this network only
@@ -125,6 +133,9 @@ func Discover(ctx context.Context, o DiscoverOptions) ([]Found, error) {
 			send = append(send, func() error { _, err := c.WriteTo(probe, group); return err })
 		}
 		if len(conns) == 0 {
+			if lastErr != nil {
+				return nil, fmt.Errorf("no interface could send the probe: %w", lastErr)
+			}
 			if o.Interface != "" {
 				return nil, fmt.Errorf("no interface %q that is up, multicast and has an IPv4 address", o.Interface)
 			}
@@ -154,7 +165,11 @@ func Discover(ctx context.Context, o DiscoverOptions) ([]Found, error) {
 				_ = c.SetReadDeadline(deadline)
 				n, from, err := c.ReadFrom(buf)
 				if err != nil {
-					return
+					var ne net.Error
+					if errors.Is(err, net.ErrClosed) || (errors.As(err, &ne) && ne.Timeout()) || time.Now().After(deadline) {
+						return
+					}
+					continue // an oversized datagram or an ICMP reset (Windows reports both as errors): the next may be real
 				}
 				b := make([]byte, n)
 				copy(b, buf[:n])
@@ -166,6 +181,7 @@ func Discover(ctx context.Context, o DiscoverOptions) ([]Found, error) {
 		}()
 	}
 	found := map[string]Found{}
+	perSource := map[string]int{}
 	timer := time.NewTimer(o.Timeout + 200*time.Millisecond)
 	defer timer.Stop()
 loop:
@@ -173,8 +189,10 @@ loop:
 		select {
 		case p := <-ch:
 			if f, ok := parseProbeMatch(p.b, p.from); ok {
-				if _, dup := found[f.Endpoint]; !dup && len(found) < MaxFound {
+				// one host that answers for many devices cannot fill the table
+				if _, dup := found[f.Endpoint]; !dup && len(found) < MaxFound && perSource[f.From] < MaxPerSource {
 					found[f.Endpoint] = f
+					perSource[f.From]++
 				}
 			}
 		case <-timer.C:

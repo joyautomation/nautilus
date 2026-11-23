@@ -73,7 +73,8 @@ func TestDiscoveryAsksForVideoTransmittersAndListsWhatAnswers(t *testing.T) {
 }
 
 func TestWhatAnswersIsNeverTrustedOrAllowedToMoveATerminal(t *testing.T) {
-	big := strings.Repeat("a", maxDatagram)
+	// a valid ProbeMatch padded past the datagram bound: only the bound keeps it out
+	big := probeMatch("urn:uuid:big", "", "http://127.0.0.1/big") + "<!--" + strings.Repeat("a", maxDatagram) + "-->"
 	answers := []string{
 		"not xml at all",
 		big,
@@ -102,14 +103,43 @@ func TestWhatAnswersIsNeverTrustedOrAllowedToMoveATerminal(t *testing.T) {
 	}
 }
 
+func TestNoCharacterThatCanReorderOrRewriteATerminalSurvives(t *testing.T) {
+	for _, s := range []string{"evil\u202Ereversed", "a\u009B2Jb", "zero\u200Bwidth", "line\u2028sep", "bidi\u2066x\u2069", "esc\x1b[31m"} {
+		got := cleanText(s, 64)
+		for _, r := range got {
+			if r == 0x202e || r == 0x9b || r == 0x200b || r == 0x2028 || r == 0x2066 || r == 0x2069 || r < 0x20 {
+				t.Errorf("%q survived as %q", s, got)
+			}
+		}
+	}
+	if cleanText("Pump house dome — 1ª câmera", 64) != "Pump house dome — 1ª câmera" {
+		t.Error("ordinary text, accents and dashes were cleaned away")
+	}
+}
+
+func TestOneAddressCannotFillTheTableWithDevices(t *testing.T) {
+	var many []string
+	for i := 0; i < 100; i++ {
+		many = append(many, probeMatch(fmt.Sprintf("urn:uuid:%03d", i), "", "http://127.0.0.1/x"))
+	}
+	addr, _ := responder(t, func() []string { return many })
+	got, err := Discover(context.Background(), DiscoverOptions{Target: addr, Timeout: 800 * time.Millisecond})
+	if err != nil || len(got) != MaxPerSource {
+		t.Errorf("%d found from one address, want %d: %v", len(got), MaxPerSource, err)
+	}
+}
+
 func TestAFloodOfAnswersKeepsAtMostMaxFound(t *testing.T) {
+	old := MaxPerSource
+	MaxPerSource = 1 << 20
+	t.Cleanup(func() { MaxPerSource = old })
 	var many []string
 	for i := 0; i < MaxFound+100; i++ {
 		many = append(many, probeMatch(fmt.Sprintf("urn:uuid:%04d", i), "", "http://127.0.0.1/x"))
 	}
 	addr, _ := responder(t, func() []string { return many })
 	got, err := Discover(context.Background(), DiscoverOptions{Target: addr, Timeout: 800 * time.Millisecond})
-	if err != nil || len(got) > MaxFound || len(got) == 0 {
+	if err != nil || len(got) != MaxFound {
 		t.Errorf("%d found, %v", len(got), err)
 	}
 }

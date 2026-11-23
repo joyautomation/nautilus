@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +26,9 @@ func runCameraDiscover(args []string, stdout, stderr io.Writer) int {
 	asJSON := fs.Bool("json", false, "print the answers as JSON")
 	fs.Usage = func() { fmt.Fprint(stderr, cameraUsage) }
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if fs.NArg() > 0 {
@@ -65,7 +69,7 @@ func runCameraDiscover(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "    %s\n", a)
 		}
 		if f.Elsewhere {
-			fmt.Fprintf(stdout, "    note: an address above is not on %s, where the answer came from: a camera behind NAT or a bridge, or something pretending to be one. Look before you trust it.\n", f.From)
+			fmt.Fprintf(stdout, "    note: an address above is not on %s, where the answer came from: a camera behind NAT or a bridge, one that names itself by a host name, or something pretending to be one. Look before you trust it.\n", f.From)
 		}
 		fmt.Fprintf(stdout, "    manifest row:\n      - { id: cam%d, label: %q, asset: <equipment id>, kind: onvif, url: %q, credentials: true }\n\n", i+1, name, f.XAddrs[0])
 	}

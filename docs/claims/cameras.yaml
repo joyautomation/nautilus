@@ -411,8 +411,8 @@ claims:
     claim: >-
       naut camera discover probes the local network for ONVIF cameras and lists
       what answers with a manifest row to start from, changing nothing: answers
-      are treated as data (size-bounded, at most 256 devices, cleaned of control
-      characters, only http and https addresses without user information, a
+      are treated as data (size-bounded, at most 256 devices and 16 from one
+      address, cleaned of control, format and separator characters, only http and https addresses without user information, a
       device whose address is not on the host it answered from is flagged),
       with nothing answering it says what to check, and the probe ends when
       asked to or after its timeout.
@@ -421,6 +421,8 @@ claims:
       - go ./camera TestDiscoveryAsksForVideoTransmittersAndListsWhatAnswers
       - go ./camera TestWhatAnswersIsNeverTrustedOrAllowedToMoveATerminal
       - go ./camera TestAFloodOfAnswersKeepsAtMostMaxFound
+      - go ./camera TestOneAddressCannotFillTheTableWithDevices
+      - go ./camera TestNoCharacterThatCanReorderOrRewriteATerminalSurvives
       - go ./camera TestDiscoveryEndsWhenAskedToAndWithNoAnswersIsAnEmptyList
       - go ./cmd/naut TestCameraDiscoverListsWhatAnsweredWithARowToStartFromAndChangesNothing
       - go ./cmd/naut TestCameraDiscoverSaysWhatToDoWhenNothingAnswersAndWhenItCannotProbe
