@@ -325,3 +325,66 @@ func TestConfigPatchEndOfFile(t *testing.T) {
 		})
 	}
 }
+
+// A candidate that applies at the next restart is committed in the
+// principal's name with the same refusals as a live commit, and the message
+// says nothing running changed (#711).
+func TestConfigSaveForRestartCommitsAsThePrincipal(t *testing.T) {
+	dir := gitProject(t, "a: 1\nb: 2\n")
+	os.WriteFile(filepath.Join(dir, "other.st"), []byte("changed\n"), 0o644)
+	gitIn(t, dir, "add", "other.st")
+
+	res, err := committer(t, dir).save(server.IOSave{By: "user:akhan", ID: "7", Files: map[string]string{"modbus.yaml": "a: 1\nb: 3\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Branch != "main" || len(res.Files) != 1 || res.Files[0] != "modbus.yaml" || res.Commit != gitIn(t, dir, "rev-parse", "HEAD") {
+		t.Fatalf("result %+v", res)
+	}
+	if files := gitIn(t, dir, "show", "--name-only", "--format=", "HEAD"); files != "modbus.yaml" {
+		t.Fatalf("commit holds %q, want only modbus.yaml", files)
+	}
+	if got := gitIn(t, dir, "show", "-s", "--format=%an <%ae>", "HEAD"); got != "user:akhan <akhan@plant-1>" {
+		t.Fatalf("author = %q", got)
+	}
+	body := gitIn(t, dir, "show", "-s", "--format=%B", "HEAD")
+	if !strings.Contains(body, "saved for the next restart") || !strings.Contains(body, "nothing running changed") || !strings.Contains(body, "\nNautilus-Staged: 7") {
+		t.Fatalf("message %q: want the restart, that nothing running changed, and the trailer", body)
+	}
+	if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\nb: 3\n" {
+		t.Fatalf("modbus.yaml = %q", got)
+	}
+	if st := gitIn(t, dir, "status", "--porcelain"); !strings.Contains(st, "M  other.st") {
+		t.Fatalf("the staged other work was swept in or lost: %q", st)
+	}
+}
+
+func TestConfigSaveForRestartRefusals(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		edit  bool // a file edited in the worktree since boot
+		want  string
+	}{
+		{"a program source", map[string]string{"other.st": "evil\n"}, false, "cannot be committed"},
+		{"a hidden path", map[string]string{".git/config.yaml": "x: 1\n"}, false, "cannot be committed"},
+		{"nothing differs", map[string]string{"modbus.yaml": "a: 1\nb: 2\n"}, false, "nothing to commit"},
+		{"edited since the controller booted", map[string]string{"modbus.yaml": "a: 1\nb: 3\n"}, true, "overwrite your edits"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := gitProject(t, "a: 1\nb: 2\n")
+			g := committer(t, dir)
+			if c.edit {
+				os.WriteFile(filepath.Join(dir, "modbus.yaml"), []byte("a: 9\nb: 2\n"), 0o644)
+			}
+			before := gitIn(t, dir, "rev-parse", "HEAD")
+			_, err := g.save(server.IOSave{By: "user:akhan", ID: "7", Files: c.files})
+			if err == nil || !errors.Is(err, server.ErrIOCommitRefused) || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want a refusal containing %q", err, c.want)
+			}
+			if gitIn(t, dir, "rev-parse", "HEAD") != before {
+				t.Fatal("a refused save made a commit")
+			}
+		})
+	}
+}

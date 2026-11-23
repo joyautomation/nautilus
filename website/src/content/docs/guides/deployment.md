@@ -397,6 +397,17 @@ box. It installs, updates, rolls back, backs up and restores, deploys a
 release that cannot start and one that hangs, and asserts after every
 step which release answers and that a retained setpoint survived.
 
+## Moving a site's configuration
+
+A nautilus project is text files in git, so a site's configuration is that
+repository. To hand one to another site, archive it
+(`git archive --format=tar.gz -o site.tar.gz HEAD`, tracked files only) and
+start the new project from the unpacked tree, or clone it and drop the
+history; then edit what differs, on the configuration screen or in the files
+(both produce the same commit), and run `naut check`. Passwords, tokens,
+secrets and contacts live in the controller's state directory, not the
+project, so an archive carries none of them.
+
 ## HTTPS
 
 The quickest way to get HTTPS is a certificate the controller makes for itself:

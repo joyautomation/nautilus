@@ -409,6 +409,36 @@ type IOCommand struct {
 	Value any    `json:"value"`
 }
 
+// restartChecks are the checks whose failure only means a restart would be
+// needed: what is fixed while the runtime runs.
+var restartChecks = map[string]bool{"topology": true, "tags": true, "device-type": true, "fields": true}
+
+// needsRestart reports whether every check that failed is a restart one, and
+// the candidate loaded (schema passed): a configuration a restart would apply.
+func needsRestart(checks []IOCheck) bool {
+	failed := false
+	for _, ck := range checks {
+		if ck.OK {
+			continue
+		}
+		if !restartChecks[ck.Name] {
+			return false
+		}
+		failed = true
+	}
+	return failed
+}
+
+// ChangedFiles is what the candidate reads that differs from the files the
+// controller booted from: path to content.
+func (c *IOCandidate) ChangedFiles() map[string]string {
+	out := make(map[string]string, len(c.files))
+	for k, v := range c.files {
+		out[k] = v
+	}
+	return out
+}
+
 // IOValidation is a candidate's checks, what it changes and what the apply
 // will command.
 type IOValidation struct {
@@ -421,7 +451,12 @@ type IOValidation struct {
 	// holds back; the rest are sent once they change.
 	WillCommand []IOCommand `json:"willCommand"`
 	Held        bool        `json:"held,omitempty"`
-	Notes       []string    `json:"notes,omitempty"`
+	// NeedsRestart says the candidate is not applicable live only because it
+	// changes what is fixed while the runtime runs (a device or driver added
+	// or removed, the tag set, a device's struct): it loads, and a restart
+	// would apply it. It can be saved (committed) for that restart (#711).
+	NeedsRestart bool     `json:"needsRestart,omitempty"`
+	Notes        []string `json:"notes,omitempty"`
 	// Probes are the live checks of each changed device (live or static,
 	// and why), run once every static check has passed.
 	Probes []IOProbe `json:"probes,omitempty"`
@@ -548,6 +583,7 @@ func (io *IOConfig) validate(c *IOCandidate, probes bool) *IOValidation {
 		for _, ck := range v.Checks {
 			v.Valid = v.Valid && ck.OK
 		}
+		v.NeedsRestart = needsRestart(v.Checks)
 		base := map[string]string{}
 		for k, u := range running {
 			base[k] = u.hash

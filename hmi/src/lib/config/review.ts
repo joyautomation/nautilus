@@ -10,7 +10,10 @@ export interface Check { name: string; ok: boolean; skipped?: boolean; detail?: 
 export interface Probe { driver: string; device?: string; mode: string; why: string; ok: boolean; detail?: string; bad?: string[] }
 export interface Change { driver: string; device?: string; before: string; after: string }
 export interface Command { tag: string; value: unknown }
-export interface Validation { valid: boolean; checks: Check[]; changes: Change[]; willCommand: Command[]; held?: boolean; notes?: string[]; probes?: Probe[] }
+export interface Validation { valid: boolean; checks: Check[]; changes: Change[]; willCommand: Command[]; held?: boolean; notes?: string[]; probes?: Probe[]; needsRestart?: boolean }
+
+/** A candidate saved (committed) to apply at the next restart: who, when, and the commit. */
+export interface Saved { commit: string; branch: string; files: string[]; by: string; at: string; pending: boolean }
 export interface Applied { changes: Change[]; answered?: string[]; pending?: string[]; commanded: Command[]; notes?: string[]; kept: boolean; keptWhy?: string; watch?: Watch }
 export interface Watch { state: string; pending?: string[]; answered?: string[]; silent?: string[]; revert: boolean; reason?: string }
 
@@ -21,6 +24,8 @@ export interface Staged {
 	error?: string;
 	validation?: Validation;
 	result?: Applied;
+	/** Set once saved for the next restart (POST /api/config/save). */
+	saved?: Saved;
 }
 
 /** Why a step was refused, with the fix. */
@@ -43,6 +48,17 @@ export type ReviewResult = { ok: true; value: Staged } | { ok: false; kind: Conf
 
 /** The commit POST /api/config/commit made. */
 export interface Committed { commit: string; branch: string; files: string[] }
+
+/** What a restart costs, in the plain words the screen shows beside a save for restart. */
+export const RESTART_NOTE =
+	'The scan stops while the controller restarts, and it starts again from the committed files. On a redundant pair, restart the standby first, then switch over, then restart the former leader.';
+
+/** The one line that says a change is saved and waiting: who saved it, which commit, and that nothing running changed. */
+export function savedLine(s: Saved): string {
+	return `Saved for the next restart by ${s.by}: commit ${s.commit.slice(0, 12)} on ${s.branch} (${s.files.join(', ')}). Nothing running has changed; it applies when the controller restarts.`;
+}
+
+export type SaveResult = { ok: true; value: Saved } | { ok: false; kind: ConfigFailure; status: number; message: string };
 
 /** `patch` is set when the refusal names the patch route as the way out (no checkout). */
 export type CommitResult = { ok: true; value: Committed } | { ok: false; kind: ConfigFailure; status: number; message: string; patch?: boolean };
@@ -128,6 +144,16 @@ export class ReviewClient {
 		const r = await this.#config('POST', '/commit', message ? { id, message } : { id });
 		if (!r.ok) return { ...r, patch: r.status === 409 && r.message.includes('/api/config/patch') };
 		try { return { ok: true, value: JSON.parse(r.text) as Committed }; } catch { return { ok: false, kind: 'failed', status: 200, message: 'The controller answered the commit with something unreadable.' }; }
+	}
+
+	/**
+	 * Save a candidate that loads but needs a restart (a device added or removed) as a
+	 * git commit in the signed-in user's name. Nothing running changes.
+	 */
+	async save(id: string, message?: string): Promise<SaveResult> {
+		const r = await this.#config('POST', '/save', message ? { id, message } : { id });
+		if (!r.ok) return r;
+		try { return { ok: true, value: JSON.parse(r.text) as Saved }; } catch { return { ok: false, kind: 'failed', status: 200, message: 'The controller answered the save with something unreadable.' }; }
 	}
 
 	/** What runs, where it differs from the project, as a patch to apply in your repo. */

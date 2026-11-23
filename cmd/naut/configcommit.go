@@ -68,6 +68,7 @@ func wireConfigCommit(h *server.IOHook, base fs.FS, dir string) {
 	}
 	g := committerFor(dir)
 	h.Commit = func(c server.IOCommit) (server.IOCommitted, error) { return g.commit(h.Files(), c) }
+	h.Save = g.save
 }
 
 var (
@@ -245,6 +246,35 @@ func (g *gitCommitter) commit(st server.IOFiles, c server.IOCommit) (server.IOCo
 		msg = "config: live I/O change (" + driverNames(st) + ")"
 	}
 	body := fmt.Sprintf("%s\n\nSaved by %s from the controller's live I/O configuration.\n\n%s: %s\n", msg, c.By, commitTrailer, c.ID)
+	return g.commitFiles(changes, c.By, body)
+}
+
+// save commits a candidate that applies at the next restart: the files it
+// changes, written and committed in the principal's name. Nothing runs
+// differently until the controller restarts. The same refusals as a live
+// commit: only files the manifest names, never over a file edited since the
+// controller booted, never on a standby or a detached HEAD.
+func (g *gitCommitter) save(c server.IOSave) (server.IOCommitted, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "configuration"}}}
+	paths := make([]string, 0, len(c.Files))
+	for p := range c.Files {
+		paths = append(paths, p)
+	}
+	slices.Sort(paths)
+	for _, p := range paths {
+		st.Files = append(st.Files, server.IOFile{Path: p, Running: c.Files[p]})
+	}
+	changes, err := planIOChange(g.dir, st, g.asBooted)
+	if err != nil {
+		return server.IOCommitted{}, err
+	}
+	msg := c.Message
+	if msg == "" {
+		msg = "config: saved for the next restart (" + strings.Join(paths, ", ") + ")"
+	}
+	body := fmt.Sprintf("%s\n\nSaved by %s from the controller's configuration screen. It applies when the controller next restarts; nothing running changed.\n\n%s: %s\n", msg, c.By, commitTrailer, c.ID)
 	return g.commitFiles(changes, c.By, body)
 }
 

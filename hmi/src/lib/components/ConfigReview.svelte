@@ -3,7 +3,7 @@
 	// then Stage -> Validate -> Apply on #706's routes. Nothing is applied
 	// without a valid validation; every refusal says what to do.
 	import { diffFiles } from '../config/diff.js';
-	import { ReviewClient, type Committed, type ReviewResult, type Staged } from '../config/review.js';
+	import { ReviewClient, RESTART_NOTE, savedLine, type Committed, type ReviewResult, type Saved, type Staged } from '../config/review.js';
 	import type { Overlay } from '../config/form.js';
 	import Button from './Button.svelte';
 
@@ -28,6 +28,8 @@
 	let message = $state('');
 	let committed = $state<{ id: string; c: Committed } | null>(null);
 	let canPatch = $state(false);
+	// a candidate saved for the next restart in this session (staged.saved is the controller's own record)
+	let savedHere = $state<{ id: string; s: Saved } | null>(null);
 
 	const key = $derived(JSON.stringify(overlay.files));
 	const diffs = $derived(diffFiles(before, overlay.files));
@@ -73,6 +75,17 @@
 			if (r.ok) { committed = { id: staged.id, c: r.value }; message = ''; error = null; canPatch = false; } else { error = r.message; canPatch = !!r.patch; }
 		} finally { busy = false; }
 	}
+	// A candidate a restart would apply (a device added or removed): saved as
+	// a commit, nothing live changes.
+	async function save() {
+		if (!staged) return;
+		busy = true;
+		try {
+			const r = await client.save(staged.id, message.trim() || undefined);
+			if (r.ok) { savedHere = { id: staged.id, s: r.value }; message = ''; error = null; } else error = r.message;
+		} finally { busy = false; }
+	}
+	const saved = $derived(staged?.saved ?? (savedHere && savedHere.id === staged?.id ? savedHere.s : null));
 	async function patch() {
 		busy = true;
 		try {
@@ -124,6 +137,21 @@
 				{#if v.changes.length}<p class="note">Changes: {v.changes.map((c) => c.driver + (c.device ? '/' + c.device : '')).join(', ')}</p>{/if}
 				{#if v.willCommand.length}<p class="note">The first scan will command: {v.willCommand.map((c) => `${c.tag}=${JSON.stringify(c.value)}`).join(', ')}</p>{/if}
 				{#each v.notes ?? [] as n (n)}<p class="note">{n}</p>{/each}
+				{#if v.needsRestart && staged.state === 'invalid'}
+					{#if saved}
+						<p class="note" data-saved>{savedLine(saved)}</p>
+						<p class="note">{RESTART_NOTE}</p>
+					{:else}
+						<p class="note" data-restart>
+							This change cannot be applied live: it changes what is fixed while the controller runs. It can be saved as a
+							commit and applied at the next restart. {RESTART_NOTE}
+						</p>
+						<div class="actions">
+							<input bind:value={message} placeholder="Commit message (optional)" size="28" maxlength="200" aria-label="Commit message" />
+							<Button size="sm" variant="primary" disabled={busy} onclick={save}>Save for restart</Button>
+						</div>
+					{/if}
+				{/if}
 			{/if}
 			{#if staged.result}
 				<p class="note" data-result>

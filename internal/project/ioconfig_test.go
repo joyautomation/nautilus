@@ -353,6 +353,13 @@ func TestIOValidateRefuses(t *testing.T) {
 			if v.Valid || !strings.Contains(" "+strings.Join(failed(v), " ")+" ", " "+tc.check+" ") {
 				t.Fatalf("valid %v, failed %v; want %s to fail: %+v", v.Valid, failed(v), tc.check, v.Checks)
 			}
+			// Only what is fixed while the runtime runs fails for these: a restart
+			// would apply them, so they can be saved for one (#711). Every other
+			// refusal is not that.
+			restart := tc.name == "a new device" || tc.name == "a new tag" || tc.name == "a retyped tag"
+			if v.NeedsRestart != restart {
+				t.Fatalf("NeedsRestart = %v, want %v (failed %v)", v.NeedsRestart, restart, failed(v))
+			}
 			if _, err := r.io.Apply(r.ctx, c, "tester"); err == nil {
 				t.Fatal("an invalid candidate was applied")
 			}

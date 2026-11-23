@@ -59,6 +59,13 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 		OnRevert: func(f func(server.IOWatch)) {
 			io.OnReverted(func(w IOWatch) { f(server.IOWatch(w)) })
 		},
+		Restart: func(cand any) (bool, map[string]string) {
+			c := cand.(*IOCandidate)
+			c.mu.Lock()
+			v := c.val
+			c.mu.Unlock()
+			return v != nil && v.NeedsRestart, c.ChangedFiles()
+		},
 		Running: func() any { return io.Running() },
 		Differs: func() []server.IODiffer {
 			var out []server.IODiffer
