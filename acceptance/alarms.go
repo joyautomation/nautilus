@@ -290,7 +290,7 @@ func (r *testRun) journalKinds() ([]string, error) {
 		switch events[i].Kind {
 		case alarm.KindSuppress, alarm.KindUnsuppress:
 			continue
-		case alarm.KindChatter, alarm.KindChatterEnd, alarm.KindFlood, alarm.KindFloodEnd:
+		case alarm.KindChatter, alarm.KindChatterEnd, alarm.KindFlood, alarm.KindFloodEnd, alarm.KindTuned:
 			// Detection rows (#1249) are not state changes: a journal
 			// assertion written before them must not grow rows.
 			continue

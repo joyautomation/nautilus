@@ -13,7 +13,7 @@ import (
 // delays were applied to an alarm at start (#1249): the history before it
 // was produced under other delays, so a suggestion's window starts after
 // the last one.
-const KindTuned = "tuned"
+const KindTuned = alarm.KindTuned
 
 // TuneLadder is the delays a suggestion picks from, smallest first.
 var TuneLadder = []time.Duration{
@@ -73,12 +73,17 @@ type span struct{ start, end int64 } // end is 0 while the alarm has not returne
 // the return minus the off-delay, which is a bound, not the signal itself
 // (drop-outs shorter than the off-delay are hidden). Spans while the alarm
 // was shelved or suppressed are left out, and the history starts after the
-// last tuned row.
+// last tuned row. events must be one alarm's, oldest first.
 func Suggest(events []alarm.Event, cur Delays, window time.Duration, count int) (Suggestion, bool) {
+	// The history starts after the last CHANGE of delays: a run of tuned
+	// rows that say the same (a restart or a takeover writes one each)
+	// counts from its earliest, so repeating the same tuning does not move
+	// the window and a different one does.
 	var since int64
+	var runName string
 	for _, e := range events {
-		if e.Kind == KindTuned {
-			since = e.TS
+		if e.Kind == KindTuned && (since == 0 || e.Name != runName) {
+			since, runName = e.TS, e.Name
 		}
 	}
 	w := window.Milliseconds()

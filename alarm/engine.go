@@ -78,6 +78,10 @@ type Options struct {
 	Chatter ChatterConfig
 	Flood   FloodConfig
 
+	// Tuned lists the alarms the tuning overlay changed (tuned.go): one
+	// `tuned` row each at the first Evaluate of every leadership.
+	Tuned []Tuned
+
 	Log *slog.Logger
 }
 
@@ -142,6 +146,7 @@ type Engine struct {
 	floodID    string
 	floodSeq   uint64
 	baseAt     time.Time
+	tuned      []Tuned
 	detLast    int64 // the last scan's time (ms), to see the clock step back
 	onFlood    func(FloodEvent)
 	// floodCarried is when a restart or takeover carried the flood in
@@ -221,6 +226,10 @@ func New(o Options) (*Engine, error) {
 		e.inst = append(e.inst, instance{def: d})
 		e.inst[len(e.inst)-1].derive()
 	}
+	if err := e.checkTuned(o.Tuned); err != nil {
+		return nil, err
+	}
+	e.tuned = o.Tuned
 	// Every ring up front, in one array: the scan never allocates one.
 	e.det = make([]detect, len(e.inst))
 	rings := make([]int64, len(e.inst)*chat.Count)
@@ -266,6 +275,7 @@ func (e *Engine) Evaluate() {
 	e.missing = 0
 	if e.baseAt.IsZero() {
 		e.baseAt = now
+		e.journalTuned(now)
 	}
 	e.expireOutOfService(now)
 	// Episodes end by time, before any alarm's early return: a shelved or

@@ -160,7 +160,7 @@ func (s *Server) handleAlarmJournal(w http.ResponseWriter, r *http.Request) {
 		// It is shown only to a client that asks for it (kind=notify), and
 		// so are the detection rows (#1249: chatter, flood), for the same
 		// reason.
-		f.ExceptKinds = []string{alarm.KindNotify, alarm.KindChatter, alarm.KindChatterEnd, alarm.KindFlood, alarm.KindFloodEnd}
+		f.ExceptKinds = []string{alarm.KindNotify, alarm.KindChatter, alarm.KindChatterEnd, alarm.KindFlood, alarm.KindFloodEnd, alarm.KindTuned}
 	}
 	if limit <= 0 {
 		limit = alarm.DefaultQueryLimit
