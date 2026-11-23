@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/joyautomation/nautilus/leader"
@@ -30,15 +31,36 @@ func call(t *testing.T, srv *Server, method, path, body string, mod ...func(*htt
 	return rec
 }
 
+// logBuf is a buffer the log handler and the test can use at once: a
+// goroutine an earlier test left running (a takeover's catch-up retry) may
+// log while a test reads what was captured, and a bytes.Buffer is not safe for
+// that (a DATA RACE under -race, #1262's run).
+type logBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *logBuf) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuf) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // captureLog swaps the default logger for one writing into a buffer, so the
 // audit lines can be read back.
-func captureLog(t *testing.T) *bytes.Buffer {
+func captureLog(t *testing.T) *logBuf {
 	t.Helper()
-	var buf bytes.Buffer
+	buf := &logBuf{}
 	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
-	return &buf
+	return buf
 }
 
 func TestForceAPI(t *testing.T) {
@@ -273,5 +295,32 @@ func TestSFCAPI(t *testing.T) {
 	st := New(newTestRuntime(t))
 	if rec := call(t, st, "POST", "/api/sfc/step", `{"step":"Idle"}`); rec.Code != 404 {
 		t.Fatalf("SFC command on an ST controller = %d, want 404", rec.Code)
+	}
+}
+
+// A goroutine that outlives its test logs into whatever the default logger is
+// by then; reading the capture while it does must not race (#1262's run).
+func TestCaptureLogToleratesALateWriter(t *testing.T) {
+	logs := captureLog(t)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				slog.Info("late writer")
+			}
+		}
+	}()
+	for range 200 {
+		_ = logs.String()
+	}
+	close(stop)
+	<-done
+	if !strings.Contains(logs.String(), "late writer") {
+		t.Fatal("the writer's lines are not in the capture")
 	}
 }
