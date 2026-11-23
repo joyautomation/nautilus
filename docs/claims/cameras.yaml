@@ -480,7 +480,10 @@ claims:
       Taken once by hand (the test harness is scratch: an in-tree fake RTSP
       server replaying an ffmpeg-encoded test pattern over the LAN, a viewer
       script fetching the playlist and segments, /proc sampled over ssh). No
-      test in this inventory runs it, and it is not a regression guard.
+      test in this inventory runs it, and it is not a regression guard. The
+      guide's remark that naut run's screen build was still going at full use of
+      both cores after 90 s on that board (about 4 s on a desktop: 3.7 s wall and
+      48 s of CPU for the same build here) was seen once, by hand.
 
   - id: CAM-027
     claim: >-

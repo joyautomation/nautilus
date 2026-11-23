@@ -34,6 +34,7 @@ func camerasMount(rows project.CameraRows) server.Mount {
 		Local      bool   `json:"local"`
 	}
 	var out []view
+	seen := map[string]bool{}
 	for i := range rows {
 		var r struct {
 			ID    string `yaml:"id"`
@@ -41,9 +42,11 @@ func camerasMount(rows project.CameraRows) server.Mount {
 			Asset string `yaml:"asset"`
 			Kind  string `yaml:"kind"`
 		}
-		if rows[i].Decode(&r) != nil || r.Kind != "virtual" || r.ID == "" {
+		// a repeated id is left out: the controller refuses it, the playground only shows the first
+		if rows[i].Decode(&r) != nil || r.Kind != "virtual" || r.ID == "" || seen[r.ID] {
 			continue
 		}
+		seen[r.ID] = true
 		if r.Label == "" {
 			r.Label = r.ID
 		}

@@ -31,6 +31,7 @@ func TestThePlaygroundListsOnlyVirtualCamerasAndMarksThemLocal(t *testing.T) {
 - { id: dock, asset: TK101, kind: rtsp, url: "rtsp://10.0.0.5/x" }
 - { id: bare, asset: TK101, kind: virtual }
 - { kind: virtual }
+- { id: tank-top, label: Again, asset: TK101, kind: virtual }
 `))(nil, mux)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/cameras", nil))

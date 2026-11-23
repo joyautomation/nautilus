@@ -24,8 +24,14 @@
 			last = now;
 			drawTestPattern(ctx as unknown as Parameters<typeof drawTestPattern>[0], canvas!.width, canvas!.height, (now - t0) / 1000, camera.label);
 		};
+		// a person who asked for less motion gets one still frame, not a sweeping line
+		const still = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 		const run = () => {
 			cancelAnimationFrame(raf);
+			if (still) {
+				drawTestPattern(ctx as unknown as Parameters<typeof drawTestPattern>[0], canvas!.width, canvas!.height, 0, camera.label);
+				return;
+			}
 			if (typeof document === 'undefined' || document.visibilityState !== 'hidden') raf = requestAnimationFrame(frame);
 		};
 		run();

@@ -437,4 +437,4 @@ token always counts as fresh), and is journalled as `camera.snapshot-purge`.
   if a `snapshot-url` is given.
 - The playground has no camera relay (it is controller-only code and none of it is in
   the browser build): only a `kind: virtual` camera shows there, as a test pattern the
-  page draws itself (see below). Every other kind needs a controller.
+  page draws itself (see above). Every other kind needs a controller.
