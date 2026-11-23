@@ -263,6 +263,8 @@ claims:
       - go ./checkout TestAReplicaThatCannotReadAnEntryHaltsInsteadOfDiverging
       - go ./checkout TestAWriterIsToldItsOwnResultNotALaterOne
       - go ./checkout TestALateEndDoesNotEndTheNextForce
+      - go ./checkout TestAProposerInFlightWhenTheStoreHaltsIsToldUnknown
+      - go ./checkout TestAKeptRecordThatIsNotTheLogsIsNotServed
       - go ./checkout TestASealWithoutAPayloadIsRefusedAtApply
       - go ./server TestAPairsWriteAnswersSayWhetherAnythingIsWaiting
       - go ./server TestAProposeIsNotAnswerUntilItIsAppliedHere

@@ -556,3 +556,72 @@ func TestAWriterIsToldItsOwnResultNotALaterOne(t *testing.T) {
 		t.Errorf("the writer was told %+v, not its own result", res)
 	}
 }
+
+// A halt, a Reset or a slow catch-up between a commit and the proposer being
+// answered leaves no record of the entry here: the proposer is told "unknown",
+// never success (a seal is not handed out for a run that is not sealed).
+func TestAProposerInFlightWhenTheStoreHaltsIsToldUnknown(t *testing.T) {
+	l, a, _ := newPairStores(t)
+	run, _ := a.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	passAllLogged(t, a, run.ID, "alice")
+	l.before = func(seq uint64) {
+		l.before = nil
+		// an entry from a newer build commits first and halts every replica
+		for _, r := range l.replicas {
+			r.ApplyLogged(seq, 1, []byte(`{"v":2,"kind":"result"}`))
+		}
+		l.seq++
+	}
+	sr, err := a.Seal(sealIn(run.ID, "bob"))
+	if !errors.Is(err, ErrUnknown) || len(sr.Payload) != 0 {
+		t.Fatalf("a seal in flight at a halt: %v / a record of %d bytes, want ErrUnknown and none", err, len(sr.Payload))
+	}
+	// and a Reset in the window is the same
+	_, a2, _ := newPairStores(t)
+	run2, _ := a2.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	l2 := a2.propose
+	a2.propose = func(ctx context.Context, by string, body []byte) (uint64, error) {
+		seq, err := l2(ctx, by, body)
+		a2.Reset() // the history is replaced while the answer is on its way
+		return seq, err
+	}
+	if _, err := a2.Record(run2.ID, "XV101", Pass, "", nil, "", "alice", "user:alice"); !errors.Is(err, ErrUnknown) {
+		t.Errorf("a write in flight at a Reset: %v, want ErrUnknown", err)
+	}
+}
+
+// A record kept from another history that verifies on its own but is not the
+// one this log's seal made is not served, and a Reset removes the kept records.
+func TestAKeptRecordThatIsNotTheLogsIsNotServed(t *testing.T) {
+	_, a, _ := newPairStores(t)
+	run, _ := a.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	passAllLogged(t, a, run.ID, "alice")
+	if _, err := a.Seal(sealIn(run.ID, "bob")); err != nil {
+		t.Fatal(err)
+	}
+	good, _ := a.ReadSealed(run.ID)
+	// a record that verifies by itself (re-signed with the controller's own key)
+	// but whose payload is not the log's
+	var sr SealedRecord
+	json.Unmarshal(good, &sr)
+	var pl SealPayload
+	plc, _ := compact(sr.Payload)
+	json.Unmarshal(plc, &pl)
+	pl.Note = "not what the log sealed"
+	pb, _ := json.Marshal(pl)
+	sr.Payload = pb
+	sr.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(a.key.priv, pb))
+	forged, _ := json.MarshalIndent(sr, "", "  ")
+	if _, err := Verify(forged, nil); err != nil {
+		t.Fatalf("setup: the forged record should verify on its own: %v", err)
+	}
+	os.WriteFile(a.SealedPath(run.ID), forged, 0o600)
+	got, err := a.ReadSealed(run.ID)
+	if err != nil || strings.Contains(string(got), "not what the log sealed") {
+		t.Errorf("a kept record that is not the log's was served: %v", err)
+	}
+	a.Reset()
+	if _, err := os.Stat(a.SealedPath(run.ID)); err == nil {
+		t.Errorf("a Reset left a kept record of the old history")
+	}
+}

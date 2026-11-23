@@ -244,13 +244,12 @@ type Store struct {
 	// every replica by ApplyLogged. propMu serializes this replica's own
 	// proposals (s.mu is released while one commits, so the commit's apply can
 	// take it).
-	propose  func(ctx context.Context, by string, body []byte) (uint64, error)
-	propMu   sync.Mutex
-	lines    [][]byte         // the canonical chain, in committed order
-	rejected map[uint64]error // log entries apply refused, by the log's sequence number
-	sheet    *Sheet           // the sheet a replica rebuilds a sealed export from
-	produced map[uint64]any   // what each committed entry made, by the log's sequence number, for its proposer
-	halted   error            // set when an entry this build cannot apply arrived: nothing more is applied or proposed
+	propose func(ctx context.Context, by string, body []byte) (uint64, error)
+	propMu  sync.Mutex
+	lines   [][]byte           // the canonical chain, in committed order
+	outcome map[uint64]applied // what became of each committed entry, by the log's sequence number
+	sheet   *Sheet             // the sheet a replica rebuilds a sealed export from
+	halted  error              // set when an entry this build cannot apply arrived: nothing more is applied or proposed
 }
 
 // appendFile is the file as the store uses it (a test's can fail).
@@ -422,7 +421,7 @@ func (s *Store) apply(e entry) error {
 	case kindForceEnd:
 		r := s.runs[e.Run]
 		if r == nil || r.standing == nil || r.standing.rec.Point != e.Point {
-			return errors.New("the end of a force that does not stand")
+			return ErrNoForce
 		}
 		if e.PrevSeq != 0 && r.standing.rec.Seq != e.PrevSeq {
 			return ErrNoForce // a late end for an earlier force on this point
@@ -507,6 +506,8 @@ func (s *Store) producedBy(e entry) any {
 		if r.standing != nil {
 			return r.standing.rec
 		}
+	case kindAbandon:
+		return r.view()
 	}
 	return nil
 }
@@ -744,8 +745,8 @@ func (s *Store) InterruptStanding() (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
-	for _, id := range s.ord {
-		if r := s.runs[id]; r.State == StateOpen && r.standing != nil {
+	for _, id := range append([]string(nil), s.ord...) { // a pair's store may change while a proposal commits
+		if r := s.runs[id]; r != nil && r.State == StateOpen && r.standing != nil {
 			if err := s.endForceLocked(r, ForceInterrupted, "controller"); err != nil {
 				return n, err
 			}
@@ -778,10 +779,15 @@ func (s *Store) Abandon(run, reason, by, principal string) (Run, error) {
 			return Run{}, err
 		}
 	}
-	if err := s.append(entry{Kind: kindAbandon, Run: run, Reason: reason, By: by, Principal: principal}); err != nil {
+	p, err := s.appendGet(entry{Kind: kindAbandon, Run: run, Reason: reason, By: by, Principal: principal})
+	if err != nil {
 		return Run{}, err
 	}
-	return r.view(), nil
+	v, ok := p.(Run)
+	if !ok {
+		return Run{}, ErrUnknown
+	}
+	return v, nil
 }
 
 func (r *Run) view() Run { v := *r; v.lastResults = nil; return v }
