@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/oplog"
@@ -54,9 +55,16 @@ func (l *CheckoutLog) Attach(n *oplog.Node) {
 			return 0, fmt.Errorf("%w: %s", checkout.ErrNoMajority, msg)
 		}
 		e, err := n.Propose(ctx, oplog.CheckoutEntryOf(by, body))
-		switch {
-		case err == nil:
+		if err == nil {
+			// on a follower Propose can return once the leader committed even if
+			// this replica's catch-up failed: until the entry is applied here
+			// its refusal (if apply refused it) is not known
+			if werr := waitApplied(ctx, n.Commit, e.Seq); werr != nil {
+				return 0, werr
+			}
 			return e.Seq, nil
+		}
+		switch {
 		case errors.Is(err, oplog.ErrTooLarge):
 			return 0, fmt.Errorf("%w: %v", checkout.ErrInvalid, err)
 		}
@@ -84,3 +92,17 @@ func (l *CheckoutLog) Apply(e oplog.Entry) (bool, error) {
 // person accepted its loss, naut redundancy vouch): its runs are then exactly
 // the new history's.
 func (l *CheckoutLog) EndSuperseded() { l.store.Reset() }
+
+// waitApplied waits, within ctx, until this replica's commit index reaches
+// seq (the entry has been applied here), else says the outcome is not yet
+// known on this controller.
+func waitApplied(ctx context.Context, commit func() uint64, seq uint64) error {
+	for commit() < seq {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w (committed by the leader, not yet applied on this controller)", checkout.ErrUnknown)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	return nil
+}

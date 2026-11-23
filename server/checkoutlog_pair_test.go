@@ -4,8 +4,10 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,5 +197,55 @@ func TestCheckoutLogHandsOtherKindsOn(t *testing.T) {
 	}
 	if done, err := cl.Apply(oplog.Entry{Kind: oplog.KindCheckout}); !done || err == nil {
 		t.Errorf("a checkout entry with no body: done=%v err=%v", done, err)
+	}
+}
+
+// Propose can return on a follower once the leader committed, before this
+// replica applied the entry: the adapter waits for its commit index, and says
+// "unknown" rather than success if it does not come.
+func TestAProposeIsNotAnswerUntilItIsAppliedHere(t *testing.T) {
+	var commit uint64
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := waitApplied(ctx, func() uint64 { return commit }, 5); !errors.Is(err, checkout.ErrUnknown) {
+		t.Errorf("an entry not applied here: %v, want ErrUnknown", err)
+	}
+	go func() { time.Sleep(50 * time.Millisecond); atomic.StoreUint64(&commit, 5) }()
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	if err := waitApplied(ctx2, func() uint64 { return atomic.LoadUint64(&commit) }, 5); err != nil {
+		t.Errorf("an entry applied while waiting: %v", err)
+	}
+}
+
+// A force the record says stands that this controller is not driving is ended;
+// one it is driving is left.
+func TestReconcileEndsAForceNothingDrives(t *testing.T) {
+	st := newCkStore(t)
+	co := &CheckoutOptions{Store: st, Sheet: ckSheet()}
+	run, _ := st.Begin(false, ckSheet().Hash(), "T", "alice", "user:alice")
+	if n, err := co.ReconcileForces(); n != 0 || err != nil {
+		t.Fatalf("nothing stands: %d %v", n, err)
+	}
+	rec, err := st.StartForce(run.ID, "OUT", 5.5, 30, "alice", "user:alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// driven here (the slot names it): left
+	co.ck.mu.Lock()
+	co.ck.force = &ckForce{run: run.ID, point: "OUT"}
+	co.ck.mu.Unlock()
+	if n, _ := co.ReconcileForces(); n != 0 {
+		t.Errorf("a force this controller drives was ended")
+	}
+	// not driven (the other controller's, or a start whose answer was lost): ended
+	co.ck.mu.Lock()
+	co.ck.force = nil
+	co.ck.mu.Unlock()
+	if n, err := co.ReconcileForces(); n != 1 || err != nil {
+		t.Fatalf("a force nothing drives: %d %v", n, err)
+	}
+	if _, ok := st.Standing(); ok {
+		t.Errorf("the force still stands (seq %d)", rec.Seq)
 	}
 }

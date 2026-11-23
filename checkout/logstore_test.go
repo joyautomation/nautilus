@@ -366,3 +366,50 @@ func TestTwoBeginsInTheSameMomentLoseTheSecondOnEveryReplica(t *testing.T) {
 		t.Errorf("the chains differ after a skipped entry")
 	}
 }
+
+// An end that arrives late, for a force that is gone, does not end the next
+// force on the same point (a timer on the controller that lost the lead, or an
+// interrupt written by two leaders in turn).
+func TestALateEndDoesNotEndTheNextForce(t *testing.T) {
+	_, a, b := newPairStores(t)
+	run, _ := a.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	f1, err := a.StartForce(run.ID, "XV101", true, 30, "alice", "user:alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.EndForceOf(run.ID, f1.Seq, ForceInterrupted, "controller"); err != nil { // the new leader's interrupt
+		t.Fatal(err)
+	}
+	f2, err := b.StartForce(run.ID, "XV101", false, 30, "bob", "user:bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the old leader's expiry timer fires late, for the first force
+	if err := a.EndForceOf(run.ID, f1.Seq, ForceExpired, "controller"); !errors.Is(err, ErrNoForce) {
+		t.Errorf("a late end for the first force: %v, want ErrNoForce", err)
+	}
+	if st, ok := b.Standing(); !ok || st.Seq != f2.Seq {
+		t.Errorf("the second force no longer stands: %+v %v", st, ok)
+	}
+	// and the same through apply, when the late end is already in the log
+	body, _ := json.Marshal(entry{Kind: kindForceEnd, Run: run.ID, Point: "XV101", PrevSeq: f1.Seq, Reason: ForceExpired, By: "controller"})
+	a.ApplyLogged(1000, 2_000_000, body)
+	if st, ok := a.Standing(); !ok || st.Seq != f2.Seq {
+		t.Errorf("apply let a late end stop the next force: %+v %v", st, ok)
+	}
+}
+
+// A seal with no signed payload is refused at apply on every replica: it would
+// leave a sealed run nobody can serve a record for.
+func TestASealWithoutAPayloadIsRefusedAtApply(t *testing.T) {
+	_, a, b := newPairStores(t)
+	run, _ := a.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	passAllLogged(t, a, run.ID, "alice")
+	body, _ := json.Marshal(entry{Kind: kindSeal, Run: run.ID, SealSha: "x", By: "bob", Principal: "user:bob"})
+	for _, s := range []*Store{a, b} {
+		s.ApplyLogged(500, 3_000_000, body)
+		if g, _ := s.Get(run.ID); g.State != StateOpen {
+			t.Errorf("a seal with no payload sealed the run: %+v", g)
+		}
+	}
+}

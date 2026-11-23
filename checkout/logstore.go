@@ -112,6 +112,12 @@ func (s *Store) ApplyLogged(seq uint64, ts int64, body []byte) error {
 		s.reject(seq, fmt.Errorf("%w: the entry is not readable: %v", ErrInvalid, err))
 		return nil
 	}
+	if e.Kind == kindSeal && len(e.Payload) == 0 {
+		// a seal with no signed payload would leave a sealed run no replica
+		// can serve a record for
+		s.reject(seq, fmt.Errorf("%w: a seal carries its signed payload", ErrInvalid))
+		return nil
+	}
 	e.Seq, e.At, e.Prev = s.seq+1, ts, s.prev
 	line, err := json.Marshal(e)
 	if err != nil {

@@ -417,6 +417,9 @@ func (s *Store) apply(e entry) error {
 		if r == nil || r.standing == nil || r.standing.rec.Point != e.Point {
 			return errors.New("the end of a force that does not stand")
 		}
+		if e.PrevSeq != 0 && r.standing.rec.Seq != e.PrevSeq {
+			return ErrNoForce // a late end for an earlier force on this point
+		}
 		r.standing.ended = e.Reason
 		r.standing = nil
 	case kindAbandon:
@@ -635,11 +638,30 @@ func (s *Store) EndForce(run, how, by string) error {
 	return s.endForceLocked(r, how, by)
 }
 
+// EndForceOf is EndForce for the force that began at the entry numbered
+// forceSeq (ForceRec.Seq): an end that arrives late, for a force that is gone,
+// does not end the next force on the same point (a timer on the controller
+// that lost the lead, an interrupt written by two leaders in turn). It returns
+// ErrNoForce when that force is not the one standing.
+func (s *Store) EndForceOf(run string, forceSeq int64, how, by string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.runs[run]
+	if r == nil {
+		return ErrNoRun
+	}
+	if r.standing == nil || (forceSeq != 0 && r.standing.rec.Seq != forceSeq) {
+		return ErrNoForce
+	}
+	return s.endForceLocked(r, how, by)
+}
+
 func (s *Store) endForceLocked(r *Run, how, by string) error {
 	if r.standing == nil {
 		return ErrNoForce
 	}
-	return s.append(entry{Kind: kindForceEnd, Run: r.ID, Point: r.standing.rec.Point, Reason: how, By: by})
+	// the end names the force it ends, so apply ends that one and no other
+	return s.append(entry{Kind: kindForceEnd, Run: r.ID, Point: r.standing.rec.Point, PrevSeq: r.standing.rec.Seq, Reason: how, By: by})
 }
 
 // Standing is the checkout force that has begun and not ended, in the open
