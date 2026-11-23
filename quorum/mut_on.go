@@ -465,6 +465,9 @@ var Mutations = []string{
 	"mark_tie_current_wins",             // of two marks at one (epoch, sequence), the current one wins (#710 S2c-1)
 	"later_leader_ignored",              // a hot takeover goes on over an epoch the voters granted the old leader after its image (#710 S2c-1)
 	"records_from_floor_unset",          // a commissioned controller's voter with no records yet covers nothing, not what came after its floor (#710 S2c-1)
+	"hot_voters_unchecked",              // naut: a takeover goes hot without the voters' check (#710 S2c-1)
+	"ack_old_epoch_counts",              // naut: a leader takes its standby's acknowledgement of another epoch (#710 S2c-1)
+	"current_time_based",                // naut: a standby counts as current by the time since its last acknowledgement, not by sequence (#710 S2c-1)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

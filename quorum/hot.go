@@ -80,6 +80,7 @@ const (
 	ColdMarkOtherEpoch = "mark-other-epoch"
 	ColdNotCurrent     = "standby-not-current" // the old leader's last word: its standby was behind
 	ColdBehindMark     = "behind-mark"         // the image is older than the one the standby acknowledged
+	ColdNotLeading     = "not-leading"         // the check ran with no lease held
 )
 
 // Verdict says whether a takeover may go on hot from an image of the

@@ -142,6 +142,14 @@ type pairStream struct {
 	tooBig    int
 	tooBigAt  time.Time
 	leadSince time.Time
+	// The in-sync acknowledgement (pairack.go): the leader's ack state
+	// under markMu; the standby's one acknowledgement in flight under
+	// ackMu.
+	markMu           sync.Mutex
+	acks             ackState
+	ackMu            sync.Mutex
+	ackWant, ackSent streamAck
+	ackBusy          bool
 }
 
 // streamLoadFailed is a leader's answer, and its condition, while its
@@ -253,6 +261,7 @@ func (m *pairMember) startStream(rt *runtime.Runtime, budget int64, hotMaxAge ti
 	rt.SetTakeoverFlush(s.takeoverFlush)
 	rt.SetTakeoverReport(s.tookOver)
 	m.q.SetStreamStatus(s.status)
+	m.q.Node().SetSyncMark(s.syncMark)
 	ctx, cancel := context.WithCancel(context.Background())
 	s.ctx = ctx
 	h := http.Handler(http.HandlerFunc(s.serve))
@@ -278,6 +287,10 @@ func (s *pairStream) leads(term uint64) bool {
 // serve is the leader's side: one standby's stream, until the leadership
 // ends, the standby goes, or a write stalls.
 func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == ackPath(s.m.o.Cluster) {
+		s.serveAck(w, r)
+		return
+	}
 	term, lead := s.rt.LeadingTerm()
 	if !lead || !s.leads(term) {
 		http.Error(w, "not leading: no state stream here", http.StatusServiceUnavailable)
@@ -379,6 +392,7 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 		s.intervalMs, s.total = interval.Milliseconds(), s.total+uint64(len(buf))+9
 		if kind == streamImage {
 			s.sentTerm, s.sentSeq, s.sentAt, s.bytes = img.Term, img.Seq, time.Now(), len(buf)
+			s.noteSent(img.Term, img.Seq, s.sentAt) // markMu inside s.mu: markMu is a leaf
 			if format >= runtime.ImageFormats[len(runtime.ImageFormats)-1] && !mutNaut("hot_cold_condition_never_clears") {
 				s.coldWhy = "" // a standby follows a stream it could take over hot from
 			}
@@ -663,6 +677,11 @@ func (s *pairStream) take(img *runtime.Image, now time.Time, intervalMs int64, n
 	}
 	s.pending = append(s.pending[:0], img.Retain...)
 	s.pendTerm, s.pendSeq = img.Term, img.Seq
+	if s.state == "in-sync" {
+		// Applied whole: a takeover could go on hot from it. Tell the
+		// leader (#710 S2c-1).
+		s.ack(img.Term, img.Seq)
+	}
 	if s.persistErr != "" {
 		s.state, s.detail = "not-persisted", "the retain file takes no image: "+s.persistErr
 	}
@@ -786,6 +805,12 @@ func (s *pairStream) takeoverFlush() (*runtime.HotImage, error) {
 			hot.Cold = fmt.Sprintf("the shadow's image (term %d, seq %d) is not the one the retain file took (term %d, seq %d)", hot.Term, hot.Seq, term, seq)
 		case hot.Build != s.build && !mutNaut("hot_build_unchecked"):
 			hot.Cold = fmt.Sprintf("the image is of another nautilus build (%s; this one is %s)", hot.Build, s.build)
+		default:
+			// The voters: no leadership since the image, and the standby
+			// was in sync as the old leader last said (#710 S2c-1).
+			if ok, why := s.m.q.Node().HotVerdict(hot.Term, hot.Seq); !ok && !mutNaut("hot_voters_unchecked") {
+				hot.Cold = coldWhy(why)
+			}
 		}
 	}
 	s.mu.Lock()
