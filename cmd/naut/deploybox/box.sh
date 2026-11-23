@@ -28,6 +28,15 @@ HELPER=${NAUT_HELPER:-}
 UNITSRC=${NAUT_UNITSRC:-}
 say() { echo "$*" >&2; }
 fail() { echo "naut deploy (on box): $*" >&2; exit 1; }
+# unxz_cmd prints the command that unpacks xz on stdin to stdout, and fails
+# when the box has none: busybox boxes have xzcat and no xz, others have xz.
+unxz_cmd() {
+	if command -v xzcat >/dev/null 2>&1; then echo xzcat
+	elif command -v xz >/dev/null 2>&1; then echo "xz -dc"
+	elif command -v unxz >/dev/null 2>&1; then echo "unxz -c"
+	else return 1
+	fi
+}
 case $SUPERVISOR in
 systemd) ;;
 cron)
@@ -411,7 +420,7 @@ if [ -n "$HELPER" ]; then
 	base) [ $# -eq 0 ] ;;
 	partsize | partreset) [ $# -eq 1 ] && okid "$1" ;;
 	append) [ $# -eq 2 ] && okid "$1" && isnum "$2" ;;
-	assemble) [ $# -eq 5 ] && okid "$1" && okid "$3" && ishex64 "$2" && isnum "$4" && ishex64 "$5" ;;
+	assemble) { [ $# -eq 5 ] || { [ $# -eq 6 ] && [ "$6" = xz ]; }; } && okid "$1" && okid "$3" && ishex64 "$2" && isnum "$4" && ishex64 "$5" ;;
 	rollback | status | backup | restore | helper-version) [ $# -eq 0 ] ;;
 	uninstall) [ $# -eq 0 ] || { [ $# -eq 1 ] && [ "$1" = -purge ]; } ;;
 	*) false ;;
@@ -618,6 +627,9 @@ base)
 	# zip and a footer holding the zip's offset), its size and its SHA-256.
 	# Nothing is printed when there is no current release or it has no footer,
 	# and the caller sends the whole controller then.
+	# xz=1 first, whether or not there is a current release: a first install
+	# is the biggest upload and wants the smaller wire file most.
+	if unxz_cmd >/dev/null; then echo "xz=1"; fi
 	cur=$(target current)
 	[ -n "$cur" ] || exit 0
 	f=$ROOT/releases/$cur/controller
@@ -652,9 +664,9 @@ append)
 	cat >>"$ROOT/incoming/$1.part"
 	;;
 assemble)
-	# assemble <name> <wire-sha256> <id> <runtime-size> <controller-sha256>
+	# assemble <name> <wire-sha256> <id> <runtime-size> <controller-sha256> [xz]
 	# (needs room in incoming/ for the controller beside the upload):
-	# the upload <name> (gzip) becomes the controller <id>: the first
+	# the upload <name> (gzip, or xz when the sixth word says so) becomes the controller <id>: the first
 	# <runtime-size> bytes of the current release's controller (0: none) then
 	# the upload, unzipped. The upload's hash and the whole controller's are
 	# both checked before the file is named <id>, so a damaged or cut transfer
@@ -662,6 +674,12 @@ assemble)
 	# thrown away; exit 5: it did not rebuild the controller the caller built).
 	name=$1 wire=$2 id=$3 rsize=$4 whole=$5
 	in=$ROOT/incoming
+	# how the upload is unpacked; a box that cannot read xz refuses it (the
+	# caller asked what the box can do, so this is a changed box, not a plan)
+	unz="gunzip -c"
+	if [ "${6:-}" = xz ]; then
+		unz=$(unxz_cmd) || fail "this box cannot unpack xz (no xzcat, xz or unxz)"
+	fi
 	# what an abandoned deploy left (a day old): never left to fill the disk
 	find "$in" -maxdepth 1 \( -name '*.wire.part' -o -name '*.build' \) -mmin +1440 -exec rm -f {} + 2>/dev/null || true
 	[ -f "$in/$name.part" ] || fail "nothing uploaded as $name"
@@ -679,9 +697,9 @@ assemble)
 		cur=$(target current)
 		[ -n "$cur" ] || fail "no current release to take the runtime from"
 		head -c "$rsize" "$ROOT/releases/$cur/controller" >"$build" || fail "could not read the current controller's runtime (disk full?)"
-		gunzip -c "$in/$name.part" >>"$build" || fail "could not unzip the upload $name (damaged, or the disk is full)"
+		$unz <"$in/$name.part" >>"$build" || fail "could not unpack the upload $name (damaged, or the disk is full)"
 	else
-		gunzip -c "$in/$name.part" >"$build" || fail "could not unzip the upload $name (damaged, or the disk is full)"
+		$unz <"$in/$name.part" >"$build" || fail "could not unpack the upload $name (damaged, or the disk is full)"
 	fi
 	got=$(sha256sum <"$build" | cut -d' ' -f1)
 	if [ "$got" != "$whole" ]; then

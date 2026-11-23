@@ -72,6 +72,7 @@ install and update:
   -id <id>                the release's name on the box
                           (default <name>-<git describe>-<first 8 hex of its sha256>)
 
+  -compress <how>         auto (xz when the box can unpack it, about a quarter smaller than gzip), gzip or xz
   -dry-run                build, ask the box what it already has, say what would be sent (how
                           many bytes, how it is sent, how long it takes) and send nothing
   -bandwidth <rate>       the link speed the time estimate assumes, in bits per second (256k, 1M);
@@ -141,6 +142,7 @@ func runDeploy(args []string) int {
 		fs.BoolVar(&xo.dryRun, "dry-run", false, "say what would be sent, and send nothing")
 		fs.StringVar(&bandwidth, "bandwidth", "", "the link speed the estimate assumes (256k, 1M)")
 		fs.StringVar(&limit, "limit", "", "send no faster than this (128k)")
+		fs.StringVar(&xo.compress, "compress", "auto", "how the upload is compressed: auto (xz when the box can unpack it), gzip or xz")
 		if cmd == "install" {
 			fs.StringVar(&supervisor, "supervisor", "", "cron: a box without systemd or root (see usage)")
 			fs.StringVar(&root, "root", "", "with -supervisor cron: the directory releases and state go in")
@@ -276,7 +278,8 @@ func runDeploy(args []string) int {
 // xferOpts are the slow-link options of install and update.
 type xferOpts struct {
 	dryRun           bool
-	bandwidth, limit int64 // bits per second; 0: none given
+	bandwidth, limit int64  // bits per second; 0: none given
+	compress         string // auto, gzip or xz
 }
 
 // deployRelease builds the project (or takes -controller), sends the box
@@ -339,11 +342,14 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string, xo xfe
 	// what the box already has: an update can be built on its current runtime
 	var base boxBase
 	haveBase := false
-	if cmd == "update" && !b.helperLegacy {
+	if (cmd == "update" || cmd == "install") && !b.helperLegacy {
 		bb, ok, err := b.base()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "naut deploy:", err)
 			return 1
+		}
+		if b.helperGzipOnly {
+			bb.xz = false // its box.sh does not say, and it could not unpack it
 		}
 		base, haveBase = bb, ok
 	}
@@ -363,11 +369,14 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string, xo xfe
 		st, _ := os.Stat(ctl)
 		t = &transfer{kind: "legacy", whole: sum, size: st.Size(),
 			note: "the whole controller, uncompressed: this box's release helper predates the faster upload"}
-	} else if t, err = planTransfer(ctl, sum, tmp, base, haveBase); err != nil {
+	} else if t, err = planTransfer(ctl, sum, tmp, base, haveBase, xo.compress); err != nil {
 		fmt.Fprintln(os.Stderr, "naut deploy:", err)
 		return 1
 	}
 	fmt.Fprintf(os.Stderr, "naut deploy: %s\n", t.summary(xo.bandwidth, xo.limit))
+	if b.helperGzipOnly {
+		fmt.Fprintf(os.Stderr, "naut deploy: this box's release helper predates xz, so the upload is gzip: install the helper again once (naut deploy helper -h) for an upload about a quarter smaller\n")
+	}
 	if b.helperLegacy {
 		fmt.Fprintf(os.Stderr, "naut deploy: to send only what changed, install the helper again once, as root on the box: naut deploy helper -user <ssh-user> <dir> (then copy what it writes, as naut deploy helper -h says)\n")
 	}
@@ -410,7 +419,11 @@ func (b *sshBox) sendController(t *transfer, ctl, id string, limit int64) int {
 			fmt.Fprintln(os.Stderr, "naut deploy:", err)
 			return 1
 		}
-		code := b.root(os.Stdout, "assemble", wireName, t.wireSha, id, strconv.FormatInt(t.rsize, 10), t.whole)
+		args := []string{"assemble", wireName, t.wireSha, id, strconv.FormatInt(t.rsize, 10), t.whole}
+		if t.comp == "xz" {
+			args = append(args, "xz")
+		}
+		code := b.root(os.Stdout, args...)
 		switch code {
 		case 0:
 			return 0
@@ -425,9 +438,9 @@ func (b *sshBox) sendController(t *transfer, ctl, id string, limit int64) int {
 			fmt.Fprintln(os.Stderr, "naut deploy: the box's runtime is not the one expected; sending the whole controller")
 			full := *t
 			full.kind, full.rsize = "full", 0
-			full.wire = filepath.Join(tmp, "wire-full.gz")
+			full.wire = filepath.Join(tmp, "wire-full."+t.comp)
 			var err error
-			if full.wireSize, full.wireSha, err = gzipRange(ctl, full.wire, 0); err != nil {
+			if full.wireSize, full.wireSha, err = compressRange(t.comp, ctl, full.wire, 0); err != nil {
 				fmt.Fprintln(os.Stderr, "naut deploy:", err)
 				return 1
 			}
@@ -685,7 +698,10 @@ type sshBox struct {
 	// helperLegacy: the helper on the box is from before the slow-link
 	// upload: it runs every older command, and cannot rebuild a controller.
 	helperLegacy bool
-	known        bool // the mode is known: from install's flags, or discovered
+	// helperGzipOnly: the box's helper can rebuild a controller from an upload
+	// but cannot unpack xz (it predates it): an upload to it is gzip
+	helperGzipOnly bool
+	known          bool // the mode is known: from install's flags, or discovered
 }
 
 // checkSupervisor vets install's -supervisor and -root. The root goes into
@@ -754,6 +770,8 @@ func (b *sshBox) discover() error {
 	}
 	if got := strings.TrimSpace(out.String()); got != helperVersion() && legacyHelperVersions[got] {
 		b.helperLegacy = true
+	} else if got != helperVersion() && gzipOnlyHelperVersions[got] {
+		b.helperGzipOnly = true
 	} else if got != helperVersion() {
 		return fmt.Errorf("%s: the release helper is version %q, this naut's is %s: install it again from `naut deploy helper` (root on the box)", b.target, got, helperVersion())
 	}

@@ -204,8 +204,20 @@ rebuild:
 
 | The box's runtime is | Sent |
 |---|---|
-| the one this was built on | the project alone, gzipped (about 1 MB; 72 MB controller of the lift-station example, one rung changed: 1.2 MB, 40 s at 256 kbit/s) |
-| another, or there is none (a first install) | the whole controller, gzipped |
+| the one this was built on | the project alone, compressed (about 1 MB; 72 MB controller of the lift-station example, one rung changed: 1.2 MB, 40 s at 256 kbit/s) |
+| another, or there is none (a first install) | the whole controller, compressed |
+
+**Compression.** The upload is xz when the box can unpack it and this machine
+has `xz`, else gzip. xz makes a controller about a quarter smaller (a 51 MB
+ARMv7 controller: 15.3 MB as xz, 20.6 MB as gzip; at 256 kbit/s, 8 minutes
+instead of 10). The box says what it can unpack when naut asks what it has:
+`xzcat` (BusyBox boxes such as the PLCnext, which have no `xz`), `xz` or
+`unxz`. naut uses preset 6 and the CRC32 check every decoder has, so the box
+needs about 10 MB of memory to unpack it, not the 65 MB of the largest preset,
+for less than 1% more bytes. The plan line says which and, when it is gzip,
+why (`the box cannot unpack xz`, or `xz is not installed here`);
+`-compress gzip|xz|auto` overrides. The resume offsets are on the compressed
+file, and the SHA-256 checks are on the unpacked bytes, as before.
 
 The box joins the runtime it has with the project, checks the SHA-256 of the
 whole file against the one computed here, and only then names it a release,
@@ -228,7 +240,8 @@ naut deploy update deploy@ipc -dry-run
 naut deploy update deploy@ipc -limit 128k
 ```
 
-A box on the release helper keeps the old, whole-file upload until the helper
+A box whose release helper is from before xz is sent gzip until the helper is
+installed again once (`naut deploy` says so). A box on the release helper keeps the old, whole-file upload until the helper
 is installed again once (`naut deploy helper -user <ssh-user> <dir>`, as root on
 the box): `naut deploy` says so, with the size it is about to send.
 
