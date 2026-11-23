@@ -12,17 +12,19 @@
 // selector). nautilus's own lowering runs first, so what nautilus cannot
 // run is refused before anything else.
 //
-// This is the first subset. What it does not write yet it refuses with a
-// rule-tagged diagnostic, never a guess: more than one task, user
-// FUNCTIONs and FUNCTION_BLOCKs, UDTs and enums, arrays, STRING, LTIME,
-// TIME arithmetic, bitwise operators, SR/RS, TRUNC, the overloaded TO_*
-// conversions, division by anything but a non-zero constant (nautilus
-// gives 0 and counts it; the CPU's answer is not pinned down), and every
-// builtin outside the table in expr.go.
+// What it does not translate yet it refuses with a rule-tagged
+// diagnostic, never a guess, worded as the writer's gap with the issue
+// that closes it (gaps.go): more than one task, user FUNCTIONs and
+// FUNCTION_BLOCKs, UDTs and enums, arrays, STRING, LTIME, TIME
+// arithmetic, SFC, and every builtin outside the table in expr.go.
+// Bitwise operators, the guarded divisions (division by anything but a
+// non-zero constant: nautilus gives 0), SR/RS, the shifts, MUX, TRUNC and
+// the overloaded TO_* conversions are written (ops.go, expr.go).
 //
-// Known divergence, documented rather than refused: a REAL → integer
-// conversion out of range faults the scan in nautilus, while the CPU sets
-// ENO FALSE and carries on.
+// Known divergences, documented rather than refused: where nautilus
+// faults the scan the CPU sets ENO FALSE and carries on: a REAL → integer
+// conversion out of range (TRUNC included), a MUX selector out of range,
+// a negative shift count.
 //
 // Comments in the nautilus source are not carried into the SCL: nautilus
 // is where the program is read and edited.
@@ -46,6 +48,7 @@ import (
 
 	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ld"
+	"github.com/joyautomation/nautilus/lang/sfc"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -58,7 +61,9 @@ type Program struct {
 	Path   string
 	Source string
 	// Libs are project library sources (ST or LD) whose function block
-	// signatures a ladder file needs in scope.
+	// signatures a ladder file needs in scope. A name the program takes
+	// from one (a TYPE, FUNCTION, block or global constant) is a writer
+	// gap, not nautilus's refusal.
 	Libs []string
 }
 
@@ -148,7 +153,7 @@ func (o Output) Symbol(path string) (string, bool) {
 			return root + "." + rest, true
 		}
 	}
-	// Tags are scalars in the first subset: no member path below one.
+	// Tags are scalars so far (#1299): no member path below one.
 	if root, ok := o.Roots[""]; ok && !strings.Contains(path, ".") {
 		if _, known := o.names[""][strings.ToLower(path)]; known {
 			return root + "." + path, true
@@ -228,6 +233,10 @@ func Write(in Input) (Output, []Diag, error) {
 
 	progs := map[string]bool{}
 	for _, p := range in.Programs {
+		if isSFC(p) {
+			w.diag("siemens/sfc", p.Path, 1, gapMessage(gapSFC, "SFC programs", "they will be written as SCL state machines"))
+			continue
+		}
 		src, lines, err := toST(p)
 		if err != nil {
 			return Output{}, nil, fmt.Errorf("%s: %w", p.Path, err)
@@ -241,7 +250,7 @@ func Write(in Input) (Output, []Diag, error) {
 			w.diag("siemens/program", p.Path, 1, "the source declares no PROGRAM")
 			continue
 		}
-		pw := w.program(p.Path, prog)
+		pw := w.program(p.Path, p.Libs, prog)
 		for i := mark; i < len(w.diags); i++ {
 			w.diags[i].Line = mapLine(lines, w.diags[i].Line)
 		}
@@ -266,20 +275,37 @@ func Write(in Input) (Output, []Diag, error) {
 		out.Roots[prog.Name] = quote(dbName)
 	}
 
+	// The guarded division functions the programs call. Files come out
+	// with these first (the sort below), so tiad, which generates the
+	// sources in the order given, has each FC before an FB that calls it.
+	fns := make([]string, 0, len(w.guarded))
+	for fn := range w.guarded {
+		fns = append(fns, fn)
+	}
+	sort.Strings(fns)
+	for _, fn := range fns {
+		name := prefix + fn
+		if !claim(name, "the guarded division function "+fn) {
+			continue
+		}
+		out.Files = append(out.Files, File{Path: name + ".scl", Data: guardedSource(prefix, fn)})
+		out.Sources[name+".scl"] = Source{Path: w.guarded[fn]}
+	}
+
 	// One task in v1. nautilus copies shared tags in at a task's scan
 	// start and commits them at its end, while cyclic interrupt OBs
 	// preempt each other and touch the tags DB in place: with two tasks
 	// the CPU would see a different data model. Copy-in/copy-out comes
 	// later, as its own item.
 	if len(in.Tasks) > 1 {
-		w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("%d tasks: the first subset writes one (nautilus's per-task copy of shared tags has no SCL form yet)", len(in.Tasks)))
+		w.diag("siemens/task", "nautilus.yaml", 0, gapMessage(gapTasks, fmt.Sprintf("more than one task (%d here)", len(in.Tasks)), "nautilus's per-task copy of shared tags has no SCL form yet"))
 	}
 	for i, t := range in.Tasks {
 		if i > 0 {
 			break
 		}
 		if !progs[strings.ToLower(t.Program)] {
-			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s runs program %s, which was not written", t.Name, t.Program))
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s runs program %s, which the writer could not write (its diagnostics are above)", t.Name, t.Program))
 			continue
 		}
 		switch {
@@ -313,7 +339,17 @@ func Write(in Input) (Output, []Diag, error) {
 	if len(w.diags) > 0 {
 		return Output{}, w.diags, nil
 	}
-	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].Path < out.Files[j].Path })
+	fc := map[string]bool{}
+	for _, fn := range fns {
+		fc[prefix+fn+".scl"] = true
+	}
+	sort.Slice(out.Files, func(i, j int) bool {
+		a, b := out.Files[i].Path, out.Files[j].Path
+		if fc[a] != fc[b] {
+			return fc[a]
+		}
+		return a < b
+	})
 	return out, nil, nil
 }
 
@@ -322,6 +358,18 @@ type writer struct {
 	tagsDB  string // with the prefix
 	prefix  string
 	diags   []Diag
+	// guarded are the guarded division functions the programs call
+	// (ops.go), each with the first program that called it.
+	guarded map[string]string
+}
+
+func (w *writer) useGuarded(fn, path string) {
+	if w.guarded == nil {
+		w.guarded = map[string]string{}
+	}
+	if _, ok := w.guarded[fn]; !ok {
+		w.guarded[fn] = path
+	}
 }
 
 func (w *writer) diag(rule, path string, line int, msg string) {
@@ -430,6 +478,53 @@ func literal(src string) (string, string) {
 	return pw.expr(a.Value, 0), ""
 }
 
+// ExternalTypes is the type the programs declare for each tag they bind
+// in a VAR_EXTERNAL or VAR_GLOBAL block, by lower-cased name. nautilus
+// gives a tag with no type: the type the logic binds it as (runtime
+// tagdef.go: `init: 0` on a tag declared `Counter : DINT` is a DINT), so
+// the CLI asks this before it types such a tag for the tags DB. A source
+// that does not parse declares nothing here (check reports it).
+func ExternalTypes(progs []Program) map[string]string {
+	out := map[string]string{}
+	add := func(vbs []st.VarBlock) {
+		for _, vb := range vbs {
+			if vb.Kind != "VAR_EXTERNAL" && vb.Kind != "VAR_GLOBAL" {
+				continue
+			}
+			for _, v := range vb.Variables {
+				if t := strings.TrimSpace(v.Datatype); t != "" {
+					out[strings.ToLower(v.Name)] = t
+				}
+			}
+		}
+	}
+	for _, p := range progs {
+		if isSFC(p) {
+			if prog, err := sfc.Parse(p.Source); err == nil {
+				add(prog.VarBlocks)
+			}
+			continue
+		}
+		src, _, err := toST(p)
+		if err != nil {
+			continue
+		}
+		if prog, err := st.Parse(src); err == nil {
+			add(prog.VarBlocks)
+		}
+	}
+	return out
+}
+
+// isSFC reports an SFC program, which the writer does not translate yet.
+func isSFC(p Program) bool { return strings.EqualFold(path.Ext(p.Path), ".sfc") }
+
+// StructuredInitGap words a manifest tag start value the writer does not
+// translate yet (a structured tag's map), for the CLI that reads it.
+func StructuredInitGap(v any) string {
+	return gapMessage(gapStructured, fmt.Sprintf("the structured start value %v", v), "")
+}
+
 // toST returns a program's source as ST, with lines[i] the original line
 // of ST line i+1 (nil when the source is ST already).
 func toST(p Program) (string, []int, error) {
@@ -471,6 +566,16 @@ func mapLine(lines []int, l int) int {
 // same lowering Write uses, so a caller can name a Task's Program from
 // the file a manifest's task points at.
 func ProgramName(p Program) (string, error) {
+	if isSFC(p) {
+		prog, err := sfc.Parse(p.Source)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", p.Path, err)
+		}
+		if prog.Name == "" {
+			return "", fmt.Errorf("%s: the source declares no PROGRAM", p.Path)
+		}
+		return prog.Name, nil
+	}
 	src, _, err := toST(p)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", p.Path, err)

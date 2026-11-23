@@ -1,0 +1,70 @@
+FUNCTION_BLOCK "naut_Main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      a : INT;
+      b : INT;
+      n : INT;
+      u : UINT;
+      d : DINT;
+      w : WORD;
+      w2 : WORD;
+      l : LINT;
+      r : REAL;
+      r2 : REAL;
+      lr : LREAL;
+      q : BOOL;
+      q2 : BOOL;
+      latch : Struct
+         S1 : Bool;
+         R : Bool;
+         Q1 : Bool;
+      END_STRUCT;
+      unlatch : Struct
+         S : Bool;
+         R1 : Bool;
+         Q1 : Bool;
+      END_STRUCT;
+   END_VAR
+
+BEGIN
+	#a := WORD_TO_INT(INT_TO_WORD(#a) AND INT_TO_WORD(#b));
+	#a := WORD_TO_INT(INT_TO_WORD(#a) OR WORD#16#F);
+	#a := WORD_TO_INT(INT_TO_WORD(#a) XOR WORD#16#FFFE);
+	#w := #w AND #w2;
+	#w := #w OR WORD#16#FF00;
+	#d := LINT_TO_DINT((((LWORD_TO_LINT(LINT_TO_LWORD(INT_TO_LINT(#a)) AND LINT_TO_LWORD(DINT_TO_LINT(#d)))) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	#a := WORD_TO_INT(NOT INT_TO_WORD(#a));
+	#w := NOT #w;
+	#d := LINT_TO_DINT((((LWORD_TO_LINT(NOT LINT_TO_LWORD(UINT_TO_LINT(#u)))) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	#q := LWORD_TO_LINT(NOT LINT_TO_LWORD(UINT_TO_LINT(#u))) > 5;
+	#w := UINT_TO_WORD(LINT_TO_UINT(((UINT_TO_LINT(WORD_TO_UINT(#w)) + 1) MOD LINT#65536 + LINT#65536) MOD LINT#65536));
+	#q := #w.%X3;
+	#w.%X4 := #q;
+	#a := LINT_TO_INT(((("naut_DIV_LINT"(A := INT_TO_LINT(#a), B := INT_TO_LINT(#b))) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	#a := LINT_TO_INT(((("naut_MOD_LINT"(A := INT_TO_LINT(#a), B := INT_TO_LINT(#b))) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	#r := "naut_DIV_REAL"(A := #r, B := #r2);
+	#lr := "naut_DIV_LREAL"(A := #lr, B := #lr);
+	#r := "naut_DIV_REAL"(A := #r, B := INT_TO_REAL(#a));
+	#l := TRUNC_LINT(#r);
+	#d := TRUNC_DINT(#r);
+	#d := INT_TO_DINT(#a);
+	#r := INT_TO_REAL(#a);
+	#a := MAX(IN1 := #a, IN2 := #b, IN3 := #n);
+	#a := MIN(IN1 := #b, IN2 := #a);
+	#a := MUX(K := #n, IN0 := #a, IN1 := #b, IN2 := 7);
+	#a := LIMIT(MN := 0, IN := #a, MX := 10);
+	#w := SHL(IN := #w, N := INT_TO_UINT(#n));
+	#a := WORD_TO_INT(SHR(IN := INT_TO_WORD(#a), N := INT_TO_UINT(#n)));
+	#w := ROL(IN := #w, N := 3);
+	#u := WORD_TO_UINT(ROR(IN := UINT_TO_WORD(#u), N := #u));
+	#latch.S1 := "naut_Tags".Start;
+	#latch.R := "naut_Tags".Reset;
+	#latch.Q1 := #latch.S1 OR (#latch.Q1 AND NOT #latch.R);
+	#q := #latch.Q1;
+	#unlatch.S := "naut_Tags".Start;
+	#unlatch.R1 := "naut_Tags".Reset;
+	#unlatch.Q1 := NOT #unlatch.R1 AND (#unlatch.S OR #unlatch.Q1);
+	#q2 := #unlatch.Q1;
+	"naut_Tags".Running := #latch.Q1 AND NOT #unlatch.Q1;
+END_FUNCTION_BLOCK

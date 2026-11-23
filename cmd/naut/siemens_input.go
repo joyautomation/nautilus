@@ -35,9 +35,10 @@ const siemensDefaultScan = 100 * time.Millisecond
 //     the runtime's default when it has none. What runtime.New refuses is
 //     refused here too: a later task named like the main task, and two
 //     tasks whose programs share a PROGRAM name;
-//   - the manifest's tags, typed by the runtime's rule (type:, else what
-//     init: implies; a tag with neither is left out, since the compiler
-//     already refuses a program that names it), retained exactly where
+//   - the manifest's tags, typed by the runtime's rule (type:, else the
+//     type a program's VAR_EXTERNAL binds it as, else what init: implies;
+//     a tag with none of them is left out, since the compiler already
+//     refuses a program that names it), retained exactly where
 //     the runtime keeps them: with a retain: section, every setpoint and
 //     every tag marked retain: true; without one, none.
 //
@@ -61,32 +62,6 @@ func siemensWriterInput(dir, manifestName string) (swriter.Input, error) {
 	if err != nil {
 		return swriter.Input{}, err
 	}
-	scope, _ := runtime.ResolveTagScope(defs, nil)
-	for _, d := range defs {
-		typ := d.Type
-		if typ == "" {
-			if t := scope.Implicit[d.Name]; t != nil {
-				typ = t.String()
-			}
-		}
-		if typ == "" {
-			continue
-		}
-		g := swriter.Global{
-			Name:   d.Name,
-			Type:   typ,
-			Retain: m.Retain != nil && (d.Retain || d.Role == runtime.RoleSetpoint),
-		}
-		if d.Init != nil {
-			lit, err := siemensInitLiteral(d.Init, typ)
-			if err != nil {
-				return swriter.Input{}, fmt.Errorf("tag %s: %w", d.Name, err)
-			}
-			g.Init = lit
-		}
-		in.Globals = append(in.Globals, g)
-	}
-
 	if len(m.Tasks) == 0 {
 		return swriter.Input{}, errors.New("the project declares no task")
 	}
@@ -127,6 +102,38 @@ func siemensWriterInput(dir, manifestName string) (swriter.Input, error) {
 		}
 		in.Tasks = append(in.Tasks, task)
 	}
+	scope, _ := runtime.ResolveTagScope(defs, nil)
+	// A tag with no type: is the type the programs bind it as, as the
+	// runtime has it; only a tag no program declares takes its init's.
+	ext := swriter.ExternalTypes(in.Programs)
+	for _, d := range defs {
+		typ := d.Type
+		if typ == "" {
+			typ = ext[strings.ToLower(d.Name)]
+		}
+		if typ == "" {
+			if t := scope.Implicit[d.Name]; t != nil {
+				typ = t.String()
+			}
+		}
+		if typ == "" {
+			continue
+		}
+		g := swriter.Global{
+			Name:   d.Name,
+			Type:   typ,
+			Retain: m.Retain != nil && (d.Retain || d.Role == runtime.RoleSetpoint),
+		}
+		if d.Init != nil {
+			lit, err := siemensInitLiteral(d.Init, typ)
+			if err != nil {
+				return swriter.Input{}, fmt.Errorf("tag %s: %w", d.Name, err)
+			}
+			g.Init = lit
+		}
+		in.Globals = append(in.Globals, g)
+	}
+
 	return in, nil
 }
 
@@ -176,6 +183,9 @@ func siemensInitLiteral(v any, typ string) (string, error) {
 			return strings.TrimSpace(x), nil
 		}
 		return st.QuoteString(x), nil
+	}
+	if _, ok := v.(map[string]any); ok {
+		return "", errors.New(swriter.StructuredInitGap(v))
 	}
 	return "", fmt.Errorf("init %v is not a value the Siemens target can seed", v)
 }
