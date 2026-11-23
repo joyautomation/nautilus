@@ -1802,6 +1802,10 @@
         "flood": {
           "$ref": "#/definitions/alarm-flood"
         },
+        "tuning": {
+          "type": "string",
+          "description": "Path of the tuning overlay: a file of `tuning:` rows (`id`, `on-delay`, `off-delay`, `why`, `from-journal`) that sets the delays of chattering alarms, applied when the controller starts. `naut alarms report chatter -suggest` says what to put in it; `naut check` refuses an id no alarm has."
+        },
         "rules": {
           "type": "array",
           "items": {

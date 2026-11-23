@@ -106,6 +106,26 @@ func TestSuggestLeavesOutShelvedAndSuppressedSpansAndStartsAfterTheLastTuning(t 
 	}
 }
 
+// A restart or a takeover writes a tuned row each time, saying the same
+// delays: the window stays where the delays last CHANGED, so identical
+// repeats do not hide the history, and a different one does.
+func TestSuggestWindowStaysPutAcrossIdenticalTunedRowsAndMovesOnAChange(t *testing.T) {
+	ev := bounces(7, 3*time.Second, 4*time.Second, Delays{})
+	last := ev[len(ev)-1].TS
+	tuned := func(ts int64, name string) alarm.Event {
+		return alarm.Event{TS: ts, ID: "A", Kind: KindTuned, Name: name}
+	}
+	before := append([]alarm.Event{tuned(1, "tuned: on-delay 0s, off-delay 0s")}, ev...)
+	same := append(append([]alarm.Event{}, before...), tuned(last+1, "tuned: on-delay 0s, off-delay 0s"))
+	if _, ok := Suggest(same, Delays{}, time.Minute, 3); !ok {
+		t.Error("a restart that repeats the same tuning moved the window past the bounces")
+	}
+	changed := append(append([]alarm.Event{}, before...), tuned(last+1, "tuned: on-delay 5s, off-delay 0s"))
+	if _, ok := Suggest(changed, Delays{}, time.Minute, 3); ok {
+		t.Error("a change of delays did not move the window: history under the old ones was judged")
+	}
+}
+
 // The engine samples, so a condition held exactly the on-delay is never seen
 // true for it: 5 s bounces are filtered by a 5 s on-delay (and a 4 s drop-out
 // is bridged by a 5 s off-delay, the same total: the on-delay wins the tie).

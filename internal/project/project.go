@@ -1447,6 +1447,9 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 	if err := composeAlarms(fsys, &m); err != nil {
 		return nil, err
 	}
+	if err := composeTuning(fsys, &m); err != nil {
+		return nil, err
+	}
 	if m.Auth == nil && authKeyNull(raw) {
 		return nil, fmt.Errorf("%s: %w", name, errAuthNull)
 	}

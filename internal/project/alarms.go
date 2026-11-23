@@ -73,6 +73,12 @@ type AlarmsConfig struct {
 	Chatter alarm.ChatterConfig `yaml:"chatter"`
 	Flood   alarm.FloodConfig   `yaml:"flood"`
 
+	// Tuning names the overlay file of delays a chattering alarm should run
+	// with (alarmtuning.go), applied at start. TuningRows are its rows, read
+	// at load.
+	Tuning     string        `yaml:"tuning"`
+	TuningRows []AlarmTuning `yaml:"-"`
+
 	Rules []alarm.Rule `yaml:"rules"`
 	Defs  []alarm.Def  `yaml:"defs"`
 
@@ -285,7 +291,22 @@ func (p *Project) AlarmDefs(rt *runtime.Runtime) ([]alarm.Def, error) {
 	if p.Alarms == nil {
 		return nil, nil
 	}
-	return p.Alarms.alarmConfig().Compose(p.deviceAlarmFiles(), p.alarmTagInfo(rt))
+	defs, _, _, err := p.alarmDefsTuned(rt)
+	return defs, err
+}
+
+// alarmDefsTuned is AlarmDefs with the overlay's account: the rows applied
+// and the ids no alarm has (CheckAlarms refuses those; a start logs them).
+func (p *Project) alarmDefsTuned(rt *runtime.Runtime) (defs []alarm.Def, applied []AlarmTuning, missing []string, err error) {
+	if p.Alarms == nil {
+		return nil, nil, nil, nil
+	}
+	defs, err = p.Alarms.alarmConfig().Compose(p.deviceAlarmFiles(), p.alarmTagInfo(rt))
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defs, applied, missing = p.Alarms.tuneDefs(defs)
+	return defs, applied, missing, nil
 }
 
 // deviceAlarmFiles are the alarms the project's devices raise by default
@@ -393,6 +414,28 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 	tags := p.alarmTagInfo(rt)
 	if defs, err = p.Alarms.alarmConfig().Compose(p.deviceAlarmFiles(), tags); err != nil {
 		return nil, nil, nil, err
+	}
+	// The overlay: every row's id must be an alarm of the project (a renamed
+	// alarm leaves a dead row that tunes nothing), and a delay shorter than
+	// the alarm's own is said, because shortening one can fire pending
+	// alarms on the first scan.
+	byIDDef := make(map[string]alarm.Def, len(defs))
+	for _, d := range defs {
+		byIDDef[d.ID] = d
+	}
+	for _, t := range p.Alarms.TuningRows {
+		d, ok := byIDDef[t.ID]
+		if !ok {
+			errs = append(errs, fmt.Sprintf("alarms.tuning %s: no alarm has the id %q", p.Alarms.Tuning, t.ID))
+			continue
+		}
+		on, off := t.delays()
+		if on >= 0 && on < d.OnDelay {
+			warns = append(warns, fmt.Sprintf("alarms.tuning %s: %s's on-delay %s is shorter than the alarm's own %s: shortening can fire pending alarms on the first scan", p.Alarms.Tuning, t.ID, on, d.OnDelay))
+		}
+		if off >= 0 && off < d.OffDelay {
+			warns = append(warns, fmt.Sprintf("alarms.tuning %s: %s's off-delay %s is shorter than the alarm's own %s: shortening can fire pending alarms on the first scan", p.Alarms.Tuning, t.ID, off, d.OffDelay))
+		}
 	}
 	for _, err := range []error{p.Alarms.Chatter.Validate(), p.Alarms.Flood.Validate()} {
 		if err != nil {
@@ -568,9 +611,19 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 	if p.Alarms == nil {
 		return nil, nil
 	}
-	defs, err := p.AlarmDefs(rt)
+	defs, applied, missing, err := p.alarmDefsTuned(rt)
 	if err != nil {
 		return nil, err
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	for _, id := range missing {
+		log.Warn("alarm tuning: no alarm has this id; its row is skipped (naut check refuses it)", "id", id)
+	}
+	tuned := make([]alarm.Tuned, 0, len(applied))
+	for _, t := range applied {
+		tuned = append(tuned, alarm.Tuned{ID: t.ID, Why: t.Why})
 	}
 	tags := rt.Tags()
 	read := tags.ReadPath
@@ -653,6 +706,7 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		Substituted: substitutedCache(tags),
 		Chatter:     p.Alarms.Chatter,
 		Flood:       p.Alarms.Flood,
+		Tuned:       tuned,
 	})
 	if err != nil {
 		out.Close()
