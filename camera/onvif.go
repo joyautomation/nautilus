@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // ONVIF (#724 slice 4): a camera row of kind onvif names the device's service
@@ -415,8 +416,10 @@ func wsse(user, pass string, at time.Time) (string, error) {
 
 // cleanText is device text made safe to show: no control characters, cut to n.
 func cleanText(s string, n int) string {
+	// controls (C0 and C1: U+009B is 8-bit CSI), format characters (bidi overrides,
+	// zero-width), and line and paragraph separators: none of them may reach a terminal
 	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return -1
 		}
 		return r

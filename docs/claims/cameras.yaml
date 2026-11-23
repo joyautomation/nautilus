@@ -406,3 +406,26 @@ claims:
       Run against a fake device only; no real ONVIF camera has been tried yet
       (pending: a bench device, one that asks HTTP basic on its snapshot port,
       a Profile-T device).
+
+  - id: CAM-025
+    claim: >-
+      naut camera discover probes the local network for ONVIF cameras and lists
+      what answers with a manifest row to start from, changing nothing: answers
+      are treated as data (size-bounded, at most 256 devices and 16 from one
+      address, cleaned of control, format and separator characters, only http and https addresses without user information, a
+      device whose address is not on the host it answered from is flagged),
+      with nothing answering it says what to check, and the probe ends when
+      asked to or after its timeout.
+    source: "#finding-onvif-cameras-on-the-network"
+    tests:
+      - go ./camera TestDiscoveryAsksForVideoTransmittersAndListsWhatAnswers
+      - go ./camera TestWhatAnswersIsNeverTrustedOrAllowedToMoveATerminal
+      - go ./camera TestAFloodOfAnswersKeepsAtMostMaxFound
+      - go ./camera TestOneAddressCannotFillTheTableWithDevices
+      - go ./camera TestNoCharacterThatCanReorderOrRewriteATerminalSurvives
+      - go ./camera TestDiscoveryEndsWhenAskedToAndWithNoAnswersIsAnEmptyList
+      - go ./cmd/naut TestCameraDiscoverListsWhatAnsweredWithARowToStartFromAndChangesNothing
+      - go ./cmd/naut TestCameraDiscoverSaysWhatToDoWhenNothingAnswersAndWhenItCannotProbe
+    note: >-
+      Run against a loopback responder only (the multicast send is not exercised
+      by a test); pending: a real camera answering a real probe on a real network.
