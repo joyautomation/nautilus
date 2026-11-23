@@ -741,6 +741,24 @@ func TestSiemensDeployInDoubtOnAnUnreadableReply(t *testing.T) {
 	}
 }
 
+// TestSiemensDeployInDoubtComparesAPinnedCPU (#1325): the compare after
+// a download in doubt is an online call to the pinned CPU too, and carries
+// the operator's attestation, so it can still say what the CPU runs.
+func TestSiemensDeployInDoubtComparesAPinnedCPU(t *testing.T) {
+	r := newDeployRig(t)
+	r.adopt()
+	r.fake.SetDevice(tiadtest.BenchDevice(), true)
+	bench := tiadtest.BenchDevice()
+	if _, err := tiad.New(r.url, r.token).SetPin(context.Background(), deployCPU, tiad.PinRequest{Device: &bench, Announced: true}); err != nil {
+		t.Fatal(err)
+	}
+	r.mangleDownload = true
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--attest-order", "6ES7 510-1DK03-0AB0", "--attest-firmware", "3.1.3")
+	if code != 1 || !strings.Contains(out, "download: OUTCOME UNKNOWN") || !strings.Contains(out, "the compare after it is EQUAL") || len(r.downloads()) != 1 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+}
+
 // TestSiemensDeployRefusesABrokenRecord: the last deploy's archive is not
 // the one its record names, so nothing says what the CPU runs: refused
 // without --accept-outside-changes.
