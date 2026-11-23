@@ -575,7 +575,12 @@ whose window passed while the controller was stopped ends at its first
 scan, with its end row at the time the episode ended and the reason
 "ended while this controller was stopped or taking over". The same holds
 when both controllers of a pair were down: the log dates the episode no
-later than its last entry. A standalone controller saves every 2 seconds,
+later than its last entry. That last entry is the episode's start, so a
+pair that restarts with no leader in between (both controllers rebooted,
+or a controller that comes back as leader while the other is down) ends
+an episode older than its window at the first scan, even one that was
+still going when the controllers stopped. It ends early, never late:
+the alarms show and page as usual. A standalone controller saves every 2 seconds,
 so one killed within 2 seconds of an episode's end can write that end
 row again after the restart. The record
 and the summary carry `carriedMs` for a carried episode. The new
