@@ -10,7 +10,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"reflect"
 	"strings"
 	"sync"
@@ -40,18 +39,6 @@ type testServer struct {
 	port int
 	vars map[string]*server.Node
 	sess *Session
-}
-
-// freePort asks the kernel for a port and gives it back — the gopcua server
-// does not report the port it bound when asked for :0.
-func freePort(t *testing.T) int {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
 }
 
 func startServer(t *testing.T, port int) *testServer {
