@@ -546,6 +546,7 @@ func TestHotTakeoverOfAMultiRateImage(t *testing.T) {
 	if err := r.lead.ScanTask("aux"); err != nil { // the slow task, 5 s on
 		t.Fatal(err)
 	}
+	r.lc.step(7 * time.Millisecond) // the image is taken a moment after the last copy
 	img := &Image{}
 	if !r.lead.TakeImage(img) {
 		t.Fatal("no image")
@@ -564,10 +565,10 @@ func TestHotTakeoverOfAMultiRateImage(t *testing.T) {
 	if !rep.Hot {
 		t.Fatalf("takeover: %+v, want hot", rep)
 	}
-	if et := fbSlot(t, r.stby.TaskProgram(MainTaskName), "tmr", "ET").I; et != copyET+5300 {
-		t.Errorf("main's TON ET %d on the first hot scan, want %d: its copy's %d, plus the 5 s it ran on the leader before the image was taken, plus the image's 300 ms age", et, copyET+5300, copyET)
+	if et := fbSlot(t, r.stby.TaskProgram(MainTaskName), "tmr", "ET").I; et != copyET+5307 {
+		t.Errorf("main's TON ET %d on the first hot scan, want %d: its copy's %d, plus the 5.007 s it ran on the leader before the image was taken, plus the image's 300 ms age", et, copyET+5307, copyET)
 	}
-	if rep.OldestFrameAge != 5300*time.Millisecond {
-		t.Errorf("oldest task state %v at the install, want 5.3s", rep.OldestFrameAge)
+	if rep.OldestFrameAge != 5307*time.Millisecond {
+		t.Errorf("oldest task state %v at the install, want 5.307s", rep.OldestFrameAge)
 	}
 }
