@@ -291,3 +291,19 @@ func SplitCredentials(secret string) (user, pass string, err error) {
 	}
 	return user, pass, nil
 }
+
+// validToken says a profile token is safe to put in a request: devices use
+// short names, and what a device sends is never spliced into XML unchecked.
+func validToken(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-', r == '.', r == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
