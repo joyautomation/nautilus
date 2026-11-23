@@ -674,3 +674,46 @@ func TestStopLetsAStandingForceGoAndWaitsForItsGoroutines(t *testing.T) {
 	}
 	co.Stop() // and again: nothing standing
 }
+
+// Losing the lead without exiting lets the force go here at once and proposes
+// nothing; the record still says it stands until the controller that runs the
+// program ends it; and when this controller leads again no force is standing,
+// in its runtime or in the record.
+func TestDemotionLetsAForceGoAndARePromotionFindsNoneStanding(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	co := ckOf(r.srv)
+	co.ck.mu.Lock()
+	f := co.ck.force
+	co.ck.mu.Unlock()
+	co.Demoted()
+	select {
+	case <-f.watched:
+	default:
+		t.Errorf("the watch goroutine is still running after the demotion")
+	}
+	if r.forced("Out") {
+		t.Errorf("the output is still forced in this controller's runtime after the demotion")
+	}
+	co.ck.mu.Lock()
+	still := co.ck.force != nil
+	co.ck.mu.Unlock()
+	if still {
+		t.Errorf("the force's slot is still taken after the demotion")
+	}
+	// nothing was proposed: the record still says it stands
+	if _, ok := r.st.Standing(); !ok {
+		t.Errorf("the demoted controller recorded an end it had no right to propose")
+	}
+	// re-promoted: the leader's reconcile ends the force nothing drives, and no force stands anywhere
+	if n, err := co.ReconcileForces(); n != 1 || err != nil {
+		t.Fatalf("reconcile on the new leader: %d %v", n, err)
+	}
+	if _, ok := r.st.Standing(); ok || r.forced("Out") {
+		t.Errorf("a force is still standing after the re-promotion")
+	}
+	co.Demoted() // and again: nothing to do
+}

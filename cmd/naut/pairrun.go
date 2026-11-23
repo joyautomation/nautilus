@@ -1231,11 +1231,12 @@ var _ server.Commissioner = (*leader.Quorum)(nil)
 //     a start whose answer was lost can commit later under a new leader. On a
 //     standby it would propose ends for a force the leader is driving, so it
 //     is not called there.
-func (m *pairMember) checkoutDuties(st *checkout.Store, reconcile func() (int, error)) {
+func (m *pairMember) checkoutDuties(st *checkout.Store, reconcile func() (int, error), demoted func()) {
 	name := string(m.o.Self)
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	shown := ""
+	led := false
 	for range t.C {
 		// a checkout that stopped on an entry from a newer build is a standing
 		// condition of the pair (naut redundancy status, /api/cluster), with its fix
@@ -1253,9 +1254,16 @@ func (m *pairMember) checkoutDuties(st *checkout.Store, reconcile func() (int, e
 		if err := st.AnnounceKey(name); err != nil {
 			slog.Debug("checkout: the key is not announced yet", "error", err)
 		}
-		if !m.q.IsLeader() {
+		if lead := m.q.IsLeader(); !lead {
+			if led {
+				// lost the lead without exiting: the force it was driving is let go here
+				// at once (nothing is proposed: it no longer leads)
+				demoted()
+			}
+			led = false
 			continue
 		}
+		led = true
 		switch n, err := reconcile(); {
 		case err != nil:
 			slog.Warn("checkout: could not end a force the log still has", "error", err) // asked again

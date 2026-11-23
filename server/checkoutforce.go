@@ -406,3 +406,51 @@ func (co *CheckoutOptions) Stop() {
 		}
 	}
 }
+
+// Demoted is what a controller does the moment it stops leading without exiting:
+// the force it was driving is let go here at once (unforced in its runtime, its
+// timer stopped, its watch closed) and nothing is proposed, since it no longer
+// leads. Its outputs are fenced anyway, but a force must not linger in this
+// controller's table to come back when it leads again. The record still says it
+// stands; the controller that runs the program now ends it (ReconcileForces).
+func (co *CheckoutOptions) Demoted() {
+	co.ck.mu.Lock()
+	f, a := co.ck.force, co.api
+	co.ck.mu.Unlock()
+	if f == nil || a == nil {
+		return
+	}
+	a.dropForceLocally(f)
+}
+
+// dropForceLocally is endCheckoutForce without the record and the journal: the
+// local half only.
+func (a *checkoutAPI) dropForceLocally(f *ckForce) {
+	a.co.ck.mu.Lock()
+	if a.co.ck.force != f || f.ending {
+		a.co.ck.mu.Unlock()
+		return
+	}
+	f.ending = true
+	if f.timer != nil {
+		f.timer.Stop()
+	}
+	close(f.done)
+	w := f.watched
+	a.co.ck.mu.Unlock()
+	if f.ready {
+		a.s.rt.Tags().UnforceIf(f.tag, f.gen)
+	}
+	a.co.ck.mu.Lock()
+	if a.co.ck.force == f {
+		a.co.ck.force = nil
+	}
+	a.co.ck.mu.Unlock()
+	if w != nil {
+		select {
+		case <-w:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	slog.Warn("checkout: force let go here (this controller no longer leads)", "tag", f.tag, "point", f.point)
+}

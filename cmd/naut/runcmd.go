@@ -612,7 +612,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			if why := st.KeyError(); why != "" {
 				fmt.Fprintf(os.Stderr, "naut run: checkout: sealing is off here (results are still recorded): the signing key cannot be used: %s\n", why)
 			}
-			go pair.checkoutDuties(st, co.ReconcileForces)
+			go pair.checkoutDuties(st, co.ReconcileForces, co.Demoted)
 		} else if pair == nil && proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 			if st, err := openCheckout(proj, dir, os.Getenv); err != nil {
 				fmt.Fprintf(os.Stderr, "naut run: the I/O checkout is off: %v\n", err)

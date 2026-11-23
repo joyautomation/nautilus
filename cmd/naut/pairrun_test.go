@@ -888,7 +888,7 @@ func TestAPairOfMembersSharesTheCheckout(t *testing.T) {
 	defer close(stop)
 	for _, n := range []*pairNode{l, s} {
 		st := n.m.cl.Store()
-		go n.m.checkoutDuties(st, func() (int, error) { return 0, nil })
+		go n.m.checkoutDuties(st, func() (int, error) { return 0, nil }, func() {})
 	}
 	pairWait(t, "both keys on both controllers", 10*time.Second, func() bool {
 		return len(ls.KeyFingerprints()) == 2 && len(ss.KeyFingerprints()) == 2
