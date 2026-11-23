@@ -1357,15 +1357,19 @@ namespace Tiad.Openness
 
         // ---- software ----
 
-        public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune)
+        public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune, bool pruneTypes)
         {
             return Tia(delegate
             {
                 PlcSoftware sw = Software(Of(project).Project);
                 PlcBlockUserGroup ug = sw.BlockGroup.Groups.Find(group);
                 if (ug == null) ug = sw.BlockGroup.Groups.Create(group);
+                // The data types' user group of the same name, made only
+                // when a source declares data types.
+                PlcTypeUserGroup tg = sw.TypeGroup.Groups.Find(group);
                 var res = new SoftwareResult();
                 var made = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var madeTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var src in sources)
                 {
                     var sr = new SourceResult { Path = src.Path };
@@ -1373,18 +1377,48 @@ namespace Tiad.Openness
                     // under the file's name is never replaced or deleted.
                     string name = "tiad-" + Guid.NewGuid().ToString("N") + "-" + Path.GetFileName(src.FullPath);
                     PlcExternalSource es = sw.ExternalSourceGroup.ExternalSources.CreateFromFile(name, src.FullPath);
+                    // outside: the failure of an object handed back outside
+                    // the group, kept so a failing delete of the source
+                    // below cannot replace it and lose the mark.
+                    TiaException outside = null;
                     try
                     {
-                        foreach (IEngineeringObject b in es.GenerateBlocksFromSource(ug, GenerateBlockOption.None))
+                        IList<IEngineeringObject> gen;
+                        if (src.DataTypes)
                         {
-                            PlcBlock pb = b as PlcBlock;
-                            if (pb == null) continue;
-                            // TIA replaces a same-named block where it is:
-                            // one generated outside the group fails the
-                            // import (the agent then compares and keeps the
-                            // session unusable).
-                            if (!InGroup(pb, ug)) throw new TiaException(src.Path + ": TIA generated \"" + pb.Name + "\" outside group \"" + group + "\", replacing the project's block of that name");
-                            made.Add(pb.Name);
+                            // Straight into the data types' user group (TIA
+                            // V21's type-group overload, TIA VM 2026-11-24).
+                            if (tg == null) tg = sw.TypeGroup.Groups.Create(group);
+                            gen = es.GenerateBlocksFromSource(tg, GenerateBlockOption.None);
+                        }
+                        else
+                        {
+                            gen = es.GenerateBlocksFromSource(ug, GenerateBlockOption.None);
+                        }
+                        foreach (IEngineeringObject o in gen)
+                        {
+                            // TIA regenerates a same-named object where it
+                            // sits and hands it back with no error (a data
+                            // type in another user group, TIA VM
+                            // 2026-11-24): anything but a block in the block
+                            // group or a data type in the data types' group
+                            // fails the import, and the agent keeps the
+                            // session unusable.
+                            PlcBlock pb = o as PlcBlock;
+                            PlcType pt = o as PlcType;
+                            if (pb != null && InGroup(pb, ug))
+                            {
+                                made.Add(pb.Name);
+                                continue;
+                            }
+                            if (pt != null && tg != null && InTypeGroup(pt, tg))
+                            {
+                                madeTypes.Add(pt.Name);
+                                continue;
+                            }
+                            string what = pb != null ? "block \"" + pb.Name + "\"" : pt != null ? "data type \"" + pt.Name + "\"" : "an object (" + o.GetType().Name + ")";
+                            outside = new TiaException(src.Path + ": TIA generated " + what + " outside group \"" + group + "\", where a same-named one sits") { OutsideGroup = true };
+                            throw outside;
                         }
                         sr.Ok = true;
                     }
@@ -1394,7 +1428,14 @@ namespace Tiad.Openness
                     }
                     finally
                     {
-                        es.Delete();
+                        try
+                        {
+                            es.Delete();
+                        }
+                        catch (EngineeringException)
+                        {
+                            if (outside == null) throw;
+                        }
                     }
                     res.Results.Add(sr);
                 }
@@ -1414,15 +1455,29 @@ namespace Tiad.Openness
                 }
                 if (prune)
                 {
+                    // The blocks first: a data type may be in use by one.
                     foreach (PlcBlock b in new List<PlcBlock>(ug.Blocks))
                     {
                         if (!made.Contains(b.Name)) b.Delete();
+                    }
+                    // Data types only when the agent says so (pruneTypes): an
+                    // older caller's prune never deletes them.
+                    if (pruneTypes && tg != null)
+                    {
+                        foreach (PlcType t in new List<PlcType>(tg.Types))
+                        {
+                            if (!madeTypes.Contains(t.Name)) t.Delete();
+                        }
                     }
                 }
                 foreach (PlcBlock b in ug.Blocks)
                 {
                     string kind = TiaNames.BlockKind(b.GetType().Name);
                     if (kind != "") res.Blocks.Add(new Block { Name = b.Name, Kind = kind });
+                }
+                if (tg != null)
+                {
+                    foreach (PlcType t in tg.Types) res.Blocks.Add(new Block { Name = t.Name, Kind = "UDT" });
                 }
                 res.Blocks.Sort(delegate(Block a, Block b) { return string.CompareOrdinal(a.Name, b.Name); });
                 return res;
@@ -1745,6 +1800,19 @@ namespace Tiad.Openness
             foreach (PlcBlockUserGroup u in g.Groups) ProjectBlocks(u, path == "" ? u.Name : path + "/" + u.Name, into);
         }
 
+        // InTypeGroup is InGroup for a data type and a data types group.
+        static bool InTypeGroup(PlcType t, PlcTypeUserGroup g)
+        {
+            IEngineeringObject p = t.Parent;
+            while (p != null)
+            {
+                if (ReferenceEquals(p, g) || p.Equals(g)) return true;
+                if (!(p is PlcTypeUserGroup)) return false;
+                p = p.Parent;
+            }
+            return false;
+        }
+
         // InGroup is whether b sits in g or one of its user groups.
         static bool InGroup(PlcBlock b, PlcBlockUserGroup g)
         {
@@ -1839,6 +1907,34 @@ namespace Tiad.Openness
                 ProjectBlocks(Software(Of(project).Project).BlockGroup, "", blocks);
                 return blocks;
             });
+        }
+
+        public List<ProjectBlock> Types(object project)
+        {
+            return Tia(delegate
+            {
+                var types = new List<ProjectBlock>();
+                ProjectTypes(Software(Of(project).Project).TypeGroup, "", types);
+                return types;
+            });
+        }
+
+        // ProjectTypes reads every data type in g and its user groups, each
+        // with its group path and modified time in ticks, as blocks are.
+        static void ProjectTypes(PlcTypeGroup g, string path, List<ProjectBlock> into)
+        {
+            foreach (PlcType t in g.Types)
+            {
+                into.Add(new ProjectBlock
+                {
+                    Name = t.Name,
+                    Type = t.GetType().Name,
+                    Group = path,
+                    DataType = true,
+                    Modified = t.ModifiedDate.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),
+                });
+            }
+            foreach (PlcTypeUserGroup u in g.Groups) ProjectTypes(u, path == "" ? u.Name : path + "/" + u.Name, into);
         }
 
         // Node copies one element of TIA's compare tree, and its children,

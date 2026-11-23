@@ -1218,7 +1218,9 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 		group = project.DefaultSiemensGroup
 	}
 	d.group = group
-	req := tiad.SoftwareRequest{Group: group, Prune: true, TagTables: []string{}}
+	// The prune deletes only what carries the block prefix: the agent
+	// refuses when the group holds anything else.
+	req := tiad.SoftwareRequest{Group: group, Prune: true, PrunePrefix: tgt.Prefix(), TagTables: []string{}}
 	byWork := map[string]string{}
 	for _, f := range out.Files {
 		p := siemensSourceDir + "/" + name + "/" + f.Path
@@ -1247,6 +1249,10 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 		d.say("%s: error: TIA did not import %s: %s", at, file, strings.Join(r.Messages, " "))
 	}
 	if err != nil {
+		if tiad.Kind(err) == tiad.KindBadRequest && strings.Contains(err.Error(), `unknown field "prunePrefix"`) {
+			d.fail("the agent is older than this naut (it does not know prunePrefix, which keeps the prune to nautilus's own blocks): reinstall tiad from this nautilus version; nothing was imported")
+			return 1
+		}
 		return d.tiadErr("software import", err)
 	}
 	if failed > 0 {
@@ -1593,25 +1599,41 @@ func (d *siemensDeployer) sayForeign(foreign []tiad.ForeignBlock) {
 		d.say("  other program blocks: none outside group %s", d.group)
 		return
 	}
-	var groups []string
-	byGroup := map[string][]string{}
-	for _, b := range foreign {
-		if _, ok := byGroup[b.Group]; !ok {
-			groups = append(groups, b.Group)
-		}
-		byGroup[b.Group] = append(byGroup[b.Group], b.Label())
+	// One line per group, the program blocks' groups first, then the
+	// data types' (the agent lists them in that order).
+	type where struct {
+		group    string
+		dataType bool
 	}
-	for _, g := range groups {
-		where := "group " + g
-		if g == "" {
-			where = "the program blocks' root"
+	var groups []where
+	byGroup := map[where][]string{}
+	for _, b := range foreign {
+		w := where{b.Group, b.DataType}
+		if _, ok := byGroup[w]; !ok {
+			groups = append(groups, w)
 		}
-		n := len(byGroup[g])
-		noun := "blocks"
-		if n == 1 {
+		byGroup[w] = append(byGroup[w], b.Label())
+	}
+	for _, w := range groups {
+		n := len(byGroup[w])
+		at, noun := "group "+w.group, "blocks"
+		switch {
+		case w.dataType && w.group == "":
+			at = "the PLC data types' root"
+		case w.dataType:
+			at = "data types group " + w.group
+		case w.group == "":
+			at = "the program blocks' root"
+		}
+		switch {
+		case w.dataType && n == 1:
+			noun = "data type"
+		case w.dataType:
+			noun = "data types"
+		case n == 1:
 			noun = "block"
 		}
-		d.say("  also loads, not nautilus's: %s (%d %s: %s)", where, n, noun, strings.Join(byGroup[g], ", "))
+		d.say("  also loads, not nautilus's: %s (%d %s: %s)", at, n, noun, strings.Join(byGroup[w], ", "))
 	}
 	if d.adoptedEqual {
 		d.say("    on the CPU as they are: the adopted project compared equal with it before the import, which changes no block outside group %s", d.group)

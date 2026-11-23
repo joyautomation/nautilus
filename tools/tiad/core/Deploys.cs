@@ -681,6 +681,9 @@ namespace Tiad
             line["attestation"] = req.Hardware ? req.Attestation.ToJson() : null;
             line["deviceAttestation"] = req.DeviceAttested == null ? null : req.DeviceAttested.ToJson();
             line["keptDevices"] = KeptDevice.ToJson(s.Kept);
+            // The import group: a verify of this deploy requires the data
+            // types in it by name, as the download's own compare did.
+            if (s.ImportGroup != "") line["group"] = s.ImportGroup;
             // A turn-on download: an adopt of this archive stays gated
             // unless the record says loaded (TurnOnRule.MarkerSuffix).
             if (s.AccessTurnOn && !s.AccessTurnOnLoaded) line["accessTurnOn"] = true;

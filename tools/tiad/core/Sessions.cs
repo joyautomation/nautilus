@@ -83,6 +83,10 @@ namespace Tiad
         // the session is never saved, archived for a deploy or imported
         // into again, only closed.
         public bool ForeignChanged;
+        // ImportGroup is the group of the session's last software import
+        // ("" before any): a compile then checks every block and data type
+        // outside it, and a compare requires the data types in it by name.
+        public string ImportGroup = "";
         public bool Closed;
         // Broken is set when closing the project failed: TIA may still
         // hold it. Every call but another close refuses.

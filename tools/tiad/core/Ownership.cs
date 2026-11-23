@@ -20,9 +20,15 @@
 //   - the glue fails the import when TIA generates a block outside the
 //     group.
 //
-// A source that declares a data type (TYPE ... END_TYPE) is refused: TIA
-// puts a generated type in the PLC data types' root, beside the project's
-// own, so nothing yet tells nautilus's types from a customer's.
+// Data types (D1b, #1301) go the same way, into the PLC data types' user
+// group of the same name (GenerateBlocksFromSource's type-group overload).
+// TIA keeps one name for a program block and a data type, and on the TIA
+// VM (2026-11-24) a type generated for that group while a same-named type
+// sat in another user group came back from the call where it sat, with no
+// error: so the checks above read blocks and data types as one list (a
+// ProjectBlock with DataType set is a type, its group a path from the
+// data types' root), and a source declares data types or blocks, never
+// both (MixedRefused), so each goes to its own group.
 
 using System;
 using System.Collections.Generic;
@@ -238,9 +244,9 @@ namespace Tiad
                 string.Compare(blockGroup, 0, group, 0, group.Length, StringComparison.OrdinalIgnoreCase) == 0;
         }
 
-        // Foreign is every program block outside group, by group path
-        // ("" the root first) and then name: what a download loads besides
-        // the group's own blocks (#1326).
+        // Foreign is every program block, then every data type, outside
+        // group, each by group path ("" the root first) and then name: what
+        // a download loads besides the group's own (#1326).
         public static List<ProjectBlock> Foreign(List<ProjectBlock> blocks, string group)
         {
             var l = new List<ProjectBlock>();
@@ -250,6 +256,7 @@ namespace Tiad
             }
             l.Sort(delegate(ProjectBlock a, ProjectBlock b)
             {
+                if (a.DataType != b.DataType) return a.DataType ? 1 : -1;
                 int c = string.CompareOrdinal(a.Group ?? "", b.Group ?? "");
                 return c != 0 ? c : string.CompareOrdinal(a.Name, b.Name);
             });
@@ -265,17 +272,19 @@ namespace Tiad
             return k != "" ? k : b.Type;
         }
 
-        // Conflicts is every program block outside group that a declared
-        // block (not a data type) names, in TIA's case-insensitive block
-        // names (OrdinalIgnoreCase: assumed to be TIA's rule, not proven),
-        // each with the sources that declare it: "<source>: <block> in
-        // <group>".
+        // Conflicts is every program block or data type outside group (in
+        // the program blocks' tree or the data types') that a declared
+        // block or data type names, in TIA's case-insensitive names
+        // (OrdinalIgnoreCase: assumed to be TIA's rule, not proven), each
+        // with the sources that declare it: "<source> declares <object> in
+        // <group>". Blocks and data types share one name space, so a
+        // declared type that names a foreign block counts, and the other
+        // way round: TIA may replace a same-named type where it sits.
         public static List<string> Conflicts(List<Declared> declared, List<ProjectBlock> blocks, string group)
         {
             var by = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (var d in declared)
             {
-                if (d.Kind == "UDT") continue;
                 List<string> l;
                 if (!by.TryGetValue(d.Name, out l)) by[d.Name] = l = new List<string>();
                 if (!l.Contains(d.Source)) l.Add(d.Source);
@@ -285,7 +294,7 @@ namespace Tiad
             {
                 if (Owned(b.Group, group)) continue;
                 List<string> srcs;
-                if (by.TryGetValue(b.Name, out srcs)) out_.Add(string.Join(", ", srcs.ToArray()) + " declares " + Label(b) + " in " + GroupName(b.Group));
+                if (by.TryGetValue(b.Name, out srcs)) out_.Add(string.Join(", ", srcs.ToArray()) + " declares " + Label(b) + " in " + GroupName(b));
             }
             return out_;
         }
@@ -296,20 +305,64 @@ namespace Tiad
         {
             return new TiadException(409, Kinds.ForeignBlock,
                 string.Join("; ", conflicts.ToArray()) + ", outside group \"" + group +
-                "\": importing it would replace that block. Nothing was imported. Rename the block in the source (a prefix the project does not use)");
+                "\": importing it would replace it (TIA keeps one name for a block and a data type). Nothing was imported. Rename it in the source (a prefix the project does not use)");
         }
 
-        // TypesRefused is the refusal of a source that declares a data type:
-        // TIA puts a generated type in the PLC data types' root (the TIA VM,
-        // 2026-11-22), beside the project's own, so nothing yet tells
-        // nautilus's types from a customer's. Nothing was imported.
-        public static TiadException TypesRefused(List<Declared> declared)
+        // MixedRefused refuses a source that declares a data type and a
+        // block: a source generates into one group, the data types' or the
+        // program blocks', and the block-group call put a type in the data
+        // types' root (TIA VM, 2026-11-22). Nothing was imported.
+        public static TiadException MixedRefused(List<Declared> declared)
         {
-            var named = new List<string>();
-            foreach (var d in declared) if (d.Kind == "UDT") named.Add(d.Source + " declares data type \"" + d.Name + "\"");
-            if (named.Count == 0) return null;
+            var types = new HashSet<string>(StringComparer.Ordinal);
+            var blocks = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var d in declared)
+            {
+                if (d.Kind == "UDT") types.Add(d.Source);
+                else blocks.Add(d.Source);
+            }
+            var mixed = new List<string>();
+            foreach (var d in declared)
+            {
+                if (types.Contains(d.Source) && blocks.Contains(d.Source) && !mixed.Contains(d.Source)) mixed.Add(d.Source);
+            }
+            if (mixed.Count == 0) return null;
             return new TiadException(400, Kinds.BadRequest,
-                string.Join("; ", named.ToArray()) + ": data types are not imported yet (TIA puts them beside the project's own, so tiad cannot keep a customer's apart). Nothing was imported");
+                string.Join(", ", mixed.ToArray()) + " declares a data type and a block: put the data types (TYPE ... END_TYPE) in sources of their own. Nothing was imported");
+        }
+
+        // TypeSources is the sources that declare a data type (MixedRefused
+        // has refused any that also declares a block): each generates into
+        // the data types' user group.
+        public static HashSet<string> TypeSources(List<Declared> declared)
+        {
+            var l = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var d in declared) if (d.Kind == "UDT") l.Add(d.Source);
+            return l;
+        }
+
+        // PruneRefused refuses a prune that would delete what nautilus did
+        // not write: with prefix set, every block or data type in group
+        // (its own tree's group of that name, and their user groups) that
+        // no source declares must carry the prefix, any case. A customer's
+        // object put in the group is named and nothing is imported. An
+        // empty prefix keeps the prune as it was (an older caller).
+        public static TiadException PruneRefused(List<ProjectBlock> objects, List<Declared> declared, string group, string prefix)
+        {
+            if (prefix == "") return null;
+            var named = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in declared) named.Add(d.Name);
+            var not = new List<string>();
+            foreach (var b in objects)
+            {
+                if (!Owned(b.Group, group) || named.Contains(b.Name)) continue;
+                if (b.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+                not.Add(Label(b) + " in " + GroupName(b));
+            }
+            if (not.Count == 0) return null;
+            not.Sort(StringComparer.Ordinal);
+            return new TiadException(409, Kinds.ForeignBlock,
+                string.Join("; ", not.ToArray()) + ": not named with the prefix \"" + prefix + "\", so not nautilus's, and the prune would delete it. Nothing was imported. Move it out of group \"" + group + "\" in the project, deploy into another group, or deploy with the block prefix that made it");
         }
 
         // GroupRefused refuses a group name with a path separator: a group
@@ -320,9 +373,14 @@ namespace Tiad
             return TiadException.BadRequest("group " + Json.Quote(group) + " holds a path separator: name one user group under the program blocks' root");
         }
 
-        // Changed lists every block outside group that the import changed:
-        // gone, or there with another kind or number, or new. Read from
-        // the blocks before and after the import.
+        // Changed lists every block or data type outside group that the
+        // import (or a compile after it) changed: gone, there with another
+        // kind, number or group, modified, or new. Read from the blocks and
+        // data types before and after. Only objects outside group are
+        // read: TIA's own date bump on nautilus's objects (a regenerated
+        // type, the blocks that use it) is the import's to make, while a
+        // customer's object whose date moves is a change, even when only a
+        // type of nautilus's that it uses changed.
         public static List<string> Changed(List<ProjectBlock> before, List<ProjectBlock> after, string group)
         {
             var was = new Dictionary<string, ProjectBlock>(StringComparer.OrdinalIgnoreCase);
@@ -333,15 +391,15 @@ namespace Tiad
             foreach (var kv in was)
             {
                 ProjectBlock n;
-                if (!now.TryGetValue(kv.Key, out n)) changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value.Group) + " is gone");
+                if (!now.TryGetValue(kv.Key, out n)) changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value) + " is gone");
                 else if (n.Type != kv.Value.Type || n.Number != kv.Value.Number || !string.Equals(n.Group ?? "", kv.Value.Group ?? "", StringComparison.OrdinalIgnoreCase))
-                    changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value.Group) + " is now " + Label(n) + " in " + GroupName(n.Group));
+                    changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value) + " is now " + Label(n) + " in " + GroupName(n));
                 else if (n.Modified != kv.Value.Modified)
-                    changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value.Group) + " was modified");
+                    changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value) + " was modified");
             }
             foreach (var kv in now)
             {
-                if (!was.ContainsKey(kv.Key)) changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value.Group) + " is new");
+                if (!was.ContainsKey(kv.Key)) changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value) + " is new");
             }
             changed.Sort(StringComparer.Ordinal);
             return changed;
@@ -352,8 +410,36 @@ namespace Tiad
         public static TiadException ForeignChangedError(List<string> changed, string group)
         {
             return new TiadException(500, Kinds.OperationFailed,
-                "the import changed program blocks outside group \"" + group + "\" (" + string.Join("; ", changed.ToArray()) +
-                "): this session can no longer be saved, archived for a deploy or downloaded. Close it without saving");
+                "the import changed program blocks or data types outside group \"" + group + "\" (" + string.Join("; ", changed.ToArray()) +
+                "): this session can no longer be saved, archived for a deploy or downloaded. Close it without saving, then open or adopt the project again");
+        }
+
+        // OutsideGroupError is the failure of an import that TIA answered
+        // with an object outside the group (TiaException.OutsideGroup): it
+        // regenerated a same-named object where it sits, maybe with the
+        // same content and date, so the session stays unusable whatever a
+        // compare after it shows.
+        public static TiadException OutsideGroupError(string what, string group)
+        {
+            return new TiadException(500, Kinds.OperationFailed,
+                "TIA: " + what + ": the import may have changed an object outside group \"" + group +
+                "\", so this session can no longer be saved, archived for a deploy or downloaded. Close it without saving, then open or adopt the project again, and rename the source's object (a prefix the project does not use)");
+        }
+
+        // CompileChangedError is the failure of a compile, after an import,
+        // that changed blocks or data types outside the import's group
+        // (naut-lead's rule, D1b: fail closed). What changed is the
+        // customer's: most likely it uses one of nautilus's blocks or data
+        // types, or it was not compiled as found. nautilus does not
+        // recompile it, so the deploy stays refused until the project
+        // changes; closing the session only recovers the session.
+        public static TiadException CompileChangedError(List<string> changed, string group)
+        {
+            return new TiadException(409, Kinds.UncleanSession,
+                "the compile changed program blocks or data types outside group \"" + group + "\" (" + string.Join("; ", changed.ToArray()) +
+                "): they are not nautilus's, and tiad does not recompile them. Most likely they use a block or data type of group \"" + group +
+                "\", or the project was not compiled as found. This session can no longer be saved, archived for a deploy or downloaded: close it without saving. " +
+                "A deploy stays refused while the project's own objects use group \"" + group + "\" or need a compile; that needs the project changed outside nautilus");
         }
 
         // Unusable is the refusal of what after an import changed blocks
@@ -361,17 +447,20 @@ namespace Tiad
         public static TiadException Unusable(string what)
         {
             return new TiadException(409, Kinds.UncleanSession,
-                "refusing " + what + ": an import on this session left the project as tiad did not ask (blocks outside its group changed, or a cyclic interrupt OB is not as asked). Close it without saving");
+                "refusing " + what + ": an import on this session left the project as tiad did not ask (blocks or data types outside its group changed, or a cyclic interrupt OB is not as asked). Close it without saving, then open or adopt the project again");
         }
 
         static string Label(ProjectBlock b)
         {
+            if (b.DataType) return "data type \"" + b.Name + "\"";
             string l = TiaNames.BlockLabel(b);
             return "\"" + b.Name + "\"" + (l == null ? " (" + b.Type + ")" : l.Substring(b.Name.Length));
         }
 
-        static string GroupName(string g)
+        static string GroupName(ProjectBlock b)
         {
+            string g = b.Group;
+            if (b.DataType) return string.IsNullOrEmpty(g) ? "the PLC data types' root" : "data types group \"" + g + "\"";
             return string.IsNullOrEmpty(g) ? "the program blocks' root" : "group \"" + g + "\"";
         }
     }

@@ -192,7 +192,17 @@ namespace Tiad
                 if (use.MayHaveAskedCredentials) instanceLogons.Forget(address, call + " failed after TIA asked credentials");
                 throw;
             }
-            equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
+            // The data types of the session's import group are required by
+            // name (TiaNames.CompareEqual); a session with no import group
+            // (a fingerprint read, a bare compare, an older deploy's
+            // verify) requires none.
+            List<ProjectBlock> types = null;
+            if (s.ImportGroup != "")
+            {
+                types = new List<ProjectBlock>();
+                foreach (var ty in t.Types(s.Handle)) if (Ownership.Owned(ty.Group, s.ImportGroup)) types.Add(ty);
+            }
+            equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, types, diffs);
             if (use.MayHaveAskedCredentials && !use.LoggedOn)
             {
                 instanceLogons.Forget(address, call + ": TIA asked credentials and tiad did not log on");

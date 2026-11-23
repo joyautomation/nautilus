@@ -26,6 +26,10 @@ type projectBlock struct {
 	// CyclicTime in microseconds.
 	class string
 	cycle int64
+	// dataType marks a PLC data type (its group a path from the data
+	// types' root), modified its modified date as the agent compares it.
+	dataType bool
+	modified string
 }
 
 var (
@@ -104,7 +108,7 @@ func foreignBlocks(blocks []projectBlock, other []tiad.ForeignBlock, group strin
 	out := []tiad.ForeignBlock{}
 	for _, b := range blocks {
 		if !owned(b.group, group) {
-			out = append(out, tiad.ForeignBlock{Name: b.name, Kind: b.kind, Number: b.number, Group: b.group})
+			out = append(out, tiad.ForeignBlock{Name: b.name, Kind: b.kind, Number: b.number, Group: b.group, DataType: b.dataType})
 		}
 	}
 	for _, b := range other {
@@ -113,6 +117,9 @@ func foreignBlocks(blocks []projectBlock, other []tiad.ForeignBlock, group strin
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].DataType != out[j].DataType {
+			return !out[i].DataType
+		}
 		if out[i].Group != out[j].Group {
 			return out[i].Group < out[j].Group
 		}
@@ -122,7 +129,21 @@ func foreignBlocks(blocks []projectBlock, other []tiad.ForeignBlock, group strin
 }
 
 func (b projectBlock) label() string {
+	if b.dataType {
+		return fmt.Sprintf("data type %q", b.name)
+	}
 	return fmt.Sprintf("%q [%s%d]", b.name, b.kind, b.number)
+}
+
+// where is Ownership.GroupName: the object's group in its own tree.
+func (b projectBlock) where() string {
+	switch {
+	case b.dataType && b.group == "":
+		return "the PLC data types' root"
+	case b.dataType:
+		return fmt.Sprintf("data types group %q", b.group)
+	}
+	return groupName(b.group)
 }
 
 func groupName(g string) string {
@@ -139,42 +160,28 @@ type declared struct {
 }
 
 // foreignConflicts is Ownership.Conflicts plus its Refusal: nil when no
-// declared block (data types aside) names a block outside group.
-func foreignConflicts(ds []declared, blocks []projectBlock, group string) *failure {
+// declared block or data type names a block or data type outside group
+// (one name space).
+func foreignConflicts(ds []declared, objects []projectBlock, group string) *failure {
 	by := map[string][]string{}
 	for _, d := range ds {
 		k := strings.ToLower(d.Name)
-		if d.Kind != "UDT" && !slices.Contains(by[k], d.source) {
+		if !slices.Contains(by[k], d.source) {
 			by[k] = append(by[k], d.source)
 		}
 	}
 	var named []string
-	for _, b := range blocks {
+	for _, b := range objects {
 		if srcs, ok := by[strings.ToLower(b.name)]; ok && !owned(b.group, group) {
-			named = append(named, strings.Join(srcs, ", ")+" declares "+b.label()+" in "+groupName(b.group))
+			named = append(named, strings.Join(srcs, ", ")+" declares "+b.label()+" in "+b.where())
 		}
 	}
 	if len(named) == 0 {
 		return nil
 	}
 	return fail(http.StatusConflict, tiad.KindForeignBlock,
-		"%s, outside group %q: importing it would replace that block. Nothing was imported. Rename the block in the source (a prefix the project does not use)",
+		"%s, outside group %q: importing it would replace it (TIA keeps one name for a block and a data type). Nothing was imported. Rename it in the source (a prefix the project does not use)",
 		strings.Join(named, "; "), group)
-}
-
-// typesRefused is Ownership.TypesRefused.
-func typesRefused(ds []declared) *failure {
-	var named []string
-	for _, d := range ds {
-		if d.Kind == "UDT" {
-			named = append(named, fmt.Sprintf("%s declares data type %q", d.source, d.Name))
-		}
-	}
-	if len(named) == 0 {
-		return nil
-	}
-	return fail(http.StatusBadRequest, tiad.KindBadRequest,
-		"%s: data types are not imported yet (TIA puts them beside the project's own, so tiad cannot keep a customer's apart). Nothing was imported", strings.Join(named, "; "))
 }
 
 // foreignChanges is Ownership.Changed.
@@ -194,14 +201,16 @@ func foreignChanges(before, after []projectBlock, group string) []string {
 		n, ok := now[k]
 		switch {
 		case !ok:
-			changed = append(changed, b.label()+" in "+groupName(b.group)+" is gone")
+			changed = append(changed, b.label()+" in "+b.where()+" is gone")
 		case n.kind != b.kind || n.number != b.number || !strings.EqualFold(n.group, b.group):
-			changed = append(changed, b.label()+" in "+groupName(b.group)+" is now "+n.label()+" in "+groupName(n.group))
+			changed = append(changed, b.label()+" in "+b.where()+" is now "+n.label()+" in "+n.where())
+		case n.modified != b.modified:
+			changed = append(changed, b.label()+" in "+b.where()+" was modified")
 		}
 	}
 	for k, b := range now {
 		if _, ok := was[k]; !ok {
-			changed = append(changed, b.label()+" in "+groupName(b.group)+" is new")
+			changed = append(changed, b.label()+" in "+b.where()+" is new")
 		}
 	}
 	sort.Strings(changed)
@@ -437,7 +446,7 @@ func verifyOBs(obs []tiad.CyclicOB, blocks []projectBlock, group string) []strin
 
 func foreignUnusable(what string) *failure {
 	return fail(http.StatusConflict, tiad.KindUncleanSession,
-		"refusing %s: an import on this session left the project as tiad did not ask (blocks outside its group changed, or a cyclic interrupt OB is not as asked). Close it without saving", what)
+		"refusing %s: an import on this session left the project as tiad did not ask (blocks or data types outside its group changed, or a cyclic interrupt OB is not as asked). Close it without saving, then open or adopt the project again", what)
 }
 
 // SetOBImportIgnoresClass makes the fake TIA's OB import make a program
