@@ -73,7 +73,7 @@ type span struct{ start, end int64 } // end is 0 while the alarm has not returne
 // the return minus the off-delay, which is a bound, not the signal itself
 // (drop-outs shorter than the off-delay are hidden). Spans while the alarm
 // was shelved or suppressed are left out, and the history starts after the
-// last tuned row.
+// last tuned row. events must be one alarm's, oldest first.
 func Suggest(events []alarm.Event, cur Delays, window time.Duration, count int) (Suggestion, bool) {
 	// The history starts after the last CHANGE of delays: a run of tuned
 	// rows that say the same (a restart or a takeover writes one each)

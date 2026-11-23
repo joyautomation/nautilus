@@ -7,6 +7,10 @@ package project
 // -suggest` says what to put in it; nothing here is live, so a change takes
 // effect at the next start, and a pair applies it in a rolling restart.
 //
+// Removing a row puts the alarm's own delays back at the next start but
+// writes no `tuned` row, so a delay suggestion's window does not move at
+// that change.
+//
 //	tuning:
 //	  - id: P101_SealLeak
 //	    on-delay: 5s
