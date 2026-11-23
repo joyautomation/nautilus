@@ -284,3 +284,52 @@ func TestPairHotTakeoverOverAnUnreadableRetainFile(t *testing.T) {
 	os.Chmod(dirs[stand], 0o700)
 	pairWait(t, "the warning to clear once a save succeeds", 10*time.Second, func() bool { return !r.hasWarning(stand, "only in memory") })
 }
+
+// At the default hot-max-age (3 × lease + 2 × the stream's interval: 1.7 s
+// at the rig's 500 ms lease) a hard kill of the leader is hot: the
+// default is meant to cover it (design §4.2).
+func TestPairHotTakeoverAtTheDefaultHotMaxAge(t *testing.T) {
+	r := newHotPairRig(t, func(_ string, p *project.Project) { p.Redundancy.HotMaxAge = nil })
+	lead := r.leader()
+	stand := other(lead)
+	r.inSync(t, stand)
+	r.set(t, lead, "Mode", 5)
+	r.shadowed(t, lead)
+	r.nodes[lead].crash()
+	if got := r.leader(); got != stand {
+		t.Fatalf("after the kill: leader %q, want %s", got, stand)
+	}
+	pairWait(t, "the new leader's takeover report", 5*time.Second, func() bool {
+		s := r.streamStatus(stand)
+		return s != nil && s.Takeover != ""
+	})
+	s := r.streamStatus(stand)
+	t.Logf("takeover %s at the default hot-max-age, image %d ms old at the takeover", s.Takeover, s.TakeoverImageAgeMs)
+	if s.Takeover != "hot" {
+		t.Fatalf("takeover %q (%s) after a hard kill at the default hot-max-age, want hot", s.Takeover, s.TakeoverCold)
+	}
+	if got := r.get(stand, "Mode"); got != "5" {
+		t.Errorf("Mode %s, want the operator's 5", got)
+	}
+}
+
+// A takeover edge whose term moves while it waits flushes again (#710
+// S1b review F6), and the second flush finds the shadow the first one
+// took and emptied. It is not hot (another leadership may have come in
+// between) but there was an image: the candidate says so, and the cold
+// takeover is warned of.
+func TestPairFlushOfAMovedTermStillHasAnImage(t *testing.T) {
+	r := newHotPairRig(t, nil)
+	lead := r.leader()
+	stand := other(lead)
+	r.inSync(t, stand)
+	s := r.nodes[stand].m.stream
+	first, err := s.takeoverFlush()
+	if err != nil || first == nil || first.Cold != "" {
+		t.Fatalf("first flush: %+v, %v; want the image", first, err)
+	}
+	second, err := s.takeoverFlush()
+	if err != nil || second == nil || !strings.Contains(second.Cold, "term moved") {
+		t.Fatalf("second flush of the same edge: %+v, %v; want a refused image", second, err)
+	}
+}

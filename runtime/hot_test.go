@@ -326,7 +326,7 @@ func TestHotTakeoverColdCases(t *testing.T) {
 		{name: "aux runs another source", stby: [2]string{"", edited}, reason: "runs another source", image: true},
 		{name: "the flush failed", setup: func(t *testing.T, r *hotRig) {
 			r.flush = r.take(10*time.Second, errors.New("disk full"))
-		}, reason: "flush of the newest image failed", image: false},
+		}, reason: "flush of the newest image failed", image: true},
 		{name: "the shadow is not in sync", setup: func(t *testing.T, r *hotRig) {
 			img := *r.img
 			img.Seq++
@@ -385,8 +385,8 @@ func TestHotTakeoverNeverInstallsALateFlush(t *testing.T) {
 		return take()
 	}
 	rep := r.takeOver(t)
-	if rep.Hot || !strings.Contains(rep.Reason, "did not finish") {
-		t.Fatalf("takeover: %+v, want cold for a late flush", rep)
+	if rep.Hot || !strings.Contains(rep.Reason, "did not finish") || !rep.Image {
+		t.Fatalf("takeover: %+v, want cold for a late flush, warned of as an image refused", rep)
 	}
 	time.Sleep(300 * time.Millisecond)
 	r.stby.Scan()

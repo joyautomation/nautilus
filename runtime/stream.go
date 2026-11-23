@@ -57,6 +57,9 @@ type streamSide struct {
 	// late). Taken by takeover, cleared by flushReset (hot.go).
 	hot    *HotImage
 	hotWhy string
+	// hadImage: the flush failed or ended late, so it hands over no
+	// candidate, though the standby held an image (or may have).
+	hadImage bool
 
 	// report is the last takeover's (hot.go), memOnly that its retained
 	// values are held only in memory until a save succeeds, onTakeover
@@ -140,7 +143,7 @@ func (r *Runtime) flushReady(term uint64) bool {
 			ch <- flushResult{hot, err}
 		}()
 		r.strm.ch, r.strm.chTerm, r.strm.since = ch, term, time.Now()
-		r.strm.hot, r.strm.hotWhy = nil, ""
+		r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
 	}
 	select {
 	case res := <-r.strm.ch:
@@ -151,12 +154,12 @@ func (r *Runtime) flushReady(term uint64) bool {
 			if !errors.Is(res.err, ErrRetainUnreadable) && !mutRuntime("hot_failed_flush_installs") {
 				// Only this controller's own store being unreadable keeps
 				// the image hot (#710 S2 Q3): the file did not take it.
-				r.strm.hot, r.strm.hotWhy = nil, "the takeover's flush of the newest image failed: "+res.err.Error()
+				r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "the takeover's flush of the newest image failed: "+res.err.Error(), res.hot != nil
 			}
 		}
 		if r.strm.doneTerm != term && !mutRuntime("stream_flush_term_unkeyed") {
 			r.strm.done = false // it ran for an earlier term: the next look flushes for this one
-			r.strm.hot, r.strm.hotWhy = nil, ""
+			r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
 			return false
 		}
 		return true
@@ -173,7 +176,7 @@ func (r *Runtime) flushReady(term uint64) bool {
 	r.strm.ch, r.strm.done, r.strm.doneTerm = nil, true, r.strm.chTerm
 	// Late: whatever it hands over afterwards is never installed (the
 	// channel is dropped), and this takeover is cold.
-	r.strm.hot, r.strm.hotWhy = nil, fmt.Sprintf("the takeover's flush of the newest image did not finish within %s", takeoverFlushWait)
+	r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, fmt.Sprintf("the takeover's flush of the newest image did not finish within %s", takeoverFlushWait), true
 	if mutRuntime("hot_late_flush_installs") {
 		res := <-late // waits it out, and takes what it hands over
 		r.strm.hot, r.strm.hotWhy = res.hot, ""
@@ -186,7 +189,7 @@ func (r *Runtime) flushReady(term uint64) bool {
 // its candidate is never installed. Under leadMu.
 func (r *Runtime) flushReset() {
 	r.strm.ch, r.strm.done = nil, false
-	r.strm.hot, r.strm.hotWhy = nil, ""
+	r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
 }
 
 // RetainLoadFailed reports whether this runtime's last takeover could not

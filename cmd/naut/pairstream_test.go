@@ -319,8 +319,13 @@ func TestStatusShowsTheStateStream(t *testing.T) {
 		}
 	}
 	out.Reset()
-	printClusterStatus(&out, []byte(`{"mode":"quorum","pod":"a","leader":"a","isLeader":true,"stream":{"role":"leader","state":"sending","term":1004,"seq":7,"ageMs":-1,"intervalMs":416,"bytes":4165,"budgetBytes":10000,"takeoverImageAgeMs":120,"flushMs":3.4}}`))
-	if want := "state stream: sending; image 7 of term 1004, 4165 bytes every 416ms (budget 10000 B/s); last takeover loaded an image 120ms old, flushed in 3.4 ms"; !strings.Contains(out.String(), want) {
+	printClusterStatus(&out, []byte(`{"mode":"quorum","pod":"a","leader":"a","isLeader":true,"stream":{"role":"leader","state":"sending","term":1004,"seq":7,"ageMs":-1,"intervalMs":416,"bytes":4165,"budgetBytes":10000,"takeoverImageAgeMs":120,"flushMs":3.4,"takeover":"hot","retainInMemory":true}}`))
+	if want := "state stream: sending; image 7 of term 1004, 4165 bytes every 416ms (budget 10000 B/s); last takeover loaded an image 120ms old, flushed in 3.4 ms; last takeover hot; retained values only in memory"; !strings.Contains(out.String(), want) {
+		t.Fatalf("want %q in\n%s", want, out.String())
+	}
+	out.Reset()
+	printClusterStatus(&out, []byte(`{"mode":"quorum","pod":"a","leader":"a","isLeader":true,"stream":{"role":"leader","state":"sending","ageMs":-1,"takeoverImageAgeMs":-1,"takeover":"cold","takeoverCold":"the image is of another nautilus build"}}`))
+	if want := "state stream: sending; last takeover cold (the image is of another nautilus build)"; !strings.Contains(out.String(), want) {
 		t.Fatalf("want %q in\n%s", want, out.String())
 	}
 }

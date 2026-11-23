@@ -122,6 +122,10 @@ type pairStream struct {
 	// existed: its condition, until a standby follows a hot-capable
 	// stream again (an image of the newest format sent).
 	coldWhy string
+	// flushTook: a flush of the pending takeover edge took the shadow's
+	// image (the next flush of the same edge, for a moved term, finds the
+	// shadow empty), until the takeover reports.
+	flushTook bool
 	// Leader side.
 	sending   atomic.Int32
 	sentTerm  uint64
@@ -689,18 +693,32 @@ func (s *pairStream) takeoverFlush() (*runtime.HotImage, error) {
 	}
 	s.mu.Unlock()
 	following := s.following()
+	// The one candidate: the shadow's newest image, taken before the
+	// carry's fsync so a slow disk does not age it (hot-max-age is judged
+	// at the election). It must be the image whose retain section the
+	// file then takes.
+	hot := s.shadow.Take()
 	var took time.Duration
 	var err error
 	if !mutNaut("stream_flush_no_persist") {
 		took, err = s.persist(ctx)
 	}
-	// The one candidate: the shadow's newest image, which must be the one
-	// whose retain section the file just took.
-	hot := s.shadow.Take()
 	if !mutNaut("stream_flush_keeps_shadow") {
 		s.shadow.Reset()
 	}
-	if hot != nil {
+	s.mu.Lock()
+	switch {
+	case hot != nil:
+		s.flushTook = true
+	case s.flushTook:
+		// An earlier flush of this same edge took the image and emptied
+		// the shadow, then the term moved before the takeover ran: the
+		// other controller may have led in between, so it is not hot,
+		// but there was an image, and the cold takeover says so.
+		hot = &runtime.HotImage{Cold: "the term moved while the takeover waited: another leadership may have come between the image and this one"}
+	}
+	s.mu.Unlock()
+	if hot != nil && hot.Term != 0 {
 		hot.Retain = ret
 		hot.MaxAge = s.hotMaxAge
 		if hot.MaxAge < 0 {
@@ -754,6 +772,7 @@ func (s *pairStream) takeoverFlush() (*runtime.HotImage, error) {
 // follows again.
 func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
 	s.mu.Lock()
+	s.flushTook = false // the edge is taken
 	s.coldWhy = ""
 	if !rep.Hot && rep.Image {
 		s.coldWhy = rep.Reason

@@ -19,10 +19,12 @@ import (
 // the candidate: by value into fresh frames of the programs running now,
 // timers moved to this clock, host handles forgotten, FIRST_SCAN TRUE as
 // on any takeover; then its tags over the retain load. It reports either
-// way. why is the flush's reason when it handed over no candidate. Called
+// way. why is the flush's reason when it handed over no candidate, had
+// whether the standby held an image all the same (a failed or late
+// flush): a refused image is warned of, a plain start is not. Called
 // by takeover under leadMu, after the retain load, before any frame
 // reset: false means takeover resets them (cold).
-func (r *Runtime) hotTakeover(h *HotImage, why string) bool {
+func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 	rep := TakeoverReport{At: time.Now(), ImageAge: -1}
 	if t, ok := r.coord.(Termed); ok {
 		rep.Term = t.Term()
@@ -35,6 +37,7 @@ func (r *Runtime) hotTakeover(h *HotImage, why string) bool {
 	}
 	if h == nil {
 		if why != "" {
+			rep.Image = had
 			return cold(why)
 		}
 		rep.Reason = "no state image: the standby followed no leader"

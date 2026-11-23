@@ -308,9 +308,9 @@ func (r *Runtime) takeover() {
 	// load. Otherwise it is cold, as below.
 	hot := false
 	if r.strm.flush.Load() != nil {
-		h, why := r.strm.hot, r.strm.hotWhy
-		r.strm.hot, r.strm.hotWhy = nil, ""
-		hot = r.hotTakeover(h, why)
+		h, why, had := r.strm.hot, r.strm.hotWhy, r.strm.hadImage
+		r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
+		hot = r.hotTakeover(h, why, had)
 	}
 	if !hot {
 		r.prog.ResetFrame()
