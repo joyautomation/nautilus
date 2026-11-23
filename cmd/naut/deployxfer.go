@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,7 +33,8 @@ import (
 // transfer is the plan for one controller.
 type transfer struct {
 	kind     string // project, full, legacy
-	wire     string // the file that goes over the wire (gzip), "" for legacy
+	comp     string // how the wire file is compressed: xz or gzip
+	wire     string // the file that goes over the wire, "" for legacy
 	wireSize int64
 	wireSha  string
 	rsize    int64  // the runtime bytes the box supplies (0 for full)
@@ -47,6 +49,7 @@ type boxBase struct {
 	rsize   int64
 	rsha    string
 	csha    string // the whole current controller's SHA-256, when the box says
+	xz      bool   // the box can unpack xz (box.sh base says so, with or without a release)
 }
 
 func parseBase(out string) (boxBase, bool) {
@@ -65,6 +68,8 @@ func parseBase(out string) (boxBase, bool) {
 			b.rsha = v
 		case "controller-sha256":
 			b.csha = v
+		case "xz":
+			b.xz = v == "1"
 		}
 	}
 	return b, b.release != "" && b.rsize > 0 && len(b.rsha) == 64
@@ -91,6 +96,86 @@ func runtimePart(path string) (off int64, sha string, ok bool, err error) {
 		return 0, "", false, err
 	}
 	return off, hex.EncodeToString(h.Sum(nil)), true, nil
+}
+
+// pickCompression chooses how the wire file is compressed: xz when the box can
+// unpack it and this machine can make it (xz is some 25% smaller than gzip on
+// a controller, and the link is the slow part), else gzip. comp is -compress:
+// auto, gzip or xz. why says what decided it when it was not simply the best
+// choice, for the plan line.
+func pickCompression(comp string, boxXZ bool) (how, why string) {
+	switch comp {
+	case "gzip":
+		return "gzip", "-compress gzip"
+	case "xz":
+		if _, err := exec.LookPath("xz"); err != nil {
+			return "gzip", "-compress xz, but xz is not installed here"
+		}
+		if !boxXZ {
+			return "gzip", "-compress xz, but the box has no xzcat, xz or unxz"
+		}
+		return "xz", ""
+	}
+	if !boxXZ {
+		return "gzip", "the box cannot unpack xz"
+	}
+	if _, err := exec.LookPath("xz"); err != nil {
+		return "gzip", "xz is not installed here; with it the upload would be about a quarter smaller"
+	}
+	return "xz", ""
+}
+
+// helperGzipOnlyNote puts the right reason in the plan line of a box whose
+// release helper predates xz: the box may well have xz, but its helper cannot
+// ask for it, so planTransfer's "the box cannot unpack xz" would be untrue.
+func helperGzipOnlyNote(t *transfer) {
+	if i := strings.LastIndex(t.note, " ("); i >= 0 && strings.HasSuffix(t.note, ")") {
+		t.note = t.note[:i]
+	}
+	t.note += " (this box's release helper predates xz)"
+}
+
+// compressRange makes the wire file: bytes [from, end) of src, gzip or xz.
+func compressRange(how, src, dst string, from int64) (int64, string, error) {
+	if how == "xz" {
+		return xzRange(src, dst, from)
+	}
+	return gzipRange(src, dst, from)
+}
+
+// xzRange is gzipRange for xz, by the xz program: preset 6 (its decompressor
+// needs about 10 MB, where -9 needs 65 for under 1% less: the boxes are
+// small), the CRC32 check every xz decoder has (busybox's included), and as
+// many threads as the machine has (blocks, so the file is the same stream any
+// decoder reads).
+func xzRange(src, dst string, from int64) (int64, string, error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return 0, "", err
+	}
+	defer in.Close()
+	if _, err := in.Seek(from, io.SeekStart); err != nil {
+		return 0, "", err
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return 0, "", err
+	}
+	defer out.Close()
+	h := sha256.New()
+	cmd := exec.Command("xz", "-6", "--check=crc32", "-T0", "-c")
+	cmd.Stdin = in
+	cmd.Stdout = io.MultiWriter(out, h)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return 0, "", fmt.Errorf("xz: %v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	st, err := out.Stat()
+	if err != nil {
+		return 0, "", err
+	}
+	return st.Size(), hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // gzipLevel is how hard the wire file is compressed: the link is the slow
@@ -135,14 +220,16 @@ func gzipRange(src, dst string, from int64) (int64, string, error) {
 // SHA-256 is sum) given what the box has: the project part only when the
 // box's runtime part is the same bytes, else all of it. dir is a scratch
 // directory for the gzip file.
-func planTransfer(ctl, sum, dir string, base boxBase, haveBase bool) (*transfer, error) {
+func planTransfer(ctl, sum, dir string, base boxBase, haveBase bool, comp string) (*transfer, error) {
 	st, err := os.Stat(ctl)
 	if err != nil {
 		return nil, err
 	}
-	t := &transfer{whole: sum, size: st.Size(), wire: filepath.Join(dir, "wire.gz")}
+	t := &transfer{whole: sum, size: st.Size()}
+	how, why := pickCompression(comp, base.xz)
+	t.comp, t.wire = how, filepath.Join(dir, "wire."+how)
 	from := int64(0)
-	t.kind, t.note = "full", "the whole controller, gzipped"
+	t.kind, t.note = "full", "the whole controller, "+how+"-compressed"
 	if haveBase {
 		off, rsha, ok, err := runtimePart(ctl)
 		if err != nil {
@@ -150,17 +237,20 @@ func planTransfer(ctl, sum, dir string, base boxBase, haveBase bool) (*transfer,
 		}
 		switch {
 		case !ok:
-			t.note = "the whole controller, gzipped (it has no project footer to split at)"
+			t.note = "the whole controller, " + how + "-compressed (it has no project footer to split at)"
 		case off == base.rsize && rsha == base.rsha:
 			t.kind, t.rsize, from = "project", off, off
-			t.note = "the project only, gzipped: the runtime on the box (" + base.release + ") is the one this was built on"
+			t.note = "the project only, " + how + "-compressed: the runtime on the box (" + base.release + ") is the one this was built on"
 		default:
-			t.note = "the whole controller, gzipped: the runtime on the box is not the one this was built on"
+			t.note = "the whole controller, " + how + "-compressed: the runtime on the box is not the one this was built on"
 		}
 	} else {
-		t.note = "the whole controller, gzipped: the box has no controller to build on"
+		t.note = "the whole controller, " + how + "-compressed: the box has no controller to build on"
 	}
-	t.wireSize, t.wireSha, err = gzipRange(ctl, t.wire, from)
+	if why != "" {
+		t.note += " (" + why + ")"
+	}
+	t.wireSize, t.wireSha, err = compressRange(how, ctl, t.wire, from)
 	return t, err
 }
 
@@ -436,4 +526,11 @@ var legacyHelperVersions = map[string]bool{
 	"40e9c9fef68243e2": true, // the helper's first versions
 	"5b0ccbee0a2913d3": true, // v0.22.0
 	"177ab940e0359f6e": true, // main before the slow-link upload
+}
+
+// gzipOnlyHelperVersions are helper versions that can rebuild a controller
+// from the upload (the slow-link path) but cannot unpack xz: a deploy to one
+// of them sends gzip, whatever the box has, and the plan line says so.
+var gzipOnlyHelperVersions = map[string]bool{
+	"5818797304182e21": true, // the slow-link upload, before xz
 }

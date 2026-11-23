@@ -22,10 +22,10 @@ func TestDeployCronInstallRunsAsTheUser(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	calls := sshCalls(t, log)
-	if len(calls) != 7 || !strings.Contains(calls[0].cmd, ".config/naut-deploy") || calls[1].cmd != "uname -sm" {
-		t.Fatalf("want 7 ssh calls (mode, uname, partsize, append, partsize, assemble, install), got %d: %+v", len(calls), calls)
+	if len(calls) != 8 || !strings.Contains(calls[0].cmd, ".config/naut-deploy") || calls[1].cmd != "uname -sm" || !strings.HasSuffix(calls[2].cmd, "sh -s -- base") {
+		t.Fatalf("want 8 ssh calls (mode, uname, base (what the box can unpack), partsize, append, partsize, assemble, install), got %d: %+v", len(calls), calls)
 	}
-	calls = calls[2:]
+	calls = calls[3:]
 	for _, c := range calls {
 		if strings.Contains(c.cmd, "sudo") {
 			t.Errorf("cron mode must not use sudo: %q", c.cmd)
