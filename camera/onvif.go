@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -236,7 +237,7 @@ func (f *Fetcher) discoverONVIF(ctx context.Context, c Camera) (Resolved, error)
 // area is a picture's size; a profile that states none is the largest, not the smallest.
 func area(w, h int) int {
 	if w <= 0 || h <= 0 {
-		return 1 << 40
+		return math.MaxInt32
 	}
 	return w * h
 }
@@ -395,16 +396,7 @@ func decodeSOAP(b []byte, out any) error {
 		return errors.New("the device's answer is not SOAP")
 	}
 	if fault.Code != "" || fault.Reason.Text != "" {
-		t := strings.Map(func(r rune) rune {
-			if r < 0x20 || r == 0x7f {
-				return -1
-			}
-			return r
-		}, fault.Reason.Text)
-		if len(t) > 120 {
-			t = t[:120]
-		}
-		return &soapFault{reason: strings.TrimSpace(t)}
+		return &soapFault{reason: cleanText(fault.Reason.Text, 120)}
 	}
 	if out == nil {
 		return nil
