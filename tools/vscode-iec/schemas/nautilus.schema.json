@@ -632,6 +632,68 @@
         }
       }
     },
+    "cameras": {
+      "type": "array",
+      "description": "The plant's cameras (#724): each bound to an asset the plant.yaml names. The controller relays them; a browser never talks to a camera. Credentials are never here: set credentials: true and put user:password in the secrets file (naut alarms secrets set camera.<id>).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "asset",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Letters, digits, - and _ (it is in a URL)."
+          },
+          "label": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string",
+            "description": "A plant.yaml equipment id: the asset page shows the camera."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "snapshot",
+              "mjpeg",
+              "hls",
+              "rtsp",
+              "onvif"
+            ],
+            "description": "virtual (drawn by the controller), snapshot (a JPEG URL), mjpeg (a motion-JPEG URL); hls, rtsp and onvif are later steps."
+          },
+          "url": {
+            "type": "string",
+            "description": "The stream or device URL, with no user name or password in it."
+          },
+          "credentials": {
+            "type": "boolean",
+            "description": "The camera needs a user name and password, kept as the secret camera.<id>."
+          },
+          "snapshot-url": {
+            "type": "string",
+            "description": "A JPEG URL the controller fetches for the asset page's picture."
+          },
+          "interval": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600,
+            "description": "Seconds between snapshot refreshes on the asset page (default 5)."
+          },
+          "max-viewers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16,
+            "description": "How many people may watch this camera live at once (default 2)."
+          }
+        }
+      }
+    },
     "pwa": {
       "type": "object",
       "additionalProperties": false,

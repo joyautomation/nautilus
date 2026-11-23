@@ -108,7 +108,8 @@ type Secrets struct {
 	Secrets   map[string]string `json:"secrets"`
 }
 
-// SecretKeys are the keys the secrets file may hold.
+// SecretKeys are the keys the secrets file may hold, besides camera.<id>
+// (a camera's "user:password", #724).
 //
 // push.vapid-key is the Web Push application server key (#722): the private
 // half of the VAPID pair, 32 octets as unpadded base64url. The same key
@@ -171,7 +172,22 @@ func (c *Contact) Check() error {
 	return nil
 }
 
+// A camera's credentials ("user:password") are the secret camera.<id> (#724):
+// the id is the manifest row's, letters, digits, - and _.
+const cameraSecretPrefix = "camera."
+
 func validSecretKey(k string) bool {
+	if id, ok := strings.CutPrefix(k, cameraSecretPrefix); ok {
+		if id == "" || len(id) > 64 {
+			return false
+		}
+		for _, r := range id {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+				return false
+			}
+		}
+		return true
+	}
 	for _, s := range SecretKeys {
 		if s == k {
 			return true

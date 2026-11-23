@@ -240,6 +240,9 @@ export { NotesClient, DraftKeeper, classifyFailure, notKeptText, canChange, grou
 export type { Note, NoteTarget, NoteTargetKind, NoteRevision, NoteQuery, NoteAnswer, NoteOutcome, SupersededHistory, DayGroup, DraftStorage } from './notes.js';
 export { default as CheckoutPage } from './components/CheckoutPage.svelte';
 export { default as CheckoutBanner } from './components/CheckoutBanner.svelte';
+export { default as CameraPanel } from './components/CameraPanel.svelte';
+export { CameraClient, formatBps, camerasFor, watchingText, nextState as cameraNext, LIVE_CAPTION } from './camera.js';
+export type { Camera, CameraMode, CameraState, CameraEvent } from './camera.js';
 export { CheckoutClient, FORCE_SECONDS, forceValue, canIn, offersForce, countdown, clock, forceBanner, resultLine, needsNote, runLinks, offersSeal, SEAL_NOTICE } from './checkout.js';
 export type { CheckoutPoint, CheckoutResult, CheckoutRun, CheckoutRunView, CheckoutView, CheckoutForce, CheckoutAnswer, CountdownState, Progress as CheckoutProgress, PointKind } from './checkout.js';
 export { PushClient, pushState, readPushEnv, realPushBrowser, enablePush, disablePush, endpointId, keyBytes } from './push.js';

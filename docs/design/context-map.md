@@ -50,7 +50,7 @@ into another's.
 | **IT drivers** | `hw` `snmp/…` `redfish/…` `prom/…` | source, scan class, the shared UDT set (SwitchPort, PSU, …), counter→rate. `hw` is to these what `runtime` is to the languages. | nothing above the seam | Same ACL rule as field drivers; `hw` owns the shared UDTs so a port is one struct whether it came from IF-MIB or REST |
 | **Sparkplug edge** | `sparkplug` `sparkplug/spb` | node, device, metric, birth, rebirth, NCMD, RBE. | Sparkplug host (payload codec) | The one adapter that imports `runtime` directly: it publishes a runtime's store, so it is downstream of Runtime, not a driver |
 | **Alarms** | `alarm` `alarm/escalate` `alarm/oncall` `alarm/channel` `alarm/channel/send` `alarm/pgjournal` `alarm/rationalize` `alarm/acklink` | ISA-18.2: definition, rule, active, unacked, shelved, journal, notifier; escalation policy, level, step, roster, on call, channel, contact; ack link, link id, spent, reply code, inbound, provider signature (#715); consequence, response, rationalization, master, flood, chattering, bad actor, stale (#715). | Operator surface | Imports only `lang/ir` and `retain`; the manifest hands it a tag store. It does not import `runtime`, and that is the point. `alarm/escalate` reads the engine's records and is gated by the write gate the manifest hands it. `alarm/oncall` keeps the contacts and channel secrets on the box; `alarm/channel/send` turns a principal into an address there and sends (email, SMS, voice, webhook) |
-| **Operator surface** | `server` `oplog` `hist` `notes` `checkout` `internal/webpush`, `audit` and `auth` ([identity-audit.md](identity-audit.md)) | tag API, snapshot, SSE stream, write, program history, operator intent, sink; principal, role, area, permission, elevation, session, audit entry, chain; push subscription, VAPID key, push service (#722); note, revision, target, addendum, retraction, shift log (#720). | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
+| **Operator surface** | `server` `oplog` `hist` `notes` `checkout` `camera` `internal/webpush`, `audit` and `auth` ([identity-audit.md](identity-audit.md)) | tag API, snapshot, SSE stream, write, program history, operator intent, sink; principal, role, area, permission, elevation, session, audit entry, chain; push subscription, VAPID key, push service (#722); note, revision, target, addendum, retraction, shift log (#720); camera, snapshot, live viewer (#724). | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
 | **Manifest** | `internal/project` `internal/dialect` `cmd/naut` | `nautilus.yaml` nouns: tags, tasks, drivers, alarms, scene, dialect. | nothing; it is the composition root | Every context's manifest form lives here (`project.TagConfig` ↔ `runtime.TagDef`). It is the only package allowed to import everything |
 | **Verification** | `acceptance` `lang/conformance` `internal/vcs` | suite, case, expect, virtual time, corpus. | CLI, Authoring | Composes whatever it tests; held to no import rule |
 | **Authoring** | `internal/lsp` `tools/vscode-iec` | diagnostics, hover, completion, diagram editor, live values, component preview, kind editor. | the person | Reads the Manifest and Languages; the only non-CLI importer of `internal/project` |
@@ -162,6 +162,13 @@ break one changes this section first and says why.
   record the controller signs when a run is sealed. It knows no permission, tag
   store, alarm or server: `server` decides who may record, force or seal before
   an entry exists, and `cmd/naut` tells it what the controller is connected to.
+- `camera` (the plant's cameras, #724) imports only the standard library: a
+  manifest row bound to an asset, a still fetched with the camera's
+  credentials, a motion-JPEG relay and the cap on live viewers. It knows no
+  plant, permission, alarm or server: `server` decides who may view and
+  journals a live view, the manifest checks the asset, and `cmd/naut` hands it
+  the secrets. Its fetch, relay and drawing files are `!js`: the playground's
+  wasm carries the row type only, and draws its own virtual camera in the kit.
 - `internal/webpush` (Web Push: RFC 8291 payload encryption, VAPID, the
   sealed subscription registry and the sender that dials only what its
   endpoint policy allows, #722) imports only the standard library. It

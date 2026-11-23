@@ -1,0 +1,131 @@
+page: website/src/content/docs/guides/cameras.md
+title: Cameras
+prefix: CAM
+claims:
+  - id: CAM-001
+    claim: >-
+      Cameras are optional: a project with no `cameras:` section has no camera
+      routes (they answer like any unknown API path), and `naut check` says
+      nothing about them.
+    source: "#cameras"
+    tests:
+      - go ./server TestACameraRoutesAreNotMountedWithoutCameras
+      - go ./internal/project TestNoCamerasNoCheck
+
+  - id: CAM-002
+    claim: >-
+      The manifest refuses a camera row that cannot be right and names the row:
+      no id or kind, an id that is not URL-safe, a duplicate id, an unknown kind,
+      a missing url, a URL with a user name or password in it (the error never
+      repeats the password), a scheme the kind does not use, an interval or
+      viewer cap out of range, an unknown field. `naut check` refuses an asset
+      the plant does not have, and warns when a camera of a kind that is not
+      built in yet has no snapshot-url.
+    source: "#the-manifest"
+    tests:
+      - go ./camera TestValidateAcceptsGoodRowsAndNamesEachBadOne
+      - go ./internal/project TestACameraRowThatCannotBeRightRefusesTheManifest
+      - go ./internal/project TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant
+
+  - id: CAM-003
+    claim: >-
+      A camera's credentials are the secret `camera.<id>` of the secrets file;
+      `naut check` says which cameras need credentials the file lacks or holds
+      malformed (an error on the controller, a warning off it), without
+      repeating a credential; the controller reads the file when a picture is
+      asked for.
+    source: "#credentials"
+    tests:
+      - go ./cmd/naut TestCameraCredentialsAreCheckedAgainstTheSecretsFile
+      - go ./cmd/naut TestACameraProjectGetsOptionsAndOthersGetNone
+      - go ./alarm/oncall TestCameraSecretsAreKeyedByCameraID
+
+  - id: CAM-004
+    claim: >-
+      The controller fetches a still with the camera's credentials by basic or
+      digest authentication, sending nothing until the camera asks and then only
+      in the scheme it asked for (a digest camera never sees the password in
+      basic), refuses a snapshot that is larger than 4 MB or is not a JPEG,
+      refuses a redirect to another host, port or scheme, refuses a digest
+      algorithm it does not speak, and says why a camera did not answer without
+      its address, its own bytes or a credential, whichever error the connection
+      or the stream parser raised; `naut check` warns on credentials over http.
+    source: "#what-the-controller-does"
+    tests:
+      - go ./camera TestSnapshotFetchesWithBasicAndDigestCredentials
+      - go ./camera TestSnapshotRefusesWhatIsNotAStillAndNeverRepeatsCredentialsOrAddress
+      - go ./camera TestErrorsFromABrokenCameraCarryNeitherItsAddressNorItsBytes
+      - go ./camera TestCredentialsAreSentOnlyAfterTheChallengeAndInItsScheme
+      - go ./camera TestARedirectKeepsHostPortAndScheme
+      - go ./camera TestACredentialInAURLsQueryIsRefused
+      - go ./server TestCameraSnapshotsAreStillsFetchedWithTheControllersCredentials
+      - go ./internal/project TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant
+
+  - id: CAM-005
+    claim: >-
+      A motion-JPEG camera is relayed frame by frame: a part that is not a JPEG
+      ends the stream without reaching the browser, and a camera that is not a
+      motion-JPEG stream is said so; a virtual camera is drawn by the controller
+      and runs until the viewer leaves. A camera that refuses the controller is
+      a 502 with a reason, not an empty stream, and one that stops sending ends
+      the stream instead of holding its place.
+    source: "#what-the-controller-does"
+    tests:
+      - go ./camera TestRelayCarriesFramesAndEndsOnAPartThatIsNotAJPEG
+      - go ./camera TestRelayOfAVirtualCameraRunsUntilTheViewerLeaves
+      - go ./camera TestAStreamThatGoesQuietEnds
+      - go ./camera TestVirtualFrameIsAJPEGThatMoves
+      - go ./server TestACameraThatRefusesTheControllerIsA502NotAnEmptyStream
+
+  - id: CAM-006
+    claim: >-
+      Viewing a camera needs read: a person who may not read, or is not signed
+      in, is refused before the camera is named, and the list tells no address,
+      URL or credential.
+    source: "#who-may-view"
+    tests:
+      - go ./server TestCamerasAreForReadersAndNeverTellAnAddress
+    note: >-
+      Read is whole-controller in the auth model, so a camera is not scoped to
+      an area; that is stated on the page, not hidden.
+
+  - id: CAM-007
+    claim: >-
+      A live view of a real camera is journalled when it starts and when it ends
+      (with the seconds, the bytes and why it ended), and a view that could not
+      start is journalled as an error. One camera's viewers are capped by
+      `max-viewers`, one person's streams by two and the controller's by four,
+      each refusal saying which cap, and a place is given back when the viewer
+      leaves. A view ends after its time limit and when the person signs out or
+      may no longer read; a still is fetched from a camera at most once a second
+      however many ask; a picture is answered never cached, never sniffed and
+      sandboxed; a HEAD is not a view.
+    source: "#who-may-view"
+    tests:
+      - go ./server TestACameraStreamIsLiveJournalledAndCapped
+      - go ./server TestALiveViewEndsWhenThePersonSignsOutOrTimeRunsOut
+      - go ./server TestStillsAreFetchedAtMostOnceASecondPerCamera
+      - go ./camera TestLimiterHoldsTheCameraCapTheControllersCapAndEachPersons
+      - go ./camera TestMeterIsTheAverageSinceTheFirstByte
+
+  - id: CAM-008
+    claim: >-
+      The asset page shows a still that refreshes by default, starts live video
+      only on a click and shows its bitrate, and stops live video when the tab
+      is hidden or the page closes.
+    source: "#on-the-asset-page"
+    tests: []
+    note: >-
+      The kit's pure parts (bitrate text, the mode of a feed, the client) are
+      tested in hmi/tests/camera.test.ts, which this inventory does not run;
+      the click, the hidden tab and the stop were seen in a browser against a
+      running controller with a virtual camera, not automated.
+
+  - id: CAM-009
+    claim: >-
+      The camera code is controller-only: the playground's wasm links none of
+      the camera package's fetch, relay or drawing code.
+    source: "#what-is-not-here-yet"
+    tests:
+      - go ./internal/contextmap TestWasmStaysFreeOfControllerCode
+      - go ./internal/contextmap TestContextMap

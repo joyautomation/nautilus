@@ -71,7 +71,11 @@ type Manifest struct {
 	// sign-off rule. checkoutSheet is the sheet, read by ReadManifest.
 	Checkout      *CheckoutConfig `yaml:"checkout"`
 	checkoutSheet any             // the sheet (*checkout.Sheet), read by checkout.go: not in the browser build
-	Tasks         []TaskConfig    `yaml:"tasks"`
+	// Cameras are the plant's cameras (#724): each bound to an asset the
+	// plant.yaml names; the controller relays them. Checked as rows by
+	// ReadManifest, against the plant by CheckCameras.
+	Cameras CameraRows   `yaml:"cameras"`
+	Tasks   []TaskConfig `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
 	// tag set stays a separate reviewable artifact instead of a 500-line
@@ -1220,6 +1224,8 @@ type Project struct {
 	// Checkout is the manifest's checkout: section (#719), nil without one;
 	// CheckoutSheet is the sheet it names.
 	Checkout *CheckoutConfig
+	// Cameras are the manifest's cameras: section (#724).
+	Cameras  CameraRows
 	checkout any // the sheet, see CheckoutSheet
 
 	// Retain/Redundancy carry the manifest's sections for `naut run`
@@ -1433,6 +1439,9 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 	}
 	if err := m.readCheckout(fsys, !noSheet); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if err := validateCameras(m.Cameras); err != nil {
+		return nil, fmt.Errorf("%s: cameras: %w", name, err)
 	}
 	if m.Parameters != nil {
 		switch m.Parameters.WriteBack {
@@ -1961,6 +1970,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		PWA:         m.PWA,
 		PWAIcon:     m.pwaIcon,
 		Checkout:    m.Checkout,
+		Cameras:     m.Cameras,
 		checkout:    m.checkoutSheet,
 
 		AuthStateDir: m.authStateDir(),

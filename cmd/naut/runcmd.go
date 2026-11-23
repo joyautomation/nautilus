@@ -643,6 +643,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		defer co.Stop()
 		co.Install(&sopts)
 	}
+	// The plant's cameras (#724), when the manifest lists any.
+	if co := cameraOptions(proj, dir, rt, os.Getenv, os.Stderr); co != nil {
+		co.Install(&sopts)
+	}
 	// Program provenance: a built binary decodes the history its archive
 	// carries; a checkout captures live from git. Lazy (first request pays,
 	// not startup) and nil-safe — no repo just means an empty history.
