@@ -11,7 +11,7 @@ import (
 // TestCarryClassifiesEveryField until it is put in one of them.
 var (
 	carried = []string{"Tags", "ParamBases", "ParamEdits", "ParamCommitted", "Locals", "Programs", "ProgramBases", "DiscardedPrograms", "Push"}
-	kept    = []string{"Alarms", "AlarmFlood", "Substitutes", "IO"}
+	kept    = []string{"Alarms", "AlarmFlood", "Substitutes", "IO", "Stream"}
 )
 
 func TestCarryClassifiesEveryField(t *testing.T) {
@@ -53,6 +53,7 @@ func TestCarry(t *testing.T) {
 		AlarmFlood:        &AlarmFlood{ID: "own"},
 		Substitutes:       &SubstituteState{HighID: 7},
 		IO:                &IOState{Units: map[string]IOUnit{"own": {}}},
+		Stream:            &StreamPos{Term: 4, Seq: 2},
 	}
 	lead := State{
 		Tags:        map[string]any{"SP": 3.0},
@@ -64,6 +65,7 @@ func TestCarry(t *testing.T) {
 		AlarmFlood:  &AlarmFlood{ID: "lead"},
 		Substitutes: &SubstituteState{HighID: 99},
 		IO:          &IOState{Units: map[string]IOUnit{"lead": {}}},
+		Stream:      &StreamPos{Term: 5},
 		// no online edits, no ParamCommitted: the standby's must go too
 	}
 	got := Carry(own, lead)

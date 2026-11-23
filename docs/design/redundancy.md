@@ -250,22 +250,22 @@ bumpless, and the measured takeover time is published instead.
 
 ```yaml
 redundancy:
-  experimental: true     # required until the state stream (§4) lands
+  experimental: true     # required until hot takeover (§4.2) lands
   peers:                 # the same file on both controllers
     a: ctl-a:9450
     b: ctl-b:9450
   witness: witness-host:9460
   lease: 2s              # default; the takeover time it gives is published
   state-dir: /srv/naut   # optional: default $STATE_DIRECTORY (systemd)
-  stream: every-scan     # or {every: 5}: one image per 5 scans
+  stream-budget: 1MB/s   # the state stream's bytes a second (§4.1)
   stream-link: ctl-a-link:9451   # optional dedicated A–B cable (§6)
 ```
 
-- **An explicit opt-in until §4.** Until the state stream (step 4), a pair needs
-  `experimental: true`, and Load refuses one without it, because a takeover starts from the
-  new leader's own retain file and loses a setpoint the old leader took. A running pair says
-  so at start, in `/api/cluster`'s `warnings` and on the dashboard (#1028, naut-lead's call).
-  The key goes when step 4 lands.
+- **An explicit opt-in until §4.2.** A pair needs `experimental: true`, and Load refuses one
+  without it (#1028, naut-lead's call). Since S1b the state stream keeps the leader's retained
+  values across a takeover, but the takeover is cold (program state restarts), and `naut run`
+  says so at every start. The standing `/api/cluster` warning of the interim is gone: the
+  stream's own state raises one when it is not in sync. The key goes when hot takeover lands.
 - **Two modes, one section.** `peers:` selects the pair. Without it, `redundancy:` is the
   Kubernetes Lease as before, and `lease:` is the Lease's name. With it, `lease:` is a time
   (200 ms to 1 min), and a name there is refused. `witness:` or `state-dir:` without `peers:`
@@ -1472,13 +1472,25 @@ The leader streams **images** of its state to the standby (#710 S1; rulings 2026
     encoder refuses a bigger one (`ErrImageTooBig`, which the stream reports) rather than send
     what no standby would read, and the decoder reads nothing bigger.
 - **What the standby applies.**
-  - It takes an image only of the term its own voter knows the leader holds, and only in
-    `(term, seq)` order (`Shadow.Apply` refuses an older one too).
+  - It takes an image only when its own voter vouches for the term (`quorum.ImageTermOK`,
+    S1b): the voter sees the peer holding a live lease; the term is above the last term this
+    controller led and not below the newest it already took (its shadow's, or the one its
+    retain file records: a leader's own saves record its term); and the term is at most the
+    highest term the peer asked this voter at. A bound, not an equality: the image carries
+    the fencing term (epoch), and the vote term the voter sees moves above it on a re-term.
+    It rests on every new epoch being above every earlier one (two majorities share a voter
+    whose promises only rise; `TestImageTermBoundAcrossADeposedLeader`). A deposed leader's
+    open stream gets images through only while the standby's voter still sees its lease, all
+    of them of its own epoch and sent while its gate was open; the only later leader is the
+    standby itself, which stops following before it takes over.
+  - It applies images only in `(term, seq)` order (`Shadow.Apply` refuses an older one too),
+    and its retain file never goes back to an earlier `(term, seq)` (`CarryRetained`).
   - It applies each task's frame to a **shadow** frame of its own program (never run), and
     only when the layout matches. A mismatch leaves that task's shadow as it was and is
     reported.
   - It persists the retain section **by name, whatever the layouts**, to its own retain file,
-    on the leader's 2 s cadence. So a rolling update, which is a takeover across builds,
+    on the leader's 2 s cadence, when it changed, through the runtime's retain saver (the
+    file's one writer). So a rolling update, which is a takeover across builds,
     keeps the setpoints.
 - **What the standby carries, and what it keeps.** `retain.Carry` decides; a test fails when
   `retain.State` gains a field that is neither:

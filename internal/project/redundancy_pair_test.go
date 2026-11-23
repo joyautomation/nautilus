@@ -87,7 +87,10 @@ func TestPairSectionRefusals(t *testing.T) {
 		{"relative state dir", pairOK + "  state-dir: state\n", "absolute path"},
 		{"witness without peers", "redundancy:\n  witness: wit:9460\n", "needs peers"},
 		{"state dir without peers", "redundancy:\n  state-dir: /srv/naut\n", "needs peers"},
-		{"a pair without the opt-in", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n", "retained values (setpoints) are not replicated until state streaming"},
+		{"a pair without the opt-in", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n", "a takeover is cold"},
+		{"a stream budget that is not a rate", pairOK + "  stream-budget: fast\n", "redundancy.stream-budget"},
+		{"a stream budget too small", pairOK + "  stream-budget: 1kB/s\n", "at least 10kB/s"},
+		{"a stream budget without peers", "redundancy:\n  stream-budget: 1MB/s\n", "applies to a redundant pair"},
 		{"the opt-in without peers", "redundancy:\n  experimental: true\n", "applies to a redundant pair"},
 		{"empty peers", "redundancy:\n  peers: {}\n  witness: wit:9460\n", "peers is empty"},
 		{"a fence margin of a quarter lease", pairOK + "  lease: 2s\n  net-delay: 480ms\n  send-margin: 20ms\n", "under a quarter of the lease"},
@@ -240,5 +243,19 @@ func TestFloatingIPConfig(t *testing.T) {
 	}
 	if _, err := Load(pairFS("redundancy:\n  floating-ip: {address: 10.0.0.50/24, interface: eth0}\n"), ""); err == nil || !strings.Contains(err.Error(), "applies to a redundant pair") {
 		t.Errorf("floating-ip without peers: %v", err)
+	}
+}
+
+// The state stream's budget (#710 S1b): bytes a second, plain or with a
+// unit; 1 MB/s when unset.
+func TestStreamBudget(t *testing.T) {
+	for in, want := range map[string]int64{"": DefaultStreamBudget, "2000000": 2_000_000, "500kB/s": 500_000, "2MB/s": 2_000_000, "1MiB/s": 1 << 20, "64 KiB": 64 << 10, "1.5MB": 1_500_000} {
+		r := &RedundancyConfig{StreamBudget: in}
+		if got := r.StreamBudgetBytes(); got != want {
+			t.Errorf("stream-budget %q = %d, want %d", in, got, want)
+		}
+	}
+	if got := (*RedundancyConfig)(nil).StreamBudgetBytes(); got != DefaultStreamBudget {
+		t.Errorf("no section: %d, want the default", got)
 	}
 }

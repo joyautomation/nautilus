@@ -2037,6 +2037,19 @@ func (e *Elector) KnownFloor() uint64 {
 	return e.a.KnownFloor()
 }
 
+// ImageTermOK is the term check on a state image from the peer (#710
+// S1b): quorum.ImageTermOK on this controller's voter, now. ownLed is the
+// last term this controller led (its runtime's), seen the newest term it
+// already took an image of. A spare takes none.
+func (e *Elector) ImageTermOK(term, ownLed, seen uint64) (bool, string) {
+	if e.spare.Load() {
+		return false, "this controller is a spare"
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return quorum.ImageTermOK(e.v, e.now(), e.o.Peer, term, ownLed, seen)
+}
+
 // Status returns a snapshot.
 func (e *Elector) Status() Status {
 	e.mu.Lock()

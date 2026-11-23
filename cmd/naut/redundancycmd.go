@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/quorum"
 	"github.com/joyautomation/nautilus/quorum/node"
@@ -386,6 +387,7 @@ func printClusterStatus(w io.Writer, b []byte) {
 			Superseded  string   `json:"superseded"`
 			Forked      []string `json:"forked"`
 		} `json:"log"`
+		Stream *leader.StreamStatus `json:"stream"`
 	}
 	if json.Unmarshal(b, &st) != nil {
 		w.Write(b)
@@ -438,9 +440,36 @@ func printClusterStatus(w io.Writer, b []byte) {
 			fmt.Fprintf(bw, "FORKED: the log of %s forked from this one: choose one with naut redundancy vouch\n", strings.Join(l.Forked, ", "))
 		}
 	}
+	if s := st.Stream; s != nil {
+		fmt.Fprintln(bw, streamLine(s))
+	}
 	for _, x := range st.Warnings {
 		fmt.Fprintf(bw, "warning: %s\n", x)
 	}
+}
+
+// streamLine is the state stream's line in naut redundancy status (#710
+// S1b).
+func streamLine(s *leader.StreamStatus) string {
+	ms := func(v int64) string { return (time.Duration(v) * time.Millisecond).String() }
+	line := "state stream: " + s.State
+	switch s.Role {
+	case "leader":
+		if s.Seq > 0 {
+			line += fmt.Sprintf("; image %d of term %d, %d bytes every %s (budget %d B/s)", s.Seq, s.Term, s.Bytes, ms(s.IntervalMs), s.BudgetBytes)
+		}
+	default:
+		if s.AgeMs >= 0 {
+			line += fmt.Sprintf("; image %d of term %d, %s old (lag %s), %d bytes every %s; retain file at image %d of term %d", s.Seq, s.Term, ms(s.AgeMs), ms(s.LagMs), s.Bytes, ms(s.IntervalMs), s.PersistedSeq, s.PersistedTerm)
+		}
+	}
+	if s.Detail != "" {
+		line += " (" + s.Detail + ")"
+	}
+	if s.TakeoverImageAgeMs >= 0 {
+		line += fmt.Sprintf("; last takeover loaded an image %s old, flushed in %.1f ms", ms(s.TakeoverImageAgeMs), s.FlushMs)
+	}
+	return line
 }
 
 // printClearAnswer prints POST /api/cluster/clear-duplicate's answer for a

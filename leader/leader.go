@@ -59,6 +59,10 @@ type Status struct {
 	// copies, reached or not, synced or not, and this one's. Nil
 	// elsewhere.
 	Log *LogStatus `json:"log,omitempty"`
+	// Stream is a redundant pair's state stream (#710 S1b) as this
+	// controller sees it: the leader's sending, or the standby's following.
+	// Nil elsewhere.
+	Stream *StreamStatus `json:"stream,omitempty"`
 	// A redundant pair member's duplicate state (#1029 3c): Marked, the
 	// names its voter marks as run by two processes at once; Held, a
 	// voter's last word marked this controller's own name, so it
@@ -67,6 +71,58 @@ type Status struct {
 	Marked []string `json:"marked,omitempty"`
 	Held   bool     `json:"held,omitempty"`
 	Spare  bool     `json:"spare,omitempty"`
+}
+
+// StreamStatus is a pair's state stream (#710 S1b, design §4.1) as one
+// controller sees it.
+type StreamStatus struct {
+	// Role is "leader" (it sends) or "standby" (it follows).
+	Role string `json:"role"`
+	// State, on a standby: in-sync (every task's frame applied, images
+	// arriving), connecting (no stream yet, or it broke), behind (the
+	// newest image is older than the leader's interval allows),
+	// layout-differs (a task this build runs another program for: a
+	// takeover would be cold for it), too-big (the leader's image is over
+	// the limit and none is sent; Bytes says how big), refused (images
+	// arrive but fail the term check, Detail says why), off (this
+	// controller leads, is a spare, or has no leader to follow). On a
+	// leader: sending, no-standby (none connected), too-big.
+	State  string `json:"state"`
+	Detail string `json:"detail,omitempty"`
+	// Term and Seq are the newest image's place in the stream: sent (a
+	// leader) or applied (a standby).
+	Term uint64 `json:"term,omitempty"`
+	Seq  uint64 `json:"seq,omitempty"`
+	// AgeMs is, on a standby, how long ago (its own clock) the newest
+	// image arrived; -1 before the first. What a takeover now would load
+	// is that old.
+	AgeMs int64 `json:"ageMs"`
+	// LagMs is, on a standby, from the copy at the leader (its clock) to
+	// the image's arrival here (this one's): the two clocks' offset is in
+	// it.
+	LagMs int64 `json:"lagMs,omitempty"`
+	// IntervalMs is the effective interval between images: 100 ms, or
+	// longer where the budget stretches it.
+	IntervalMs int64 `json:"intervalMs,omitempty"`
+	// Bytes is the newest image's size (or, too-big, the size refused);
+	// TotalBytes all sent or received in this boot; BudgetBytes the
+	// budget a second.
+	Bytes       int    `json:"bytes,omitempty"`
+	TotalBytes  uint64 `json:"totalBytes,omitempty"`
+	BudgetBytes int64  `json:"budgetBytes,omitempty"`
+	// Persisted is the image the standby's retain file holds (term, seq).
+	PersistedTerm uint64 `json:"persistedTerm,omitempty"`
+	PersistedSeq  uint64 `json:"persistedSeq,omitempty"`
+	// LayoutDiffers names the tasks whose frames were not applied.
+	LayoutDiffers []string `json:"layoutDiffers,omitempty"`
+	// FlushMs is the last takeover's flush of the newest image into the
+	// retain file (its fsync included): part of that takeover's time.
+	FlushMs float64 `json:"flushMs,omitempty"`
+	// TakeoverImageAgeMs is how old the newest image was at this
+	// controller's last takeover (its own clock): the retained values it
+	// took over with are as of then. -1 when it had none (it never
+	// followed, or took over before its first image).
+	TakeoverImageAgeMs int64 `json:"takeoverImageAgeMs"`
 }
 
 // LogStatus is a pair's operator-intent log as one controller sees it.

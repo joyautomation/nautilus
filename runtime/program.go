@@ -349,6 +349,13 @@ func (p *Program) ResetFrame() {
 	if !mutRuntime("takeover_keeps_first_scan") {
 		p.ran = false
 	}
+	// A frame copy made before the reset is of the old frame: a pair's
+	// stream must never send it as this leadership's (#710 S1b).
+	if !mutRuntime("stream_stale_capture_sent") {
+		p.img.mu.Lock()
+		p.img.ready = false
+		p.img.mu.Unlock()
+	}
 }
 
 // Locals returns the current values of the program's retained VAR slots.

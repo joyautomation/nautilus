@@ -46,11 +46,20 @@ var (
 type Quorum struct {
 	n *node.Elector
 
-	mu        sync.Mutex
-	unhealthy string
-	warnings  []string
-	conds     map[string]string // SetCondition, by key
-	logStatus func() *LogStatus // SetLogStatus
+	mu           sync.Mutex
+	unhealthy    string
+	warnings     []string
+	conds        map[string]string    // SetCondition, by key
+	logStatus    func() *LogStatus    // SetLogStatus
+	streamStatus func() *StreamStatus // SetStreamStatus
+}
+
+// SetStreamStatus adds the pair's state stream to Status (its Stream
+// block). f is called outside the Quorum's lock.
+func (q *Quorum) SetStreamStatus(f func() *StreamStatus) {
+	q.mu.Lock()
+	q.streamStatus = f
+	q.mu.Unlock()
 }
 
 // SetLogStatus adds the pair's operator-intent log to Status (its Log
@@ -113,10 +122,13 @@ func (q *Quorum) Release()                 { q.n.Release() }
 func (q *Quorum) Status() Status {
 	st := quorumStatus(q.n.Status())
 	q.mu.Lock()
-	ls := q.logStatus
+	ls, ss := q.logStatus, q.streamStatus
 	q.mu.Unlock()
 	if ls != nil {
 		st.Log = ls()
+	}
+	if ss != nil {
+		st.Stream = ss()
 	}
 	q.mu.Lock()
 	st.Warnings = append([]string(nil), q.warnings...)

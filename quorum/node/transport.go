@@ -209,6 +209,18 @@ func newClient(dial func(ctx context.Context, network, addr string) (net.Conn, e
 	}}
 }
 
+// NewPeerClient is an HTTP client for a peer call of its own, outside the
+// vote protocol's: the pair's state stream (#710 S1b) keeps its own
+// connections, so a busy stream never delays a renewal (design §6). Same
+// dial (every close a reset), same peer TLS, same handshake bound.
+func NewPeerClient(dial func(ctx context.Context, network, addr string) (net.Conn, error), conf *tls.Config) *http.Client {
+	return newClient(dial, conf)
+}
+
+// PeerURL is the base URL of a peer address (host:port, or a URL in
+// tests): https with peer TLS on.
+func PeerURL(addr string, tls bool) string { return baseURL(addr, tls) }
+
 // tlsHandshakeTimeout bounds a peer TLS handshake.
 var tlsHandshakeTimeout = 2 * time.Second
 

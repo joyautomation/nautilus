@@ -52,6 +52,20 @@ const (
 // the stream reports it rather than send what no standby would read.
 var ErrImageTooBig = errors.New("runtime: the state image is over its size limit")
 
+// ImageTooBigError is EncodeImage's ErrImageTooBig with its numbers:
+// What is over (the image, or one string in it), Bytes how big, Limit the
+// limit. errors.Is(err, ErrImageTooBig) holds for it.
+type ImageTooBigError struct {
+	What         string
+	Bytes, Limit int
+}
+
+func (e *ImageTooBigError) Error() string {
+	return fmt.Sprintf("%v: %s of %d bytes, the limit is %d", ErrImageTooBig, e.What, e.Bytes, e.Limit)
+}
+
+func (e *ImageTooBigError) Is(target error) bool { return target == ErrImageTooBig }
+
 // EncodeImage appends img's wire form to dst and returns it. With a dst
 // whose capacity a previous image filled, it allocates nothing. An image
 // over MaxImageBytes, or with a string over maxImageString (a long STRING
@@ -81,7 +95,7 @@ func EncodeImage(dst []byte, img *Image) ([]byte, error) {
 		}
 	}
 	if n := len(dst) - start + 4; n > MaxImageBytes && !mutRuntime("image_size_unbounded") {
-		return dst[:start], fmt.Errorf("%w: %d bytes, the limit is %d", ErrImageTooBig, n, MaxImageBytes)
+		return dst[:start], &ImageTooBigError{What: "the image", Bytes: n, Limit: MaxImageBytes}
 	}
 	sum := crc32.Checksum(dst[start:], castagnoli)
 	if mutRuntime("image_crc_unchecked") {
@@ -98,7 +112,7 @@ func imageStringsFit(img *Image) error {
 	}
 	long := func(what string, n int) error {
 		if n > maxImageString {
-			return fmt.Errorf("%w: %s of %d bytes, the limit is %d", ErrImageTooBig, what, n, maxImageString)
+			return &ImageTooBigError{What: what, Bytes: n, Limit: maxImageString}
 		}
 		return nil
 	}

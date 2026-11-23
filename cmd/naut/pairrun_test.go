@@ -22,6 +22,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/quorum/node"
+	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 )
@@ -218,6 +219,10 @@ func startPairNodeWith(t *testing.T, files fstest.MapFS, env map[string]string, 
 
 // startPairNodeFull is startPairNodeWith with pmod applied to the loaded
 // project first (a driver, a takeover wait).
+// testPairFiles, when set, is the pair rig's project instead of
+// pairProject (the state stream's, #710 S1b).
+var testPairFiles func(a, b, w string) fstest.MapFS
+
 // testWantCheckout makes a harness member keep the I/O checkout in the log, as
 // runProject does for a project that turned it on.
 var testWantCheckout bool
@@ -245,6 +250,15 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		m.wantCheckout = true
 		os.Chmod(filepath.Dir(m.o.StatePath), 0o700) // the checkout's signing key is made there
 	}
+	if proj.Retain != nil {
+		// As runProject does; the file in the member's own state directory,
+		// as two members on one host need.
+		cm, file := proj.RetainNames()
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(env["STATE_DIRECTORY"], file)
+		}
+		proj.Runtime.Retain = retain.New(cm, file)
+	}
 	rt, err := runtime.New(proj.Runtime)
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +276,19 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	m.startStream(rt, proj.Redundancy.StreamBudgetBytes())
 	gate := gateOnLiveScans(proj, m.q, rt, localGateLease)
+	// Live I/O configuration, as runProject wires it: its edge re-applies
+	// what the retain store keeps, reading the store before the takeover.
+	if ioc, err := project.NewIOConfig(proj, rt, files, "nautilus.yaml"); err == nil {
+		ioc.Gate = gate.IsLeader
+		ioc.PeersKeepIO = m.peersKeepIO
+		if proj.Runtime.Retain != nil {
+			ioc.Keep = rt.SaveRetained
+			ioc.KeepStore = proj.Runtime.Retain.Kind()
+		}
+		rt.SetIO(ioc)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &pairNode{m: m, rt: rt, cancel: cancel, done: make(chan struct{}), eng: eng, al: al}
 	if api != nil {
@@ -566,10 +592,11 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 	if proj.Member == "" || proj.Member != el.Status().Pod {
 		t.Errorf("proj.Member = %q, want this member's name %q", proj.Member, el.Status().Pod)
 	}
-	// Until state streaming, the pair says its retained values are not
-	// replicated, wherever its status is shown.
-	if w := el.Status().Warnings; len(w) != 1 || !strings.Contains(w[0], "retained state not replicated") {
-		t.Errorf("status warnings %q, want the retain warning", w)
+	// The state stream replicates retained values (#710 S1b): no standing
+	// warning says otherwise, so a healthy leader's OPC UA ServiceLevel is
+	// not held at 200 for it.
+	if w := el.Status().Warnings; len(w) != 0 {
+		t.Errorf("status warnings %q, want none standing", w)
 	}
 	// The peer port speaks TLS by default (#710): plain HTTP gets Go's
 	// 400 for it, and nothing behind it.

@@ -55,6 +55,13 @@ type Voter struct {
 	// a restarted voter's candidate learns it again from the next renewal.
 	renewalFrom  NodeID
 	renewalUntil Instant
+	// asked is, per node, the highest term a request of it has asked this
+	// voter for (campaign or renewal, granted or not; never a fenced
+	// one). In memory only. A pair's standby bounds the terms of the state
+	// images it takes by its peer's (Asked, #710 S1b): a leader's fencing
+	// term is the term it campaigned at, at most every term it asks at
+	// later.
+	asked map[NodeID]uint64
 
 	// grantNonce is the boot nonce the running promise was granted under:
 	// while it runs, the same name under another nonce is a second process
@@ -937,6 +944,11 @@ func (v *Voter) LeaderSeen() (NodeID, Instant) {
 	return from, until
 }
 
+// Asked is the highest term a request of name has asked this voter for,
+// in this voter's boot (0: none heard). Probes (term 0) and fenced
+// requests are not counted.
+func (v *Voter) Asked(name NodeID) uint64 { return v.asked[name] }
+
 // wouldYield reports whether r, received at now, asks for a term strictly
 // above the one this voter promised to its OWN candidate, while that
 // promise runs (YieldTo).
@@ -1064,6 +1076,12 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 	}
 	if r.Renewal && r.From != v.self && now.Add(v.lease) > v.renewalUntil {
 		v.renewalFrom, v.renewalUntil = r.From, now.Add(v.lease)
+	}
+	if r.Term > v.asked[r.From] && !mut("asked_unrecorded") {
+		if v.asked == nil {
+			v.asked = map[NodeID]uint64{}
+		}
+		v.asked[r.From] = r.Term
 	}
 	if now < v.waitUntil || r.Term < v.st.Promised || r.Term == 0 || r.Term <= v.st.Floor {
 		return nil, refuse // a term-0 request is a probe: always refused

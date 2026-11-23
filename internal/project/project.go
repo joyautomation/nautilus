@@ -514,6 +514,12 @@ type RedundancyConfig struct {
 	// says so at every start and on /api/cluster. The witness takes the
 	// same setting as `naut witness --peer-tls`.
 	PeerTLS string `yaml:"peer-tls"`
+	// StreamBudget is the state stream's bytes a second (#710 S1b, design
+	// §4.1): the leader sends a full image at most every 100 ms, and an
+	// image too big for that at this budget stretches the interval, never
+	// drops images. A number of bytes a second, or with kB/s, MB/s, KiB/s
+	// or MiB/s (default 1MB/s). Pair only.
+	StreamBudget string `yaml:"stream-budget"`
 }
 
 // FloatingIPConfig is redundancy.floating-ip. The process needs
@@ -553,10 +559,53 @@ func checkPublicURLs(urls map[string]string) error {
 	return nil
 }
 
-// PairRetainNotReplicated is what a pair says about its retained values
-// until state streaming (#710 step 4): at start, in /api/cluster and on
-// the dashboard.
-const PairRetainNotReplicated = "retained state not replicated: retained values (setpoints) are not replicated until state streaming (#710 step 4), so a takeover starts from the new leader's own retain and a setpoint the old leader took is lost"
+// PairColdTakeover is what an experimental pair says at every start
+// until hot takeover (#710 S2): the leader streams its state to the
+// standby, which keeps the retained values, but a takeover is cold.
+const PairColdTakeover = "a takeover is cold: the standby keeps the leader's retained values (setpoints, VAR RETAIN, online edits) from the state stream, but program state (timers, counters, SFC steps) restarts from the field, and a setpoint written in the last stream interval before a crash (up to a lease before an isolation) is lost"
+
+// DefaultStreamBudget is the state stream's bytes a second when the
+// manifest names none (1 MB/s).
+const DefaultStreamBudget = 1_000_000
+
+// StreamBudgetBytes is the state stream's budget in bytes a second
+// (DefaultStreamBudget when unset). Load has checked it.
+func (r *RedundancyConfig) StreamBudgetBytes() int64 {
+	if r == nil || r.StreamBudget == "" {
+		return DefaultStreamBudget
+	}
+	n, err := parseByteRate(r.StreamBudget)
+	if err != nil {
+		return DefaultStreamBudget
+	}
+	return n
+}
+
+// parseByteRate reads a bytes-a-second figure: a number, or one with
+// B/s, kB/s, MB/s, KiB/s or MiB/s (the /s optional).
+func parseByteRate(s string) (int64, error) {
+	t := strings.TrimSuffix(strings.TrimSpace(s), "/s")
+	units := []struct {
+		suffix string
+		mul    float64
+	}{{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"kB", 1e3}, {"KB", 1e3}, {"MB", 1e6}, {"B", 1}}
+	mul := 1.0
+	for _, u := range units {
+		if strings.HasSuffix(t, u.suffix) {
+			t, mul = strings.TrimSpace(strings.TrimSuffix(t, u.suffix)), u.mul
+			break
+		}
+	}
+	f, err := strconv.ParseFloat(t, 64)
+	if err != nil || f <= 0 || f*mul > 1e12 {
+		return 0, fmt.Errorf("want a positive rate such as 1MB/s, 500kB/s or 2000000")
+	}
+	return int64(f * mul), nil
+}
+
+// minStreamBudget is the lowest budget a pair takes: below it, even a
+// small image goes out seconds apart.
+const minStreamBudget = 10_000
 
 // Pair reports whether the section names a redundant pair (peers:)
 // rather than the Kubernetes Lease.
@@ -609,11 +658,13 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.floating-ip applies to a redundant pair (peers:): the address the leader holds")
 		case r.PeerTLS != "":
 			return errors.New("redundancy.peer-tls applies to a redundant pair (peers:): the TLS of its controllers' and witness's peer ports")
+		case r.StreamBudget != "":
+			return errors.New("redundancy.stream-budget applies to a redundant pair (peers:): the bytes a second its leader streams its state to the standby at")
 		}
 		return nil
 	}
 	if !r.Experimental {
-		return errors.New("redundancy.peers: a redundant pair is experimental for now: retained values (setpoints) are not replicated until state streaming: a takeover starts from the new leader's own retain. Set redundancy.experimental: true to run it knowing that")
+		return errors.New("redundancy.peers: a redundant pair is experimental for now: " + PairColdTakeover + ". Set redundancy.experimental: true to run it knowing that")
 	}
 	for name := range r.Peers {
 		if name != "a" && name != "b" {
@@ -666,6 +717,15 @@ func checkRedundancy(r *RedundancyConfig) error {
 	}
 	if err := checkFence(r); err != nil {
 		return err
+	}
+	if r.StreamBudget != "" {
+		n, err := parseByteRate(r.StreamBudget)
+		switch {
+		case err != nil:
+			return fmt.Errorf("redundancy.stream-budget %q: %v", r.StreamBudget, err)
+		case n < minStreamBudget:
+			return fmt.Errorf("redundancy.stream-budget %s: want at least 10kB/s", r.StreamBudget)
+		}
 	}
 	if err := checkPublicURLs(r.PublicURLs); err != nil {
 		return err
