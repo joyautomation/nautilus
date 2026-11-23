@@ -87,6 +87,10 @@ type sentVote struct {
 	done bool
 	took time.Duration
 	err  error
+	// verdict is what the answer said (voteVerdict): granted, or why not.
+	// Answered in time says nothing of which voter refused a lapsing
+	// leader, or why (#1329).
+	verdict string
 }
 
 type member struct {
@@ -364,12 +368,54 @@ func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	resp, err := f.roundTrip(r, to)
 	if sent >= 0 {
+		verdict := ""
+		if err == nil {
+			verdict = voteVerdict(resp)
+		}
 		f.c.mu.Lock()
 		v := &f.c.votes[sent]
-		v.done, v.took, v.err = true, time.Since(v.at), err
+		v.done, v.took, v.err, v.verdict = true, time.Since(v.at), err, verdict
 		f.c.mu.Unlock()
 	}
 	return resp, err
+}
+
+// voteVerdict reads a vote's answer, leaving resp's body for the caller,
+// and says what it was: "granted"; "refused, promised <term>" with the
+// promise the voter relayed and a mark; or a refusal by status, with its
+// RefusedHeader reason and the voter's words.
+func voteVerdict(resp *http.Response) string {
+	b, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(b))
+	if err != nil {
+		return "unread: " + err.Error()
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg := strings.TrimSpace(string(b))
+		if len(msg) > 160 {
+			msg = msg[:160] + "..."
+		}
+		if why := resp.Header.Get(RefusedHeader); why != "" {
+			return fmt.Sprintf("%d %s: %s", resp.StatusCode, why, msg)
+		}
+		return fmt.Sprintf("%d: %s", resp.StatusCode, msg)
+	}
+	var rep quorum.Reply
+	if err := rep.UnmarshalBinary(b); err != nil {
+		return "unreadable: " + err.Error()
+	}
+	if rep.Granted {
+		return "granted"
+	}
+	out := fmt.Sprintf("refused, promised %d", rep.Promised)
+	if rep.Promise.To != "" {
+		out += fmt.Sprintf(" (its promise: to %s, %v left)", rep.Promise.To, rep.Promise.Left.Round(time.Millisecond))
+	}
+	if rep.Marked {
+		out += ", marked"
+	}
+	return out
 }
 
 func (f *faultRT) roundTrip(r *http.Request, to quorum.NodeID) (*http.Response, error) {
@@ -568,16 +614,18 @@ func (c *cluster) steady(id quorum.NodeID, n int) {
 // voteTrail sums up, then lists, the vote requests id sent in the last
 // span, with each call's outcome: when a lease lapses it tells a renewal
 // never sent (the process stalled: a long gap between sends) from one sent
-// and answered late, or not at all (#1120). The summary is one line, so
+// and answered late, or not at all (#1120), and an answer in time from
+// what it said: granted, or refused and why (#1329). The summary is one
+// line, so
 // the mutation runner, which keeps only report lines, keeps it.
 func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	type sum struct {
-		sent, answered, failed, pending int
-		slowest                         time.Duration
-		lastErr                         error
+		sent, answered, refused, failed, pending int
+		slowest                                  time.Duration
+		lastErr                                  error
 	}
 	per := map[quorum.NodeID]*sum{}
 	var detail strings.Builder
@@ -607,6 +655,12 @@ func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
 			s.answered++
 			s.slowest = max(s.slowest, v.took)
 			out = fmt.Sprintf("answered in %v", v.took.Round(time.Millisecond))
+			if v.verdict != "" {
+				out += ": " + v.verdict
+			}
+			if v.verdict != "" && v.verdict != "granted" {
+				s.refused++
+			}
 		default:
 			s.pending++
 		}
@@ -621,7 +675,7 @@ func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
 	}
 	for _, to := range []quorum.NodeID{"a", "b", WitnessID} {
 		if s := per[to]; s != nil {
-			fmt.Fprintf(&b, " to %s: %d sent, %d answered (slowest %v), %d failed, %d pending", to, s.sent, s.answered, s.slowest.Round(time.Millisecond), s.failed, s.pending)
+			fmt.Fprintf(&b, " to %s: %d sent, %d answered (slowest %v), %d refused, %d failed, %d pending", to, s.sent, s.answered, s.slowest.Round(time.Millisecond), s.refused, s.failed, s.pending)
 			if s.lastErr != nil {
 				fmt.Fprintf(&b, " (last: %v)", s.lastErr)
 			}
