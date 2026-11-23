@@ -581,3 +581,35 @@ func TestACameraThatAskedForDigestIsNeverDowngradedToBasic(t *testing.T) {
 		t.Errorf("a header offering both: %v (basic seen %d)", err, basicSeen.Load())
 	}
 }
+
+func TestSnapshotOnAlarmNeedsAStillAndThePolicyHasBounds(t *testing.T) {
+	ok := []Camera{
+		{ID: "a", Asset: "A", Kind: KindVirtual, SnapshotOnAlarm: true},
+		{ID: "b", Asset: "A", Kind: KindSnapshot, URL: "http://10.0.0.1/s.jpg", SnapshotAlarms: []string{"HiLevel"}},
+		{ID: "c", Asset: "A", Kind: KindRTSP, URL: "rtsp://10.0.0.1/s", SnapshotURL: "http://10.0.0.1/s.jpg", SnapshotOnAlarm: true},
+	}
+	if errs := Validate(ok); len(errs) != 0 {
+		t.Errorf("good rows refused: %v", errs)
+	}
+	for name, c := range map[string]Camera{
+		"rtsp with no still": {ID: "a", Asset: "A", Kind: KindRTSP, URL: "rtsp://10.0.0.1/s", SnapshotOnAlarm: true},
+		"hls with no still":  {ID: "a", Asset: "A", Kind: KindHLS, URL: "http://10.0.0.1/s.m3u8", SnapshotAlarms: []string{"X"}},
+		"an empty alarm id":  {ID: "a", Asset: "A", Kind: KindVirtual, SnapshotAlarms: []string{" "}},
+	} {
+		if errs := Validate([]Camera{c}); len(errs) == 0 {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	for _, p := range []*SnapshotPolicy{{KeepDays: -1}, {KeepDays: 99999}, {MaxCount: -5}, {MaxMB: 1 << 30}} {
+		if p.Validate() == nil {
+			t.Errorf("%+v accepted", p)
+		}
+	}
+	if err := (&SnapshotPolicy{KeepDays: 7, MaxCount: 10, MaxMB: 5}).Validate(); err != nil {
+		t.Error(err)
+	}
+	var none *SnapshotPolicy
+	if none.Validate() != nil {
+		t.Error("no policy is an error")
+	}
+}

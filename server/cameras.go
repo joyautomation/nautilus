@@ -53,6 +53,17 @@ type CameraOptions struct {
 	mu    sync.Mutex
 	meter map[string]*camera.Meter
 	snaps map[string]*snapCache
+
+	// Alarm pictures (#724 slice 2): Snaps keeps them, Equipment names an
+	// alarm's equipment (an alarm id to its key), Leads says this controller
+	// leads (nil: it does).
+	Snaps     *camera.SnapStore
+	Equipment func(alarmID string) string
+	Leads     func() bool
+	snapSem   chan struct{}
+	semOnce   sync.Once
+	lowWarned atomic.Bool
+	api       *cameraAPI
 }
 
 // Install adds the cameras to the server's options: its routes.
@@ -82,6 +93,10 @@ func (co *CameraOptions) mount(s *Server, mux *http.ServeMux) {
 	if co.Fetcher == nil {
 		co.Fetcher = &camera.Fetcher{}
 	}
+	co.mu.Lock()
+	co.api = a
+	co.mu.Unlock()
+	a.mountSnaps(mux)
 	mux.HandleFunc("GET /api/cameras", a.list)
 	mux.HandleFunc("GET /api/cameras/{id}/snapshot", a.snapshot)
 	mux.HandleFunc("GET /api/cameras/{id}/stream", a.stream)

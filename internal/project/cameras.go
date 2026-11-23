@@ -15,8 +15,18 @@ import (
 // virtual camera, and the camera package's checks stay out of its wasm.
 type CameraRows = []camera.Camera
 
-// validateCameras checks the rows on their own (the plant is CheckCameras').
-func validateCameras(rows CameraRows) error { return errors.Join(camera.Validate(rows)...) }
+// CameraSnapshotsCfg is the camera-snapshots: policy (a YAML node in the browser build).
+type CameraSnapshotsCfg = *camera.SnapshotPolicy
+
+// validateCameras checks the rows and the policy on their own (the plant is
+// CheckCameras').
+func validateCameras(rows CameraRows, pol CameraSnapshotsCfg) error {
+	errs := camera.Validate(rows)
+	if err := pol.Validate(); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
 
 // CheckCameras is what `naut check` says about the cameras (#724): each names
 // a piece of equipment the plant has, and a camera the asset page cannot show a

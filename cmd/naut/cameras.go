@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/oncall"
 	"github.com/joyautomation/nautilus/camera"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -21,9 +24,9 @@ import (
 // no restart.
 
 // cameraOptions is the server's cameras for a project, nil without any.
-func cameraOptions(proj *project.Project, dir string, rt *runtime.Runtime, getenv func(string) string, stderr io.Writer) *server.CameraOptions {
+func cameraOptions(proj *project.Project, dir string, rt *runtime.Runtime, leads func() bool, getenv func(string) string, stderr io.Writer) (*server.CameraOptions, func()) {
 	if len(proj.Cameras) == 0 {
-		return nil
+		return nil, func() {}
 	}
 	secrets := func(name string) (string, bool) {
 		sd, err := controllerStateDir("the camera credentials", proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
@@ -54,8 +57,50 @@ func cameraOptions(proj *project.Project, dir string, rt *runtime.Runtime, geten
 		}
 		return []string{fmt.Sprintf("%s %v", e.ID, v)}
 	}
-	return co
+	closeFn := func() {}
+	// pictures kept when an alarm activates, if any camera asks for them
+	wantSnaps := false
+	for _, c := range proj.Cameras {
+		if c.SnapshotOnAlarm || len(c.SnapshotAlarms) > 0 {
+			wantSnaps = true
+		}
+	}
+	if wantSnaps {
+		sd, err := controllerStateDir("the camera snapshots", proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
+		if err != nil {
+			fmt.Fprintf(stderr, "naut run: cameras: alarm pictures are off: %v\n", err)
+		} else {
+			o := camera.SnapOptions{}
+			if p := proj.CameraSnapshots; p != nil {
+				o.KeepDays, o.MaxCount, o.MaxBytes = p.KeepDays, p.MaxCount, int64(p.MaxMB)<<20
+			}
+			st, err := camera.OpenSnapStore(filepath.Join(sd, SnapshotsDir), o)
+			if err != nil {
+				fmt.Fprintf(stderr, "naut run: cameras: alarm pictures are off: %v\n", err)
+			} else {
+				co.Snaps, co.Leads = st, leads
+				closeFn = func() { st.Close() }
+				var eq map[string]string
+				var once sync.Once
+				co.Equipment = func(id string) string {
+					once.Do(func() {
+						eq = map[string]string{}
+						if defs, err := proj.AlarmDefs(rt); err == nil {
+							for _, d := range defs {
+								eq[d.ID] = d.Equipment
+							}
+						}
+					})
+					return eq[id]
+				}
+			}
+		}
+	}
+	return co, closeFn
 }
+
+// SnapshotsDir is the name of the alarm pictures' directory in the state directory.
+const SnapshotsDir = "snapshots"
 
 // checkCameraSecrets says which cameras need credentials the secrets file does
 // not hold: an error on the controller, a warning off it, where the file may
@@ -96,4 +141,27 @@ func checkCameraSecrets(proj *project.Project, stateDir string, onBox bool) (err
 		}
 	}
 	return errs, nil
+}
+
+// checkCameraAlarms is what `naut check` says about the pictures kept when an
+// alarm activates: an alarm id a camera names must exist, and a camera that asks
+// for pictures of its asset's alarms should have alarms on that equipment.
+func checkCameraAlarms(proj *project.Project, defs []alarm.Def) (errs, warns []string) {
+	ids := map[string]bool{}
+	equip := map[string]bool{}
+	for _, d := range defs {
+		ids[d.ID] = true
+		equip[strings.ToLower(d.Equipment)] = true
+	}
+	for _, c := range proj.Cameras {
+		for _, id := range c.SnapshotAlarms {
+			if !ids[id] {
+				errs = append(errs, fmt.Sprintf("camera %q: snapshot-alarms: the project has no alarm %q", c.ID, id))
+			}
+		}
+		if c.SnapshotOnAlarm && !equip[strings.ToLower(c.Asset)] {
+			warns = append(warns, fmt.Sprintf("camera %q: snapshot-on-alarm: no alarm is on equipment %q (an alarm's equipment: key), so no picture will be kept", c.ID, c.Asset))
+		}
+	}
+	return errs, warns
 }

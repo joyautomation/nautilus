@@ -692,8 +692,27 @@
             "minimum": 1,
             "maximum": 16,
             "description": "How many people may watch this camera live at once (default 2)."
+          },
+          "snapshot-on-alarm": {
+            "type": "boolean",
+            "description": "Keep a still when an alarm of this asset's equipment activates (needs a snapshot source; kept under the state directory for the camera-snapshots policy)."
+          },
+          "snapshot-alarms": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Alarm ids (of any equipment) that also keep a still."
           }
         }
+      }
+    },
+    "camera-snapshots": {
+      "type": "object",
+      "description": "How long and how much of the pictures kept when an alarm activates (#724). They are pictures of people: nothing is kept past keep-days, and never more than max-count pictures, max-mb megabytes or 5% of the state filesystem's free space.",
+      "additionalProperties": false,
+      "properties": {
+        "keep-days": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "Days a picture is kept (default 30)." },
+        "max-count": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "Most pictures kept (default 500)." },
+        "max-mb": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "Most megabytes kept (default 200)." }
       }
     },
     "pwa": {

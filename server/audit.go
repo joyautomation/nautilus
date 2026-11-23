@@ -97,11 +97,15 @@ var actionClass = map[string]string{
 	// Watching a camera live (#724): journalled when it starts and ends, and, like
 	// the other operator actions, allowed while the journal is down (the entry is
 	// kept in memory and written later).
-	"camera.view":    operator,
-	"alarm.ack":      operator,
-	"alarm.shelve":   operator,
-	"alarm.unshelve": operator,
-	"sfc.step":       operator,
+	"camera.view": operator,
+	// a picture kept when an alarm activates is the system's own record; purging
+	// them is an engineer's, never unrecorded (#724)
+	"camera.snapshot":       operator,
+	"camera.snapshot-purge": strict,
+	"alarm.ack":             operator,
+	"alarm.shelve":          operator,
+	"alarm.unshelve":        operator,
+	"sfc.step":              operator,
 	// Back in service shows alarms again: a way back, as a force's clear.
 	"alarm.in-service": recovery,
 	"sfc.transition":   operator,
