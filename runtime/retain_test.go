@@ -915,3 +915,39 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	defer l.mu.Unlock()
 	return l.w.Write(p)
 }
+
+// floodAlarms is a fakeAlarms whose flood in progress rides the store
+// (retain.AlarmFloodRetainer), as a standalone engine's does.
+type floodAlarms struct {
+	fakeAlarms
+	flood    *retain.AlarmFlood
+	restores []*retain.AlarmFlood
+}
+
+func (f *floodAlarms) RetainedFlood() *retain.AlarmFlood { return f.flood }
+func (f *floodAlarms) RestoreFlood(fl *retain.AlarmFlood) {
+	f.restores = append(f.restores, fl)
+}
+
+// A standalone controller's flood in progress (#1249) is saved beside
+// the alarms and handed back at the takeover that starts the next run,
+// after the alarms; a project in no flood writes no flood slot.
+func TestAlarmFloodRoundTripsThroughRetain(t *testing.T) {
+	carried := &retain.AlarmFlood{ID: "flood-1", SinceMs: 1700000000000, OverMs: 1700000060000, Total: 12, Peak: 11,
+		FirstOut: []retain.AlarmFloodAct{{ID: "HiTemp", Ms: 1700000000000}}}
+	store := &fakeStore{state: retain.State{AlarmFlood: carried}}
+	rt := newRetained(t, store, nil)
+	eng := &floodAlarms{flood: &retain.AlarmFlood{ID: "flood-2", SinceMs: 1700000100000, OverMs: 1700000200000}}
+	rt.SetAlarms(eng)
+	rt.Scan()
+	if len(eng.restores) != 1 || eng.restores[0] == nil || eng.restores[0].ID != "flood-1" || eng.restores[0].FirstOut[0].ID != "HiTemp" {
+		t.Fatalf("RestoreFlood got %+v, want the stored flood once", eng.restores)
+	}
+	if got := rt.retainState().AlarmFlood; got == nil || got.ID != "flood-2" {
+		t.Fatalf("saved flood = %+v, want the engine's", got)
+	}
+	eng.flood = nil
+	if got := rt.retainState().AlarmFlood; got != nil {
+		t.Fatalf("no flood, saved %+v", got)
+	}
+}

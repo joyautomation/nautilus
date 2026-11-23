@@ -49,3 +49,32 @@ func TestPairTakeoverRestoresAlarmsWhenTheStoreFails(t *testing.T) {
 		t.Fatalf("restores at the takeover: %v; want one synced restore from the log", got)
 	}
 }
+
+// pairFloodAlarms is a pair's alarm retainer that could also carry a
+// flood: the runtime must never hand it the store's, since a pair's log
+// carries its own (#1249).
+type pairFloodAlarms struct {
+	recPairAlarms
+	floods int
+}
+
+func (p *pairFloodAlarms) RetainedFlood() *retain.AlarmFlood { return nil }
+func (p *pairFloodAlarms) RestoreFlood(*retain.AlarmFlood)   { p.floods++ }
+
+// A pair's takeover restores its alarms from the log alone: the retain
+// store's flood slot is never a second source.
+func TestPairTakeoverNeverRestoresTheStoresFlood(t *testing.T) {
+	clk := noon()
+	coord := lead(false)
+	store := &fakeStore{state: retain.State{AlarmFlood: &retain.AlarmFlood{ID: "flood-1", SinceMs: 1, OverMs: 1}}}
+	rt, _ := newRetainSubRig(t, coord, store, clk)
+	pa := &pairFloodAlarms{}
+	rt.SetAlarms(pa)
+	rt.SetIntentLog(&fakeLog{}, time.Second)
+	rt.Scan()
+	coord.set(true)
+	scanUntilLogic(t, rt)
+	if got := pa.got(); len(got) != 1 || pa.floods != 0 {
+		t.Fatalf("restores %v, flood restores %d; want one alarm restore and no flood from the store", got, pa.floods)
+	}
+}

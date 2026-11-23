@@ -418,6 +418,11 @@ func (r *Runtime) loadRetained() error {
 			sa.RestoreAlarmsSynced(st.Alarms, r.intent.synced)
 		} else {
 			a.RestoreAlarms(st.Alarms)
+			// The flood in progress (#1249): a standalone controller's
+			// alone. A pair's log carries its own (PairAlarms).
+			if fr, ok := a.(retain.AlarmFloodRetainer); ok {
+				fr.RestoreFlood(st.AlarmFlood)
+			}
 		}
 	}
 	// Earlier discards ride along until a newer one for the same task
@@ -696,6 +701,9 @@ func (r *Runtime) retainState() retain.State {
 	if a := r.alarmRetainer(); a != nil {
 		if m := a.RetainedAlarms(); len(m) > 0 {
 			st.Alarms = m
+		}
+		if fr, ok := a.(retain.AlarmFloodRetainer); ok {
+			st.AlarmFlood = fr.RetainedFlood()
 		}
 	}
 	// The live I/O configuration an apply changed (#706): nil while what

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"maps"
@@ -145,6 +146,16 @@ type AlarmLog struct {
 	match   atomic.Pointer[func(alarm.Def) bool]
 	occBusy atomic.Bool
 	oosBusy atomic.Bool // an endOutOfService is in flight
+	detBusy atomic.Bool // a syncDetect proposal is in flight
+
+	// flood is the alarm flood the leader's engine is in (#1249,
+	// KindAlarmDetect), nil when none. Under mu.
+	flood *retain.AlarmFlood
+	// heardMs is the latest instant this replica knows a leader was
+	// live: the newest applied entry's TS (the leader's clock), or a log
+	// tick while this replica led live. With the node's LeaderHeard it
+	// dates the view's episodes at a takeover (vouchedMs).
+	heardMs atomic.Int64
 
 	// adopt holds, by alarm, a committed ack of an occurrence the live
 	// engine is not on, until the log is caught up (Reconcile): an entry
@@ -288,6 +299,12 @@ type alarmIntent struct {
 	waitMs   int64
 
 	ackGen uint64 // AlarmLog.ackGen when the view took its ack
+
+	// chatSinceMs, chatActs and chatEpisodes are the chattering episode
+	// the leader's engine is in (#1249, KindAlarmDetect): its start
+	// names it. chatSinceMs 0: none.
+	chatSinceMs            int64
+	chatActs, chatEpisodes int
 }
 
 // adoption is a committed ack waiting to adopt an occurrence (AlarmLog.adopt).
@@ -361,6 +378,7 @@ func (l *AlarmLog) Attach(n *oplog.Node) { l.node = n }
 func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 	l.liveMu.Lock()
 	defer l.liveMu.Unlock()
+	l.heard(e.TS)
 	live := l.live()
 	if e.Lapsed && (e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve || e.Kind == oplog.KindOutOfService) {
 		slog.Warn("alarm: an operator's ack or shelve lapsed: it was committed too late to apply to the occurrence it was for", "kind", e.Kind, "ids", e.IDs, "id", e.ID, "by", e.By)
@@ -520,6 +538,8 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 			}
 		}
 		l.mu.Unlock()
+	case oplog.KindAlarmDetect:
+		l.applyDetect(e)
 	case oplog.KindLapse:
 		// A replica that applied a named ack or shelve before the lapse
 		// reached it (a 3-replica case) drops it from its view; the leader
@@ -694,7 +714,8 @@ func (l *AlarmLog) Reconcile() {
 	if !l.live() || mutServer("ack_clear_off") {
 		return
 	}
-	l.adoptPending() // first: an ack it applies is held below
+	l.heard(time.Now().UnixMilli()) // leading live: its engine's episodes are current
+	l.adoptPending()                // first: an ack it applies is held below
 	// The engine's acks and the view's, read together under liveMu: an
 	// Apply between the two reads would make its fresh ack look stale.
 	if !mutServer("reconcile_without_livemu") {
@@ -740,6 +761,7 @@ func (l *AlarmLog) Reconcile() {
 	}
 	l.endOutOfService(notHeld)
 	l.syncOccurrences()
+	l.syncDetect()
 }
 
 // endOutOfService proposes, in the background, a return to service for
@@ -794,6 +816,7 @@ func (l *AlarmLog) dropView() {
 	clear(l.oos)
 	clear(l.ending)
 	l.adopt = nil
+	l.flood = nil
 }
 
 // EndSuperseded ends what this controller holds of the old history's
@@ -927,6 +950,13 @@ func (l *AlarmLog) Held(synced bool, retained map[string]retain.AlarmRetain) map
 		if v.shelfSet {
 			r.ShelfUntilMs, r.ShelfBy = v.shelfUntilMs, v.shelfBy // the log's shelf, or none
 		}
+		if synced && v.chatSinceMs != 0 && !mutServer("takeover_drops_episodes") {
+			// Going as of the last time a live leader was heard: an
+			// episode that ended on it would have been ended in the log
+			// (one log tick's residual).
+			r.ChatterSinceMs, r.ChatterLastMs = v.chatSinceMs, l.vouchedMsLocked()
+			r.ChatterActs, r.ChatterEpisodes = v.chatActs, v.chatEpisodes
+		}
 		if r == (retain.AlarmRetain{}) {
 			delete(out, id)
 			continue
@@ -1042,6 +1072,7 @@ func (p PairAlarms) restore(m map[string]retain.AlarmRetain, synced bool) {
 		p.Engine.ResetOperatorState()
 	}
 	p.Engine.RestoreAlarms(p.Log.Held(synced, m))
+	p.Engine.RestoreFlood(p.Log.HeldFlood(synced))
 }
 
 // PairAlarmsTakingOver refuses an alarm write that reaches a leader whose
@@ -1339,6 +1370,179 @@ func (l *AlarmLog) syncOccurrences() {
 				slog.Warn("alarm: occurrences not committed yet; the next log tick tries again", "kind", e.Kind, "alarms", len(e.Occs), "err", err)
 				return
 			}
+		}
+	}()
+}
+
+// Alarm floods and chattering across a takeover (#1249 slice 1b).
+//
+// The leader keeps the view's episodes current at every log tick
+// (syncDetect): one KindAlarmDetect entry names the flood and the
+// chattering episodes that began, and those that ended, since the view
+// last heard. Only an episode beginning or ending is proposed, never its
+// numbers moving: the log is never compacted. A synced takeover continues
+// them (Held, HeldFlood) as going at the last instant this replica knew a
+// leader was live (vouchedMsLocked: the newest entry, a replication from
+// the leader, its own last tick leading), so the new leader ends each one
+// window after that unless its own activations keep it going (and at once
+// after a cold start hours later), and
+// writes the end row under the episode's start and the flood's id. An
+// unsynced takeover carries none (the view can't say which are current):
+// the new leader starts with none, and the next tick ends the view's.
+// Applying an entry never touches the engine: detection is the leader's
+// own.
+
+// detectEntryVersion is detectEntry's version. A replica ignores a body
+// of a later version (its takeover then carries no episode).
+const detectEntryVersion = 1
+
+// detectEntry is a KindAlarmDetect entry's Value. Ends apply before
+// starts.
+type detectEntry struct {
+	V          int                `json:"v"`
+	Flood      *retain.AlarmFlood `json:"flood,omitempty"`    // the flood begun
+	FloodEnd   string             `json:"floodEnd,omitempty"` // the flood ended, by id
+	Chatter    []chatterEpisode   `json:"chatter,omitempty"`  // episodes begun
+	ChatterEnd []chatterEpisode   `json:"chatterEnd,omitempty"`
+}
+
+// chatterEpisode is one alarm's chattering episode in a detectEntry: its
+// start names it.
+type chatterEpisode struct {
+	ID       string `json:"id"`
+	SinceMs  int64  `json:"sinceMs"`
+	Acts     int    `json:"acts,omitempty"`
+	Episodes int    `json:"episodes,omitempty"`
+}
+
+// applyDetect applies a KindAlarmDetect entry to the view.
+func (l *AlarmLog) applyDetect(e oplog.Entry) {
+	var b detectEntry
+	if err := json.Unmarshal(e.Value, &b); err != nil || b.V != detectEntryVersion {
+		slog.Warn("alarm: an alarm-detect entry this build does not read; a takeover carries no flood or chattering episode from it", "seq", e.Seq, "v", b.V, "err", err)
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b.FloodEnd != "" && l.flood != nil && (l.flood.ID == b.FloodEnd || mutServer("flood_end_any")) {
+		l.flood = nil
+	}
+	for _, c := range b.ChatterEnd {
+		if v, ok := l.view[c.ID]; ok && v.chatSinceMs == c.SinceMs {
+			v.chatSinceMs, v.chatActs, v.chatEpisodes = 0, 0, 0
+			l.view[c.ID] = v
+		}
+	}
+	if b.Flood != nil && b.Flood.ID != "" {
+		f := *b.Flood
+		f.FirstOut = slices.Clone(f.FirstOut)
+		l.flood = &f
+	}
+	for _, c := range b.Chatter {
+		if c.ID == "" || c.SinceMs == 0 {
+			continue
+		}
+		v := l.view[c.ID]
+		v.chatSinceMs, v.chatActs, v.chatEpisodes = c.SinceMs, c.Acts, c.Episodes
+		l.view[c.ID] = v
+	}
+}
+
+// HeldFlood is the flood a takeover continues: the view's, from a synced
+// catch-up only, as going at the last instant a live leader was heard.
+func (l *AlarmLog) HeldFlood(synced bool) *retain.AlarmFlood {
+	if !synced || mutServer("takeover_drops_episodes") {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.flood == nil {
+		return nil
+	}
+	f := *l.flood
+	f.FirstOut = slices.Clone(f.FirstOut)
+	f.OverMs = l.vouchedMsLocked()
+	return &f
+}
+
+// heard records that a leader was live at ms (epoch ms).
+func (l *AlarmLog) heard(ms int64) {
+	for {
+		cur := l.heardMs.Load()
+		if ms <= cur || l.heardMs.CompareAndSwap(cur, ms) {
+			return
+		}
+	}
+}
+
+// vouchedMsLocked is the latest instant this replica knows a live leader
+// stood behind the view's episodes: the newest applied entry, its own
+// last log tick as live leader, or the last replication a leader sent.
+// After a cold start (both controllers down for hours) it is the newest
+// entry's time, so an episode that ended while nobody ran ends on the
+// new leader's first scan instead of reading as live for a window. A
+// leader is "heard" while it lives; one whose build predates the
+// alarm-detect kind never ends the view's episodes, so after an
+// interlude under it they read as going until it was last heard.
+func (l *AlarmLog) vouchedMsLocked() int64 {
+	if mutServer("episodes_stamped_now") {
+		return time.Now().UnixMilli()
+	}
+	ms := l.heardMs.Load()
+	if l.node != nil {
+		if t := l.node.LeaderHeard(); !t.IsZero() {
+			ms = max(ms, t.UnixMilli())
+		}
+	}
+	return ms
+}
+
+// syncDetect brings the view's episodes in line with the live engine (the
+// leader, at each log tick): one KindAlarmDetect naming the flood and the
+// chattering episodes begun or ended since. In the background; a tick
+// that finds the last proposal in flight does nothing (the next one finds
+// what it left).
+func (l *AlarmLog) syncDetect() {
+	if l.node == nil || !l.live() || l.detBusy.Load() || mutServer("episodes_not_synced") {
+		return
+	}
+	chat, flood := l.eng.Episodes()
+	b := detectEntry{V: detectEntryVersion}
+	l.mu.Lock()
+	for id, r := range chat {
+		if l.view[id].chatSinceMs != r.ChatterSinceMs {
+			b.Chatter = append(b.Chatter, chatterEpisode{ID: id, SinceMs: r.ChatterSinceMs, Acts: r.ChatterActs, Episodes: r.ChatterEpisodes})
+		}
+	}
+	for id, v := range l.view {
+		if v.chatSinceMs != 0 && chat[id].ChatterSinceMs != v.chatSinceMs {
+			b.ChatterEnd = append(b.ChatterEnd, chatterEpisode{ID: id, SinceMs: v.chatSinceMs})
+		}
+	}
+	if flood != nil && (l.flood == nil || l.flood.ID != flood.ID) {
+		b.Flood = flood
+	}
+	if l.flood != nil && (flood == nil || flood.ID != l.flood.ID) {
+		b.FloodEnd = l.flood.ID
+	}
+	l.mu.Unlock()
+	if b.Flood == nil && b.FloodEnd == "" && len(b.Chatter) == 0 && len(b.ChatterEnd) == 0 {
+		return
+	}
+	byID := func(a, b chatterEpisode) int { return strings.Compare(a.ID, b.ID) }
+	slices.SortFunc(b.Chatter, byID)
+	slices.SortFunc(b.ChatterEnd, byID)
+	val, err := json.Marshal(b)
+	if err != nil {
+		return
+	}
+	l.detBusy.Store(true)
+	go func() {
+		defer l.detBusy.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), substituteProposeWait)
+		defer cancel()
+		if _, err := l.node.Propose(ctx, oplog.Entry{Kind: oplog.KindAlarmDetect, Value: val, By: "system"}); err != nil {
+			slog.Warn("alarm: flood and chatter episodes not committed yet; the next log tick tries again", "err", err)
 		}
 	}()
 }

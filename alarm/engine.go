@@ -144,6 +144,9 @@ type Engine struct {
 	baseAt     time.Time
 	detLast    int64 // the last scan's time (ms), to see the clock step back
 	onFlood    func(FloodEvent)
+	// floodCarried is when a restart or takeover carried the flood in
+	// progress here (ms; 0: it began here).
+	floodCarried int64
 }
 
 // New validates the definitions and builds the engine. Ids must be unique
@@ -1044,6 +1047,7 @@ func (e *Engine) RetainedAlarms() map[string]retain.AlarmRetain {
 		if o, ok := e.oos[in.eqKey]; ok {
 			o.retained(&r, now)
 		}
+		e.retainChatter(i, &r)
 		if r == (retain.AlarmRetain{}) {
 			continue // omit the overwhelming majority that are simply normal
 		}
@@ -1112,6 +1116,7 @@ func (e *Engine) RestoreAlarms(m map[string]retain.AlarmRetain) {
 		if r.OOSEquipment != "" {
 			e.restoreOutOfService(r, now)
 		}
+		e.restoreChatter(i, r, now.UnixMilli())
 		if r.ShelfUntilMs > 0 {
 			until := time.UnixMilli(r.ShelfUntilMs)
 			if until.After(now) && in.def.Shelvable {

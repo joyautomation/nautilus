@@ -261,6 +261,15 @@ const (
 	KindOccurrenceStart = "occurrence-start"
 	KindOccurrenceEnd   = "occurrence-end"
 
+	// KindAlarmDetect keeps, for a takeover, the alarm floods and
+	// chattering episodes the leader's engine is in (#1249): Value is a
+	// versioned JSON body (server's detectEntry) naming the episodes
+	// begun and ended since the last one. Proposed by the leader when an
+	// episode begins or ends, at most one per log tick, never as its
+	// numbers move; never lapsed. A replica that predates it ignores it,
+	// and its takeover starts with no episode.
+	KindAlarmDetect = "alarm-detect"
+
 	// KindOutOfService takes a piece of equipment's alarms out of service
 	// until Until (#715 PR 5): ID is the equipment, Reason why, By who.
 	// Lapses as a shelve does: late, it would hide alarms nobody meant
@@ -633,6 +642,10 @@ type Node struct {
 	syncedTerm  uint64 // the term this leader last caught up for
 	file        *os.File
 	lastContact map[string]time.Time
+	// leaderHeard is when a leader's replication last matched here
+	// (epoch ms). Atomic: read without mu, so a caller holding a lock
+	// that Apply takes (Apply runs under mu) can read it.
+	leaderHeard atomic.Int64
 	mark        Mark                // with Options.Mark
 	pending     bool                // Options.Pending, until Rebind
 	peers       map[string]peerInfo // what each peer last said of itself
@@ -1228,6 +1241,18 @@ func (n *Node) SupersededAtStart() bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.supersededAtStart
+}
+
+// LeaderHeard is when a leader's replication (an entry or a heartbeat)
+// last reached this replica and matched its log; zero if none has in this
+// process's life. It says a leader was alive then, not what it held.
+// It takes no lock: safe to call from inside Options.Apply's callers'
+// own locks.
+func (n *Node) LeaderHeard() time.Time {
+	if ms := n.leaderHeard.Load(); ms != 0 {
+		return time.UnixMilli(ms)
+	}
+	return time.Time{}
 }
 
 // Synced reports whether this replica's log is known to hold every
@@ -3308,6 +3333,9 @@ func (n *Node) Handler() http.Handler {
 		commit := n.commit
 		if l := n.leaderAddr(); l != "" {
 			n.lastContact[l] = n.o.Now()
+		}
+		if err == nil {
+			n.leaderHeard.Store(n.o.Now().UnixMilli())
 		}
 		n.mu.Unlock()
 		if err != nil {

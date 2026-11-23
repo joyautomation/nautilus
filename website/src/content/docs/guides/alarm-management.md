@@ -559,8 +559,37 @@ report counts fixed 10-minute windows from the start of its range, and
 its floods can differ at the edges. Give `-window` and `-threshold` (or
 `-count` and `-window` for chatter) when `alarms:` changes the defaults.
 
+**Across a restart or a takeover,** an episode in progress carries on.
+A standalone controller keeps it in its retain store, and a redundant
+pair keeps it in its operator-intent log (a takeover whose log caught
+up; one that did not carries none). The controller that continues the
+episode writes its end row, with the episode's start and, for a flood,
+its id, and with the reason "carried over a restart or takeover". It
+counts activations again from the restore, because the activations
+before it are not carried. So a carried flood ends one window after the
+restore (for a pair, after the last time the new leader heard from a live
+leader) unless the plant floods again, and its `total` and `peak` are
+at least what was carried. A `-sliding` report, which reads every
+activation in the journal, can end it at a different time. An episode
+whose window passed while the controller was stopped ends at its first
+scan, with its end row at the time the episode ended and the reason
+"ended while this controller was stopped or taking over". The same holds
+when both controllers of a pair were down: the log dates the episode no
+later than its last entry. That last entry is the episode's start, so a
+pair that restarts with no leader in between (both controllers rebooted,
+or a controller that comes back as leader while the other is down) ends
+an episode older than its window at the first scan, even one that was
+still going when the controllers stopped. It ends early, never late:
+the alarms show and page as usual. A standalone controller saves every 2 seconds,
+so one killed within 2 seconds of an episode's end can write that end
+row again after the restart. The record
+and the summary carry `carriedMs` for a carried episode. The new
+leader's journal has the end row but not the start row, which is in the
+old leader's journal.
+
 A `chatter` or `flood` row with no end row means the controller stopped
-or handed over while the episode lasted. If the controller's clock steps back
+during the episode and nothing carried it: a pair whose takeover did not
+catch up its log, or a replica on an older version. If the controller's clock steps back
 during an episode, detection reads the step as no time passing, and the
 episode's end row gives its start in the new clock's time; a `-sliding`
 report over a range that spans the step can differ from the controller
