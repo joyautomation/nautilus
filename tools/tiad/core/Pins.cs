@@ -170,12 +170,12 @@ namespace Tiad
         public string Validate()
         {
             var errs = new List<string>();
-            if (By.Trim() == "") errs.Add("deviceAttestation.by is empty");
+            if (By.Trim(' ') == "") errs.Add("deviceAttestation.by is empty");
             else if (Encoding.UTF8.GetByteCount(By) > Attestation.MaxBy) errs.Add("deviceAttestation.by is longer than " + Attestation.MaxBy + " bytes");
             else if (HasControl(By)) errs.Add("deviceAttestation.by has a control character");
             Field(errs, "order", Order);
             Field(errs, "firmware", Firmware);
-            if (Firmware.Trim() != "" && Firmware.Length <= DeviceIdentity.MaxField && Version(Firmware) == null)
+            if (Firmware.Trim(' ') != "" && Firmware.Length <= DeviceIdentity.MaxField && !HasControl(Firmware) && Ascii(Firmware) && Version(Firmware) == null)
             {
                 errs.Add("deviceAttestation.firmware " + Json.Quote(Firmware) + " is not a firmware version (V3.1.3, or 3.1.3)");
             }
@@ -184,9 +184,20 @@ namespace Tiad
 
         static void Field(List<string> errs, string name, string v)
         {
-            if (v.Trim() == "") errs.Add("deviceAttestation." + name + " is empty");
+            if (v.Trim(' ') == "") errs.Add("deviceAttestation." + name + " is empty");
             else if (v.Length > DeviceIdentity.MaxField) errs.Add("deviceAttestation." + name + " is longer than " + DeviceIdentity.MaxField + " characters");
             else if (HasControl(v)) errs.Add("deviceAttestation." + name + " has a control character");
+            else if (!Ascii(v)) errs.Add("deviceAttestation." + name + " is not printable ASCII (as an order number and a firmware version are)");
+        }
+
+        // Ascii is whether v holds printable ASCII only.
+        static bool Ascii(string v)
+        {
+            foreach (char c in v)
+            {
+                if (c < 0x20 || c > 0x7e) return false;
+            }
+            return true;
         }
 
         static bool HasControl(string v)
@@ -203,7 +214,7 @@ namespace Tiad
         // one.
         static List<string> Version(string v)
         {
-            v = v.Trim();
+            v = v.Trim(' ');
             if (v.StartsWith("V", StringComparison.Ordinal) || v.StartsWith("v", StringComparison.Ordinal)) v = v.Substring(1);
             var parts = new List<string>();
             foreach (string p in v.Split('.'))
@@ -219,14 +230,17 @@ namespace Tiad
             return parts;
         }
 
-        // OrderKey is an order number as compared: whitespace dropped,
-        // upper case ("6ES7 510-1DK03-0AB0" is "6ES7510-1DK03-0AB0").
+        // OrderKey is an order number as compared: spaces dropped, ASCII
+        // letters upper case ("6ES7 510-1DK03-0AB0" is "6ES7510-1DK03-0AB0").
+        // Nothing else is folded, so a character outside ASCII matches only
+        // itself (the attestation holds none).
         static string OrderKey(string v)
         {
             var b = new StringBuilder();
             foreach (char c in v)
             {
-                if (!char.IsWhiteSpace(c)) b.Append(char.ToUpperInvariant(c));
+                if (c == ' ') continue;
+                b.Append(c >= 'a' && c <= 'z' ? (char)(c - 'a' + 'A') : c);
             }
             return b.ToString();
         }
@@ -242,7 +256,11 @@ namespace Tiad
             if (pinned.Serial != null) gaps.Add("the pin holds a serial number, which an attestation does not state");
             if (pinned.Mac != null) gaps.Add("the pin holds a MAC address, which an attestation does not state");
             List<string> p = Version(pinned.Firmware), n = Version(a.Firmware);
-            if (p != null && n != null && n.Count < p.Count)
+            if (p == null)
+            {
+                gaps.Add("the pin's firmware " + Json.Quote(pinned.Firmware) + " is not a version an attestation can be compared with: re-pin it as one (POST /v1/pins/<address> with replace: true, audited)");
+            }
+            else if (n != null && n.Count < p.Count)
             {
                 gaps.Add("the attested firmware " + Json.Quote(a.Firmware) + " is less precise than the pin's " + Json.Quote(pinned.Firmware) + ": read the full version off the CPU");
             }
@@ -260,7 +278,7 @@ namespace Tiad
             if (OrderKey(pinned.Order) != OrderKey(a.Order)) diffs.Add("order " + Json.Quote(pinned.Order) + " is attested as " + Json.Quote(a.Order));
             List<string> p = Version(pinned.Firmware), n = Version(a.Firmware);
             bool same;
-            if (p == null || n == null) same = string.Equals(pinned.Firmware, a.Firmware.Trim(), StringComparison.Ordinal);
+            if (p == null || n == null) same = false; // Gap and Validate refuse both first
             else
             {
                 same = n.Count >= p.Count;

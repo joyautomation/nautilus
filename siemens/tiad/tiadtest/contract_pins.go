@@ -377,6 +377,23 @@ func contractPinAttestedRefusals(t *testing.T, start Starter) {
 	if _, err := s.CompareWith(ctx, cmp); tiad.Kind(err) != tiad.KindDeviceChanged || !strings.Contains(err.Error(), `firmware "V3.1" is now "V3.2"`) {
 		t.Fatalf("attested compare to a CPU read online as changed: %v", err)
 	}
+	// An identity read but unusable (no firmware) is a read too: the
+	// attestation does not stand in for it.
+	a.SetDevice(t, tiad.DeviceIdentity{Order: "6ES7 511-1AK02-0AB0"}, false)
+	if _, err := s.CompareWith(ctx, cmp); tiad.Kind(err) != tiad.KindDeviceUnverified ||
+		!strings.Contains(err.Error(), "an attestation does not stand in for an identity tiad read and could not use") {
+		t.Fatalf("attested compare to a CPU whose read identity is unusable: %v", err)
+	}
+	// A pin whose firmware is no version cannot be compared with any
+	// attestation: unverified, never "changed".
+	a.SetDevice(t, BenchDevice(), true)
+	if _, err := c.SetPin(ctx, benchCPU, tiad.PinRequest{Device: &tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1.3 HF1"}, Replace: true, Announced: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CompareWith(ctx, cmp); tiad.Kind(err) != tiad.KindDeviceUnverified ||
+		!strings.Contains(err.Error(), `the pin's firmware "V3.1.3 HF1" is not a version an attestation can be compared with`) {
+		t.Fatalf("attested compare against a pin whose firmware is no version: %v", err)
+	}
 }
 
 // contractPinAttestationNeverPins: an attestation is never a pin: one to
@@ -473,6 +490,9 @@ func contractPinAttestationBadRequest(t *testing.T, start Starter) {
 		{"control character", with("order", "6ES7\n510"), "deviceAttestation.order has a control character"},
 		{"too long", with("order", strings.Repeat("6", 129)), "deviceAttestation.order is longer than 128"},
 		{"unknown field", with("serial", "x"), "serial"},
+		{"not ASCII", with("order", "6ES7 510-1DK03-0ABØ"), "deviceAttestation.order is not printable ASCII"},
+		{"two prefixes", with("firmware", "Vv3.1"), `deviceAttestation.firmware "Vv3.1" is not a firmware version`},
+		{"tab is no space", with("firmware", "\t"), "deviceAttestation.firmware has a control character"},
 	} {
 		for _, call := range []string{"compare", "online", "fingerprint"} {
 			body := map[string]any{"deviceAttestation": x.att}
@@ -483,6 +503,32 @@ func contractPinAttestationBadRequest(t *testing.T, start Starter) {
 			if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest || !strings.Contains(errMessage(b), x.want) {
 				t.Errorf("%s on %s: HTTP %d %s, want 400 with %q", x.name, call, status, b, x.want)
 			}
+		}
+		// The download and the verify read it too, before anything else.
+		for _, call := range []struct {
+			path string
+			body map[string]any
+		}{
+			{"/v1/sessions/" + s.ID + "/download", map[string]any{"address": benchCPU, "software": true, "announced": true, "deviceAttestation": x.att}},
+			{"/v1/deploys/verify", map[string]any{"deploy": "d-20261123T000000000Z-00000000", "deviceAttestation": x.att}},
+		} {
+			status, b := rawJSON(t, c, "POST", call.path, call.body)
+			if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest || !strings.Contains(errMessage(b), x.want) {
+				t.Errorf("%s on %s: HTTP %d %s, want 400 with %q", x.name, call.path, status, b, x.want)
+			}
+		}
+	}
+	// Never inside a fingerprint request of a verify or a download.
+	for _, call := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"/v1/sessions/" + s.ID + "/download", map[string]any{"address": benchCPU, "software": true, "announced": true, "fingerprint": map[string]any{"deviceAttestation": good}}},
+		{"/v1/deploys/verify", map[string]any{"deploy": "d-20261123T000000000Z-00000000", "fingerprint": map[string]any{"deviceAttestation": good}}},
+	} {
+		status, b := rawJSON(t, c, "POST", call.path, call.body)
+		if status != http.StatusBadRequest || !strings.Contains(errMessage(b), "deviceAttestation") {
+			t.Errorf("an attestation inside %s's fingerprint: HTTP %d %s, want 400 naming it", call.path, status, b)
 		}
 	}
 }

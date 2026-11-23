@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
 // DeviceIdentity is what a device pin holds about the CPU at one address
@@ -134,7 +133,7 @@ func (a DeviceAttestation) Validate() error {
 		return false
 	}
 	switch {
-	case strings.TrimSpace(a.By) == "":
+	case strings.Trim(a.By, " ") == "":
 		errs = append(errs, "deviceAttestation.by is empty")
 	case len(a.By) > MaxAttestationBy:
 		errs = append(errs, "deviceAttestation.by is longer than "+strconv.Itoa(MaxAttestationBy)+" bytes")
@@ -143,18 +142,20 @@ func (a DeviceAttestation) Validate() error {
 	}
 	field := func(name, v string) {
 		switch {
-		case strings.TrimSpace(v) == "":
+		case strings.Trim(v, " ") == "":
 			errs = append(errs, "deviceAttestation."+name+" is empty")
 		// The agent counts UTF-16 code units; identity fields are ASCII.
 		case len(v) > MaxDeviceField:
 			errs = append(errs, "deviceAttestation."+name+" is longer than "+strconv.Itoa(MaxDeviceField)+" characters")
 		case controls(v):
 			errs = append(errs, "deviceAttestation."+name+" has a control character")
+		case !printableASCII(v):
+			errs = append(errs, "deviceAttestation."+name+" is not printable ASCII (as an order number and a firmware version are)")
 		}
 	}
 	field("order", a.Order)
 	field("firmware", a.Firmware)
-	if strings.TrimSpace(a.Firmware) != "" && len(a.Firmware) <= MaxDeviceField && firmwareParts(a.Firmware) == nil {
+	if strings.Trim(a.Firmware, " ") != "" && len(a.Firmware) <= MaxDeviceField && printableASCII(a.Firmware) && firmwareParts(a.Firmware) == nil {
 		errs = append(errs, "deviceAttestation.firmware "+quote(a.Firmware)+" is not a firmware version (V3.1.3, or 3.1.3)")
 	}
 	if len(errs) > 0 {
@@ -166,8 +167,10 @@ func (a DeviceAttestation) Validate() error {
 // firmwareParts is a firmware version's numeric parts ("V3.1.3" and
 // "3.1.3" are 3, 1, 3), leading zeros dropped; nil when it is not one.
 func firmwareParts(v string) []string {
-	v = strings.TrimSpace(v)
-	v = strings.TrimPrefix(strings.TrimPrefix(v, "V"), "v")
+	v = strings.Trim(v, " ")
+	if strings.HasPrefix(v, "V") || strings.HasPrefix(v, "v") {
+		v = v[1:]
+	}
 	var parts []string
 	for _, p := range strings.Split(v, ".") {
 		if p == "" {
@@ -187,14 +190,31 @@ func firmwareParts(v string) []string {
 	return parts
 }
 
-// orderKey is an order number as compared: whitespace dropped, upper
-// case ("6ES7 510-1DK03-0AB0" is "6ES7510-1DK03-0AB0").
+// printableASCII is whether v holds printable ASCII only.
+func printableASCII(v string) bool {
+	for i := 0; i < len(v); i++ {
+		if v[i] < 0x20 || v[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// orderKey is an order number as compared: spaces dropped, ASCII letters
+// upper case ("6ES7 510-1DK03-0AB0" is "6ES7510-1DK03-0AB0"). Nothing
+// else is folded, so a character outside ASCII matches only itself (the
+// attestation holds none).
 func orderKey(v string) string {
 	var b strings.Builder
-	for _, c := range v {
-		if !unicode.IsSpace(c) {
-			b.WriteRune(unicode.ToUpper(c))
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case c == ' ':
+			continue
+		case c >= 'a' && c <= 'z':
+			c -= 'a' - 'A'
 		}
+		b.WriteByte(c)
 	}
 	return b.String()
 }
@@ -211,7 +231,9 @@ func DeviceAttestationGap(pinned DeviceIdentity, a DeviceAttestation) string {
 	if pinned.MAC != nil {
 		gaps = append(gaps, "the pin holds a MAC address, which an attestation does not state")
 	}
-	if p, n := firmwareParts(pinned.Firmware), firmwareParts(a.Firmware); p != nil && n != nil && len(n) < len(p) {
+	if p, n := firmwareParts(pinned.Firmware), firmwareParts(a.Firmware); p == nil {
+		gaps = append(gaps, "the pin's firmware "+quote(pinned.Firmware)+" is not a version an attestation can be compared with: re-pin it as one (POST /v1/pins/<address> with replace: true, audited)")
+	} else if n != nil && len(n) < len(p) {
 		gaps = append(gaps, "the attested firmware "+quote(a.Firmware)+" is less precise than the pin's "+quote(pinned.Firmware)+": read the full version off the CPU")
 	}
 	return strings.Join(gaps, "; ")
@@ -229,7 +251,7 @@ func DeviceAttestationMismatch(pinned DeviceIdentity, a DeviceAttestation) strin
 	p, n := firmwareParts(pinned.Firmware), firmwareParts(a.Firmware)
 	same := false
 	if p == nil || n == nil {
-		same = pinned.Firmware == strings.TrimSpace(a.Firmware)
+		same = false // DeviceAttestationGap and Validate refuse both first
 	} else if len(n) >= len(p) {
 		same = true
 		for i := range p {

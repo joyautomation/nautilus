@@ -2363,6 +2363,11 @@ func (f *Fake) checkDevicePin(address, call string, att *tiad.DeviceAttestation)
 		return &tiad.DeviceAttestationRecord{By: att.By, Order: att.Order, Firmware: att.Firmware, Pinned: pinned, At: fakeNow()}, nil
 	}
 	now := f.device()
+	// An identity read but unusable is a read: no attestation stands in.
+	if err := now.Validate(); err != nil {
+		return nil, fail(http.StatusConflict, tiad.KindDeviceUnverified,
+			"%s has a device pin, but its identity could not be read (%v), so the pin cannot be checked; the %s was refused before it began; an attestation does not stand in for an identity tiad read and could not use", address, err, call)
+	}
 	if diff := tiad.DeviceMismatch(pinned, now); diff != "" {
 		return nil, deviceChanged(address, pinned, now, diff, "The "+call+" was refused before it began.")
 	}

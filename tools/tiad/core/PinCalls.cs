@@ -148,10 +148,13 @@ namespace Tiad
             string bad = now == null ? "this agent's TIA side cannot read a CPU's identity online yet" : now.Validate();
             if (bad != null)
             {
-                if (att != null) return Attested(s, address, call, pinned, att, bad);
+                // Only an identity not read at all takes an attestation: one
+                // read but unusable is a read, and stands in the way.
+                if (now == null && att != null) return Attested(s, address, call, pinned, att, bad);
                 Log.Line("audit pin unverified call={0} session={1} address={2} why={3}", call, s.Id, Json.Quote(address), Json.Quote(bad));
                 throw new TiadException(409, Kinds.DeviceUnverified,
-                    address + " has a device pin, but its identity could not be read (" + bad + "), so the pin cannot be checked; the " + call + " was refused before it began" + Unverifiable(address));
+                    address + " has a device pin, but its identity could not be read (" + bad + "), so the pin cannot be checked; the " + call + " was refused before it began" +
+                    (now == null ? Unverifiable(address) : "; an attestation does not stand in for an identity tiad read and could not use"));
             }
             string diff = DeviceIdentity.Mismatch(pinned, now);
             if (diff != null)

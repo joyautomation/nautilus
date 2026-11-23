@@ -1792,16 +1792,18 @@ display), and who did. naut sends it with `--attest-order` and
 coordinator on 2026-11-23 under the rule that a refusal of our own that
 blocks a needed load is loosened narrowly, audited, and named here.
 
-- It is used only on the "identity cannot be read" branch. An identity
-  tiad does read wins: a read that differs is `device_changed` whatever
-  is attested. To an unpinned CPU it is not used.
+- It is used only when tiad's TIA side read no identity at all. An
+  identity tiad does read wins: a read that differs is `device_changed`
+  whatever is attested, and one read but unusable (a field missing) stays
+  `device_unverified`. To an unpinned CPU it is not used.
 - It is compared with the pin at the pin's precision: the order number
-  without whitespace or case, the firmware on the pin's parts (a `V3.1`
+  without spaces or ASCII case, the firmware on the pin's parts (a `V3.1`
   pin matches `3.1.3`, `V3.1.3`, `V3.01`; not `V3.10.1`). A difference is
   `device_changed`, named as the attestation's, and nothing is sent.
 - It cannot stand in for every pin: a pin holding a serial number or a
-  MAC (an attestation states neither), or a firmware stated less
-  precisely than the pin's (`V3` against `V3.1`), is `device_unverified`.
+  MAC (an attestation states neither), a pin whose firmware is no version
+  (re-pin it as one), or a firmware stated less precisely than the pin's
+  (`V3` against `V3.1`), is `device_unverified`.
 - It never adds or changes a pin: no call that takes one writes the pins
   directory, and the upload, which pins on first trust, does not take it.
 - Every use is audited (`audit pin attested call=... pinned=...
@@ -1809,8 +1811,13 @@ blocks a needed load is loosened narrowly, audited, and named here.
   `device-changed` or `unverified`). A download's response and its deploy
   record keep it as `deviceAttestation: {by, order, firmware, pinned, at}`.
 - A malformed one (`by`, `order` or `firmware` empty, a control character,
-  a field over its cap, a firmware that is not `V3.1.3` or `3.1.3`) is
-  `bad_request` on every call that takes it.
+  an order or firmware that is not printable ASCII, a field over its cap,
+  a firmware that is not `V3.1.3` or `3.1.3`) is `bad_request` on every
+  call that takes it, before anything else. It is never accepted inside a
+  verify's or a download's `fingerprint` options.
+- Only a download's response says the check rested on an attestation;
+  verify, compare, online and fingerprint say it in the audit log only
+  (a follow-up on #616).
 
 It is weaker than a read: it trusts what a person says the label shows.
 It goes once an online identity read is proven.
