@@ -10,7 +10,7 @@ import "fmt"
 type gap int
 
 const (
-	gapStructured gap = iota // UDTs, enums, arrays, structured start values
+	gapStructured gap = iota // enums, arrays, what structs.go does not write
 	gapTasks                 // more than one task
 	gapPOUs                  // user FUNCTIONs and FBs, library FBs, VAR CONSTANT
 	gapSFC                   // SFC programs

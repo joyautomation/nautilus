@@ -15,8 +15,11 @@
 // What it does not translate yet it refuses with a rule-tagged
 // diagnostic, never a guess, worded as the writer's gap with the issue
 // that closes it (gaps.go): more than one task, user FUNCTIONs and
-// FUNCTION_BLOCKs, UDTs and enums, arrays, STRING, LTIME, TIME
-// arithmetic, SFC, and every builtin outside the table in expr.go.
+// FUNCTION_BLOCKs, enums, arrays, STRING, LTIME, TIME arithmetic, SFC,
+// and every builtin outside the table in expr.go. STRUCTs the project
+// declares are written inline (structs.go), with nautilus's start
+// values; programs are lowered with the project's library in scope, as
+// naut check compiles them.
 // Bitwise operators, the guarded divisions (division by anything but a
 // non-zero constant: nautilus gives 0), SR/RS, the shifts, MUX, TRUNC and
 // the overloaded TO_* conversions are written (ops.go, expr.go).
@@ -70,9 +73,15 @@ type Program struct {
 
 // Global is one manifest tag, which becomes a member of the global DB.
 type Global struct {
-	Name   string
-	Type   string // IEC type name, e.g. REAL, BOOL, INT
-	Init   string // ST literal text, or ""
+	Name string
+	// Type is an IEC type name (REAL, BOOL, INT) or a STRUCT the project
+	// declares (#1299).
+	Type string
+	Init string // an elementary tag's start value, as an ST literal, or ""
+	// Start is a structured tag's start value as the manifest gives it
+	// (init: { Depth: 0.45 }): the writer types each member from the
+	// struct, as nautilus seeds it. nil when the tag has none.
+	Start  any
 	Retain bool
 }
 
@@ -135,9 +144,9 @@ type Output struct {
 	// diagnostics when Write refuses.
 	Warnings []Diag
 	// names are the readable names under each root, lower-cased: the
-	// manifest tags under "", a program's statics under its name. The
-	// value says whether the name has members (an FB instance).
-	names map[string]map[string]bool
+	// manifest tags under "", a program's statics under its name, each
+	// with what it holds below it (nil: a scalar).
+	names map[string]map[string]*shape
 }
 
 // Symbol maps a nautilus tag path to the Web API symbol of the same value:
@@ -146,28 +155,53 @@ type Output struct {
 //
 // It answers only for what the CPU holds where the Web API can read it: a
 // manifest tag, or a program's static (not a temp), and members below
-// them.
+// them: a struct's at any depth, an FB instance's one level down.
 func (o Output) Symbol(path string) (string, bool) {
 	if head, rest, ok := strings.Cut(path, "."); ok {
 		for k, root := range o.Roots {
 			if k == "" || !strings.EqualFold(k, head) {
 				continue
 			}
-			v, member, deep := strings.Cut(rest, ".")
-			hasMembers, known := o.names[strings.ToLower(k)][strings.ToLower(v)]
-			if !known || deep && (!hasMembers || strings.Contains(member, ".")) {
-				return "", false
+			if sym, ok := o.member(k, root, rest); ok {
+				return sym, true
 			}
-			return root + "." + rest, true
 		}
 	}
-	// Tags are scalars so far (#1299): no member path below one.
-	if root, ok := o.Roots[""]; ok && !strings.Contains(path, ".") {
-		if _, known := o.names[""][strings.ToLower(path)]; known {
-			return root + "." + path, true
-		}
+	if root, ok := o.Roots[""]; ok {
+		return o.member("", root, path)
 	}
 	return "", false
+}
+
+// member maps path, below the root of scope k, to its symbol: each part
+// must be a name the writer declared there.
+func (o Output) member(k, root, path string) (string, bool) {
+	parts := strings.Split(path, ".")
+	s, known := o.names[strings.ToLower(k)][strings.ToLower(parts[0])]
+	if !known {
+		return "", false
+	}
+	// Each part as the writer declared it: the caller's case may differ.
+	sym := root + "." + sclName(s.name)
+	for i, p := range parts[1:] {
+		switch {
+		case s.instance:
+			if i != len(parts)-2 || p == "" {
+				return "", false
+			}
+			sym += "." + p // an IEC pin, as nautilus names it
+		case s.members == nil:
+			return "", false
+		default:
+			next, ok := s.members[strings.ToLower(p)]
+			if !ok {
+				return "", false
+			}
+			s = next
+			sym += "." + sclName(s.name)
+		}
+	}
+	return sym, true
 }
 
 // Source is where one generated file came from: the nautilus file, and
@@ -222,9 +256,32 @@ func Write(in Input) (Output, []Diag, error) {
 	for _, g := range in.Globals {
 		w.globals[strings.ToLower(g.Name)] = g
 	}
-	out := Output{Roots: map[string]string{"": quote(tagsDB)}, names: map[string]map[string]bool{"": {}}, Sources: map[string]Source{}}
+	// The project's library (every program is given the same one) and
+	// the programs' own TYPE blocks: the types the tags and the programs
+	// use (#1299).
+	var libs []string
+	seenLib := map[string]bool{}
+	var own []*st.Program
+	for _, p := range in.Programs {
+		for _, l := range p.Libs {
+			if !seenLib[l] {
+				seenLib[l] = true
+				libs = append(libs, l)
+			}
+		}
+		if isSFC(p) {
+			continue
+		}
+		if src, _, err := toST(p); err == nil {
+			if prog, err := st.Parse(src); err == nil {
+				own = append(own, prog)
+			}
+		}
+	}
+	w.lib = loadLibrary(libs, own)
+	out := Output{Roots: map[string]string{"": quote(tagsDB)}, names: map[string]map[string]*shape{"": {}}, Sources: map[string]Source{}}
 	for _, g := range in.Globals {
-		out.names[""][strings.ToLower(g.Name)] = false
+		out.names[""][strings.ToLower(g.Name)] = w.shapeOf(g.Name, g.Type)
 	}
 	// Every block name, lower-cased (TIA's are case-insensitive): a
 	// program named Tags would make an FB and a DB both "Tags".
@@ -258,7 +315,7 @@ func Write(in Input) (Output, []Diag, error) {
 			w.diag("siemens/program", p.Path, 1, "the source declares no PROGRAM")
 			continue
 		}
-		pw := w.program(p.Path, p.Libs, prog)
+		pw := w.program(p.Path, p.Libs, src, prog)
 		for i := mark; i < len(w.diags); i++ {
 			w.diags[i].Line = mapLine(lines, w.diags[i].Line)
 		}
@@ -367,6 +424,7 @@ func Write(in Input) (Output, []Diag, error) {
 
 type writer struct {
 	globals map[string]Global
+	lib     *library
 	tagsDB  string // with the prefix
 	prefix  string
 	diags   []Diag
@@ -427,15 +485,57 @@ func (w *writer) globalDB() ([]byte, bool) {
 	sort.Strings(names)
 	var plain, retained []string
 	ok := true
+	// A type that cannot be written is reported once, at its first tag,
+	// not once per tag of the type.
+	refused := map[string]bool{}
 	for _, k := range names {
 		g := w.globals[k]
-		typ, why := sclType(g.Type)
+		if w.structOf(g.Type) != nil {
+			if g.Init != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: init %s is not a struct's start value", g.Name, g.Init))
+				ok = false
+				continue
+			}
+			tk := strings.ToLower(strings.TrimSpace(g.Type))
+			if why := w.typeRefusal(g.Type, map[string]bool{}); why != "" {
+				ok = false
+				if !refused[tk] {
+					refused[tk] = true
+					w.diag("siemens/type", "nautilus.yaml", 0, fmt.Sprintf("tag %s: the type %s: %s", g.Name, strings.TrimSpace(g.Type), why))
+				}
+				continue
+			}
+			if why := w.seedCheck(g.Type, g.Start); why != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: nautilus refuses the start value: %s", g.Name, why))
+				ok = false
+				continue
+			}
+			typ, why := w.declType(g.Type, "      ", g.Start, true)
+			if why != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
+				ok = false
+				continue
+			}
+			line := fmt.Sprintf("      %s : %s;", sclName(g.Name), typ)
+			if g.Retain {
+				retained = append(retained, line)
+			} else {
+				plain = append(plain, line)
+			}
+			continue
+		}
+		typ, why := w.sclType(g.Type)
 		if why != "" {
 			w.diag("siemens/type", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
 			ok = false
 			continue
 		}
-		line := fmt.Sprintf("      %s : %s", g.Name, typ)
+		if g.Start != nil {
+			w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, gapMessage(gapStructured, fmt.Sprintf("the start value %v of a %s", g.Start, g.Type), "")))
+			ok = false
+			continue
+		}
+		line := fmt.Sprintf("      %s : %s", sclName(g.Name), typ)
 		if g.Init != "" {
 			init, why := literal(g.Init)
 			if why != "" {
@@ -488,8 +588,35 @@ func literal(src string) (string, string) {
 	default:
 		return "", fmt.Sprintf("init %q is not a literal", src)
 	}
-	pw := &progWriter{w: &writer{globals: map[string]Global{}}, locals: map[string]local{}}
-	return pw.expr(a.Value, 0), ""
+	return constValue(loadLibrary(nil, nil), a.Value)
+}
+
+// constValue prints a constant (a manifest init, a TYPE member's initial
+// value) for a declaration, or says why it cannot: a negative number is
+// folded to one literal (SCL's declarations take -5, not an expression),
+// and whatever the expression printer refuses is refused here, never
+// printed as an empty value.
+func constValue(lib *library, e st.Expression) (string, string) {
+	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
+		if n, ok := u.Operand.(*st.NumberLit); ok {
+			return "-" + number(n), ""
+		}
+	}
+	switch e.(type) {
+	case *st.NumberLit, *st.BoolLit, *st.StringLit, *st.TimeLit, *st.TypedLit:
+	default:
+		return "", gapMessage(gapStructured, "an initial value written as an expression", "a start value is one literal in SCL")
+	}
+	scratch := &writer{globals: map[string]Global{}, lib: lib}
+	pw := &progWriter{w: scratch, locals: map[string]local{}}
+	s := pw.expr(e, 0)
+	if len(scratch.diags) > 0 {
+		return "", scratch.diags[0].Message
+	}
+	if s == "" {
+		return "", fmt.Sprintf("the value %s has no SCL form here", exprShort(e))
+	}
+	return s, ""
 }
 
 // ExternalTypes is the type the programs declare for each tag they bind
@@ -534,12 +661,6 @@ func ExternalTypes(progs []Program) map[string]string {
 
 // isSFC reports an SFC program, which the writer does not translate yet.
 func isSFC(p Program) bool { return strings.EqualFold(path.Ext(p.Path), ".sfc") }
-
-// StructuredInitGap words a manifest tag start value the writer does not
-// translate yet (a structured tag's map), for the CLI that reads it.
-func StructuredInitGap(v any) string {
-	return gapMessage(gapStructured, fmt.Sprintf("the structured start value %v", v), "")
-}
 
 // toST returns a program's source as ST, with lines[i] the original line
 // of ST line i+1 (nil when the source is ST already).
