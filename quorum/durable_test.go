@@ -34,7 +34,11 @@ func restart(t *testing.T, v *Voter, now Instant, boot uint64) *Voter {
 func TestAMarkSurvivesTheVotersRestart(t *testing.T) {
 	v, now := markA(t)
 	written(v)
-	if b, _ := v.State().MarshalBinary(); b[len(stateMagic)] != stateVersionDups {
+	// Without the epoch records its campaign grants wrote (format 9, #710
+	// S2c), a marking voter's file is format 7.
+	noRecs := v.State()
+	noRecs.RecordsFrom, noRecs.Epochs = 0, nil
+	if b, _ := noRecs.MarshalBinary(); b[len(stateMagic)] != stateVersionDups {
 		t.Fatalf("a marking voter's file is format %d, want %d", b[len(stateMagic)], stateVersionDups)
 	}
 	if b, _ := ready("W").State().MarshalBinary(); b[len(stateMagic)] != stateVersionPlain {

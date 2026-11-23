@@ -455,6 +455,10 @@ var Mutations = []string{
 	"hot_rebase_per_task",               // runtime: a hot takeover rebases each task from its own copy time, not the image's one leader reference, so a fast task beside a slow one loses the gap (#710 S2b, Fable)
 	"hot_build_unchecked",               // naut: a takeover goes hot on an image of another build (#710 S2b)
 	"hot_cold_condition_never_clears",   // naut: the cold-takeover warning stays after a standby follows again (#710 S2b)
+	"grant_keeps_record",                // a campaign's grant records no epoch (#710 S2c-1)
+	"mark_from_refused_renewal",         // a voter keeps the mark of a renewal it refused (#710 S2c-1)
+	"reply_mark_after_grant",            // a voter keeps a renewal's mark before its grant is durable, so a failed write leaves it (#710 S2c-1)
+	"mark_term_compared",                // a mark holds the renewal's vote term, not the leader's epoch (#710 S2c-1)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

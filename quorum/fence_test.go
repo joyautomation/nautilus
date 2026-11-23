@@ -55,7 +55,7 @@ func TestAFenceIsDurableAndOnlyAFencedFileIsFormat8(t *testing.T) {
 	}
 	v.Fence("A", 5)
 	b, _ := v.State().MarshalBinary()
-	if b[len(stateMagic)] != stateVersion || stateVersion != 8 {
+	if b[len(stateMagic)] != stateVersionFence || stateVersionFence != 8 {
 		t.Fatalf("a fenced file is format %d, want 8", b[len(stateMagic)])
 	}
 	var st VoterState
