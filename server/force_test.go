@@ -304,17 +304,22 @@ func TestCaptureLogToleratesALateWriter(t *testing.T) {
 	logs := captureLog(t)
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	started := make(chan struct{})
 	go func() {
 		defer close(done)
-		for {
+		for first := true; ; first = false {
 			select {
 			case <-stop:
 				return
 			default:
 				slog.Info("late writer")
+				if first {
+					close(started)
+				}
 			}
 		}
 	}()
+	<-started // reads below overlap the writer, not precede it
 	for range 200 {
 		_ = logs.String()
 	}
