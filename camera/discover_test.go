@@ -130,17 +130,17 @@ func TestOneAddressCannotFillTheTableWithDevices(t *testing.T) {
 }
 
 func TestAFloodOfAnswersKeepsAtMostMaxFound(t *testing.T) {
-	old := MaxPerSource
-	MaxPerSource = 1 << 20
-	t.Cleanup(func() { MaxPerSource = old })
+	oldF, oldS := MaxFound, MaxPerSource
+	MaxFound, MaxPerSource = 20, 1<<20
+	t.Cleanup(func() { MaxFound, MaxPerSource = oldF, oldS })
 	var many []string
-	for i := 0; i < MaxFound+100; i++ {
+	for i := 0; i < 100; i++ {
 		many = append(many, probeMatch(fmt.Sprintf("urn:uuid:%04d", i), "", "http://127.0.0.1/x"))
 	}
 	addr, _ := responder(t, func() []string { return many })
 	got, err := Discover(context.Background(), DiscoverOptions{Target: addr, Timeout: 800 * time.Millisecond})
 	if err != nil || len(got) != MaxFound {
-		t.Errorf("%d found, %v", len(got), err)
+		t.Errorf("%d found, want %d: %v", len(got), MaxFound, err)
 	}
 }
 

@@ -28,6 +28,10 @@ import (
 // characters (a name must not move a terminal's cursor or rewrite its title), at most
 // MaxFound devices, and each address checked against where the answer came from.
 
+// MaxFound bounds how many devices are kept (a flood of answers is not memory); a
+// variable so a test need not send hundreds of datagrams that the network may drop.
+var MaxFound = 256
+
 // MaxPerSource bounds how many devices one address may answer for (a bridge or an
 // NVR answering for its cameras is a few; a host sending hundreds is not a camera).
 // A variable so a test can lift it to reach MaxFound from one loopback address.
@@ -36,8 +40,6 @@ var MaxPerSource = 16
 const (
 	// DiscoveryGroup is WS-Discovery's multicast address.
 	DiscoveryGroup = "239.255.255.250:3702"
-	// MaxFound bounds how many devices are kept (a flood of answers is not memory).
-	MaxFound = 256
 	// maxDatagram is the longest answer read; a real ProbeMatch is about a kilobyte.
 	maxDatagram = 16 << 10
 )
