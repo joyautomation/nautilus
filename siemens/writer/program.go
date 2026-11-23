@@ -2,6 +2,7 @@ package writer
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/st"
@@ -33,6 +34,23 @@ type progWriter struct {
 	// share what it shares with other tasks (nil: nothing) (tasks.go).
 	uses  map[string]*tagUse
 	share *share
+
+	// What is written: a PROGRAM, or one of the project's blocks (pou,
+	// pous.go) first used at site. name is the POU's name as declared;
+	// srcLines the line map of the source it comes from (nil for ST).
+	kind     int
+	name     string
+	pou      *pou
+	site     site
+	srcLines []int
+	// deps are the project's blocks this one uses (lower-cased).
+	deps map[string]bool
+	// consts are the VAR CONSTANT declarations, constVals their values
+	// by lower-cased name; gconsts the project's global constants named,
+	// each with the first line naming it.
+	consts    []string
+	constVals map[string]string
+	gconsts   map[string]int
 }
 
 // elementary maps the IEC elementary types the subset writes. SCL spells
@@ -81,9 +99,9 @@ func sclType(t string) (string, string) {
 	return "", gapMessage(gapStructured, "the type "+t, "UDTs, enums and user function blocks")
 }
 
-func (w *writer) program(path string, libs []string, src string, prog *st.Program) *progWriter {
-	pw := &progWriter{w: w, path: path, libs: libs, locals: map[string]local{}, statics: map[string]*shape{}, uses: map[string]*tagUse{}, share: w.shares[strings.ToLower(prog.Name)]}
-	before := len(w.diags)
+func (w *writer) program(path string, libs []string, src string, lines []int, prog *st.Program) *progWriter {
+	pw := &progWriter{w: w, path: path, libs: libs, locals: map[string]local{}, statics: map[string]*shape{}, uses: map[string]*tagUse{}, share: w.shares[strings.ToLower(prog.Name)],
+		kind: kindProgram, name: prog.Name, srcLines: lines}
 
 	// nautilus's own lowering first: what nautilus cannot run is not
 	// written for the CPU either. It compiles the program with the
@@ -93,20 +111,136 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 	if !pw.lower(src) {
 		return nil
 	}
-	if len(prog.FBDecls) > 0 || len(prog.FuncDecls) > 0 {
-		pw.gap("siemens/user-pou", 1, gapPOUs, "user FUNCTIONs and FUNCTION_BLOCKs", "")
-	}
 	for _, td := range prog.TypeDecls {
 		if _, ok := td.Type.(*st.StructType); !ok {
 			pw.gap("siemens/type", td.Pos.Line, gapStructured, "the type "+td.Name, "enumerations and type aliases")
-			break
+			return nil
 		}
 	}
+	if !pw.block("FUNCTION_BLOCK "+quote(w.prefix+prog.Name)+"\n", "END_FUNCTION_BLOCK", prog.VarBlocks, prog.Statements) {
+		return nil
+	}
+	return pw
+}
 
-	var decls strings.Builder
+// sectionRank orders the declaration sections as TIA's own sources do.
+var sectionRank = map[string]int{"VAR_INPUT": 0, "VAR_OUTPUT": 1, "VAR_IN_OUT": 2, "VAR": 3, "VAR RETAIN": 3, "VAR_TEMP": 4}
+
+// block writes one POU into pw.fb: header (the FUNCTION_BLOCK or
+// FUNCTION line), the declarations, the body, footer. It reports false
+// when anything was refused.
+func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st.Statement) bool {
+	w := pw.w
+	before := len(w.diags)
+	sections := pw.declare(vbs)
+	if pw.kind == kindFC {
+		// The return value, as nautilus names it inside the body: a temp
+		// that starts at its type's zero (the body sets it first) and is
+		// copied to the FC's return value on the way out.
+		u := strings.ToUpper(strings.TrimSpace(pw.pou.ret))
+		t, _ := w.sclType(pw.pou.ret)
+		if _, ok := zero(u); !ok {
+			pw.diag("siemens/type", pw.pou.lineOf(), pw.name+": "+gapMessage(gapOther, "a FUNCTION returning a "+u, ""))
+		} else {
+			pw.locals[strings.ToLower(pw.name)] = local{name: pw.name, typ: u}
+			pw.temps = append([]st.VarDecl{{Name: pw.name, Datatype: pw.pou.ret}}, pw.temps...)
+			sections = append(sections, section{"VAR_TEMP", []string{fmt.Sprintf("      %s : %s;", sclName(pw.name), t)}})
+		}
+	}
+	if len(w.diags) > before {
+		return false
+	}
+
+	var body strings.Builder
+	for _, v := range pw.temps {
+		if w.structOf(v.Datatype) != nil {
+			ls, _ := w.leaves(v.Datatype, "")
+			for _, l := range ls {
+				pw.emit(&body, v.Pos.Line, "\t#%s%s := %s;\n", sclName(v.Name), l.path, l.init)
+			}
+			continue
+		}
+		init, _ := zero(strings.ToUpper(strings.TrimSpace(v.Datatype)))
+		if v.Initial != nil {
+			init = pw.expr(v.Initial, 0)
+		}
+		pw.emit(&body, v.Pos.Line, "\t#%s := %s;\n", sclName(v.Name), init)
+	}
+	pw.stmts(&body, stmts, 1)
+	if pw.kind == kindFC {
+		pw.emit(&body, 0, "\t%s;\n", pw.fcReturn())
+	}
+	consts := append(pw.consts, pw.globalConsts()...)
+	if len(w.diags) > before {
+		return false
+	}
+
+	sort.SliceStable(sections, func(i, j int) bool { return sectionRank[sections[i].header] < sectionRank[sections[j].header] })
+	// One section of each kind, as TIA's own sources have.
+	var merged []section
+	for _, s := range sections {
+		if n := len(merged); n > 0 && merged[n-1].header == s.header {
+			merged[n-1].lines = append(merged[n-1].lines, s.lines...)
+			continue
+		}
+		merged = append(merged, s)
+	}
+	sections = merged
+	var b strings.Builder
+	b.WriteString(header)
+	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\n")
+	b.WriteString("VERSION : 0.1\n")
+	for _, s := range sections {
+		fmt.Fprintf(&b, "   %s \n%s\n   END_VAR\n", s.header, strings.Join(s.lines, "\n"))
+	}
+	if len(consts) > 0 {
+		fmt.Fprintf(&b, "   VAR CONSTANT \n%s\n   END_VAR\n", strings.Join(consts, "\n"))
+	}
+	b.WriteString("\nBEGIN\n")
+	b.WriteString(body.String())
+	b.WriteString(footer + "\n")
+	pw.fb = []byte(b.String())
+	return true
+}
+
+// fcReturn is the statement that hands a FUNCTION's result back: the FC's
+// return value (#<block name>) from the temp the body works on.
+func (pw *progWriter) fcReturn() string {
+	return "#" + sclName(pw.w.prefix+pw.name) + " := #" + sclName(pw.name)
+}
+
+type section struct {
+	header string
+	lines  []string
+}
+
+// declare writes the declaration sections of vbs, in source order.
+func (pw *progWriter) declare(vbs []st.VarBlock) []section {
+	w := pw.w
+	var sections []section
 	typeRefused := map[string]bool{}
-	for _, vb := range prog.VarBlocks {
+	block := pw.kind != kindProgram
+	// A block's STRUCT pins are refused together, once: a plant model
+	// with six of them says so in one line.
+	var structPins []string
+	structLine := 0
+	defer func() {
+		if len(structPins) > 0 {
+			pw.diag("siemens/type", structLine, gapMessage(gapStructured, fmt.Sprintf("a STRUCT as a pin of %s (%s)", pw.what(), strings.Join(structPins, ", ")), "it needs a named PLC data type"))
+		}
+	}()
+	for _, vb := range vbs {
 		kind := vb.Kind
+		if vb.Constant && kind != "VAR_EXTERNAL" {
+			// VAR CONSTANT, and a VAR_GLOBAL CONSTANT inside a POU, which
+			// nautilus reads the same way.
+			if kind != "VAR" && kind != "VAR_GLOBAL" {
+				pw.gap("siemens/var", lineOf(vb), gapOther, kind+" CONSTANT", "")
+				continue
+			}
+			pw.constants(vb)
+			continue
+		}
 		switch kind {
 		case "VAR_EXTERNAL", "VAR_GLOBAL":
 			// Manifest tags: they live in the global DB and need no
@@ -114,17 +248,29 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 			continue
 		case "VAR", "VAR_TEMP", "VAR_INPUT", "VAR_OUTPUT", "VAR_IN_OUT":
 		default:
-			pw.gap("siemens/var", lineOf(vb), gapPOUs, kind, "")
-			continue
-		}
-		if vb.Constant {
-			pw.gap("siemens/var", lineOf(vb), gapPOUs, "VAR CONSTANT", "")
+			pw.gap("siemens/var", lineOf(vb), gapOther, kind, "")
 			continue
 		}
 		header := kind
+		temp := kind == "VAR_TEMP"
+		where := kind
+		if pw.kind == kindFC {
+			where = "a FUNCTION"
+			if kind == "VAR" {
+				// An FC has no statics; nautilus starts a function's
+				// locals afresh on every call, as a temp is set here.
+				header, temp = "VAR_TEMP", true
+			}
+		}
+		pin := block && (kind == "VAR_INPUT" || kind == "VAR_OUTPUT" || kind == "VAR_IN_OUT")
+		static := kind == "VAR" && !temp
 		if vb.Retain {
 			if kind != "VAR" {
-				pw.gap("siemens/var", lineOf(vb), gapPOUs, kind+" RETAIN", "only VAR RETAIN is written")
+				pw.gap("siemens/var", lineOf(vb), gapOther, kind+" RETAIN", "only VAR RETAIN is written")
+				continue
+			}
+			if block {
+				pw.gap("siemens/var", lineOf(vb), gapOther, "VAR RETAIN in "+pw.what(), "TIA keeps a multi-instance's retentivity with the block that holds it")
 				continue
 			}
 			header = "VAR RETAIN"
@@ -134,12 +280,12 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 			u := strings.ToUpper(strings.TrimSpace(v.Datatype))
 			var typ string
 			if latch, ok := latches[u]; ok {
-				if kind != "VAR" {
-					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "a "+u+" instance in "+kind, "only a static (VAR) instance is written"))
+				if !static {
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "a "+u+" instance in "+where, "only a static (VAR) instance is written"))
 					continue
 				}
 				if v.Initial != nil {
-					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "an instance initializer", ""))
+					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "an instance initializer", ""))
 					continue
 				}
 				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
@@ -148,6 +294,13 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 				continue
 			}
 			if sd := w.structOf(v.Datatype); sd != nil {
+				if pin {
+					structPins = append(structPins, v.Name+" : "+sd.name)
+					if structLine == 0 {
+						structLine = v.Pos.Line
+					}
+					continue
+				}
 				if why := w.typeRefusal(v.Datatype, map[string]bool{}); why != "" {
 					if !typeRefused[why] {
 						typeRefused[why] = true
@@ -162,17 +315,17 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 				if kind == "VAR_IN_OUT" {
 					// The task's OB calls the program's FB with no
 					// arguments: nothing would bind it.
-					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "a struct in a program's VAR_IN_OUT", "the task's OB calls the program with nothing to bind it to"))
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapStructured, "a struct in a program's VAR_IN_OUT", "the task's OB calls the program with nothing to bind it to"))
 					continue
 				}
-				t, why := w.declType(v.Datatype, "      ", nil, kind != "VAR_TEMP")
+				t, why := w.declType(v.Datatype, "      ", nil, !temp)
 				if why != "" {
 					pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: %s", v.Name, why))
 					continue
 				}
 				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
 				line := fmt.Sprintf("      %s : %s;", sclName(v.Name), t)
-				if kind == "VAR_TEMP" {
+				if temp {
 					// Reset member by member at the start of the body, as
 					// nautilus resets a temp on every scan (#203).
 					if _, why := w.leaves(v.Datatype, ""); why != "" {
@@ -186,9 +339,24 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 				lines = append(lines, line)
 				continue
 			}
+			if p := w.userFB(u); p != nil {
+				if !static {
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "an instance of "+p.what()+" in "+where, "only a static (VAR) instance is written"))
+					continue
+				}
+				if v.Initial != nil {
+					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "an instance initializer", ""))
+					continue
+				}
+				pw.need(p, v.Pos.Line)
+				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
+				pw.statics[strings.ToLower(v.Name)] = w.fbShape(v.Name, p, map[string]bool{})
+				lines = append(lines, fmt.Sprintf("      %s : %s;", sclName(v.Name), quote(w.prefix+p.name)))
+				continue
+			}
 			if inst, ok := instances[u]; ok {
-				if kind != "VAR" {
-					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "a "+u+" instance in "+kind, "only a static (VAR) instance is written"))
+				if !static {
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "a "+u+" instance in "+where, "only a static (VAR) instance is written"))
 					continue
 				}
 				typ = inst
@@ -207,12 +375,12 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 			}
 			pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
 			line := fmt.Sprintf("      %s : %s", sclName(v.Name), typ)
-			if kind == "VAR_TEMP" {
+			if temp {
 				// TIA has no start values for temps, and nautilus resets a
 				// temp to its init on every scan (#203): the body starts
 				// with an assignment for each instead.
 				if _, ok := zero(u); !ok {
-					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "a "+u+" temp", ""))
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "a "+u+" temp", ""))
 					continue
 				}
 				pw.temps = append(pw.temps, v)
@@ -221,56 +389,42 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 			}
 			if _, isInst := instances[u]; isInst {
 				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name, instance: true}
-			} else {
+			} else if kind != "VAR_IN_OUT" {
 				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name}
 			}
-			if v.Initial != nil {
+			if v.Initial != nil && !(pw.kind == kindFC && kind == "VAR_INPUT") {
+				// (An FC's input has no start value in TIA; nautilus binds
+				// every input of a function call.)
 				if _, isInst := instances[u]; isInst {
-					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "an instance initializer", ""))
+					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "an instance initializer", ""))
 					continue
 				}
-				line += " := " + pw.expr(v.Initial, 0)
+				line += " := " + pw.initValue(v.Initial)
 			}
 			lines = append(lines, line+";")
 		}
 		if len(lines) > 0 {
-			fmt.Fprintf(&decls, "   %s \n%s\n   END_VAR\n", header, strings.Join(lines, "\n"))
+			sections = append(sections, section{header, lines})
 		}
 	}
-	if len(w.diags) > before {
-		return nil
-	}
+	return sections
+}
 
-	var body strings.Builder
-	for _, v := range pw.temps {
-		if w.structOf(v.Datatype) != nil {
-			ls, _ := w.leaves(v.Datatype, "")
-			for _, l := range ls {
-				pw.emit(&body, v.Pos.Line, "\t#%s%s := %s;\n", sclName(v.Name), l.path, l.init)
+// initValue prints a declaration's start value: a constant it names as
+// that constant's literal (a start value is a literal in SCL), else the
+// expression.
+func (pw *progWriter) initValue(e st.Expression) string {
+	if id, ok := e.(*st.IdentExpr); ok {
+		k := strings.ToLower(id.Name)
+		_, isConst := pw.constVals[k]
+		_, isGlobal := pw.w.lib.constDecls[k]
+		if _, isLocal := pw.locals[k]; isConst || isGlobal && !isLocal {
+			if v, why := pw.constInit(e, "", map[string]bool{}); why == "" {
+				return v
 			}
-			continue
 		}
-		init, _ := zero(strings.ToUpper(strings.TrimSpace(v.Datatype)))
-		if v.Initial != nil {
-			init = pw.expr(v.Initial, 0)
-		}
-		pw.emit(&body, v.Pos.Line, "\t#%s := %s;\n", sclName(v.Name), init)
 	}
-	pw.stmts(&body, prog.Statements, 1)
-	if len(w.diags) > before {
-		return nil
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "FUNCTION_BLOCK %s\n", quote(w.prefix+prog.Name))
-	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\n")
-	b.WriteString("VERSION : 0.1\n")
-	b.WriteString(decls.String())
-	b.WriteString("\nBEGIN\n")
-	b.WriteString(body.String())
-	b.WriteString("END_FUNCTION_BLOCK\n")
-	pw.fb = []byte(b.String())
-	return pw
+	return pw.expr(e, 0)
 }
 
 func lineOf(vb st.VarBlock) int {
@@ -385,6 +539,10 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 				pw.latch(b, s.Call, l, latch, in, at)
 				break
 			}
+			if p := pw.w.userFB(l.typ); p != nil {
+				pw.fbCall(b, s.Call, l, p, d, at)
+				break
+			}
 		}
 		pw.emit(b, at, "%s%s;\n", in, pw.call(s.Call, true))
 		for _, o := range s.Call.OutputBindings {
@@ -395,6 +553,9 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 	case *st.ContinueStmt:
 		pw.emit(b, at, "%sCONTINUE;\n", in)
 	case *st.ReturnStmt:
+		if pw.kind == kindFC {
+			pw.emit(b, at, "%s%s;\n", in, pw.fcReturn())
+		}
 		pw.emit(b, at, "%sRETURN;\n", in)
 	default:
 		pw.gap("siemens/statement", lineAt(s), gapOther, fmt.Sprintf("the statement %T", s), "")
@@ -456,6 +617,10 @@ func (pw *progWriter) ident(name string, line int) string {
 		return "#" + sclName(l.name)
 	}
 	if g, ok := pw.w.globals[strings.ToLower(name)]; ok {
+		if pw.kind != kindProgram && pw.w.tasks > 1 {
+			pw.gap("siemens/task", line, gapOther, "the manifest tag "+g.Name+" named inside "+pw.what()+" in a project with several tasks", "each task works on its own copy of the tags it shares, and a block has no one task's copy to name; pass the tag to the block as a pin instead")
+			return name
+		}
 		pw.use(g)
 		if sh := pw.share; sh != nil && sh.tags[strings.ToLower(g.Name)] != nil {
 			return quote(sh.db) + ".tags." + sclName(g.Name)
@@ -466,8 +631,12 @@ func (pw *progWriter) ident(name string, line int) string {
 		pw.gap("siemens/enum", line, gapStructured, "enumerations ("+e+")", "")
 		return name
 	}
+	if d, ok := pw.w.lib.constDecls[strings.ToLower(name)]; ok {
+		pw.useConst(strings.ToLower(name), line)
+		return "#" + sclName(d.Name)
+	}
 	if c, ok := pw.w.lib.consts[strings.ToLower(name)]; ok {
-		pw.gap("siemens/library", line, gapPOUs, "the project's global constant "+c, "")
+		pw.gap("siemens/library", line, gapOther, "the project's global variable "+c, "a library's VAR_GLOBAL that is not CONSTANT")
 		return name
 	}
 	pw.diag("siemens/name", line, fmt.Sprintf("%s is neither a variable of the program nor a manifest tag", name))

@@ -25,6 +25,10 @@ var precedence = map[string]int{
 
 const unaryPrec = 9
 
+// required is the input TIA's instruction wants at every call (PT of a
+// timer, PV of a counter), by the IEC block.
+var required = map[string]string{"TON": "PT", "TOF": "PT", "TP": "PT", "CTU": "PV", "CTD": "PV", "CTUD": "PV"}
+
 // mathFuncs are the one-argument REAL functions SCL spells and calls the
 // same. They take REAL or LREAL arguments only: nautilus's integer forms
 // (ABS of an INT) differ in width.
@@ -78,10 +82,20 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 			return ""
 		}
 		member := e.Member
-		if sd := pw.w.structOf(pw.typ(e.Object)); sd != nil {
+		ot := pw.typ(e.Object)
+		if sd := pw.w.structOf(ot); sd != nil {
 			if f, ok := sd.fieldOf(member); ok {
 				member = f.Name // as the TYPE spells it
 			}
+		} else if p := pw.w.userFB(ot); p != nil {
+			pn, ok := p.pins()[strings.ToUpper(member)]
+			if !ok || pn.kind == "VAR_TEMP" {
+				// A temp lives for one call only (TIA keeps none in the
+				// instance), and a constant is the block's own.
+				pw.gap("siemens/member", e.Pos.Line, gapOther, "reading "+exprShort(e)+", a temp or constant of "+p.what()+", from outside it", "")
+				return ""
+			}
+			member = pn.name // as the block declares it
 		}
 		return pw.widen(pw.typ(e), pw.expr(e.Object, unaryPrec+1)+"."+sclName(member))
 	case *st.IndexExpr:
@@ -252,6 +266,10 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 	name := strings.ToUpper(c.Name)
 
 	if l, ok := pw.locals[strings.ToLower(c.Name)]; ok {
+		if pw.w.userFB(l.typ) != nil {
+			pw.diag("siemens/call", line, fmt.Sprintf("%s: an instance call is a statement, not an expression", l.name))
+			return ""
+		}
 		members, isInst := instMembers[l.typ]
 		if !isInst {
 			pw.diag("siemens/call", line, fmt.Sprintf("%s is a %s, not a function block instance", l.name, l.typ))
@@ -282,12 +300,18 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			}
 			parts = append(parts, fmt.Sprintf("%s => %s", pin, pw.expr(o.Target, 0)))
 		}
+		if pin, ok := required[l.typ]; ok && !slices.ContainsFunc(c.NamedArgs, func(a st.NamedArg) bool { return strings.EqualFold(a.Name, pin) }) {
+			// TIA wants PT at every call of a timer and PV at every call
+			// of a counter (measured on V21: "Parameter 'PT' has to be
+			// used"); nautilus keeps the value the instance holds, which
+			// is what this passes.
+			parts = append(parts, pin+" := #"+sclName(l.name)+"."+pin)
+		}
 		return "#" + sclName(l.name) + "(" + strings.Join(parts, ", ") + ")"
 	}
 
-	if f, ok := pw.w.lib.funcs[strings.ToLower(c.Name)]; ok {
-		pw.gap("siemens/library", line, gapPOUs, "the project's function "+f, "")
-		return ""
+	if p := pw.w.userFC(c.Name); p != nil {
+		return pw.fcCall(c, p, stmt)
 	}
 	if stmt {
 		pw.gap("siemens/call", line, gapOther, c.Name+"(…) as a statement", "only function block instances are called that way so far")

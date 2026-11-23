@@ -14,9 +14,11 @@
 //
 // What it does not translate yet it refuses with a rule-tagged
 // diagnostic, never a guess, worded as the writer's gap with the issue
-// that closes it (gaps.go): user FUNCTIONs and FUNCTION_BLOCKs, enums,
-// arrays, STRING, LTIME, TIME arithmetic, SFC, and every builtin outside
-// the table in expr.go. Each task is its own cyclic interrupt OB, and
+// that closes it (gaps.go): nautilus's PID, enums, arrays, STRING,
+// LTIME, TIME arithmetic, SFC, and every builtin outside the table in
+// expr.go. The project's FUNCTION_BLOCKs and FUNCTIONs are written as FBs
+// (multi-instances in their callers) and FCs (pous.go). Each task is its
+// own cyclic interrupt OB, and
 // the tags tasks share are copied per task as nautilus copies them
 // (tasks.go). STRUCTs the project
 // declares are written inline (structs.go), with nautilus's start
@@ -257,7 +259,7 @@ func Write(in Input) (Output, []Diag, error) {
 	}
 	tagsDB = in.BlockPrefix + tagsDB
 	prefix := in.BlockPrefix
-	w := &writer{globals: map[string]Global{}, tagsDB: tagsDB, prefix: prefix}
+	w := &writer{globals: map[string]Global{}, tagsDB: tagsDB, prefix: prefix, tasks: len(in.Tasks)}
 	for _, g := range in.Globals {
 		w.globals[strings.ToLower(g.Name)] = g
 	}
@@ -320,6 +322,8 @@ func Write(in Input) (Output, []Diag, error) {
 			continue
 		}
 		ready = append(ready, parsed{path: p.Path, src: src, libs: p.Libs, lines: lines, prog: prog})
+		// The blocks the program file declares beside its PROGRAM.
+		w.lib.addPOUs(prog, p.Path, lines, false, false)
 	}
 	// With more than one task, what each task shares with the others
 	// (tasks.go), before any program is written: a program's FB reads a
@@ -332,7 +336,7 @@ func Write(in Input) (Output, []Diag, error) {
 	for _, p := range ready {
 		prog, lines := p.prog, p.lines
 		mark, wmark := len(w.diags), len(w.warnings)
-		pw := w.program(p.path, p.libs, p.src, prog)
+		pw := w.program(p.path, p.libs, p.src, lines, prog)
 		for i := mark; i < len(w.diags); i++ {
 			w.diags[i].Line = mapLine(lines, w.diags[i].Line)
 		}
@@ -359,6 +363,9 @@ func Write(in Input) (Output, []Diag, error) {
 		out.Sources[dbName+".db"] = Source{Path: p.path}
 		out.Roots[prog.Name] = quote(dbName)
 	}
+
+	// The project's blocks the programs reach, callees first.
+	pouOrder := w.writePOUs(&out, claim)
 
 	// The guarded division functions the programs call. Files come out
 	// with these first (the sort below), so tiad, which generates the
@@ -464,14 +471,27 @@ func Write(in Input) (Output, []Diag, error) {
 		return Output{Warnings: w.warnings}, w.diags, nil
 	}
 	out.Warnings = w.warnings
-	fc := map[string]bool{}
+	// tiad generates the sources in the order given, and TIA generates a
+	// block only once what it calls exists: the guarded division FCs
+	// first, then the project's blocks callees first, then the rest.
+	rank := map[string]int{}
 	for _, fn := range fns {
-		fc[prefix+fn+".scl"] = true
+		rank[prefix+fn+".scl"] = 1
 	}
-	sort.Slice(out.Files, func(i, j int) bool {
+	for i, f := range pouOrder {
+		rank[f] = 2 + i
+	}
+	last := 2 + len(pouOrder)
+	rankOf := func(p string) int {
+		if r, ok := rank[p]; ok {
+			return r
+		}
+		return last
+	}
+	sort.SliceStable(out.Files, func(i, j int) bool {
 		a, b := out.Files[i].Path, out.Files[j].Path
-		if fc[a] != fc[b] {
-			return fc[a]
+		if ra, rb := rankOf(a), rankOf(b); ra != rb {
+			return ra < rb
 		}
 		return a < b
 	})
@@ -492,6 +512,13 @@ type writer struct {
 	// shares is what each program (lower-cased) shares with the other
 	// tasks (tasks.go).
 	shares map[string]*share
+	// tasks is how many tasks the project has (pous.go: a block of a
+	// project with several names no manifest tag).
+	tasks int
+	// needed are the project's blocks the programs reach, each with where
+	// it is first used, and queue those still to write (pous.go).
+	needed map[string]site
+	queue  []string
 }
 
 func (w *writer) useGuarded(fn, path string) {

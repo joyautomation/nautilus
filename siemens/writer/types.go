@@ -126,16 +126,23 @@ func (pw *progWriter) typ(e st.Expression) string {
 		if g, ok := pw.w.globals[strings.ToLower(e.Name)]; ok {
 			return strings.ToUpper(strings.TrimSpace(g.Type))
 		}
+		if d, ok := pw.w.lib.constDecls[strings.ToLower(e.Name)]; ok {
+			return strings.ToUpper(strings.TrimSpace(d.Datatype))
+		}
 	case *st.MemberExpr:
-		if _, ok := bitIndex(e.Member); ok && intOrBits(pw.typ(e.Object)) {
+		ot := pw.typ(e.Object)
+		if _, ok := bitIndex(e.Member); ok && intOrBits(ot) {
 			return "BOOL"
 		}
-		if id, ok := e.Object.(*st.IdentExpr); ok {
-			if l, ok := pw.locals[strings.ToLower(id.Name)]; ok {
-				if ms, ok := instMembers[l.typ]; ok {
-					return ms[strings.ToUpper(e.Member)]
-				}
+		if ms, ok := instMembers[ot]; ok {
+			return ms[strings.ToUpper(e.Member)]
+		}
+		// A pin or static of the project's block: its declared type.
+		if p := pw.w.userFB(ot); p != nil {
+			if pn, ok := p.pins()[strings.ToUpper(e.Member)]; ok {
+				return pn.typ
 			}
+			return ""
 		}
 		// A struct's member: its declared type (#1299).
 		if sd := pw.w.structOf(pw.typ(e.Object)); sd != nil {
@@ -189,6 +196,9 @@ func (pw *progWriter) typ(e st.Expression) string {
 		}
 		return ""
 	case *st.CallExpr:
+		if p := pw.w.userFC(e.Name); p != nil {
+			return strings.ToUpper(strings.TrimSpace(p.ret))
+		}
 		name := strings.ToUpper(e.Name)
 		args, _ := pw.positional(e)
 		if _, to, ok := strings.Cut(name, "_TO_"); ok {

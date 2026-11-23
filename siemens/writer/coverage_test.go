@@ -345,31 +345,28 @@ func TestExternalTypes(t *testing.T) {
 	}
 }
 
-// TestLibraryNamesAreAGap: the writer lowers a program with the project's
-// library ahead of it, as naut check does, so a function, block or
-// constant the library declares compiles, and the writer refuses it by
-// name as its gap (#1301) and nothing else; a name no source declares is
-// nautilus's own refusal.
-func TestLibraryNamesAreAGap(t *testing.T) {
+// TestLibraryNamesAreWritten: the writer lowers a program with the
+// project's library ahead of it, as naut check does, so a function, block
+// or constant the library declares compiles, and the writer writes it
+// (#1301); nautilus's PID, which has no TIA instruction, is still its gap;
+// a name no source declares is nautilus's own refusal.
+func TestLibraryNamesAreWritten(t *testing.T) {
 	src := "PROGRAM P\nVAR a : REAL; END_VAR\na := Scale(a);\nEND_PROGRAM\n"
 	lib := "FUNCTION Scale : REAL\nVAR_INPUT x : REAL; END_VAR\nScale := x * 2.0;\nEND_FUNCTION\n"
-	_, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: src, Libs: []string{lib}}}})
-	if len(diags) != 1 || diags[0].Rule != "siemens/library" || diags[0].Line != 3 || !strings.Contains(diags[0].Message, "the project's function Scale yet (#1301)") {
+	if _, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: src, Libs: []string{lib}}}}); len(diags) != 0 {
 		t.Errorf("with the library: %v", diags)
 	}
 	// A GVL of constants (#176) declares its names too.
-	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a : REAL; END_VAR\na := HI;\nEND_PROGRAM\n", Libs: []string{"VAR_GLOBAL CONSTANT\n    HI : REAL := 80.0;\nEND_VAR\n"}}}})
-	if len(diags) != 1 || diags[0].Rule != "siemens/library" || diags[0].Line != 3 || !strings.Contains(diags[0].Message, "global constant HI yet (#1301)") {
+	if _, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a : REAL; END_VAR\na := HI;\nEND_PROGRAM\n", Libs: []string{"VAR_GLOBAL CONSTANT\n    HI : REAL := 80.0;\nEND_VAR\n"}}}}); len(diags) != 0 {
 		t.Errorf("a GVL constant: %v", diags)
 	}
 	// A library function block, as an instance's type.
 	fb := "FUNCTION_BLOCK Hold\nVAR_INPUT x : BOOL; END_VAR\nEND_FUNCTION_BLOCK\n"
-	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR h : Hold; END_VAR\nh(x := TRUE);\nEND_PROGRAM\n", Libs: []string{fb}}}})
-	if len(diags) != 1 || diags[0].Line != 2 || !strings.Contains(diags[0].Message, "the project's function block Hold yet (#1301)") {
+	if _, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR h : Hold; END_VAR\nh(x := TRUE);\nEND_PROGRAM\n", Libs: []string{fb}}}}); len(diags) != 0 {
 		t.Errorf("a library block: %v", diags)
 	}
-	// A block of nautilus's own library with no TIA instruction (#1301).
-	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR c : PID; END_VAR\nEND_PROGRAM\n"}}})
+	// A block of nautilus's own library with no TIA instruction (#1301, D2).
+	_, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR c : PID; END_VAR\nEND_PROGRAM\n"}}})
 	if len(diags) != 1 || diags[0].Line != 2 || !strings.Contains(diags[0].Message, "nautilus's function block PID yet (#1301)") {
 		t.Errorf("PID: %v", diags)
 	}
@@ -391,7 +388,7 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 	var diags []Diag
 	for _, src := range []string{
 		"PROGRAM P\nVAR s : STRING; t : LTIME; x : ARRAY[1..2] OF INT; d : DT; END_VAR\nEND_PROGRAM\n",
-		"PROGRAM P\nVAR CONSTANT k : INT := 1; END_VAR\nEND_PROGRAM\n",
+		"PROGRAM P\nFUNCTION_BLOCK H\nVAR RETAIN n : INT; END_VAR\nEND_FUNCTION_BLOCK\nVAR h : H; END_VAR\nh();\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a, b : TIME; r, q : REAL; u : ULINT; END_VAR\na := a + b;\nr := r MOD q;\nu := u + 1;\na := T#1500us;\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a : INT; r : REAL; t : TON; END_VAR\nr := ATAN2(r, r);\nt(IN := TRUE, PT := INT_TO_TIME(a + 1));\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a : LTIME; END_VAR\nEND_PROGRAM\n",

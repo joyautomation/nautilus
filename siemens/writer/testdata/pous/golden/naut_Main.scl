@@ -1,0 +1,20 @@
+FUNCTION_BLOCK "naut_Main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      st1 : "naut_Station";
+      st2 : "naut_Station";
+      localStarts : INT;
+   END_VAR
+   VAR CONSTANT 
+      HI_LIMIT : REAL := 80.0;
+   END_VAR
+
+BEGIN
+	#st1(Run := "naut_Tags".Run, Level := "naut_Tags".Level, Starts := "naut_Tags".Starts);
+	"naut_Tags".High := #st1.High;
+	"naut_Tags".Count := #st1.Count;
+	#st2(Run := NOT "naut_Tags".Run, Level := "naut_Scale"(Raw := "naut_Tags".Level, Lo := 0.0, Hi := #HI_LIMIT), Starts := #localStarts);
+	"naut_Tags".Pct := "naut_Scale"(Raw := "naut_Tags".Level, Lo := 0.0, Hi := 100.0);
+	"naut_Tags".Next := LINT_TO_INT((((INT_TO_LINT("naut_Bump"(X := "naut_Tags".Starts)) + INT_TO_LINT(#st1.Total)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+END_FUNCTION_BLOCK
