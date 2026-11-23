@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`<CameraPanel {asset}/>`: the controller's built-in cameras on an asset page** (#724 slice 1, kit side): a refreshing still
+  by default, live video only after "Watch live", with the measured bitrate and a Stop button; live stops when the
+  tab is hidden, on a stream error and when the page goes away. A failure shows the controller's own message (the
+  viewer cap, a camera that did not answer). With no cameras for the asset nothing is drawn. `AssetPage` takes
+  `cameraClient` (null: no request). New exports: `CameraPanel`, `CameraClient`, `formatBps`, `camerasFor`,
+  `watchingText`, `cameraNext`.
+
 - **`<CheckoutPage {force}/>` and `<CheckoutBanner {frame}/>`** (#719 slice 3): the I/O checkout, as the kit shows
   it: progress by area and device, Pass/Fail/Note per point, a forced output with typed confirmation, and a banner on
   every screen while a checkout force stands (the controller's countdown; "state unknown" on a quiet stream, never
