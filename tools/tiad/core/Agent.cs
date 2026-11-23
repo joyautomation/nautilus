@@ -136,6 +136,7 @@ namespace Tiad
             RegisterFingerprint(r);
             RegisterDeploys(r);
             RegisterAdopt(r);
+            RegisterShow(r);
         }
 
         object Health(Call c)
@@ -146,6 +147,7 @@ namespace Tiad
             o["openness"] = host.OpennessVersion;
             o["sessions"] = sessions.Count;
             o["targets"] = cfg.Targets.ToArray();
+            o["ui"] = cfg.Ui;
             return o;
         }
 

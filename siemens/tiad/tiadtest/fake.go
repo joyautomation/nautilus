@@ -48,6 +48,13 @@ type Fake struct {
 	Token string
 	// Targets are the CPU addresses downloads may go to (TIAD_TARGETS).
 	Targets []string
+	// VerifyCloseError makes a verify fail to close its session: the
+	// session is kept and the reply's closeError says so (the verdict
+	// stands), as the agent's does when TIA is busy closing it.
+	VerifyCloseError string
+	// UI is TIAD_UI=1: TIA Portal runs with its user interface, so a show
+	// opens a block in its editor (Shown), and every download is refused.
+	UI bool
 	// UploadCPUError makes an upload succeed without its CPU: the agent's
 	// upload whose read of the project's CPU failed (cpuError).
 	UploadCPUError string
@@ -143,6 +150,7 @@ type Fake struct {
 	sessions  map[string]*session
 	next      int
 	downloads []Download
+	shown     []string
 	loaded    map[string]string // CPU address → session that last downloaded
 	// saved is what a saved project holds besides its file: its CPU, the
 	// devices besides it and its protection, restored when it is opened.
@@ -515,6 +523,14 @@ func (f *Fake) Station(sessionID string) (tiad.Station, bool) {
 	return *s.station, true
 }
 
+// Shown is every block a show opened in TIA's editor, as "group/name"
+// ("name" at the root), in order.
+func (f *Fake) Shown() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.shown...)
+}
+
 // Blocks returns the blocks a session's project holds, sorted by name.
 func (f *Fake) Blocks(sessionID string) []tiad.Block {
 	f.mu.Lock()
@@ -580,6 +596,7 @@ func (f *Fake) init() {
 		m.HandleFunc("POST /v1/sessions/{id}/export", f.wrap(f.export, true))
 		m.HandleFunc("POST /v1/sessions/{id}/upload", f.wrap(f.upload, true))
 		m.HandleFunc("POST /v1/sessions/{id}/save", f.wrap(f.save, true))
+		m.HandleFunc("POST /v1/sessions/{id}/show", f.wrap(f.show, true))
 		m.HandleFunc("POST /v1/sessions/{id}/fingerprint", f.wrap(f.readFingerprint, true))
 		m.HandleFunc("GET /v1/pins", f.wrap(f.listPins, false))
 		m.HandleFunc("GET /v1/deploys", f.wrap(f.listDeploys, false))
@@ -789,7 +806,7 @@ func cleanPath(p string) (string, *failure) {
 // --- handlers -----------------------------------------------------------------
 
 func (f *Fake) health(*http.Request) (any, *failure) {
-	return tiad.Health{Version: "fake", TIA: "V21", Openness: "V21", Sessions: len(f.sessions), Targets: f.Targets}, nil
+	return tiad.Health{Version: "fake", TIA: "V21", Openness: "V21", Sessions: len(f.sessions), Targets: f.Targets, UI: f.UI}, nil
 }
 
 func (f *Fake) probe(*http.Request) (any, *failure) {
@@ -1507,6 +1524,9 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	}
 	if err := req.Validate(); err != nil {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%v", err)
+	}
+	if f.UI {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", UIRefusesDownload)
 	}
 	if !contains(f.Targets, req.Address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", req.Address)

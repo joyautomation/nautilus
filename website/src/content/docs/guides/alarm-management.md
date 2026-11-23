@@ -552,8 +552,9 @@ and `chatter-end` for an alarm, `flood` and `flood-end` (id
 window and when the episode began. The journal view leaves them out
 unless you ask for them (`?kind=chatter,flood`), as it does notify rows.
 
-Detection only marks and journals. Nothing is shelved, suppressed or
-paged because an alarm chatters or the plant floods.
+Detection marks and journals. Nothing is shelved or suppressed because
+an alarm chatters or the plant floods. What changes is how escalation
+pages, next.
 
 `naut alarms report flood -sliding` finds floods in the journal by the
 same rule, so the report matches the controller. Without `-sliding`, the
@@ -596,6 +597,87 @@ during an episode, detection reads the step as no time passing, and the
 episode's end row gives its start in the new clock's time; a `-sliding`
 report over a range that spans the step can differ from the controller
 there.
+
+### Paging while an alarm chatters or the plant floods
+
+Both are on by default, with nothing to configure. The two settings
+turn them off:
+
+```yaml
+alarms:
+  chatter: { page: false }        # page every bounce, as before
+  flood:   { group-pages: false } # page every alarm, as before
+```
+
+**A chattering alarm pages once per level.** Some escalations start
+again at every activation: a policy with `stop: ack-or-rtn`, an alarm
+with `ack-required: false`, and an alarm someone acknowledges between
+bounces. Left alone, each bounce of a chattering alarm pages the first
+level again. Once the alarm chatters, those bounces are held, and the
+alarm escalates on one clock that starts when the episode began, under
+the policy its latest bounce would page under (so a chatter across a
+shift change, or into a policy's `when:` window, pages the people on now).
+Each level goes once, as a chatter notice ("Seal leak is chattering: 7
+times in 60 s"); a level whose repeats already fell due when the chatter
+is seen goes once, not once per repeat. Later levels still climb on that clock. So a fast
+chatter still pages a first level that waits (say `after: 30s`), which no
+single bounce would reach. A latched alarm nobody acknowledged already
+pages once per level, and is not changed. The bounces before the third
+(the ones that made it chatter) paged as usual. When the chatter ends and
+the alarm still waits, the levels its notices sent are not sent again; a
+new activation after the end pages as usual.
+
+A chatter notice carries no ack link and no reply code, because the
+occurrence they would acknowledge changes at every bounce. It links to
+the alarm on the alarms page, where you can shelve it with a reason.
+The link uses `alarms.oncall.ack-url`, and you sign in as usual. A
+shelved or suppressed alarm sends no notice. The journal gets one
+`held` notify row when the first bounce is held and one at the episode's
+end, with how many bounces were held. It never writes a row per bounce.
+
+**A flood's pages are grouped.** During a flood each alarm keeps its own
+escalation clock. When a level falls due, the alarm joins that level's
+next grouped page instead of paging on its own. The first grouped page
+for a policy level goes at once to each person and channel the level
+names. After that, the level sends at most one grouped page every 5
+minutes, listing the alarms that fell due since. So an alarm that
+arrives late in a long flood is still told within 5 minutes.
+
+A grouped page says how many alarms activated in the window and lists
+the alarms it is about. A long list is cut to what the channel holds
+("+150 more"). It also names the first out and the equipment, and links
+to the alarms page's flood focus view. It never carries an ack link, a
+reply code or a keypress: acknowledge the alarms in the HMI. Each alarm
+the page listed gets a notify row with the result `grouped` and the
+flood's id, so who was told about what stays in the journal. If a
+grouped page fails for good, its alarms page on their own to that person
+by that channel (the row says `failed`, then the page's own row), and so
+do they for a grouped page the channel's queue could not take. When the
+flood ends, a level a grouped page already covered does not page again;
+the alarm's later levels page on their own as usual. Alarms that fell due
+in the last 5 minutes and were waiting for the next grouped page page on
+their own when the flood ends (at most about the flood threshold of
+them, since a flood ends only after a full window under it).
+
+**Critical alarms and the class `safety` (in any case: `Safety` too)
+always page on their own**, and nothing in the configuration changes that. `individual` adds more:
+
+```yaml
+alarms:
+  flood:
+    individual: { priorities: [high], classes: [fire] }
+```
+
+Classes compare ignoring case. `naut check` refuses an unknown priority
+there, and a class no alarm has (a typo would let the alarms it meant to
+name be grouped). A
+critical or safety alarm that chatters during a flood pages on its own,
+once per level per episode.
+
+**After a restart or a takeover** mid-flood, the flood carries over (see
+above), so the first look groups its resends. Each policy level goes
+again once, as a grouped page labelled "resend after restart" or "resend
+after takeover". No covered alarm is paged on its own.
 
 ## Measuring the alarm system
 

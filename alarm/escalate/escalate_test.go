@@ -320,6 +320,12 @@ func newRig(t *testing.T, gated bool, defs ...alarm.Def) *rig {
 // newRigWith is newRig with more dispatcher options (opt changes them).
 func newRigWith(t *testing.T, gated bool, opt func(*Options), defs ...alarm.Def) *rig {
 	t.Helper()
+	return newRigEng(t, gated, nil, opt, defs...)
+}
+
+// newRigEng is newRigWith with engine options too (eopt changes them).
+func newRigEng(t *testing.T, gated bool, eopt func(*alarm.Options), opt func(*Options), defs ...alarm.Def) *rig {
+	t.Helper()
 	r := &rig{t: t, tags: map[string]any{}}
 	r.setNow(chicago(t, "2026-11-20 06:00"))
 	if len(defs) == 0 {
@@ -334,8 +340,12 @@ func newRigWith(t *testing.T, gated bool, opt func(*Options), defs ...alarm.Def)
 	}
 	r.ring = alarm.NewRing(1000)
 	var err error
-	r.eng, err = alarm.New(alarm.Options{Defs: defs, Now: func() time.Time { return *r.clock.Load() },
-		Read: func(p string) (any, bool) { v, ok := r.tags[p]; return v, ok }, Journal: r.ring})
+	eo := alarm.Options{Defs: defs, Now: func() time.Time { return *r.clock.Load() },
+		Read: func(p string) (any, bool) { v, ok := r.tags[p]; return v, ok }, Journal: r.ring}
+	if eopt != nil {
+		eopt(&eo)
+	}
+	r.eng, err = alarm.New(eo)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,11 +14,17 @@
 
         .\install-tiad.ps1 -NoTia          # installed, but TIA can never start
         .\install-tiad.ps1 -Targets 192.0.2.10
+        .\install-tiad.ps1 -Targets 192.0.2.10 -Ui   # TIA's window, viewing only
         .\install-tiad.ps1 -Uninstall
 
     The verify step calls health and probe only. Neither ever starts TIA, so
     installing costs no trial time. With -NoTia the agent refuses every call
     that needs TIA (the tia gate fails): use it until TIA may start.
+
+    With -Ui (TIAD_UI=1) TIA Portal starts with its user interface on the
+    logged-on console desktop, for viewing only: a block can be shown in
+    TIA's editor (POST /v1/sessions/{id}/show), and every download is
+    refused. Re-run without -Ui to download again.
 
 .NOTES
     - tiad.exe never references Siemens.Engineering. The TIA side,
@@ -54,6 +60,9 @@ param(
     # Fail the tia gate, and build no tiad.Openness.dll: no call can start
     # TIA (and the trial clock).
     [switch] $NoTia,
+    # TIA Portal with its user interface (TIAD_UI=1): viewing only, every
+    # download refused.
+    [switch] $Ui,
     [switch] $Uninstall
 )
 
@@ -425,6 +434,7 @@ Secure-Dir $DeploysDir
 Ok "deploy record in $DeploysDir (kept across reinstalls)"
 $bat = Join-Path $InstallDir 'run-tiad.bat'
 $noTiaLine = if ($NoTia) { 'set TIAD_NO_TIA=1' } else { 'set TIAD_NO_TIA=' }
+$uiLine = if ($Ui) { 'set TIAD_UI=1' } else { 'set TIAD_UI=' }
 @"
 @echo off
 rem Written by install-tiad.ps1. The token is in TIAD_TOKEN_FILE, never here.
@@ -437,6 +447,7 @@ set TIAD_PINS_DIR=$PinsDir
 set TIAD_DEPLOYS_DIR=$DeploysDir
 set TIAD_TARGETS=$Targets
 $noTiaLine
+$uiLine
 set "TIAD_PC_INTERFACE=$PcInterface"
 set TIAD_EXIT_ON_STDIN=
 cd /d "$InstallDir"
@@ -454,6 +465,7 @@ $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGo
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
     -Description 'nautilus tiad: TIA Portal Openness agent' | Out-Null
 $mode = if ($NoTia) { 'TIA starts disabled (-NoTia)' } else { 'TIA may start' }
+if ($Ui) { $mode += '; TIA shows its window (-Ui): viewing only, downloads refused' }
 Ok "task '$TaskName' registered (interactive, at logon, as $user; $mode)"
 
 # ------------------------------------------------------------- 6. firewall

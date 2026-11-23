@@ -1958,6 +1958,10 @@
           "minimum": 2,
           "maximum": 100,
           "description": "Activations within the window that make an alarm chatter. Default 3."
+        },
+        "page": {
+          "type": "boolean",
+          "description": "Page a chattering alarm once per escalation level per episode, instead of once per bounce, in the modes that page per bounce (stop: ack-or-rtn, ack-required: false, an acknowledgement between bounces). Default true."
         }
       }
     },
@@ -1975,6 +1979,27 @@
           "minimum": 1,
           "maximum": 1023,
           "description": "A flood is more than this many activations within the window. Default 10."
+        },
+        "group-pages": {
+          "type": "boolean",
+          "description": "During a flood, send one grouped page per escalation step per person per channel (then at most every 5 minutes for alarms newly due) instead of one per alarm. Critical alarms and class safety always page on their own. Default true."
+        },
+        "individual": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "More alarms that page on their own during a flood. Critical priority and class safety always do: this adds to them, never replaces them.",
+          "properties": {
+            "priorities": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["diagnostic", "low", "medium", "high", "critical"] },
+              "description": "Priorities that page on their own (critical always does)."
+            },
+            "classes": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Alarm classes that page on their own (safety always does). Each must be the class of some alarm."
+            }
+          }
         }
       }
     },

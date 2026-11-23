@@ -16,6 +16,29 @@ func (c LogChannel) Send(ctx context.Context, m Message) error {
 	if log == nil {
 		log = slog.Default()
 	}
+	if g := m.Group; g != nil {
+		ids := make([]string, 0, min(len(g.Alarms), 20))
+		for i, a := range g.Alarms {
+			if i == 20 {
+				break
+			}
+			ids = append(ids, a.ID)
+		}
+		log.LogAttrs(ctx, slog.LevelWarn, "alarm escalation, grouped (flood)",
+			slog.String("flood", g.Flood.ID), slog.Int("alarms", len(g.Alarms)), slog.Any("ids", ids),
+			slog.String("policy", m.Policy), slog.Int("level", m.Level), slog.Int("repeat", m.Repeat),
+			slog.String("to", m.To), slog.String("reason", m.Reason))
+		return nil
+	}
+	if c := m.Chatter; c != nil {
+		log.LogAttrs(ctx, slog.LevelWarn, "alarm escalation, chattering",
+			slog.String("id", m.Alarm.ID), slog.String("name", m.Alarm.Name),
+			slog.String("priority", m.Alarm.Priority.String()), slog.Int("activations", c.Activations),
+			slog.Int64("windowMs", c.WindowMs), slog.String("policy", m.Policy),
+			slog.Int("level", m.Level), slog.Int("repeat", m.Repeat), slog.String("to", m.To),
+			slog.String("reason", m.Reason))
+		return nil
+	}
 	log.LogAttrs(ctx, slog.LevelWarn, "alarm escalation",
 		slog.String("id", m.Alarm.ID), slog.String("name", m.Alarm.Name),
 		slog.String("priority", m.Alarm.Priority.String()), slog.String("policy", m.Policy),

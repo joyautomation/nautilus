@@ -43,7 +43,8 @@
 		flood = null,
 		focus = false,
 		onchattershelve,
-		suggestShelve
+		suggestShelve,
+		search = ''
 	}: {
 		/** Full instance list — active, unack-RTN, and shelved together (e.g.
 		 * `alarmClient.instances`). Shelved rows are hidden by default; toggle
@@ -85,6 +86,9 @@
 		onchattershelve?: (id: string, seconds: number, reason: string, by: string) => void | boolean | Promise<void | boolean>;
 		/** Seconds the chatter dialog opens on (the project's `shelve-suggest`). */
 		suggestShelve?: number;
+		/** The search box's starting text: a page's link to one alarm (#1249)
+		 * opens the table on it. Read once; the box is the operator's after. */
+		search?: string;
 	} = $props();
 
 	let sortKey = $state<SortKey>('activeTime');
@@ -92,7 +96,7 @@
 	let filterPriority = $state<Priority | ''>('');
 	let filterState = $state<AlarmState | ''>('');
 	let filterSite = $state('');
-	let filterText = $state('');
+	let filterText = $state(untrack(() => search));
 	let showShelved = $state(false);
 	let filterChatter = $state(false);
 	let chatterOpen = $state(false);

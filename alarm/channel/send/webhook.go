@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 )
@@ -32,15 +33,62 @@ type webhookAlarm struct {
 	Class    string `json:"class"`
 	State    string `json:"state"`
 	ActiveMs int64  `json:"activeMs"`
+	// Chattering marks a flood's listed alarm that chatters.
+	Chattering bool `json:"chattering,omitempty"`
 }
 
+// webhookBody is what a webhook receives. Kind is "alarm" (one alarm's
+// page), "chatter" (a chattering alarm's once-per-level notice, #1249) or
+// "flood" (a grouped page: no alarm, the flood and the alarms it lists).
 type webhookBody struct {
-	Alarm  webhookAlarm `json:"alarm"`
-	Policy string       `json:"policy"`
-	Level  int          `json:"level"`
-	Repeat int          `json:"repeat"`
-	To     string       `json:"to"`
-	Reason string       `json:"reason"`
+	Kind    string         `json:"kind"`
+	Alarm   *webhookAlarm  `json:"alarm,omitempty"`
+	Chatter *alarm.Chatter `json:"chatter,omitempty"`
+	Flood   *webhookFlood  `json:"flood,omitempty"`
+	Policy  string         `json:"policy"`
+	Level   int            `json:"level"`
+	Repeat  int            `json:"repeat"`
+	To      string         `json:"to"`
+	Reason  string         `json:"reason"`
+	Link    string         `json:"link,omitempty"`
+}
+
+type webhookFlood struct {
+	alarm.FloodBrief
+	FirstOut []alarm.Brief      `json:"firstOut"`
+	Groups   []alarm.FloodGroup `json:"groups"`
+	Alarms   []webhookAlarm     `json:"alarms"`
+}
+
+// webhookFloodMax is how many alarms a flood's webhook body lists.
+const webhookFloodMax = 500
+
+func webhookAlarmOf(a alarm.Record) webhookAlarm {
+	return webhookAlarm{ID: a.ID, Name: a.Name, Priority: a.Priority.String(), Site: a.Site,
+		Area: a.Area, Class: a.Class, State: a.State.String(), ActiveMs: a.ActiveMs}
+}
+
+func webhookPayload(m escalate.Message) webhookBody {
+	b := webhookBody{Kind: "alarm", Policy: m.Policy, Level: m.Level, Repeat: m.Repeat, To: m.To, Reason: m.Reason, Link: m.Link}
+	if g := m.Group; g != nil {
+		b.Kind = "flood"
+		f := &webhookFlood{FloodBrief: g.Flood, FirstOut: g.FirstOut, Groups: g.Groups, Alarms: []webhookAlarm{}}
+		for i, a := range g.Alarms {
+			if i == webhookFloodMax {
+				break
+			}
+			f.Alarms = append(f.Alarms, webhookAlarm{ID: a.ID, Name: a.Name, Priority: a.Priority.String(),
+				Area: a.Area, State: a.State.String(), ActiveMs: a.ActiveMs, Chattering: a.Chattering})
+		}
+		b.Flood = f
+		return b
+	}
+	a := webhookAlarmOf(m.Alarm)
+	b.Alarm = &a
+	if m.Chatter != nil {
+		b.Kind, b.Chatter = "chatter", m.Chatter
+	}
+	return b
 }
 
 func (w *webhookSender) attempt(ctx context.Context, m escalate.Message) error {
@@ -68,12 +116,7 @@ func (w *webhookSender) attempt(ctx context.Context, m escalate.Message) error {
 		}
 		hdr.Set(w.cfg.Header, v)
 	}
-	a := m.Alarm
-	b, err := json.Marshal(webhookBody{
-		Alarm: webhookAlarm{ID: a.ID, Name: a.Name, Priority: a.Priority.String(), Site: a.Site,
-			Area: a.Area, Class: a.Class, State: a.State.String(), ActiveMs: a.ActiveMs},
-		Policy: m.Policy, Level: m.Level, Repeat: m.Repeat, To: m.To, Reason: m.Reason,
-	})
+	b, err := json.Marshal(webhookPayload(m))
 	if err != nil {
 		return escalate.Failed(escalate.FailUnknown)
 	}
