@@ -16,7 +16,7 @@ function fake(answers: Array<Response | Error>) {
 	}) as unknown as typeof fetch;
 	return { sent, client: new CameraClient({ fetch: f }) };
 }
-const cam = (o: Partial<Camera> = {}): Camera => ({ id: 'c1', label: 'Wet well', asset: 'p1', kind: 'mjpeg', interval: 5, maxViewers: 2, view: true, live: true, snapshot: true, watching: 0, bps: 0, ...o });
+const cam = (o: Partial<Camera> = {}): Camera => ({ id: 'c1', label: 'Wet well', asset: 'p1', kind: 'mjpeg', interval: 5, maxViewers: 2, view: true, live: true, hls: false, snapshot: true, watching: 0, bps: 0, ...o });
 
 describe('formatBps', () => {
 	it('names the unit', () => {
@@ -77,7 +77,7 @@ describe('nextState', () => {
 
 describe('CameraClient', () => {
 	it('lists the cameras and fills defaults', async () => {
-		const { client } = fake([json({ cameras: [{ id: 'c1', label: 'A', asset: 'p1', live: true, snapshot: true, watching: 1, bps: 1500, maxViewers: 2 }, { nope: 1 }] })]);
+		const { client } = fake([json({ cameras: [{ id: 'c1', label: 'A', asset: 'p1', live: true, hls: false, snapshot: true, watching: 1, bps: 1500, maxViewers: 2 }, { nope: 1 }] })]);
 		const l = await client.list();
 		expect(l.length).toBe(1);
 		expect(l[0].interval).toBe(5);

@@ -5,7 +5,8 @@
 	// away. The still pauses while the tab is hidden and refreshes the moment
 	// it is visible again. A failure shows the controller's own words.
 	import { onMount } from 'svelte';
-	import { CameraClient, formatBps, nextState, watchingText, isLive, INITIAL, LIVE_CAPTION, type Camera, type CameraEvent, type CameraState, NO_VIEW } from '../camera.js';
+	import { playHls } from '../hls.js';
+	import { CameraClient, formatBps, LIVE_LIMIT, nextState, watchingText, isLive, INITIAL, LIVE_CAPTION, type Camera, type CameraEvent, type CameraState, NO_VIEW } from '../camera.js';
 
 	let { camera, client }: { camera: Camera; client: CameraClient } = $props();
 
@@ -16,6 +17,11 @@
 	const now = $derived(seen && seen.id === camera.id ? seen : camera);
 	const live = $derived(isLive(st));
 	const src = $derived(live ? client.streamUrl(camera.id) : client.snapshotUrl(camera.id, nonce));
+	const hls = $derived(camera.hls);
+	let video = $state<HTMLVideoElement | null>(null);
+	// HLS: the bitrate the player measured (null: none yet), and whether the browser plays it itself
+	let measured = $state<number | null>(null);
+	let native = $state(false);
 	const alt = $derived(`${camera.label} camera`);
 
 	function send(e: CameraEvent) {
@@ -35,6 +41,19 @@
 	function loaded() {
 		if (!live) send({ type: 'snapshotOk' });
 	}
+
+	// HLS live: started only here, which runs only while live (a click) and ends on
+	// Stop, a hidden tab, destroy and any error
+	$effect(() => {
+		if (!live || !hls || !video) return;
+		measured = null;
+		const h = playHls(video, client.hlsUrl(camera.id), {
+			onBitrate: (bps) => (measured = bps),
+			onError: (message, status) => send({ type: 'streamError', status, message: status === 410 ? LIVE_LIMIT : message })
+		});
+		native = h.native;
+		return () => h.stop();
+	});
 
 	onMount(() => {
 		const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
@@ -87,13 +106,18 @@
 	{#if !camera.view}
 		<p class="msg bad" role="status">{NO_VIEW}</p>
 	{:else}
+	{#if live && hls}
+		<!-- svelte-ignore a11y_media_has_caption -->
+		<video bind:this={video} muted playsinline autoplay aria-label={alt}></video>
+	{:else}
 	{#key live}
 		<img {src} {alt} onerror={failed} onload={loaded} />
 	{/key}
+	{/if}
 	<div class="bar">
 		{#if live}
 			<button type="button" class="btn" onclick={() => send({ type: 'stop' })}>Stop</button>
-			<span class="stat">{watchingText(now)} · {formatBps(now.bps)}</span>
+			<span class="stat">{watchingText(now)} · {#if !hls}{formatBps(now.bps)}{:else if native}bitrate not measured{:else}{measured === null ? '…' : formatBps(measured)}{/if}</span>
 		{:else if camera.live}
 			<button type="button" class="btn" onclick={() => send({ type: 'watch' })}>Watch live</button>
 		{/if}
@@ -127,7 +151,8 @@
 		color: var(--muted);
 		font-size: var(--font-xs, 0.85rem);
 	}
-	img {
+	img,
+	video {
 		max-width: 100%;
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);

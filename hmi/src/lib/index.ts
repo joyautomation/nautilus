@@ -241,7 +241,9 @@ export type { Note, NoteTarget, NoteTargetKind, NoteRevision, NoteQuery, NoteAns
 export { default as CheckoutPage } from './components/CheckoutPage.svelte';
 export { default as CheckoutBanner } from './components/CheckoutBanner.svelte';
 export { default as CameraPanel } from './components/CameraPanel.svelte';
-export { CameraClient, formatBps, camerasFor, watchingText, nextState as cameraNext, LIVE_CAPTION } from './camera.js';
+export { CameraClient, formatBps, camerasFor, watchingText, nextState as cameraNext, LIVE_CAPTION, LIVE_LIMIT } from './camera.js';
+export { playHls, parsePlaylist, codecFromInit, nextSegments, bufferTrim, liveSeek, BitrateMeter } from './hls.js';
+export type { HlsPlaylist, HlsSegment, HlsHandle, HlsOptions } from './hls.js';
 export type { Camera, CameraMode, CameraState, CameraEvent } from './camera.js';
 export { SnapshotClient, parseSnaps, thumbSplit, NO_SNAP_VIEW } from './alarmsnaps.js';
 export type { AlarmSnap, SnapResult, SnapState } from './alarmsnaps.js';

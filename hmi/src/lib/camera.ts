@@ -24,6 +24,8 @@ export interface Camera {
 	view: boolean;
 	/** A live stream exists for this camera kind. */
 	live: boolean;
+	/** The live stream is HLS (an RTSP camera): play it with `playHls` in a <video>, not as an <img>. */
+	hls: boolean;
 	/** A still exists. */
 	snapshot: boolean;
 	/** How many are watching live now. */
@@ -63,6 +65,7 @@ function normalize(j: any): Camera | null {
 		// an older controller says nothing: it has no such permission
 		view: j.view !== false,
 		live: j.live === true,
+		hls: j.hls === true,
 		snapshot: j.snapshot === true,
 		watching: n(j.watching, 0),
 		bps: n(j.bps, 0)
@@ -105,6 +108,11 @@ export class CameraClient {
 	/** The motion JPEG stream's URL (an <img src>). */
 	streamUrl(id: string): string {
 		return `${this.#url}/${encodeURIComponent(id)}/stream`;
+	}
+
+	/** The directory of an HLS camera's playlist (for `playHls`). */
+	hlsUrl(id: string): string {
+		return `${this.#url}/${encodeURIComponent(id)}/hls`;
 	}
 
 	/**
@@ -155,6 +163,8 @@ export function camerasFor(list: Camera[], assetId: string): Camera[] {
 export function watchingText(c: Pick<Camera, 'watching' | 'maxViewers'>): string {
 	return c.maxViewers > 0 ? `Live: ${c.watching} of ${c.maxViewers} watching` : `Live: ${c.watching} watching`;
 }
+
+export const LIVE_LIMIT = 'The live view reached its time limit: click Watch live to continue.';
 
 export const LIVE_CAPTION = 'Live video uses bandwidth, and over a slow link (radio, cellular) it can slow the tag values. Watching live is your choice.';
 

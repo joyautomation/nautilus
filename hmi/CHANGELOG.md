@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Live video from an RTSP camera plays in the panel** (#724 slice 3b, kit side): a camera the controller marks
+  `hls` shows a muted `<video>` instead of the motion-JPEG `<img>`, started only by "Watch live" and stopped by Stop,
+  a hidden tab, leaving the page and any error (the viewer cap, the 15-minute limit and a camera that did not open
+  show the controller's words). The player is the kit's own (about 200 lines, Media Source Extensions; Safari and
+  iOS play HLS natively): no hls.js, so the playground's wasm does not grow. The measured bitrate is shown, or
+  "bitrate not measured" where the browser plays the stream itself. `Camera.hls`; new exports: `playHls`,
+  `parsePlaylist`, `codecFromInit`, `nextSegments`, `bufferTrim`, `liveSeek`, `BitrateMeter`, `LIVE_LIMIT`,
+  `CameraClient.hlsUrl`.
+
 - **A picture is kept when an alarm activates** (#724 slice 2, kit side): `<AlarmJournal>` shows a small thumbnail (a
   link to the full picture, up to 3 cameras then "+N") on each `Activated` row that has one. Pictures are asked for
   lazily, three requests at a time; a controller that keeps none (404) is asked once and the journal looks as
