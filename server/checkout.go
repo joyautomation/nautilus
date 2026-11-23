@@ -50,7 +50,8 @@ type CheckoutOptions struct {
 	// file), so the answer names it.
 	OpenErr string
 
-	ck ckState // the standing checkout force (checkoutforce.go)
+	ck  ckState      // the standing checkout force (checkoutforce.go)
+	api *checkoutAPI // the mounted handlers, for Stop
 }
 
 // The checkout is controller-only and optional: its handlers are in files no
@@ -75,6 +76,9 @@ type checkoutAPI struct {
 
 func (co *CheckoutOptions) mount(s *Server, mux *http.ServeMux) {
 	a := &checkoutAPI{s: s, co: co}
+	co.ck.mu.Lock()
+	co.api = a
+	co.ck.mu.Unlock()
 	mux.HandleFunc("GET /api/checkout", a.handleCheckout)
 	mux.HandleFunc("GET /api/checkout/runs/{id}", a.handleCheckoutRun)
 	mux.HandleFunc("GET /api/checkout/runs/{id}/export", a.handleCheckoutExport)

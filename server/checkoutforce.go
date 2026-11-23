@@ -73,6 +73,7 @@ type ckForce struct {
 	until               time.Time // monotonic
 	timer               *time.Timer
 	done                chan struct{} // closed when it ends
+	watched             chan struct{} // closed when its watch goroutine has returned (nil until it starts)
 }
 
 type ckState struct {
@@ -222,7 +223,12 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		// a timer's duration runs on the monotonic clock
 		f.timer = time.AfterFunc(d, func() { a.guarded(func() { a.endCheckoutForce(f, checkout.ForceExpired, "controller") }) })
 		a.co.ck.mu.Unlock()
-		go a.watchCheckoutForce(f)
+		watched := make(chan struct{})
+		f.watched = watched
+		go func() {
+			defer close(watched)
+			a.watchCheckoutForce(f)
+		}()
 		slog.Warn("checkout: forcing an output", "tag", pt.Tag, "point", pt.ID, "by", by, "seconds", rec.Seconds, "run", run.ID)
 		return rec, http.StatusCreated, nil
 	})
@@ -375,4 +381,28 @@ func (co *CheckoutOptions) ReconcileForces() (int, error) {
 		return 0, err
 	}
 	return 1, nil
+}
+
+// Stop ends a standing checkout force and waits for its goroutines: the
+// controller's shutdown (the force is let go and recorded as interrupted, as a
+// restart would have found it), and a test's cleanup, so no timer or watch
+// outlives the server it belongs to. It is safe with nothing standing, and to
+// call more than once.
+func (co *CheckoutOptions) Stop() {
+	co.ck.mu.Lock()
+	f, a := co.ck.force, co.api
+	co.ck.mu.Unlock()
+	if f == nil || a == nil || co.Store == nil {
+		return
+	}
+	a.endCheckoutForce(f, checkout.ForceInterrupted, "controller")
+	co.ck.mu.Lock()
+	w := f.watched
+	co.ck.mu.Unlock()
+	if w != nil {
+		select {
+		case <-w:
+		case <-time.After(2 * time.Second):
+		}
+	}
 }

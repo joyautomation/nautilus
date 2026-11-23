@@ -635,6 +635,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 				}
 			}
 		}
+		// a standing force is let go, and recorded as interrupted, when the
+		// controller shuts down: no timer or watch outlives it
+		defer co.Stop()
 		co.Install(&sopts)
 	}
 	// Program provenance: a built binary decodes the history its archive
