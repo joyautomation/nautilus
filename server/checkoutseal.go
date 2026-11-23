@@ -3,6 +3,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -77,4 +78,51 @@ func (a *checkoutAPI) handleCheckoutSealed(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(b)
+}
+
+// handleCheckoutReport is a run as a printable page (checkout.Report): a
+// sealed run's report is built from its sealed record, so it shows what the
+// signature covers; any other run's says DRAFT, NOT SIGNED OFF. A read like the
+// run's own. The page loads nothing from anywhere and may not run script.
+func (a *checkoutAPI) handleCheckoutReport(w http.ResponseWriter, r *http.Request) {
+	if a.checkoutOff(w) {
+		return
+	}
+	run, ok := a.co.Store.Get(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
+		return
+	}
+	var rep checkout.Report
+	if run.State == checkout.StateSealed {
+		b, err := a.co.Store.ReadSealed(run.ID)
+		if err == nil {
+			var vr checkout.VerifyReport
+			// a record that does not verify is not printed as signed, nor one for another run
+			if vr, err = checkout.Verify(b, nil); err == nil && vr.Run != run.ID {
+				err = errors.New("the record is for another run")
+			}
+		}
+		if err == nil {
+			rep, err = checkout.ReportFromSealed(b)
+			rep.CurrentKey = a.co.Store.KeyFingerprint()
+		}
+		if err != nil {
+			// a fixed message: the error may name a path in the state directory
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the sealed record is missing or does not verify: run naut checkout verify on it"})
+			return
+		}
+	} else {
+		rep = checkout.Report{Export: checkout.BuildExport(run, a.co.Sheet, a.co.Store.Results(run.ID))}
+	}
+	page, err := rep.HTML()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not build the report"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(page)
 }

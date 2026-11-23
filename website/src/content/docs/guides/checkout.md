@@ -150,6 +150,10 @@ its own: at zero it says "ending now", and only a frame without the force says
 there is none. If the stream goes quiet, the banner says whether the force
 still stands is not known.
 
+A person with `signoff` sees **Sign off…** on an open live run: a note, the
+password, and the controller decides (see Signing off). The page shows the
+signing key's fingerprint, and each run's report, CSV, JSON and sealed record.
+
 A custom HMI app can mount `CheckoutPage` and `CheckoutBanner` from the kit
 itself.
 
@@ -168,7 +172,18 @@ curl -H "Authorization: Bearer $TOKEN" -o run.csv \
   "https://controller/api/checkout/runs/<run id>/export?format=csv"
 ```
 
-The Checkout page has the same two links for the open run.
+The Checkout page has the same two links for the open run, and a list of the
+runs so far with their files.
+
+`GET /api/checkout/runs/{id}/report` is a printable page for a run: the points
+with every result, who recorded, and for a sealed run who signed off, under
+which rule, the controller's evidence about its devices and the key's
+fingerprint. A run that is not sealed prints as **DRAFT, NOT SIGNED OFF**. A
+sealed run's report is built from its sealed record, and is refused (500) if
+that record no longer verifies, so a page that says SEALED is one whose
+signature checked against the key the record carries (the page says when that is
+not this controller's current key). The report loads nothing from anywhere and is served with a
+content-security policy that allows no script.
 
 ## Signing off
 
@@ -267,8 +282,26 @@ so a site that copies the audit journal off the box has an independent anchor
 for `verify --audit`. (`--audit` looks the entry up; it does not check the
 journal's own chain: use `naut audit verify` for that.)
 
+## Limits
+
+What a sign-off does not do, stated plainly:
+
+- The controller works out whether real devices are behind the points from the
+  manifest on disk (when a run begins, as each result is recorded, and at the
+  seal), not from what its drivers actually dialled. Someone with the project
+  directory or deploy rights can defeat it; the per-result hash catches a
+  simulator deployed for part of a run.
+- `naut checkout verify --audit` finds the seal in a copy of the audit journal;
+  it does not check that journal's own chain (`naut audit verify` does).
+- The two-person rule compares sign-in names: one person with two accounts, or
+  a user and an OIDC identity, passes it.
+- `naut check` does not warn up front when the devices look virtual or
+  unreadable. The Checkout page shows why a run can never be signed off as soon
+  as it begins, and the refusal names `checkout: real-io`.
+- Whoever holds the controller's state directory (the results file and the key)
+  can forge both; keep copies elsewhere.
+
 ## Not yet
 
-- The printable report and a Seal button on the Checkout page (sealing is the API and the command line for now).
 - A redundant pair: its controllers answer that the checkout is not available
   yet, rather than keep results on one box.

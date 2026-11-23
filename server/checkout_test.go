@@ -87,6 +87,7 @@ func TestCheckoutIsOffUnlessTheProjectEnablesIt(t *testing.T) {
 		{"GET", "/api/checkout/runs/x", ""},
 		{"GET", "/api/checkout/runs/x/export", ""},
 		{"GET", "/api/checkout/runs/x/sealed", ""},
+		{"GET", "/api/checkout/runs/x/report", ""},
 		{"POST", "/api/checkout/runs/x/seal", `{}`},
 		{"POST", "/api/checkout/runs", `{}`},
 		{"POST", "/api/checkout/runs/x/results", `{"point":"SP","outcome":"pass"}`},

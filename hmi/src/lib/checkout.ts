@@ -55,7 +55,11 @@ export interface CheckoutResult {
 export interface CheckoutRun {
 	id: string;
 	rehearsal?: boolean;
-	state: 'open' | 'abandoned';
+	state: 'open' | 'abandoned' | 'sealed';
+	sealedAt?: number;
+	sealedBy?: string;
+	/** Why the controller found this run can never be signed off (virtual devices, no field driver): its own finding, not the client's. */
+	unreal?: string;
 	sheet: string;
 	title?: string;
 	by: string;
@@ -76,6 +80,8 @@ export interface CheckoutView {
 	title?: string;
 	hash: string;
 	signoff: string;
+	/** The key that signs a sealed run: write it down from here, ahead of time. */
+	keyFingerprint?: string;
 	points: CheckoutPoint[];
 	run?: CheckoutRun;
 	sheetChanged?: boolean;
@@ -186,6 +192,11 @@ export class CheckoutClient {
 		return this.#do(`/runs/${encodeURIComponent(run)}/force`, { method: 'POST', body: JSON.stringify({ point, value, seconds, confirm }) }, 'could not force the point', (j) => j !== null && typeof j === 'object');
 	}
 
+	/** Sign a run off (needs `signoff`: the kit's fetch asks for the password). */
+	seal(run: string, note = ''): Promise<CheckoutAnswer<Record<string, unknown>>> {
+		return this.#do(`/runs/${encodeURIComponent(run)}/seal`, { method: 'POST', body: JSON.stringify({ note }) }, 'could not seal the run', (j) => j !== null && typeof j === 'object');
+	}
+
 	release(run: string): Promise<CheckoutAnswer<Record<string, unknown>>> {
 		return this.#do(`/runs/${encodeURIComponent(run)}/force/release`, { method: 'POST', body: '{}' }, 'could not release the force', (j) => j !== null && typeof j === 'object');
 	}
@@ -286,4 +297,25 @@ export function resultLine(r: CheckoutResult): string {
 /** Whether a note is required (a fail or a note says why). */
 export function needsNote(outcome: 'pass' | 'fail' | 'note'): boolean {
 	return outcome !== 'pass';
+}
+
+/** What signing off is, in the words the page, the report and the record use. */
+export const SEAL_NOTICE =
+	"Signing off signs this run's record with the controller's key. It is a tamper-evident record: the signature proves it came from this controller and was not altered since. The people named were identified by the controller's sign-in, not by a personal certificate, and it is not an electronic signature in a legal or regulatory sense.";
+
+/** The links for a run's files (a browser sign-in carries the cookie; a token calls the API). */
+export function runLinks(run: Pick<CheckoutRun, 'id' | 'state'>): { label: string; href: string }[] {
+	const base = `/api/checkout/runs/${encodeURIComponent(run.id)}`;
+	const out = [
+		{ label: 'Report', href: `${base}/report` },
+		{ label: 'CSV', href: `${base}/export?format=csv` },
+		{ label: 'JSON', href: `${base}/export?format=json` }
+	];
+	if (run.state === 'sealed') out.push({ label: 'Sealed record', href: `${base}/sealed` });
+	return out;
+}
+
+/** Whether the page offers Seal: the run is open and live, the person may sign off. The controller decides every condition. */
+export function offersSeal(me: Me | null | undefined, run: Pick<CheckoutRun, 'state' | 'rehearsal' | 'unreal'> | null | undefined): boolean {
+	return !!run && run.state === 'open' && !run.rehearsal && !run.unreal && canIn(me, 'signoff', undefined);
 }

@@ -550,7 +550,7 @@ func TestTheCheckoutPageIsOptIn(t *testing.T) {
 	if !regexp.MustCompile(`label:\s*"Checkout",\s*needs:\s*"checkout"`).MatchString(js) {
 		t.Errorf("the Checkout screen is not gated with needs: checkout")
 	}
-	for _, want := range []string{"/api/checkout", "Begin rehearsal", "is forced by", "/export?format=csv"} {
+	for _, want := range []string{"/api/checkout", "Begin rehearsal", "is forced by", "/export?format=csv", "Sign off this run", "/report"} {
 		if !strings.Contains(js, want) {
 			t.Errorf("the checkout app lacks %q (the page or the banner is not linked)", want)
 		}
