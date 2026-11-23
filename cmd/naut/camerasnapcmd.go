@@ -25,6 +25,13 @@ const cameraUsage = `naut camera — the plant's cameras on a running controller
 
 Usage:
   naut camera snapshots purge --host <controller> (--all | --older-than-days N)
+  naut camera discover [--interface NAME] [--timeout 3s] [--json]
+
+discover asks this machine's network which ONVIF cameras are on it (WS-Discovery,
+multicast: run it on a machine on the cameras' network; it does not cross
+routers). It prints what answered and a manifest row to start from; it changes
+nothing, and a controller never does it by itself. What answers is unauthenticated:
+check the address before you put it in a manifest.
 
 Drops the pictures kept when alarms activated (camera-snapshots: in the
 manifest says how long they are kept: keep-days, 30 by default). The purge is
@@ -44,6 +51,9 @@ func runCamera(args []string) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		fmt.Print(cameraUsage)
 		return 0
+	}
+	if args[0] == "discover" {
+		return runCameraDiscover(args[1:], os.Stdout, os.Stderr)
 	}
 	if args[0] != "snapshots" || len(args) < 2 || args[1] != "purge" {
 		fmt.Fprintf(os.Stderr, "naut camera: unknown command %q\n\n%s", strings.Join(args, " "), cameraUsage)
