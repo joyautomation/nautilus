@@ -74,7 +74,7 @@ func TestClearDuplicateAllClearsEveryMember(t *testing.T) {
 	rep, err := c.elector("b").ClearDuplicateAll(ctx, "a", "user:op")
 	again := false
 	if err != nil && raceOn && slowWrite(rep) {
-		// Under -race a member's state write can miss its half-lease
+		// Under -race a member's state write can miss its write
 		// deadline on a loaded runner (#1120): the command ends
 		// INCOMPLETE, as it must, and its own advice is to run it again.
 		again = true

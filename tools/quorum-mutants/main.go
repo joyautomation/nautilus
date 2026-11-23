@@ -306,6 +306,7 @@ var table = []mutation{
 	{"fence_not_learned", []string{"TestOnlyAVoterThatLostItsStateLearnsFences", "TestAWitnessReplyThenTheOldBoxsStateGivesNoProposal", "TestFromSpareNeverMakesTwoLeaders"}},
 	{"fence_any_name", []string{"TestAFenceNamesOnlyAPairController"}},
 	{"dup_answered_before_write", []string{"TestAFromSpareWhoseWitnessCantWriteIsIncomplete"}},
+	{"dup_wait_lease_scaled", []string{"TestAClearWaitsOutASlowDisk", "TestDupWriteWaitHasAFloor"}},
 	// #1164 re-check.
 	{"fence_hides_lookalike", []string{"TestAFencedVoterStillHearsAnUncommissionedLookalike", "TestFromSpareNeverMakesTwoLeaders"}},
 	{"fence_learns_any_name", []string{"TestAFenceIsLearntOnlyOnAPairNameAndNeverCarriedToAController"}},

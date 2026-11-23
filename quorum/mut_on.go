@@ -250,6 +250,7 @@ var Mutations = []string{
 	"recommission_under_fence",       // node: a commission or re-commission adopts below a member's fence, which then refuses the pair
 	"fence_any_name",                 // node: a member takes a fence on any name, the witness's or its own included
 	"dup_answered_before_write",      // node: a clear or fence is answered before its write is durable: a crash then loses what the command reported done
+	"dup_wait_lease_scaled",          // node: a member waits for a clear's or a fence's write only its share of the lease (125 ms on a 500 ms witness): a slow disk ends the command incomplete (#1329)
 	// #1029 3c-3c-2a: accepting a loss, and the log history.
 	"accept_loss_blanket",               // oplog: a vouched catch-up overrides a copy outside what the person accepted
 	"accept_kept_after_sync",            // oplog: a log synced by the normal path keeps its acceptance
