@@ -1190,3 +1190,35 @@ func TestSiemensDeployAdoptedProjectIsItsCPUs(t *testing.T) {
 		}
 	}
 }
+
+// TestSiemensDeployRefusesAnUploadWithoutItsCPU: an upload whose CPU the
+// agent could not read adopts nothing a deploy builds on.
+func TestSiemensDeployRefusesAnUploadWithoutItsCPU(t *testing.T) {
+	r := newDeployRig(t)
+	r.cpuRuns(false)
+	r.setStation(", access-control: keep, configuration-protection: keep")
+	r.fake.UploadCPUError = "the project holds two CPUs"
+	out, code := r.run("", false, "--adopt", "upload")
+	if code != 1 || !strings.Contains(out, "the adopted project's CPU could not be read") || !strings.Contains(out, "the project holds two CPUs") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if a := r.adoption(); a == nil || a.Complete {
+		t.Fatalf("the adoption record: %+v", a)
+	}
+}
+
+// TestSiemensDeployAdoptTypoKeepsTheAdoption: an --adopt that fails its own
+// checks (no such file, no record) leaves an earlier adoption as it was.
+func TestSiemensDeployAdoptTypoKeepsTheAdoption(t *testing.T) {
+	r := newDeployRig(t)
+	r.adopt()
+	if out, code := r.run("", false, "--adopt", filepath.Join(r.dir, "no-such.zap21")); code != 2 || !strings.Contains(out, "--adopt: open") {
+		t.Fatalf("a missing archive: exit %d:\n%s", code, out)
+	}
+	if a := r.adoption(); a == nil || !a.Complete || a.Source != "archive" {
+		t.Fatalf("the adoption record after a typo: %+v", a)
+	}
+	if out, code := r.run("", false, "--download", "--yes", "--allow-stop"); code != 0 {
+		t.Fatalf("the adoption still deploys: exit %d:\n%s", code, out)
+	}
+}

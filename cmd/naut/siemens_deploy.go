@@ -596,22 +596,13 @@ func (d *siemensDeployer) adopt(ctx context.Context, name string, st tiad.Statio
 	default:
 		rec.Source, rec.Archive = "archive", filepath.Base(o.adopt)
 	}
-	// Until the adopt ended, the project it may leave is marked
-	// unfinished (Complete false): nothing builds on it uncompared, even
-	// when naut dies between the agent's adopt and the record.
-	pending, _ := json.Marshal(rec)
-	if _, err := d.client.PutFile(ctx, siemensAdoptionRecord(name), pending); err != nil {
-		return d.tiadErr("the adoption record", err)
-	}
-	// The station record speaks of a hardware load of another project.
-	if err := d.client.DeleteFile(ctx, siemensStationRecord(name)); err != nil && tiad.Kind(err) != tiad.KindNotFound {
-		return d.tiadErr("the station record", err)
-	}
-	var res tiad.AdoptResult
-	var err error
+	// What can be checked before anything changes, first: a typo in the
+	// path, or no record to adopt from, leaves an earlier adoption as it
+	// was.
+	var archive []byte
+	id := last.id
 	switch o.adopt {
 	case adoptLastDeploy:
-		id := last.id
 		switch {
 		case o.download && id == "":
 			d.fail("--adopt last-deploy: %s, so there is no archive to adopt; adopt the CPU's project archive (--adopt FILE.zap21) or an upload (--adopt upload)", last.why)
@@ -636,6 +627,29 @@ func (d *siemensDeployer) adopt(ctx context.Context, name string, st tiad.Statio
 			}
 			d.say("adopting deploy %s's archive, not checked against the CPU (built only: a --download compares it first)", id)
 		}
+	case adoptUpload:
+	default:
+		var err error
+		if archive, err = os.ReadFile(o.adopt); err != nil {
+			d.fail("--adopt: %v", err)
+			return 2
+		}
+	}
+	// Until the adopt ended, the project it may leave is marked
+	// unfinished (Complete false): nothing builds on it uncompared, even
+	// when naut dies between the agent's adopt and the record.
+	pending, _ := json.Marshal(rec)
+	if _, err := d.client.PutFile(ctx, siemensAdoptionRecord(name), pending); err != nil {
+		return d.tiadErr("the adoption record", err)
+	}
+	// The station record speaks of a hardware load of another project.
+	if err := d.client.DeleteFile(ctx, siemensStationRecord(name)); err != nil && tiad.Kind(err) != tiad.KindNotFound {
+		return d.tiadErr("the station record", err)
+	}
+	var res tiad.AdoptResult
+	var err error
+	switch o.adopt {
+	case adoptLastDeploy:
 		rec.Deploy = id
 		res, err = d.client.AdoptProject(ctx, tiad.AdoptRequest{Name: name, Deploy: id, Replace: replace, Address: st.CPU.Address})
 		if err != nil {
@@ -646,6 +660,9 @@ func (d *siemensDeployer) adopt(ctx context.Context, name string, st tiad.Statio
 		// The upload replaces the project's station with the CPU's: the
 		// project it goes into holds the spec's CPU only, with settings a
 		// new CPU takes without secrets (keep would have nothing to keep).
+		// The create replaces an adoption no download took before the
+		// upload is proven; the pending record keeps anything from
+		// building on what a failed upload leaves.
 		host := tiad.Station{CPU: st.CPU}
 		host.CPU.ConfigurationProtection = tiad.ProtectNone
 		host.CPU.AccessControl = tiad.AccessKeep
@@ -672,13 +689,8 @@ func (d *siemensDeployer) adopt(ctx context.Context, name string, st tiad.Statio
 		cpu := ur.CPU
 		res = tiad.AdoptResult{Project: "projects/" + name + "/" + name + ".ap21", CPU: &cpu, CPUError: ur.CPUError, CPUAddress: st.CPU.Address}
 	default:
-		b, err := os.ReadFile(o.adopt)
-		if err != nil {
-			d.fail("--adopt: %v", err)
-			return 2
-		}
 		wp := siemensSourceDir + "/" + name + "/adopt.zap21"
-		if _, err := d.client.PutFile(ctx, wp, b); err != nil {
+		if _, err := d.client.PutFile(ctx, wp, archive); err != nil {
 			return d.tiadErr("put "+rec.Archive, err)
 		}
 		res, err = d.client.AdoptProject(ctx, tiad.AdoptRequest{Name: name, Archive: wp, Replace: replace, Address: st.CPU.Address})

@@ -175,6 +175,17 @@ func (f *Fake) adoptProject(r *http.Request) (any, *failure) {
 				"projects/%s/ holds a project already: adopt makes a deploy's first project and replaces one only when asked (replace); open it (POST /v1/sessions)", req.Name)
 		}
 	}
+	// As the agent: a replace removes the project there once the source
+	// is staged and hashed, before TIA retrieves it; whatever fails after
+	// leaves no project.
+	if req.Replace {
+		for p := range f.files {
+			if strings.HasPrefix(strings.ToLower(p), strings.ToLower(guard)) {
+				delete(f.files, p)
+				delete(f.saved, p)
+			}
+		}
+	}
 	if req.Archive != "" {
 		// What TIA retrieves from the file: a deploy's archive or a
 		// save's, else nothing.
@@ -206,13 +217,6 @@ func (f *Fake) adoptProject(r *http.Request) (any, *failure) {
 	sum := sha256.Sum256(b)
 	source["sha256"] = hex.EncodeToString(sum[:])
 	source["bytes"] = len(b)
-	// As a create replaces it.
-	for p := range f.files {
-		if strings.HasPrefix(strings.ToLower(p), strings.ToLower(guard)) {
-			delete(f.files, p)
-			delete(f.saved, p)
-		}
-	}
 	f.files[project] = []byte("fake TIA project")
 	if f.saved == nil {
 		f.saved = map[string]savedProject{}

@@ -48,6 +48,9 @@ type Fake struct {
 	Token string
 	// Targets are the CPU addresses downloads may go to (TIAD_TARGETS).
 	Targets []string
+	// UploadCPUError makes an upload succeed without its CPU: the agent's
+	// upload whose read of the project's CPU failed (cpuError).
+	UploadCPUError string
 	// Gates are what probe reports. Empty means every gate passes. Any
 	// gate that blocks (tiad.Gate.Blocks: failed, or a state it does not
 	// know) makes every TIA call fail with kind "gate"; an unknown one
@@ -2063,6 +2066,10 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s.restored, s.changed = f.loadedArchive[address], false
 	// The fake's CPU asks no TLS question going online for an upload, so
 	// nothing is trusted (the C# fake's uploadAsksTls models one).
+	if f.UploadCPUError != "" {
+		// The agent's upload that could not read the project's CPU.
+		return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPUError: f.UploadCPUError, RemovedAccess: removed, BlindTrust: f.blindTrust}, nil
+	}
 	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPU: *s.cpu, RemovedAccess: removed, BlindTrust: f.blindTrust}, nil
 }
 
