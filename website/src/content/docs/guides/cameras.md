@@ -402,8 +402,7 @@ token always counts as fresh), and is journalled as `camera.snapshot-purge`.
 
 ## What is not here yet
 
-- `hls` cameras: live video of that kind, and finding ONVIF cameras
-  on the network (`naut camera discover`) are later steps. An `hls` camera shows a still
+- `hls` cameras: live video of that kind is a later step. An `hls` camera shows a still
   if a `snapshot-url` is given.
 - The playground draws no camera: the camera relay is controller-only code and
   is not in the browser build.
