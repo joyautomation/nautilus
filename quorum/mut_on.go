@@ -114,6 +114,9 @@ var Mutations = []string{
 	"no_term_cap",                // the witness takes a vote that jumps the terms
 	"controller_no_term_cap",     // a controller's voter takes a vote that jumps the terms
 	"hello_unbound",              // the client-token MAC binds no names or direction: a reflected question passes
+	"hello_retry_slow",           // node: a hello with no verified answer is retried only an interval later (#1120)
+	"hello_not_asked_again",      // node: a peer restart or link-up asks for no hello (#1120)
+	"hello_asks_unspaced",        // node: asks for a hello send them back to back (#1120 review)
 	"creds_unbound",              // the credential check's MAC leaves the digest out, so differing users files read as the same (#708)
 	"creds_names_unbound",        // the credential MAC leaves the asker and answerer out, so a reflected answer can pass (#1046 review)
 	"creds_challenge_unbound",    // the credential MAC leaves the challenge out, so a replayed answer can pass (#1046 review)

@@ -42,6 +42,9 @@ type cluster struct {
 	mute map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
 	// noAdopt: every Adopt to or from it is lost (the rest goes through).
 	noAdopt map[quorum.NodeID]bool
+	// noHello: its hellos to the peer are lost (the rest goes through).
+	noHello map[quorum.NodeID]bool
+	hellos  map[quorum.NodeID]int    // hellos sent, by sender
 	addr    map[quorum.NodeID]string // the name peers use: a DNS name nothing allows
 	byHP    map[string]quorum.NodeID
 	real    map[string]string // name -> the address it listens on now
@@ -108,7 +111,7 @@ func newCluster(t *testing.T) *cluster {
 // times one cluster at a time.
 func newClusterHere(t *testing.T) *cluster {
 	c := &cluster{t: t, pair: NewClusterID(), cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
-		byHP: map[string]quorum.NodeID{}, real: map[string]string{}, ctl: map[quorum.NodeID]*member{},
+		byHP: map[string]quorum.NodeID{}, noHello: map[quorum.NodeID]bool{}, hellos: map[quorum.NodeID]int{}, real: map[string]string{}, ctl: map[quorum.NodeID]*member{},
 		tok:  map[quorum.NodeID]string{"a": testToken, "b": testToken, WitnessID: testToken},
 		ctok: map[quorum.NodeID]string{"a": "client", "b": "client"}, led: map[uint64]quorum.NodeID{},
 		stop: make(chan struct{}), done: make(chan struct{}), bytes: map[quorum.NodeID]*tap{}, fail: t.Errorf,
@@ -334,7 +337,11 @@ func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, errCut
 	}
 	f.c.mu.Lock()
+	if strings.HasSuffix(r.URL.Path, "/hello") {
+		f.c.hellos[f.from]++
+	}
 	mute := f.c.mute[f.from] && strings.HasSuffix(r.URL.Path, "/vote") ||
+		f.c.noHello[f.from] && strings.HasSuffix(r.URL.Path, "/hello") ||
 		(f.c.noAdopt[f.from] || f.c.noAdopt[to]) && strings.HasSuffix(r.URL.Path, "/adopt")
 	f.c.mu.Unlock()
 	if mute {
