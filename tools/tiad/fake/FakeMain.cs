@@ -23,6 +23,7 @@
 //   GET /fake/downloads {"downloads": [{address, hardware, software, state}]}
 //       every download that loaded the CPU. Secrets are never recorded.
 //   GET /fake/shown   {"shown": ["group/name", ...]}: the blocks a show opened
+//   GET /fake/online  {"online": ["online <address>", "offline <address>", ...]}
 //
 // PUT /fake/script also takes "questions": [{id, message, detail,
 // objects}], TIA's pre-download checks for every download.
@@ -685,6 +686,9 @@ namespace Tiad.Fake
         // shown is every block a show opened in the (absent) editor, as
         // "group/name" ("name" at the root), in order.
         readonly List<object> shown = new List<object>();
+        // onlineEvents is every hold and release: "online <address>" and
+        // "offline <address>", in order.
+        readonly List<object> onlineEvents = new List<object>();
 
         public List<Question> Questions
         {
@@ -861,6 +865,25 @@ namespace Tiad.Fake
             return new Obj();
         }
 
+        public void OnlineEvent(string e)
+        {
+            lock (mu)
+            {
+                onlineEvents.Add(e);
+            }
+        }
+
+        // Online is GET /fake/online {"online": ["online <address>", "offline <address>", ...]}.
+        public object Online(Call c)
+        {
+            var o = new Obj();
+            lock (mu)
+            {
+                o["online"] = onlineEvents.ToArray();
+            }
+            return o;
+        }
+
         public void Showed(string group, string name)
         {
             lock (mu)
@@ -894,6 +917,9 @@ namespace Tiad.Fake
     sealed class FakeProject
     {
         public string Full = "";
+        // HeldOnline is the address a HoldOnline holds the project online
+        // to, "" when offline.
+        public string HeldOnline = "";
         public Station Station;
         public List<Block> Blocks = new List<Block>();
         // GroupOf is each imported block's group (lower-cased name to the
@@ -1458,6 +1484,8 @@ namespace Tiad.Fake
         public void CloseProject(object project)
         {
             script.Enter("CloseProject");
+            // As tiad.Openness: a project held online goes offline first.
+            ReleaseOnline(project);
             openProjects--;
         }
 
@@ -2044,6 +2072,28 @@ namespace Tiad.Fake
         // Show records the block, as the editor TIA would open it in.
         // It refuses a block the project does not hold there, as
         // Openness finds none.
+        // HoldOnline records the hold: the fake has nothing to show online.
+        // It does not model credentials or certificates going online.
+        public string HoldOnline(object project, string address, LoginUse use)
+        {
+            script.Enter("HoldOnline");
+            var p = (FakeProject)project;
+            if (p.Cpu == null) throw new TiaException("the project has no CPU");
+            if (p.HeldOnline != "") throw new TiaException("the project is already online");
+            p.HeldOnline = address;
+            script.OnlineEvent("online " + address);
+            return "Online";
+        }
+
+        public void ReleaseOnline(object project)
+        {
+            var p = (FakeProject)project;
+            if (p.HeldOnline == "") return;
+            script.Enter("ReleaseOnline");
+            script.OnlineEvent("offline " + p.HeldOnline);
+            p.HeldOnline = "";
+        }
+
         public void Show(object project, string group, string name)
         {
             script.Enter("Show");
@@ -2614,6 +2664,7 @@ namespace Tiad.Fake
             router.Add("GET", "/fake/calls", script.Calls);
             router.Add("GET", "/fake/downloads", script.Downloads);
             router.Add("GET", "/fake/shown", script.Shown);
+            router.Add("GET", "/fake/online", script.Online);
             router.Add("POST", "/fake/load", delegate(Call c) { return FakeTia.LoadOutside(world, c); });
 
             var server = new Server(cfg, router);

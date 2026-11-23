@@ -57,6 +57,10 @@ namespace Tiad.Openness
     {
         public Project Project;
         public string Full = "";
+        // Held and HeldAsks are the connection a HoldOnline keeps online,
+        // and the handler answering its questions; null when offline.
+        public OnlineProvider Held;
+        public OnlineAsks HeldAsks;
     }
 
     // OnlineAsks answers what TIA asks when it goes online to a CPU
@@ -567,7 +571,82 @@ namespace Tiad.Openness
 
         public void CloseProject(object project)
         {
+            // A project held online goes offline first, so TIA closes no
+            // project with a live connection.
+            ReleaseOnline(project);
             Tia(delegate { Of(project).Project.Close(); });
+        }
+
+        // HoldOnline goes online as Compare does, and stays online: TIA's
+        // window then shows the CPU's state and the online/offline compare.
+        // It reads and loads nothing itself.
+        public string HoldOnline(object project, string address, LoginUse use)
+        {
+            return Tia(delegate
+            {
+                OpenProject o = Of(project);
+                if (o.Held != null) throw new TiaException("the project is already online");
+                HwDevice d = StationOf(o.Project);
+                if (d == null) throw new TiaException("the project has no CPU");
+                DeviceItem cpu = CpuOf(d);
+                OnlineProvider op = cpu.GetService<OnlineProvider>();
+                ConfigurationPcInterface pc = PcInterface(op.Configuration);
+                ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
+                var online = new OnlineAsks(op.Configuration, Detached, use, address);
+                bool held = false;
+                try
+                {
+                    OnlineState st = op.GoOnline(at);
+                    if (st != OnlineState.Online)
+                    {
+                        if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
+                        if (online.LoggedIn) throw new TiaException(TiaNames.LoginFailed(address, "online state " + st));
+                        throw new TiaException("TIA could not go online to " + address + ": " + st);
+                    }
+                    online.Check(address, "going online");
+                    o.Held = op;
+                    o.HeldAsks = online;
+                    held = true;
+                    return st.ToString();
+                }
+                catch (TiaException)
+                {
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    TiaException refused = online.Explain(address, e);
+                    if (refused != null) throw refused;
+                    throw;
+                }
+                finally
+                {
+                    if (!held)
+                    {
+                        DownloadSteps.Quietly(delegate { op.GoOffline(); }, "online: going offline after a failed go-online (if TIA is alive, the project may still be online)");
+                        online.Stop();
+                    }
+                }
+            });
+        }
+
+        public void ReleaseOnline(object project)
+        {
+            Tia<bool>(delegate
+            {
+                OpenProject o = Of(project);
+                if (o.Held == null) return true;
+                // Held until TIA says offline: a GoOffline that throws
+                // leaves the project held, so a retried release (or the
+                // retried close of the session it broke) tries again, and
+                // no close drops a live connection unasked.
+                o.Held.GoOffline();
+                OnlineAsks asks = o.HeldAsks;
+                o.Held = null;
+                o.HeldAsks = null;
+                asks.Stop();
+                return true;
+            });
         }
 
         // ArchiveInto writes a compressed archive of o, already saved, into

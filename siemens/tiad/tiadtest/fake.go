@@ -48,6 +48,10 @@ type Fake struct {
 	Token string
 	// Targets are the CPU addresses downloads may go to (TIAD_TARGETS).
 	Targets []string
+	// ReleaseOnlineFails makes taking a project offline fail inside TIA's
+	// side with this message: the project stays held online, and a close
+	// fails, leaving the session (the agent's broken close).
+	ReleaseOnlineFails string
 	// VerifyCloseError makes a verify fail to close its session: the
 	// session is kept and the reply's closeError says so (the verdict
 	// stands), as the agent's does when TIA is busy closing it.
@@ -151,6 +155,7 @@ type Fake struct {
 	next      int
 	downloads []Download
 	shown     []string
+	online    []string          // "online <address>" / "offline <address>", in order
 	loaded    map[string]string // CPU address → session that last downloaded
 	// saved is what a saved project holds besides its file: its CPU, the
 	// devices besides it and its protection, restored when it is opened.
@@ -162,6 +167,9 @@ type Fake struct {
 
 type session struct {
 	id, project string
+	// heldOnline is the address an online call holds the project online
+	// to, "" when offline (the agent's Session.HeldOnline).
+	heldOnline string
 	// guard is the directory a created project owns, "projects/<name>/".
 	guard    string
 	station  *tiad.Station
@@ -597,6 +605,7 @@ func (f *Fake) init() {
 		m.HandleFunc("POST /v1/sessions/{id}/upload", f.wrap(f.upload, true))
 		m.HandleFunc("POST /v1/sessions/{id}/save", f.wrap(f.save, true))
 		m.HandleFunc("POST /v1/sessions/{id}/show", f.wrap(f.show, true))
+		m.HandleFunc("POST /v1/sessions/{id}/online", f.wrap(f.goOnline, true))
 		m.HandleFunc("POST /v1/sessions/{id}/fingerprint", f.wrap(f.readFingerprint, true))
 		m.HandleFunc("GET /v1/pins", f.wrap(f.listPins, false))
 		m.HandleFunc("GET /v1/deploys", f.wrap(f.listDeploys, false))
@@ -1110,6 +1119,11 @@ func (f *Fake) session(r *http.Request) (*session, *failure) {
 func (f *Fake) closeSession(r *http.Request) (any, *failure) {
 	s, fl := f.session(r)
 	if fl != nil {
+		return nil, fl
+	}
+	// As the agent: a project held online goes offline first, and a close
+	// whose offline step fails keeps the session.
+	if _, fl := f.releaseOnline(s); fl != nil {
 		return nil, fl
 	}
 	delete(f.sessions, s.id)
@@ -1930,6 +1944,9 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if fl := heldOnlineRefuses(s, "compare"); fl != nil {
+		return nil, fl
+	}
 	var req tiad.CompareRequest
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
@@ -2021,6 +2038,9 @@ func (f *Fake) export(r *http.Request) (any, *failure) {
 func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s, fl := f.session(r)
 	if fl != nil {
+		return nil, fl
+	}
+	if fl := heldOnlineRefuses(s, "upload"); fl != nil {
 		return nil, fl
 	}
 	var req tiad.UploadRequest
@@ -2163,6 +2183,9 @@ func (f *Fake) fingerprintItems(address string) []tiad.FingerprintItem {
 func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
 	s, fl := f.session(r)
 	if fl != nil {
+		return nil, fl
+	}
+	if fl := heldOnlineRefuses(s, "read the fingerprint"); fl != nil {
 		return nil, fl
 	}
 	var req tiad.FingerprintRequest

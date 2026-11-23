@@ -1179,3 +1179,31 @@ func (s *Session) Show(ctx context.Context, block string) (Shown, error) {
 	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("show"), map[string]string{"block": block}, &r)
 	return r, err
 }
+
+// OnlineRequest is POST /v1/sessions/{id}/online.
+type OnlineRequest struct {
+	Online  bool           `json:"online"`
+	Secrets *OnlineSecrets `json:"secrets,omitempty"`
+}
+
+// OnlineResult is where an online call left the session.
+type OnlineResult struct {
+	Online bool `json:"online"`
+	// Address is the CPU held online, or (going offline) the one it was
+	// held online to, "" when it was not.
+	Address string `json:"address"`
+	State   string `json:"state,omitempty"`
+}
+
+// Online holds the session's project online to its CPU in TIA Portal's
+// window, or (online false) takes it offline. Only an agent started with
+// TIAD_UI=1 has a window (Health.UI); any other refuses (KindBadRequest).
+// It loads, compares and writes nothing: TIA's window shows the CPU's
+// state and its own online/offline compare. While held online, the
+// session refuses compare, fingerprint and upload (KindBusy); a close
+// goes offline first.
+func (s *Session) Online(ctx context.Context, req OnlineRequest) (OnlineResult, error) {
+	var r OnlineResult
+	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("online"), req, &r)
+	return r, err
+}

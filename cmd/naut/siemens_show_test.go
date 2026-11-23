@@ -115,3 +115,45 @@ func TestSiemensShowRefusals(t *testing.T) {
 		t.Fatalf("another project open: exit %d:\n%s", code, out)
 	}
 }
+
+// TestSiemensShowOnline: --online holds the deployed project online in
+// TIA's window before the show; --close takes it offline, then closes it.
+func TestSiemensShowOnline(t *testing.T) {
+	r := newDeployRig(t)
+	r.deployed()
+	r.fake.UI = true
+	out, code := r.show("--online", "naut_main")
+	if code != 0 || !strings.Contains(out, "TIA Portal is online to the CPU at "+deployCPU+" (Online)") ||
+		!strings.Contains(out, "naut_main [FB1]") || !strings.Contains(out, "--close takes it offline first") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if got := r.fake.OnlineEvents(); !slices.Equal(got, []string{"online " + deployCPU}) {
+		t.Fatalf("online events %v", got)
+	}
+	// Again on the reused session: still one connection.
+	if out, code := r.show("--online", "naut_Tags"); code != 0 || len(r.fake.OnlineEvents()) != 1 {
+		t.Fatalf("second --online: exit %d, events %v:\n%s", code, r.fake.OnlineEvents(), out)
+	}
+	out, code = r.show("--close")
+	if code != 0 || !strings.Contains(out, "took projects/s7_demo/s7_demo.ap21 offline from "+deployCPU) || len(r.sessions()) != 0 {
+		t.Fatalf("--close: exit %d:\n%s", code, out)
+	}
+	if got := r.fake.OnlineEvents(); !slices.Equal(got, []string{"online " + deployCPU, "offline " + deployCPU}) {
+		t.Fatalf("online events %v", got)
+	}
+}
+
+// TestSiemensShowOnlineRefused: a go-online the agent refuses closes the
+// session the show opened, and shows nothing.
+func TestSiemensShowOnlineRefused(t *testing.T) {
+	r := newDeployRig(t)
+	r.deployed()
+	r.fake.UI = true
+	r.fake.Targets = []string{"192.0.2.99"}
+	out, code := r.show("--online", "naut_main")
+	// One refusal, and nothing after it: the show is never tried.
+	if code != 1 || !strings.Contains(out, "going online:") || !strings.Contains(out, "TIAD_TARGETS") || strings.Count(out, "naut siemens show:") != 1 ||
+		len(r.sessions()) != 0 || len(r.fake.Shown()) != 0 {
+		t.Fatalf("exit %d, sessions %d, shown %v:\n%s", code, len(r.sessions()), r.fake.Shown(), out)
+	}
+}

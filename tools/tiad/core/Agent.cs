@@ -137,6 +137,7 @@ namespace Tiad
             RegisterDeploys(r);
             RegisterAdopt(r);
             RegisterShow(r);
+            RegisterOnline(r);
         }
 
         object Health(Call c)
