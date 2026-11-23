@@ -2,12 +2,14 @@ package checkout
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 )
@@ -58,7 +60,7 @@ func OpenLog(dir string, now func() time.Time) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
-	s := &Store{now: now, runs: map[string]*Run{}, rejected: map[uint64]error{}}
+	s := &Store{now: now, runs: map[string]*Run{}, rejected: map[uint64]error{}, path: filepath.Join(dir, "checkout.jsonl")} // path names the state directory (the sealed records' cache); no file is opened
 	var created bool
 	var err error
 	if s.key, created, err = loadOrCreateKey(filepath.Join(dir, KeyFile)); err != nil {
@@ -107,9 +109,23 @@ func (s *Store) Reset() {
 func (s *Store) ApplyLogged(seq uint64, ts int64, body []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.halted != nil {
+		return nil // an entry this build could not apply came before: nothing more is applied
+	}
+	if len(body) > MaxLine {
+		s.reject(seq, fmt.Errorf("%w: the entry is larger than %d bytes", ErrInvalid, MaxLine))
+		return nil
+	}
 	var e entry
 	if err := json.Unmarshal(body, &e); err != nil {
 		s.reject(seq, fmt.Errorf("%w: the entry is not readable: %v", ErrInvalid, err))
+		return nil
+	}
+	if e.V > entryVersion {
+		// a newer build wrote it, with something this one would drop or refuse:
+		// going on would leave this controller's runs and chain different from
+		// its peer's. It stops, and says so.
+		s.halt(fmt.Errorf("the pair's checkout entries are from a newer build than this controller's (format %d, this build reads %d): upgrade this controller, then restart it", e.V, entryVersion))
 		return nil
 	}
 	if e.Kind == kindSeal && len(e.Payload) == 0 {
@@ -125,12 +141,47 @@ func (s *Store) ApplyLogged(seq uint64, ts int64, body []byte) error {
 		return nil
 	}
 	if err := s.apply(e); err != nil {
+		if errors.Is(err, errUnknownKind) {
+			s.halt(fmt.Errorf("the pair's checkout log has an entry kind this build does not know (%q): upgrade this controller, then restart it", e.Kind))
+			return nil
+		}
 		s.reject(seq, err)
 		return nil
 	}
 	s.seq, s.prev = e.Seq, lineHash(line)
 	s.lines = append(s.lines, line)
+	if p := s.producedBy(e); p != nil {
+		if s.produced == nil {
+			s.produced = map[uint64]any{}
+		}
+		s.produced[seq] = p
+		for k := range s.produced { // bounded: a proposer asks within seconds
+			if k+256 < seq {
+				delete(s.produced, k)
+			}
+		}
+	}
+	if e.Kind == kindSeal {
+		s.cacheSealed(e.Run)
+	}
 	return nil
+}
+
+func (s *Store) halt(err error) {
+	if s.halted == nil {
+		s.halted = err
+	}
+}
+
+// Halted is why this controller applies no more checkout entries ("" when it
+// does): the pair's log holds entries a newer build wrote.
+func (s *Store) Halted() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.halted == nil {
+		return ""
+	}
+	return s.halted.Error()
 }
 
 func (s *Store) reject(seq uint64, err error) {
@@ -147,19 +198,23 @@ func (s *Store) reject(seq uint64, err error) {
 // appendLogged proposes e and waits for it to commit. Called with s.mu held,
 // it lets go of it while the entry commits (the commit's apply takes it), so
 // what was checked before the call may have changed: the decision is apply's.
-func (s *Store) appendLogged(e entry) error {
+func (s *Store) appendLogged(e entry) (any, error) {
+	if s.halted != nil {
+		return nil, s.halted
+	}
+	e.V = entryVersion
 	body, err := json.Marshal(e)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(body) > MaxLine && e.Seen != nil {
 		e.Seen = "(too large to record)"
 		if body, err = json.Marshal(e); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if len(body) > MaxLine {
-		return invalid("the entry is larger than %d bytes", MaxLine)
+		return nil, invalid("the entry is larger than %d bytes", MaxLine)
 	}
 	propose := s.propose
 	s.mu.Unlock()
@@ -170,13 +225,15 @@ func (s *Store) appendLogged(e entry) error {
 	s.propMu.Unlock()
 	s.mu.Lock()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if rej := s.rejected[seq]; rej != nil {
 		delete(s.rejected, seq)
-		return rej
+		return nil, rej
 	}
-	return nil
+	p := s.produced[seq]
+	delete(s.produced, seq)
+	return p, nil
 }
 
 // ExportChain is the canonical results file of a pair: the entries apply
@@ -206,23 +263,48 @@ func sealedExportBytes(view Run, sh *Sheet, results []Result, signer string) ([]
 	return json.Marshal(ex)
 }
 
-// readSealedLogged rebuilds a sealed run's record from the entries this
-// replica holds, and checks it against the payload's hash: a replica whose
-// copy differs (another sheet, a different history) refuses to serve it.
+// readSealedLogged serves a sealed run's record on a pair. Each replica keeps
+// the record it rebuilt when the seal was applied (a file beside its key, like
+// the single controller's), so a later edit of checkout.yaml does not make an
+// earlier record unservable; without that copy (a replica that replayed the log
+// after the sheet changed) it rebuilds from its entries and the sheet it holds,
+// and refuses one that does not hash to what was signed.
 func (s *Store) readSealedLogged(run string) ([]byte, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	r := s.runs[run]
 	if r == nil || r.State != StateSealed || len(r.sealPayload) == 0 {
-		s.mu.Unlock()
+		return nil, ErrNoRun
+	}
+	if b, err := os.ReadFile(s.SealedPath(run)); err == nil {
+		if rep, verr := Verify(b, nil); verr == nil && rep.Run == run {
+			return b, nil
+		}
+	}
+	return s.rebuildSealedLocked(run)
+}
+
+// cacheSealed keeps the record a replica can rebuild now (best effort: the
+// sheet may not be set yet, at a replay at start).
+func (s *Store) cacheSealed(run string) {
+	if b, err := s.rebuildSealedLocked(run); err == nil {
+		_ = writeFileSynced(s.SealedPath(run), b)
+	}
+}
+
+// rebuildSealedLocked builds a sealed run's record from the entries held and
+// the sheet, and checks it against the payload's hash. The caller holds s.mu.
+func (s *Store) rebuildSealedLocked(run string) ([]byte, error) {
+	r := s.runs[run]
+	if r == nil || r.State != StateSealed || len(r.sealPayload) == 0 {
 		return nil, ErrNoRun
 	}
 	view := r.view()
 	payload, sig, key := r.sealPayload, r.sealSig, r.sealKey
 	results := s.resultsLocked(run)
 	sh := s.sheet
-	s.mu.Unlock()
 	if sh == nil || sh.Hash() != view.SheetHash {
-		return nil, errors.New("checkout: this controller does not hold the sheet this run was sealed against (checkout.yaml differs between the controllers), so it cannot rebuild the signed record: ask the other controller")
+		return nil, errors.New("checkout: this controller does not hold the sheet this run was sealed against (checkout.yaml was edited, or differs between the controllers), so it cannot rebuild the signed record: ask the other controller")
 	}
 	view.State, view.SealedAt, view.SealedBy, view.SealSeq = StateOpen, 0, "", 0
 	var pl SealPayload
@@ -247,3 +329,74 @@ func (s *Store) readSealedLogged(run string) ([]byte, error) {
 // sealedKey is the public key of a sealed run's signer (log mode), for the
 // pair's page.
 func b64pub(k *signKey) string { return base64.StdEncoding.EncodeToString(k.pub) }
+
+// entryVersion is the format version this build writes and can apply.
+const entryVersion = 1
+
+// checkSealEntry is what every replica checks of a seal at apply, from what is
+// in the entry and the chain (not from the sheet, which may differ between
+// the controllers): the payload is the signer's (its signature, its key, its
+// hash), is for this run, was signed at this place in the chain, names the
+// person the entry names, and says what the entries say: no one who took part
+// signed under the two-person rule, and no point's latest result is a fail or
+// only a note. A peer that holds the log's token can still sign with a key of
+// its own: that is the pair, and each record names the key it was signed with.
+func (s *Store) checkSealEntry(r *Run, e entry) error {
+	if e.PrevSeq != s.seq {
+		// signed over the chain as it stood; something committed first: the
+		// signer builds it again
+		return errSealRaced
+	}
+	var pl SealPayload
+	if err := json.Unmarshal(e.Payload, &pl); err != nil {
+		return fmt.Errorf("%w: the seal's payload is not readable", ErrInvalid)
+	}
+	pub, err := base64.StdEncoding.DecodeString(e.PubKey)
+	if err != nil || len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("%w: the seal carries no Ed25519 key", ErrInvalid)
+	}
+	sig, err := base64.StdEncoding.DecodeString(e.Sig)
+	if err != nil || len(sig) != ed25519.SignatureSize || !ed25519.Verify(pub, e.Payload, sig) {
+		return fmt.Errorf("%w: the seal's signature does not match its payload", ErrInvalid)
+	}
+	switch {
+	case e.SealSha != PayloadSha256(e.Payload):
+		return fmt.Errorf("%w: the seal's hash is not its payload's", ErrInvalid)
+	case pl.Format != SealFormat || pl.Run != e.Run || pl.KeyFingerprint != Fingerprint(pub):
+		return fmt.Errorf("%w: the seal's payload is not for this run and key", ErrInvalid)
+	case pl.PrevSeq != s.seq || pl.PrevHash != s.prev:
+		return errSealRaced
+	case pl.SignerPrincipal != e.Principal || pl.Signer != e.By:
+		return fmt.Errorf("%w: the seal's payload names another signer than its entry", ErrInvalid)
+	}
+	// what the entries say, the same on every replica
+	took := map[string]bool{}
+	if r.Principal != "" {
+		took[r.Principal] = true
+	}
+	for _, rs := range r.lastResults {
+		for _, res := range rs {
+			who := res.Principal
+			if who == "" {
+				who = res.By
+			}
+			took[who] = true
+		}
+	}
+	for _, fs := range r.forces {
+		for _, f := range fs {
+			if f.rec.Principal != "" {
+				took[f.rec.Principal] = true
+			}
+		}
+	}
+	if pl.Mode == "two-person" && took[pl.SignerPrincipal] {
+		return refuse("%s took part in this run, and the sign-off rule is two-person", pl.Signer)
+	}
+	for pt, rs := range r.lastResults {
+		if len(rs) > 0 && rs[len(rs)-1].Outcome != Pass {
+			return refuse("point %s has no passing result", pt)
+		}
+	}
+	return nil
+}

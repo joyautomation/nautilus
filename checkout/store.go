@@ -84,6 +84,11 @@ type entry struct {
 	EvSha  string `json:"evsha,omitempty"`
 	Unreal string `json:"unreal,omitempty"`
 
+	// V is the entry's format version, written by a pair's proposer: a replica
+	// whose build is older than an entry it is handed stops applying (halts)
+	// instead of going on to a state that differs from its peer's.
+	V int `json:"v,omitempty"`
+
 	// kind result: what the controller saw standing on the point's tag when it
 	// recorded ("forced: X", "substituted: X"), and a hash of the devices it
 	// was connected to then, from the controller
@@ -244,6 +249,8 @@ type Store struct {
 	lines    [][]byte         // the canonical chain, in committed order
 	rejected map[uint64]error // log entries apply refused, by the log's sequence number
 	sheet    *Sheet           // the sheet a replica rebuilds a sealed export from
+	produced map[uint64]any   // what each committed entry made, by the log's sequence number, for its proposer
+	halted   error            // set when an entry this build cannot apply arrived: nothing more is applied or proposed
 }
 
 // appendFile is the file as the store uses it (a test's can fail).
@@ -391,7 +398,7 @@ func (s *Store) apply(e entry) error {
 	case kindResult:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
-			return errors.New("a result for a run that is not open")
+			return ErrNotOpen
 		}
 		res := Result{Run: e.Run, Seq: e.Seq, At: e.At, Point: e.Point,
 			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, Override: e.Override, EvSha: e.EvSha, By: e.By, Principal: e.Principal}
@@ -404,10 +411,10 @@ func (s *Store) apply(e entry) error {
 	case kindForce:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
-			return errors.New("a force for a run that is not open")
+			return ErrNotOpen
 		}
 		if r.standing != nil {
-			return errors.New("a force while another stands")
+			return ErrForceActive
 		}
 		fs := &forceState{rec: ForceRec{Run: e.Run, Point: e.Point, Seq: e.Seq, At: e.At, Value: e.Forced, Seconds: e.Seconds, By: e.By, Principal: e.Principal}}
 		r.forces[e.Point] = append(r.forces[e.Point], fs)
@@ -425,46 +432,86 @@ func (s *Store) apply(e entry) error {
 	case kindAbandon:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
-			return errors.New("an abandon of a run that is not open")
+			return ErrNotOpen
 		}
 		if r.standing != nil {
-			return errors.New("an abandon while a force stands")
+			return ErrForceActive
 		}
 		r.State, r.Reason, r.EndedAt, r.EndedBy = StateAbandoned, e.Reason, e.At, e.By
 	case kindSeal:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {
-			return errors.New("a seal of a run that is not open")
+			return ErrNotOpen
 		}
 		if r.standing != nil {
-			return errors.New("a seal while a force stands")
+			return ErrForceActive
 		}
 		if r.Rehearsal {
 			return errors.New("a seal of a rehearsal run")
 		}
-		if len(e.Payload) > 0 && e.PrevSeq != s.seq {
-			// the payload was signed over the chain as it stood; something
-			// committed first: the signer builds it again
-			return errSealRaced
+		if len(e.Payload) > 0 {
+			if err := s.checkSealEntry(r, e); err != nil {
+				return err
+			}
 		}
 		r.State, r.SealedAt, r.SealedBy, r.SealSeq = StateSealed, e.At, e.By, e.Seq
 		if len(e.Payload) > 0 {
 			r.sealPayload, r.sealSig, r.sealKey = e.Payload, e.Sig, e.PubKey
 		}
 	default:
-		return fmt.Errorf("unknown entry kind %q", e.Kind)
+		return fmt.Errorf("%w: %q", errUnknownKind, e.Kind)
 	}
 	return nil
 }
+
+// errUnknownKind: an entry of a kind this build does not know.
+var errUnknownKind = errors.New("unknown entry kind")
 
 // append writes e as the next line, fsyncs the file, and only then folds it
 // into the view. A write or sync that fails cuts the file back to its last
 // good size, so the entry that failed leaves nothing behind; if that fails
 // too, the store takes no more entries until it is opened again.
 func (s *Store) append(e entry) error {
+	_, err := s.appendGet(e)
+	return err
+}
+
+// appendGet is append that also hands back what the entry produced (the run,
+// the result, the force it recorded), as apply made it: after a pair's commit
+// the store's state may already have moved on (another writer, a force's end,
+// a Reset), so a caller never reads it back.
+func (s *Store) appendGet(e entry) (any, error) {
 	if s.propose != nil {
 		return s.appendLogged(e)
 	}
+	if err := s.appendFile(e); err != nil {
+		return nil, err
+	}
+	return s.producedBy(e), nil
+}
+
+// producedBy is what an applied entry made, for its proposer.
+func (s *Store) producedBy(e entry) any {
+	r := s.runs[e.Run]
+	if r == nil {
+		return nil
+	}
+	switch e.Kind {
+	case kindRun:
+		return r.view()
+	case kindResult:
+		if rs := r.lastResults[e.Point]; len(rs) > 0 {
+			return rs[len(rs)-1]
+		}
+	case kindForce:
+		if r.standing != nil {
+			return r.standing.rec
+		}
+	}
+	return nil
+}
+
+func (s *Store) appendFile(e entry) error {
 	if s.f == nil {
 		return errors.New("checkout: the store is closed")
 	}
@@ -544,10 +591,15 @@ func (s *Store) BeginWith(rehearsal bool, sheetHash, title, by, principal, evide
 		return Run{}, ErrRunOpen
 	}
 	e := entry{Kind: kindRun, Run: newID(), Rehearsal: rehearsal, SheetHash: sheetHash, Title: title, By: by, Principal: principal, EvSha: evidenceSha, Unreal: unreal}
-	if err := s.append(e); err != nil {
+	p, err := s.appendGet(e)
+	if err != nil {
 		return Run{}, err
 	}
-	return s.runs[e.Run].view(), nil
+	run, ok := p.(Run)
+	if !ok {
+		return Run{}, ErrUnknown
+	}
+	return run, nil
 }
 
 // Record adds a result for a point of an open run. A fail and a note say
@@ -592,11 +644,15 @@ func (s *Store) RecordWith(run, point, outcome, note string, seen any, quality, 
 		evidenceSha = "" // the same devices as the run began against: said once, in the run
 	}
 	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, Override: override, EvSha: evidenceSha, By: by, Principal: principal}
-	if err := s.append(e); err != nil {
+	p, err := s.appendGet(e)
+	if err != nil {
 		return Result{}, err
 	}
-	rs := r.lastResults[point]
-	return rs[len(rs)-1], nil
+	res, ok := p.(Result)
+	if !ok {
+		return Result{}, ErrUnknown
+	}
+	return res, nil
 }
 
 // StartForce records that a checkout force began on a point of an open run:
@@ -620,10 +676,15 @@ func (s *Store) StartForce(run, point string, value any, seconds int, by, princi
 	if r.standing != nil {
 		return ForceRec{}, ErrForceActive
 	}
-	if err := s.append(entry{Kind: kindForce, Run: run, Point: point, Forced: value, Seconds: seconds, By: by, Principal: principal}); err != nil {
+	p, err := s.appendGet(entry{Kind: kindForce, Run: run, Point: point, Forced: value, Seconds: seconds, By: by, Principal: principal})
+	if err != nil {
 		return ForceRec{}, err
 	}
-	return r.standing.rec, nil
+	rec, ok := p.(ForceRec)
+	if !ok {
+		return ForceRec{}, ErrUnknown
+	}
+	return rec, nil
 }
 
 // EndForce records that the standing checkout force of an open run ended, and

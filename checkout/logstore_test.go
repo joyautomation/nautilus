@@ -3,6 +3,8 @@ package checkout
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -22,6 +24,7 @@ type loglet struct {
 	down     bool             // no majority
 	slow     bool             // an answer that never comes
 	before   func(seq uint64) // runs after numbering, before applying (to interleave)
+	after    func(seq uint64) // runs after applying, before the proposer is answered
 }
 
 func (l *loglet) proposeFor(me *Store) func(context.Context, string, []byte) (uint64, error) {
@@ -39,10 +42,14 @@ func (l *loglet) proposeFor(me *Store) func(context.Context, string, []byte) (ui
 		if l.before != nil {
 			l.before(l.seq)
 		}
+		mine := l.seq
 		for _, r := range l.replicas {
-			r.ApplyLogged(l.seq, ts, body)
+			r.ApplyLogged(mine, ts, body)
 		}
-		return l.seq, nil
+		if l.after != nil {
+			l.after(mine)
+		}
+		return mine, nil
 	}
 }
 
@@ -216,6 +223,8 @@ func TestAReplicaWithAnotherSheetRefusesTheSealedRecord(t *testing.T) {
 	if _, err := a.Seal(sealIn(run.ID, "bob")); err != nil {
 		t.Fatal(err)
 	}
+	// a replica that replayed after the sheet changed has no cached record
+	os.Remove(b.SealedPath(run.ID))
 	other := sheet()
 	other.Points[0].Expect = "edited"
 	b.SetSheet(other)
@@ -332,6 +341,7 @@ func TestAReplicaWithAnotherHistoryRefusesTheSealedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	// b's copy holds a result a's does not: not the history the signer signed
+	os.Remove(b.SealedPath(run.ID))
 	b.mu.Lock()
 	b.runs[run.ID].lastResults["XV101"] = append(b.runs[run.ID].lastResults["XV101"], Result{Run: run.ID, Seq: 99, Point: "XV101", Outcome: Fail, Note: "extra", By: "x"})
 	b.mu.Unlock()
@@ -411,5 +421,138 @@ func TestASealWithoutAPayloadIsRefusedAtApply(t *testing.T) {
 		if g, _ := s.Get(run.ID); g.State != StateOpen {
 			t.Errorf("a seal with no payload sealed the run: %+v", g)
 		}
+	}
+}
+
+// A record kept when the seal was applied is still served after checkout.yaml
+// is edited for the next phase: it does not depend on today's sheet.
+func TestASealedRecordSurvivesAnEditOfTheSheet(t *testing.T) {
+	_, a, b := newPairStores(t)
+	run, _ := a.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	passAllLogged(t, a, run.ID, "alice")
+	if _, err := a.Seal(sealIn(run.ID, "bob")); err != nil {
+		t.Fatal(err)
+	}
+	next := sheet()
+	next.Points = append(next.Points, Point{ID: "NEW", Tag: "n", Kind: DI, Method: Observe})
+	a.SetSheet(next)
+	b.SetSheet(next)
+	for name, s := range map[string]*Store{"the signer": a, "the other": b} {
+		rec, err := s.ReadSealed(run.ID)
+		if err != nil {
+			t.Fatalf("%s after the sheet changed: %v", name, err)
+		}
+		if _, err := Verify(rec, a.ExportChain()); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// What apply checks of a seal, from the entries and the chain alone: the
+// signature, the key, the hash, the run, the signer, the two-person rule and
+// the results. A forged or inconsistent seal closes nothing.
+func TestApplyRefusesASealThatIsNotWhatItSaysItIs(t *testing.T) {
+	l, a, b := newPairStores(t)
+	run, _ := a.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	passAllLogged(t, a, run.ID, "alice")
+	// build a genuine payload with the controller's own key, then break one thing at a time
+	mk := func(edit func(*SealPayload, *entry)) bool {
+		pl := SealPayload{Format: SealFormat, Notice: SealNotice, Run: run.ID, Mode: "two-person", Signer: "bob", SignerPrincipal: "user:bob",
+			Recorders: []string{"user:alice"}, PrevSeq: a.seq, PrevHash: a.prev, KeyFingerprint: Fingerprint(a.key.pub), ExportSha256: "0"}
+		e := entry{Kind: kindSeal, Run: run.ID, By: "bob", Principal: "user:bob", PrevSeq: a.seq, PubKey: b64pub(a.key)}
+		if edit != nil {
+			edit(&pl, &e)
+		}
+		pb, _ := json.Marshal(pl)
+		e.Payload, e.SealSha = pb, PayloadSha256(pb)
+		e.Sig = base64.StdEncoding.EncodeToString(ed25519.Sign(a.key.priv, pb))
+		if e.Note == "badsig" {
+			e.Sig = base64.StdEncoding.EncodeToString(make([]byte, 64))
+			e.Note = ""
+		}
+		if e.Note == "badsha" {
+			e.SealSha, e.Note = strings.Repeat("0", 64), ""
+		}
+		body, _ := json.Marshal(e)
+		l.mu.Lock()
+		l.seq++
+		seq := l.seq
+		l.mu.Unlock()
+		for _, r := range l.replicas {
+			r.ApplyLogged(seq, 9_000_000+int64(seq), body)
+		}
+		g, _ := a.Get(run.ID)
+		return g.State == StateSealed
+	}
+	bad := map[string]func(*SealPayload, *entry){
+		"a signature that does not match":  func(p *SealPayload, e *entry) { e.Note = "badsig" },
+		"a hash that is not the payload's": func(p *SealPayload, e *entry) { e.Note = "badsha" },
+		"another run's payload":            func(p *SealPayload, e *entry) { p.Run = "otherrun" },
+		"a key the payload does not name":  func(p *SealPayload, e *entry) { p.KeyFingerprint = "00000000-00000000-00000000-00000000" },
+		"another signer than the entry":    func(p *SealPayload, e *entry) { p.Signer = "eve" },
+		"a place in the chain that moved":  func(p *SealPayload, e *entry) { p.PrevSeq = a.seq - 1 },
+		"the person who took part (two-person)": func(p *SealPayload, e *entry) {
+			p.SignerPrincipal, e.Principal, p.Signer, e.By = "user:alice", "user:alice", "alice", "alice"
+		},
+	}
+	for name, edit := range bad {
+		if mk(edit) {
+			t.Errorf("a seal with %s closed the run", name)
+		}
+	}
+	// and a point whose latest result is a fail
+	a.Record(run.ID, "LSH101", Fail, "stuck", nil, "", "alice", "user:alice")
+	if mk(nil) {
+		t.Errorf("a seal over a failing point closed the run")
+	}
+	a.Record(run.ID, "LSH101", Pass, "", nil, "", "alice", "user:alice")
+	for _, s := range []*Store{a, b} {
+		if g, _ := s.Get(run.ID); g.State != StateOpen {
+			t.Errorf("a refused seal left the run %s", g.State)
+		}
+	}
+}
+
+// An entry a newer build wrote, or of a kind this build does not know, stops
+// this replica's checkout (it says so) rather than let it go on to a state its
+// peer's differs from.
+func TestAReplicaThatCannotReadAnEntryHaltsInsteadOfDiverging(t *testing.T) {
+	_, a, _ := newPairStores(t)
+	run, _ := a.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	body, _ := json.Marshal(map[string]any{"v": 2, "kind": "result", "run": run.ID, "point": "XV101", "outcome": "pass", "by": "x"})
+	a.ApplyLogged(900, 1, body)
+	if why := a.Halted(); !strings.Contains(why, "newer build") {
+		t.Fatalf("halted: %q", why)
+	}
+	if _, err := a.Record(run.ID, "XV101", Pass, "", nil, "", "alice", "user:alice"); err == nil || !strings.Contains(err.Error(), "newer build") {
+		t.Errorf("a write after the halt: %v", err)
+	}
+	_, a2, _ := newPairStores(t)
+	body2, _ := json.Marshal(map[string]any{"kind": "futurething", "run": "x"})
+	a2.ApplyLogged(1, 1, body2)
+	if why := a2.Halted(); !strings.Contains(why, "does not know") {
+		t.Errorf("an unknown kind: %q", why)
+	}
+}
+
+// What a proposer is told is the entry it proposed, as apply made it, not
+// whatever the store holds once the lock is retaken.
+func TestAWriterIsToldItsOwnResultNotALaterOne(t *testing.T) {
+	l, a, _ := newPairStores(t)
+	run, _ := a.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	l.after = func(seq uint64) {
+		l.after = nil
+		body, _ := json.Marshal(entry{Kind: kindResult, Run: run.ID, Point: "XV101", Outcome: Fail, Note: "someone else, a moment later", By: "carol", Principal: "user:carol"})
+		l.seq++
+		for _, r := range l.replicas {
+			r.ApplyLogged(l.seq, 5_000_000, body)
+		}
+	}
+	res, err := a.Record(run.ID, "XV101", Pass, "", 1, "good", "alice", "user:alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.By != "alice" || res.Outcome != Pass {
+		t.Errorf("the writer was told %+v, not its own result", res)
 	}
 }
