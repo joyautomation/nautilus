@@ -76,11 +76,15 @@ claims:
     tests:
       - go ./alarm/escalate TestSelectAndSteps
       - go ./alarm/escalate TestNoPolicyNoPage
+      - go ./alarm/escalate TestMatchClassIgnoresCase
+      - go ./internal/project TestCheckAlarmsWarnsOfAlarmNoPolicyCovers
+      - go ./internal/project TestCheckAlarmsUncoveredWarningsAreCapped
     partial: true
     note: >-
-      Priority and area matching together, an hours window and first-match
-      order are tested; class, id and site in match, and days in when, are
-      not.
+      Priority and area matching together, class matching ignoring case,
+      an hours window and first-match order are tested, and naut check
+      warns of an alarm no policy covers; site in match, and days in when,
+      are not.
 
   - id: AMG-007
     claim: >-
