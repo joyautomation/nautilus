@@ -436,7 +436,7 @@ func needsRestart(checks []IOCheck) bool {
 // Either failing takes NeedsRestart back and says why.
 func (io *IOConfig) restartLoads(c *IOCandidate, v *IOValidation) {
 	var problems []string
-	if p, err := Load(c.fsys, ""); err != nil {
+	if p, err := Load(c.fsys, io.manifest); err != nil {
 		problems = append(problems, err.Error())
 	} else if _, err := runtime.New(p.Runtime); err != nil {
 		problems = append(problems, err.Error())
@@ -445,6 +445,23 @@ func (io *IOConfig) restartLoads(c *IOCandidate, v *IOValidation) {
 	if len(problems) > 0 {
 		v.NeedsRestart = false
 		return
+	}
+	// Loading read files the candidate's staging did not (alarm files, tag
+	// files, programs): if any differs from boot, a save would commit a
+	// project other than the one just loaded.
+	if rec, ok := c.fsys.(*recordFS); ok {
+		var extra []string
+		for n := range io.differingFiles(rec) {
+			if _, staged := c.files[n]; !staged {
+				extra = append(extra, n)
+			}
+		}
+		if len(extra) > 0 {
+			slices.Sort(extra)
+			v.NeedsRestart = false
+			v.Notes = append(v.Notes, "the candidate also changes files outside the I/O configuration ("+strings.Join(extra, ", ")+"): make that change in the repository and restart; it is not saved from this screen")
+			return
+		}
 	}
 	if io.changesBeyondIO(c) {
 		v.NeedsRestart = false

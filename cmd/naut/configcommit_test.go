@@ -410,6 +410,13 @@ func TestConfigSaveWaitsForARestartBeforeAnotherWrite(t *testing.T) {
 	if gitIn(t, dir, "rev-parse", "HEAD") != head || readFile(t, dir, "modbus.yaml") != "a: 1\nb: 3\n" {
 		t.Fatal("a refused write changed the pending change")
 	}
+	// a hand edit or a revert of the saved file releases it: there is nothing left to protect
+	os.WriteFile(filepath.Join(dir, "modbus.yaml"), []byte("a: 1\nb: 2\n"), 0o644)
+	gitIn(t, dir, "commit", "-q", "-am", "reverted by hand")
+	g.boot = gitIn(t, dir, "rev-parse", "HEAD")
+	if _, err := g.save(server.IOSave{By: "user:akhan", ID: "5", Files: map[string]string{"modbus.yaml": "a: 1\nb: 9\n"}}); err != nil {
+		t.Fatalf("after the saved change was reverted by hand: %v", err)
+	}
 	// after a restart the file is the committed one, and a new candidate is staged from it
 	g2 := committer(t, dir)
 	if _, err := g2.save(server.IOSave{By: "user:akhan", ID: "4", Files: map[string]string{"modbus.yaml": "a: 1\nb: 4\n"}}); err != nil {

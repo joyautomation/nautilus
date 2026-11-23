@@ -348,6 +348,10 @@ func TestIOValidateRefuses(t *testing.T) {
 		// candidate is loaded, not only the I/O sections
 		{"a new device with a broken program", "load", withFile(withFile(files, "modbus.yaml", modbusYAML(pa, pb, mbSource("DEV_C", pb), "")),
 			"main.st", "PROGRAM Main\nthis is not structured text\nEND_PROGRAM\n"), false},
+		// a device added with a program edit that compiles: a save would not
+		// write it, so the screen does not offer one
+		{"a new device with a program edit", "topology", withFile(withFile(files, "modbus.yaml", modbusYAML(pa, pb, mbSource("DEV_C", pb), "")),
+			"main.st", strings.Replace(string(files["main.st"].Data), "A_In + 1", "A_In + 2", 1)), false},
 		// a device added with a change outside the I/O sections: saved from the
 		// repository, not this screen
 		{"a new device with a manifest change outside the I/O", "topology", withFile(withFile(files, "modbus.yaml", modbusYAML(pa, pb, mbSource("DEV_C", pb), "")),
