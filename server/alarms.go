@@ -388,9 +388,9 @@ type shelveRequest struct {
 	Seconds float64 `json:"seconds"`
 	By      string  `json:"by"`
 	// Reason is one line saying why (on the journal's shelve row and in the
-	// audit entry, on a pair too), and Via how
-	// the shelve was reached (audit entry only): "chatter" is the one-click fix on a chattering
-	// alarm's badge (#1249), which must say why. Both are optional otherwise.
+	// audit entry, on a pair too). Via is how the shelve was reached (audit
+	// entry only): "chatter" is the one-click fix on a chattering alarm's
+	// badge (#1249), which must say why. Both are optional otherwise.
 	Reason string `json:"reason"`
 	Via    string `json:"via"`
 }
