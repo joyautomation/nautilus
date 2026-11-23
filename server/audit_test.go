@@ -830,6 +830,13 @@ func auditRows() []auditRow {
 		{name: "io commit what was not applied", pattern: "POST /api/config/commit", server: ioCommitSrv, prep: ioStaged(true),
 			method: "POST", path: "/api/config/commit", body: `{"id":"1"}`,
 			action: "config.commit", target: "1", user: "anonymous", source: "api", result: "refused"},
+		{name: "io save a candidate for the next restart", pattern: "POST /api/config/save", server: ioSaveSrv, prep: ioStaged(true),
+			method: "POST", path: "/api/config/save", body: `{"id":"1"}`,
+			action: "config.save", target: "1", user: "anonymous", source: "api", result: "ok",
+			after: map[string]any{"commit": "c0ffee", "branch": "main", "files": "nautilus.yaml", "pendingRestart": true}},
+		{name: "io save what a restart would not fix", pattern: "POST /api/config/save", server: ioCommitSrv, prep: ioStaged(true),
+			method: "POST", path: "/api/config/save", body: `{"id":"1"}`,
+			action: "config.save", target: "1", user: "anonymous", source: "api", result: "refused"},
 		{name: "parameter import", pattern: "POST /api/parameters/import", server: paramImportSrv,
 			method: "POST", path: "/api/parameters/import", body: `{"version":1,"parameters":{"SP":70}}`,
 			also: "write", action: "param.import", target: "1 parameters", user: "anonymous", source: "api", result: "ok",
@@ -907,6 +914,17 @@ func ioCommitSrv(t *testing.T) *Server {
 	f := &fakeIO{valid: true, drivers: []string{"modbus"}, commit: func(IOCommit) (IOCommitted, error) {
 		return IOCommitted{Commit: "c0ffee", Branch: "main", Files: []string{"modbus.yaml"}}, nil
 	}}
+	return New(newTestRuntime(t), ioOptions(f, true))
+}
+
+// ioSaveSrv is a controller whose staged candidate is invalid only because it
+// needs a restart, and that can commit: a save for restart goes through.
+func ioSaveSrv(t *testing.T) *Server {
+	f := &fakeIO{valid: false, drivers: []string{"modbus"},
+		restart: func(any) (bool, map[string]string) { return true, map[string]string{"nautilus.yaml": "x"} },
+		save: func(IOSave) (IOCommitted, error) {
+			return IOCommitted{Commit: "c0ffee", Branch: "main", Files: []string{"nautilus.yaml"}}, nil
+		}}
 	return New(newTestRuntime(t), ioOptions(f, true))
 }
 
