@@ -123,6 +123,7 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		r.readySince = time.Time{}
 		r.ioReset()
 		r.resetIntentSync()
+		r.flushReset()
 	} else if !r.leading || termed != nil && termed.Term() != r.ledTerm {
 		// A takeover (not the same leadership resumed) first re-applies
 		// the kept I/O configuration (#706), so the inputs it then waits
@@ -131,6 +132,24 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		// (substitute_intent.go) runs alongside both, asked every tick, so
 		// the edge waits for the longer, not the sum.
 		resume := !r.leading && termed != nil && r.ledTerm != 0 && termed.Term() == r.ledTerm
+		// A pair's takeover first flushes the newest state image into the
+		// retain store (#710 S1b), before anything below reads the store:
+		// ioReady keeps the store it reads for takeover's own load.
+		var term uint64
+		if termed != nil {
+			term = termed.Term()
+		}
+		if mutRuntime("stream_flush_after_io_read") {
+			// the store read for this edge first, the flush after it
+			if !resume && !r.ioReady() {
+				r.unfresh()
+				return false, r.edges
+			}
+		}
+		if !resume && !r.flushReady(term) {
+			r.unfresh()
+			return false, r.edges
+		}
 		ready := (resume || r.ioReady()) && r.inputsReady()
 		synced := resume || r.intentReady()
 		if !ready || !synced {
@@ -158,6 +177,7 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		r.unfresh() // until this leadership's first read
 		r.takeover()
 		r.ioReset()
+		r.flushReset()
 		r.leading = true
 		if termed != nil {
 			r.ledTerm = termed.Term()
@@ -258,6 +278,10 @@ func (r *Runtime) takeover() {
 	// LoadRetained already restored the store before the API answered
 	// (standalone only): loading it again here would undo a write made
 	// in between (nautilus#531's startup half).
+	// This edge's own read of the store may already have failed
+	// (ioReady): then what loads below is no store at all.
+	bad := r.strm.storeBad.Swap(false) && !mutRuntime("stream_store_bad_forgotten")
+	r.strm.loadFailed.Store((r.iok.loadErr || bad) && !mutRuntime("stream_failed_load_streams"))
 	if r.retainPreloaded {
 		r.retainPreloaded = false
 	} else if r.retainStore != nil {
@@ -335,6 +359,9 @@ func (r *Runtime) restorePairAlarms() {
 func (r *Runtime) loadRetained() error {
 	st, err := r.loadStore()
 	if err != nil {
+		// Unreadable, not merely a value that no longer fits: this
+		// leadership runs on initial values (RetainLoadFailed).
+		r.strm.loadFailed.Store(!mutRuntime("stream_failed_load_streams"))
 		return err
 	}
 	allowed := make(map[string]bool, len(r.retainTags))
@@ -543,6 +570,15 @@ func (r *Runtime) retainSaver(ctx context.Context) []byte {
 			return lastSaved
 		case <-t.C:
 			lastSaved = r.saveRetained(lastSaved)
+		case req := <-r.carryRequests():
+			err := r.carry(req)
+			if err == nil {
+				// The store now holds an image's state, not what this
+				// replica last saved as leader: its next save as leader
+				// writes, whatever it compares equal to.
+				lastSaved = nil
+			}
+			req.reply <- err
 		case req := <-r.saveRequests():
 			var err error
 			lastSaved, err = r.saveRetainedErr(lastSaved)
@@ -576,12 +612,17 @@ func (r *Runtime) saveRetainedErr(lastSaved []byte) ([]byte, error) {
 	// and its frames are fresh, and saving them would overwrite what the
 	// takeover is about to load.
 	r.leadMu.Lock()
-	leading := r.leading
+	leading, term := r.leading, r.ledTerm
 	r.leadMu.Unlock()
 	if !leading {
 		return lastSaved, ErrNotLeading
 	}
 	st := r.retainState()
+	if r.strm.flush.Load() != nil && term != 0 && !mutRuntime("stream_leader_saves_unmarked") {
+		// A pair's leader marks its file with its term (#710 S1b): as a
+		// standby later, it takes no image of a leadership before this.
+		st.Stream = &retain.StreamPos{Term: term}
+	}
 	enc, err := json.Marshal(st)
 	if err != nil {
 		return lastSaved, err

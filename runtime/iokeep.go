@@ -77,6 +77,10 @@ type ioKeep struct {
 	// edge is the store the edge read, for takeover's own load: read once
 	// per edge, not twice. Guarded by leadMu.
 	edge *retain.State
+	// loadErr: this edge's read of the store failed (a corrupt file is
+	// moved aside by it, so a retry then reads "nothing retained"): the
+	// takeover runs on initial values (RetainLoadFailed). Under leadMu.
+	loadErr bool
 
 	saveOnce sync.Once
 	saveReq  chan chan error
@@ -100,7 +104,7 @@ func (r *Runtime) ioKeeper() IOKeeper {
 // ioReset forgets the edge's restore: this replica stands by, or the edge
 // has been taken. A restore still running finishes on its own. Under leadMu.
 func (r *Runtime) ioReset() {
-	r.iok.passed, r.iok.done, r.iok.edge = false, nil, nil
+	r.iok.passed, r.iok.done, r.iok.edge, r.iok.loadErr = false, nil, nil, false
 }
 
 // loadStore is the retain store's state: what this edge's ioReady already
@@ -157,6 +161,7 @@ func (r *Runtime) ioReady() bool {
 			r.iok.edge = &st
 			go restore(st)
 		default:
+			r.iok.loadErr = true
 			go func() {
 				for i := 0; i < ioLoadTries; i++ {
 					time.Sleep(ioLoadRetry)

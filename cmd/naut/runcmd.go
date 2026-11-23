@@ -87,8 +87,6 @@ func electorWith(proj *project.Project, addr, dir string, deps pairDeps) (leader
 		if err != nil {
 			return nil, nil, err
 		}
-		// /api/cluster and the dashboard say it until state streaming.
-		m.q.Warn(project.PairRetainNotReplicated)
 		wireRedundancy(proj, m.q)
 		proj.Member = string(m.o.Self)
 		return m.q, m, nil
@@ -317,9 +315,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// Registered first, so it runs last: the peer listener answers
 		// votes until the election below has stopped and released.
 		defer pair.Close()
-		// Until state streaming (#710 step 4) the opt-in is required
-		// (Load refuses a pair without it), and said out loud.
-		fmt.Fprintln(os.Stderr, "naut run: redundancy: WARNING: experimental pair: "+project.PairRetainNotReplicated)
+		// Until hot takeover (#710 S2) the opt-in is required (Load
+		// refuses a pair without it), and said out loud.
+		fmt.Fprintln(os.Stderr, "naut run: redundancy: WARNING: experimental pair: "+project.PairColdTakeover)
 		for _, h := range pair.untrustedAPIs(append(server.EnvAllowedHosts(), proj.Server.AllowedHosts...)) {
 			fmt.Fprintf(os.Stderr, "naut run: redundancy: the pair advertises a tag API at %s, which NAUTILUS_ALLOWED_HOSTS does not list: a browser HMI that follows the leader there is refused (403). Add it to NAUTILUS_ALLOWED_HOSTS on both controllers, or name the controllers by IP in redundancy.peers\n", h)
 		}
@@ -409,6 +407,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
 			return 1
 		}
+		// The state stream (#710 S1b): the leader's images to the standby,
+		// and the takeover's flush of the newest one before the store loads.
+		pair.startStream(rt, proj.Redundancy.StreamBudgetBytes())
 		if alarmLog != nil && alarms.Escalation != nil {
 			// The occurrences a takeover continues (#715): those an
 			// escalation policy covers, so a page goes on at its level.
@@ -2075,8 +2076,8 @@ func pairServiceLevel(st leader.Status) byte {
 }
 
 // opcuaRedundancy is a pair member's OPC UA redundancy (nil outside a pair):
-// RedundancySupport Cold (a takeover starts from the new leader's own
-// retained values, PairRetainNotReplicated, not a running image), both
+// RedundancySupport Cold (a takeover keeps the retained values the state
+// stream brought, not a running image: project.PairColdTakeover), both
 // members' ApplicationUris, and the ServiceLevel from the elector. A client
 // may sample the level every 100 ms; the elector's status copies several
 // slices under its tick lock, so the level is held for 250 ms.

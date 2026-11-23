@@ -44,6 +44,24 @@ import "os"
 //     refuses the start (#1230 review);
 //   - peer_bind_loopback_taken: a peers: name that binds to loopback is
 //     served (#1230 review).
+//
+// The state stream (#710 S1b):
+//
+//   - stream_leader_follows: a controller that leads runs the stream's
+//     follower too;
+//   - stream_persist_off: the standby never carries images into its
+//     retain file (a takeover loads its own older values);
+//   - stream_old_term_applied: the standby takes an image whatever its
+//     term;
+//   - stream_budget_drops: the budget never stretches the interval.
+//   - stream_sends_unled: a leader's stream sends whether or not it leads (review);
+//   - stream_flush_no_persist: the takeover's flush writes nothing (review);
+//   - stream_flush_keeps_follower: the takeover's flush leaves the follower running (review);
+//   - stream_flush_keeps_shadow: the takeover's flush keeps the shadow (review);
+//   - stream_stale_marked_persisted: an image the retain file refused as older is shown as kept (review);
+//   - stream_file_floor_unseeded: the standby's floor is not seeded from its retain file's term (review);
+//   - stream_outlives_close: a closing member's stream handlers outlive it;
+//   - stream_persist_error_hidden: a standby whose retain file takes no image still says in sync (review);
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutNaut(name string) bool { return name == mutOn }

@@ -24,6 +24,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/logix/writer"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
+	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 	swriter "github.com/joyautomation/nautilus/siemens/writer"
 	"github.com/joyautomation/nautilus/sparkplug"
@@ -616,6 +617,13 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		// here means the composed resource failed for some other reason.
 		fmt.Printf("%s: %s\n", loc.tag(tagNamedInError(err)), err)
 		return 1, 0
+	}
+
+	// A pair's state stream (#710 S1b): an image too big to send at all,
+	// or too big for the budget at 10 a second.
+	for _, w := range streamWarnings(proj) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
 
 	// A READ or WRITE whose ID names no channel would fail every request
@@ -1344,3 +1352,50 @@ func plantManifest(dir string, paths []string, manifest string) string {
 	}
 	return ""
 }
+
+// streamWarnings sizes a pair's state stream image (#710 S1b) from the
+// project's frames and retained tags at their initial values (strings
+// empty, so a project that fills long STRINGs streams more): a warning
+// when it is over runtime.MaxImageBytes (the leader would send none), or
+// when ten a second would be over redundancy.stream-budget (the leader
+// sends them less often, so a takeover's values are older).
+func streamWarnings(proj *project.Project) []string {
+	if !proj.Redundancy.Pair() {
+		return nil
+	}
+	// A runtime of its own with a store that keeps nothing: the image's
+	// retain section is what a controller with a retain: section saves.
+	opts := proj.Runtime
+	if proj.Retain != nil {
+		opts.Retain = sizingStore{}
+	}
+	rt, err := runtime.New(opts)
+	if err != nil {
+		return nil // the check reports the compile error itself
+	}
+	img, err := rt.ImageNow()
+	if err != nil {
+		return []string{fmt.Sprintf("redundancy: the state stream's image could not be sized: %v", err)}
+	}
+	var tb *runtime.ImageTooBigError
+	b, err := runtime.EncodeImage(nil, img)
+	switch {
+	case errors.As(err, &tb):
+		return []string{fmt.Sprintf("redundancy: the state stream's image is about %d bytes (%s), over the %d-byte limit: the leader would send none, and a takeover would load the standby's own older retained values. Make the retained and program state smaller (fewer or shorter arrays and STRINGs)", tb.Bytes, tb.What, runtime.MaxImageBytes)}
+	case err != nil:
+		return []string{fmt.Sprintf("redundancy: the state stream's image could not be sized: %v", err)}
+	}
+	budget := proj.Redundancy.StreamBudgetBytes()
+	if int64(len(b))*10 > budget {
+		every := time.Duration(int64(len(b)) * int64(time.Second) / budget)
+		return []string{fmt.Sprintf("redundancy: the state stream's image is about %d bytes, so ten a second (%d B/s) is over redundancy.stream-budget (%d B/s): the leader sends one every %s instead of every 100 ms, and a setpoint written in that time before a crash is lost. Raise stream-budget if the link carries it, or make the state smaller", len(b), int64(len(b))*10, budget, every.Round(time.Millisecond))}
+	}
+	return nil
+}
+
+// sizingStore is a retain store that holds nothing (streamWarnings).
+type sizingStore struct{}
+
+func (sizingStore) Load() (retain.State, error) { return retain.State{}, nil }
+func (sizingStore) Save(retain.State) error     { return nil }
+func (sizingStore) Kind() string                { return "none" }

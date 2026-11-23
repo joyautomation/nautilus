@@ -110,6 +110,9 @@ func newPairRigPlain(t *testing.T, pmod func(n string, p *project.Project), dmod
 	wit := r.wit
 	r.peer["a"], r.peer["b"] = lnA.Addr().String(), lnB.Addr().String()
 	r.files = pairProject(r.peer["a"], r.peer["b"], wit)
+	if testPairFiles != nil {
+		r.files = testPairFiles(r.peer["a"], r.peer["b"], wit)
+	}
 	for _, n := range []string{"a", "b"} {
 		r.env[n] = map[string]string{"NAUTILUS_NODE": n, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
 	}

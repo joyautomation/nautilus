@@ -78,8 +78,14 @@ type pairMember struct {
 	// once the runtime exists (startLog); 503 until then.
 	logH swapHandler
 	log  *oplog.Node
-	al   *server.AlarmLog // nil without alarms
-	nl   *server.NotesLog // the pair's operator notes (#720)
+	// The state stream (#710 S1b, pairstream.go), mounted on the peer
+	// listener once the runtime exists (startStream); 503 until then.
+	streamH    swapHandler
+	stream     *pairStream
+	streamStop context.CancelFunc
+	streamDone chan struct{}
+	al         *server.AlarmLog // nil without alarms
+	nl         *server.NotesLog // the pair's operator notes (#720)
 	// cl is the pair's I/O checkout (#719 slice 5): runs in the log. Made by
 	// startLog only when wantCheckout was set (the project has a checkout
 	// section and auth users), so a project without one gets no key file.
@@ -259,6 +265,7 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	for _, p := range []string{"/api/oplog", "/api/oplog/", "/api/quorum"} {
 		mux.Handle(p, &m.logH)
 	}
+	mux.Handle(streamPath(o.Cluster), &m.streamH)
 	h, err := node.Guard(o.Token, spareSilent(q.Node().Spare, mux))
 	if err != nil {
 		q.Node().Close()
@@ -646,6 +653,12 @@ func (m *pairMember) Close() {
 	if m.bindStop != nil {
 		m.closeOnce.Do(func() { close(m.bindStop) })
 		<-m.bindDone
+	}
+	// The state stream first: its handlers end with it, so the shutdown
+	// below does not wait on a stream that never ends by itself.
+	if m.streamStop != nil {
+		m.streamStop()
+		<-m.streamDone
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

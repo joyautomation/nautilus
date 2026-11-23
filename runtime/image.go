@@ -201,3 +201,26 @@ func (r *Runtime) TakeImage(img *Image) bool {
 func (r *Runtime) RetainImage() ([]byte, error) {
 	return json.Marshal(r.retainState())
 }
+
+// ImageNow is an Image of every task's frame as it stands, copied without
+// a scan, with the retain section: what naut check sizes a pair's state
+// stream by. Term and Seq are zero. Not for a running runtime's stream,
+// whose copies come from the end of a scan (RequestImage, TakeImage).
+func (r *Runtime) ImageNow() (*Image, error) {
+	img := &Image{}
+	for _, np := range r.namedPrograms() {
+		p := np.prog
+		p.mu.Lock()
+		ti := TaskImage{Task: np.name, Leaves: ir.FlattenInto(nil, p.frame), Scans: p.scans}
+		prog := p.prog
+		p.mu.Unlock()
+		ti.Layout = prog.Layout()
+		img.Tasks = append(img.Tasks, ti)
+	}
+	ret, err := r.RetainImage()
+	if err != nil {
+		return nil, err
+	}
+	img.Retain = ret
+	return img, nil
+}

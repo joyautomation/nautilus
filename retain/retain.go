@@ -86,6 +86,25 @@ type State struct {
 	// Secret, so what it holds must be useless without the box's secrets
 	// file. Nil until the first subscription.
 	Push *PushState `json:"push,omitempty"`
+	// Stream is where in a redundant pair's state stream this file stands
+	// (#710 S1b): the leadership (term) and image (seq) a standby last
+	// carried into it, or the term its own controller led when it last
+	// saved as leader (Seq 0). A standby takes no image older than it, so
+	// a file never goes back to an older leadership's values. Nil outside
+	// a pair. Not carried from an image: the standby writes its own.
+	Stream *StreamPos `json:"stream,omitempty"`
+}
+
+// StreamPos is a place in a pair's state stream: (term, seq) order.
+type StreamPos struct {
+	Term uint64 `json:"term"`
+	Seq  uint64 `json:"seq,omitempty"`
+}
+
+// Before reports whether p comes before (term, seq) in the stream's
+// order. A nil p comes before everything.
+func (p *StreamPos) Before(term, seq uint64) bool {
+	return p == nil || p.Term < term || (p.Term == term && p.Seq < seq)
 }
 
 // PushState is the retained Web Push subscriptions.

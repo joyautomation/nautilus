@@ -349,9 +349,9 @@ env:
 ### A redundant pair without Kubernetes (experimental)
 
 Two controllers and a small third voter, `naut witness`, can elect a
-leader without a cluster. Commissioning and re-commissioning are below;
-the rest of the operator guide (the takeover time) comes with the rest
-of the work (#710). For now the pair is an explicit opt-in:
+leader without a cluster. The leader streams its retained state to the
+standby, so a takeover keeps it (below). Commissioning and
+re-commissioning are below too. For now the pair is an explicit opt-in:
 
 ```yaml
 redundancy:
@@ -386,14 +386,89 @@ with mapped ports, whose `peers:` entry is where the others reach it
 rather than an address it has, sets `NAUTILUS_PEER_LISTEN` (for example
 `:9450`) in its own environment to bind that instead.
 
-:::caution[Retained values are not replicated yet]
-Until state streaming lands, each controller keeps its own retained
-values. A takeover starts from the **new** leader's own retain file, so
-a setpoint the old leader took is lost at failover. A pair without
-`experimental: true` is refused for that reason, and a running pair
-says so at start, in `GET /api/cluster` (`warnings`) and on the
-dashboard. Live I/O applies are refused on a pair.
+:::caution[A takeover is cold]
+The pair keeps the leader's **retained** values across a takeover (below),
+but not its program state: timers, counters and SFC steps restart from
+the field, as after a restart. A pair without `experimental: true` is
+refused for that reason until hot takeover lands, and `naut run` says so
+at every start. Live I/O applies are refused on a pair.
 :::
+
+**What a takeover keeps.** The leader streams its state to the standby
+over the peer port: a full image at most every 100 ms, sent only while
+it leads. The standby keeps each image's retained part in its own retain
+file, written every 2 seconds when it changed, and once more, with an
+fsync, at the start of its takeover. So the new leader starts with the
+old leader's:
+
+- retained tag values: setpoints, structured (UDT) and array setpoints
+  included, with the parameter drift bookkeeping read against them;
+- `VAR RETAIN` variables of every program;
+- online edits not yet pulled into git (applied only on the same build,
+  as after a restart);
+- Web Push subscriptions (#722).
+
+Alarm acknowledgements, shelves and substitutes travel through the
+pair's operator-intent log instead, and are not taken from the stream.
+
+**What a takeover can lose.** A setpoint the leader accepted in the last
+stream interval before it crashed (about 100 ms) never reached the
+standby. When the leader is cut off rather than killed, it keeps
+scanning, and accepting writes, until its lease ends, so up to a lease
+of writes is lost on an isolation. A standby that fell behind (a slow
+link, a leader whose image is over the size limit) takes over with the
+last image it kept: it logs how old that image is, and
+`GET /api/cluster` shows it (`stream.takeoverImageAgeMs`).
+
+**Both controllers need the same secrets.** Web Push subscriptions are
+sealed under the pair's push key (`push.vapid-key` in
+`alarm-secrets.json`): a standby with another key keeps them and sends
+none. Keep the secrets file, and the users file when the project signs
+people in, the same on both controllers.
+
+**The stream's budget.** Images go out at most ten a second, and no
+faster than `stream-budget` bytes a second allows (default 1 MB/s): a
+bigger image stretches the interval, and is never dropped. `naut check`
+warns when ten images a second would be over the budget, and when an
+image would be over the 8 MiB limit (the leader then sends none).
+
+```yaml
+redundancy:
+  # ...
+  stream-budget: 1MB/s    # bytes a second: 500kB/s, 2MiB/s or a number
+```
+
+`naut redundancy status` and `GET /api/cluster` (`stream`) show how the
+stream stands. On the standby: `in-sync`, `connecting`, `behind`,
+`layout-differs` (it runs another program for a task, so it keeps no
+frame for it), `too-big`, `refused` (an image failed its term check, or
+the retain file already stands after the leader's images), `not-persisted`
+(the retain file cannot be written: a full or read-only disk) or `off`,
+with the newest image's place (term, seq), its age on the standby's
+clock, its lag from the leader's copy, and the image the retain file
+holds. On the leader: `sending`, `no-standby`, `too-big`, or `held`.
+
+**A leader that could not read its retain file streams nothing.** When
+a takeover finds its retain file unreadable, the file is kept aside and
+the controller runs on the manifest's initial values. Streaming those
+would overwrite the standby's file, the last good copy, so the leader
+holds the stream (`held`) for the rest of that leadership and both say
+why. To run on the good values, stop that controller so the standby
+takes over. To keep values set on that leader instead, stop the standby,
+restart the leader (it takes over again from its own file, which its
+saves made readable), then start the standby: it follows from there.
+Setting values on the held leader alone is not enough, since the next
+takeover is the standby's, from its own file. Anything but in sync (after a start's
+first two leases) is also a warning, which holds a leader's OPC UA
+ServiceLevel at 200.
+
+**The lease and the takeover time.** At the default 2 s lease a killed
+leader is replaced in about 2.0 s (2.8 s at p99, measured on loopback
+with peer TLS); a 1 s lease halves that (1.0 s, 1.3 s at p99) and is
+fine where the controllers renew well inside it: on an armv7 groov EPIC
+leading with 1 s, a renewal took 4.8 ms at p99. The takeover's flush
+adds a few milliseconds of flash write (11 ms at p99 for a 2 kB retain
+file on that EPIC).
 
 **Writes leave in time.** The leader stops writing a little before its
 lease ends, not at the end: the fence margin, `net-delay` (the plant
