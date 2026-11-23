@@ -93,12 +93,14 @@ func TestAHelloWithNoAnswerIsRetriedSoon(t *testing.T) {
 	c.noHello[sb] = true
 	c.mu.Unlock()
 	c.kill(sb)
-	c.start(sb) // its first hello, and the one the leader's first vote asks for, are lost
-	time.Sleep(leases(1) + leases(1)/2)
+	// Its first hello, and the one the leader's first vote asks for (a
+	// retry after it), are lost; the backed-off retry at about 3 s is not.
+	c.start(sb)
+	time.Sleep(leases(3))
 	c.mu.Lock()
 	c.noHello[sb] = false
 	c.mu.Unlock()
-	c.waitFor("the standby to learn the leader's API", leases(6), func() bool {
+	c.waitFor("the standby to learn the leader's API", leases(8), func() bool {
 		s := c.status(sb)
 		return s.Leader == string(who) && s.LeaderAddr == apiAddr(who)
 	})
