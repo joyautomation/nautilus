@@ -1225,36 +1225,28 @@ var _ server.Commissioner = (*leader.Quorum)(nil)
 //   - it says which key it signs with, in the log, so both controllers' pages
 //     show both keys (asked again until the log takes it: the pair may have no
 //     majority at start);
-//   - when it becomes the leader it ends a force the log still has standing: a
-//     force is the old leader's own output drive and does not fail over, and
-//     the controller that now runs the program did not set it. The same covers a
-//     leader that restarted: the force belonged to the process before.
-func (m *pairMember) checkoutDuties(st *checkout.Store) {
+//   - on the controller that runs the program, and only there, it ends a force
+//     the log has standing that this controller is not driving (reconcile):
+//     a force is the old leader's own output drive and does not fail over, and
+//     a start whose answer was lost can commit later under a new leader. On a
+//     standby it would propose ends for a force the leader is driving, so it
+//     is not called there.
+func (m *pairMember) checkoutDuties(st *checkout.Store, reconcile func() (int, error)) {
 	name := string(m.o.Self)
-	was := false
-	needInterrupt := false
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for range t.C {
 		if err := st.AnnounceKey(name); err != nil {
 			slog.Debug("checkout: the key is not announced yet", "error", err)
 		}
-		lead := m.q.IsLeader()
-		if lead && !was {
-			needInterrupt = true
+		if !m.q.IsLeader() {
+			continue
 		}
-		was = lead
-		if needInterrupt && lead {
-			n, err := st.InterruptStanding()
-			switch {
-			case err != nil:
-				slog.Warn("checkout: could not end a force the log still has", "error", err) // asked again
-			default:
-				needInterrupt = false
-				if n > 0 {
-					slog.Warn("checkout: this controller now runs the program: a force the other controller left standing was recorded as interrupted", "forces", n)
-				}
-			}
+		switch n, err := reconcile(); {
+		case err != nil:
+			slog.Warn("checkout: could not end a force the log still has", "error", err) // asked again
+		case n > 0:
+			slog.Warn("checkout: a force nothing on this controller drives was recorded as interrupted (the other controller's, or one whose start was not confirmed)", "forces", n)
 		}
 	}
 }

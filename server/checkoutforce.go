@@ -66,6 +66,7 @@ type ckForce struct {
 	run, point, tag, by string
 	pt                  checkout.Point
 	gen                 uint64 // the force table's generation of it
+	recSeq              int64  // the entry that recorded it (ForceRec.Seq): its end names it
 	ready               bool
 	ending              bool      // its end is in progress: the slot stays taken until it is done
 	abandoned           bool      // its run was abandoned while it was starting
@@ -216,7 +217,7 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 			a.s.rt.Tags().UnforceIf(name, gen)
 			return nil, http.StatusConflict, checkout.ErrNotOpen
 		}
-		f.tag, f.gen, f.until, f.ready = name, gen, time.Now().Add(d), true
+		f.tag, f.gen, f.until, f.ready, f.recSeq = name, gen, time.Now().Add(d), true, rec.Seq
 		started = true
 		// a timer's duration runs on the monotonic clock
 		f.timer = time.AfterFunc(d, func() { a.guarded(func() { a.endCheckoutForce(f, checkout.ForceExpired, "controller") }) })
@@ -313,7 +314,7 @@ func (a *checkoutAPI) endCheckoutForce(f *ckForce, how, by string) string {
 	if !a.s.rt.Tags().UnforceIf(f.tag, f.gen) {
 		how = checkout.ForceReplaced // not ours any more: left as it is
 	}
-	if err := a.co.Store.EndForce(f.run, how, by); err != nil && !errors.Is(err, checkout.ErrNoForce) {
+	if err := a.co.Store.EndForceOf(f.run, f.recSeq, how, by); err != nil && !errors.Is(err, checkout.ErrNoForce) {
 		slog.Error("checkout: could not record the end of a force", "err", err, "point", f.point)
 	}
 	slog.Warn("checkout: force ended", "tag", f.tag, "point", f.point, "how", how)
@@ -343,4 +344,35 @@ func (a *checkoutAPI) guarded(fn func()) {
 		}
 	}()
 	fn()
+}
+
+// ReconcileForces ends a checkout force the record says stands that this
+// controller is not driving: on a pair, one the other controller started and
+// lost the lead with, or one whose start was proposed, not confirmed, and
+// committed later under a new leader. Nothing drives it and nothing would end
+// it, and it would block abandon and seal for good. It is for the controller
+// that runs the program, and returns how many it ended.
+func (co *CheckoutOptions) ReconcileForces() (int, error) {
+	if co.Store == nil {
+		return 0, nil
+	}
+	rec, ok := co.Store.Standing()
+	if !ok {
+		return 0, nil
+	}
+	co.ck.mu.Lock()
+	f := co.ck.force
+	drives := f != nil && f.run == rec.Run && f.point == rec.Point
+	co.ck.mu.Unlock()
+	if drives {
+		return 0, nil
+	}
+	err := co.Store.EndForceOf(rec.Run, rec.Seq, checkout.ForceInterrupted, "controller")
+	if errors.Is(err, checkout.ErrNoForce) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return 1, nil
 }
