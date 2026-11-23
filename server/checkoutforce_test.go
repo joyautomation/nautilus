@@ -31,6 +31,9 @@ func newCkForceRig(t *testing.T) *ckForceRig {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// no timer or watch outlives the test (a force left standing logs, and acts,
+	// after the test is over, into whatever the process is doing then)
+	t.Cleanup(ckOf(srv).Stop)
 	return &ckForceRig{srv: srv, st: st, run: run, eng: ckAs(t, srv, "akhan"), path: "/api/checkout/runs/" + run.ID}
 }
 
@@ -638,5 +641,159 @@ func TestCheckoutNoForceStartsWhileAnotherIsEnding(t *testing.T) {
 	}
 	if !r.forced("Out") {
 		t.Error("the new force is not applied")
+	}
+}
+
+// Stop (the controller's shutdown, a test's cleanup) lets a standing force go,
+// records it as interrupted and waits for its goroutines: nothing of the force
+// is left running.
+func TestStopLetsAStandingForceGoAndWaitsForItsGoroutines(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	co := ckOf(r.srv)
+	co.ck.mu.Lock()
+	f := co.ck.force
+	co.ck.mu.Unlock()
+	if f == nil || f.watched == nil {
+		t.Fatal("setup: no force standing with a watch")
+	}
+	co.Stop()
+	select {
+	case <-f.watched:
+	default:
+		t.Errorf("the force's watch goroutine is still running after Stop")
+	}
+	if r.forced("Out") {
+		t.Errorf("the output is still forced after Stop")
+	}
+	if _, ok := r.st.Standing(); ok {
+		t.Errorf("the record still says a force stands after Stop")
+	}
+	co.Stop() // and again: nothing standing
+}
+
+// Losing the lead without exiting lets the force go here at once and proposes
+// nothing; the record still says it stands until the controller that runs the
+// program ends it; and when this controller leads again no force is standing,
+// in its runtime or in the record.
+func TestDemotionLetsAForceGoAndARePromotionFindsNoneStanding(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	co := ckOf(r.srv)
+	co.ck.mu.Lock()
+	f := co.ck.force
+	co.ck.mu.Unlock()
+	co.Demoted()
+	select {
+	case <-f.watched:
+	default:
+		t.Errorf("the watch goroutine is still running after the demotion")
+	}
+	if r.forced("Out") {
+		t.Errorf("the output is still forced in this controller's runtime after the demotion")
+	}
+	co.ck.mu.Lock()
+	still := co.ck.force != nil
+	co.ck.mu.Unlock()
+	if still {
+		t.Errorf("the force's slot is still taken after the demotion")
+	}
+	// nothing was proposed: the record still says it stands
+	if _, ok := r.st.Standing(); !ok {
+		t.Errorf("the demoted controller recorded an end it had no right to propose")
+	}
+	// re-promoted: the leader's reconcile ends the force nothing drives, and no force stands anywhere
+	if n, err := co.ReconcileForces(); n != 1 || err != nil {
+		t.Fatalf("reconcile on the new leader: %d %v", n, err)
+	}
+	if _, ok := r.st.Standing(); ok || r.forced("Out") {
+		t.Errorf("a force is still standing after the re-promotion")
+	}
+	co.Demoted() // and again: nothing to do
+}
+
+// A force still starting when its controller loses the lead is let go by the
+// start itself. Held in the gap that matters: Demoted has marked the force
+// ending but not yet freed the slot, and the start, past ForceIfFree, takes the
+// lock in that gap. Without the ending check the start would arm a timer and
+// leave the output forced here with nothing watching it.
+func TestDemotionDuringAStartLetsTheForceGo(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	startAt, dropAt := make(chan struct{}, 1), make(chan struct{}, 1)
+	goStart, goDrop := make(chan struct{}), make(chan struct{})
+	old := ckHook
+	ckHook = func(s string) {
+		switch s {
+		case "applied":
+			startAt <- struct{}{}
+			<-goStart
+		case "dropping":
+			dropAt <- struct{}{}
+			<-goDrop
+		}
+	}
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(goStart); close(goDrop) }); ckHook = old })
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- r.force(t, goodForce) }()
+	<-startAt // the output is forced in the table, the start has not taken the lock
+	dem := make(chan struct{})
+	go func() { ckOf(r.srv).Demoted(); close(dem) }()
+	<-dropAt // ending is set, the slot is still taken
+	close(goStart)
+	rec := <-done
+	close(goDrop)
+	<-dem
+	once.Do(func() {})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("a start on a controller that lost the lead: %d %s, want 409", rec.Code, rec.Body)
+	}
+	if r.forced("Out") {
+		t.Error("the output stays forced here after the demotion, with no timer or watch")
+	}
+	co := ckOf(r.srv)
+	co.ck.mu.Lock()
+	still := co.ck.force != nil
+	co.ck.mu.Unlock()
+	if still {
+		t.Error("the force's slot is still taken")
+	}
+}
+
+// A force whose record was ended by someone else (an operator abandoning the run
+// on the other controller's screen) is let go by the controller that drives it:
+// it must not stay forced until its timer under a log that says it is released.
+func TestCheckoutForceEndedInTheRecordElsewhereIsLetGoHere(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	run, _ := r.st.Standing()
+	// the end arrives through the log, not through this controller's API
+	if err := r.st.EndForceOf(run.Run, run.Seq, checkout.ForceReleased, "operator"); err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for r.forced("Out") && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if r.forced("Out") {
+		t.Fatal("the output stays forced after the record was ended elsewhere")
+	}
+	co := ckOf(r.srv)
+	co.ck.mu.Lock()
+	still := co.ck.force != nil
+	co.ck.mu.Unlock()
+	if still {
+		t.Error("the force's slot is still taken")
 	}
 }

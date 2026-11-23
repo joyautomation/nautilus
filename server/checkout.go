@@ -50,7 +50,8 @@ type CheckoutOptions struct {
 	// file), so the answer names it.
 	OpenErr string
 
-	ck ckState // the standing checkout force (checkoutforce.go)
+	ck  ckState      // the standing checkout force (checkoutforce.go)
+	api *checkoutAPI // the mounted handlers, for Stop
 }
 
 // The checkout is controller-only and optional: its handlers are in files no
@@ -75,6 +76,9 @@ type checkoutAPI struct {
 
 func (co *CheckoutOptions) mount(s *Server, mux *http.ServeMux) {
 	a := &checkoutAPI{s: s, co: co}
+	co.ck.mu.Lock()
+	co.api = a
+	co.ck.mu.Unlock()
 	mux.HandleFunc("GET /api/checkout", a.handleCheckout)
 	mux.HandleFunc("GET /api/checkout/runs/{id}", a.handleCheckoutRun)
 	mux.HandleFunc("GET /api/checkout/runs/{id}/export", a.handleCheckoutExport)
@@ -101,8 +105,8 @@ func (a *checkoutAPI) checkoutOff(w http.ResponseWriter) bool {
 	switch {
 	case a.co == nil || a.co.Sheet == nil:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the I/O checkout is not enabled for this project: add a checkout: section to the manifest (naut checkout init writes the sheet), with an auth: block with users and a state directory to keep the results in (auth.state-dir, or systemd StateDirectory=)"})
-	case a.s.cluster != nil:
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the I/O checkout is not available on a redundant pair yet: its results would be kept on one controller only"})
+	case a.s.cluster != nil && (a.co.Store == nil || !a.co.Store.IsLog()):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the I/O checkout is not available on this redundant pair: its results would be kept on one controller only (the pair's checkout needs an auth: block with users, as notes do)"})
 	case a.co.Store != nil && a.co.Store.Halted() != "":
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the I/O checkout has stopped on this controller: " + a.co.Store.Halted()})
 	case a.co.Store == nil && a.co.OpenErr != "":
@@ -121,9 +125,13 @@ type checkoutView struct {
 	Signoff string `json:"signoff"`
 	// KeyFingerprint names the key that signs a sealed run: written down from
 	// here ahead of time, it is what a sealed record is compared with.
-	KeyFingerprint string           `json:"keyFingerprint,omitempty"`
-	Points         []checkout.Point `json:"points"`
-	Run            *checkout.Run    `json:"run,omitempty"` // SheetChanged says the open run was begun against another sheet: it
+	KeyFingerprint string `json:"keyFingerprint,omitempty"`
+	// KeyFingerprints, on a pair, is each controller's signing key as it
+	// announced it: a seal is signed by the controller it is made on, so
+	// record both.
+	KeyFingerprints map[string]string `json:"keyFingerprints,omitempty"`
+	Points          []checkout.Point  `json:"points"`
+	Run             *checkout.Run     `json:"run,omitempty"` // SheetChanged says the open run was begun against another sheet: it
 	// takes no more results (abandon it and begin again).
 	SheetChanged bool `json:"sheetChanged,omitempty"`
 
@@ -134,7 +142,7 @@ func (a *checkoutAPI) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	if a.checkoutOff(w) {
 		return
 	}
-	v := checkoutView{Title: a.co.Sheet.Title, Hash: a.co.Sheet.Hash(), Signoff: a.co.Signoff, KeyFingerprint: a.co.Store.KeyFingerprint(),
+	v := checkoutView{Title: a.co.Sheet.Title, Hash: a.co.Sheet.Hash(), Signoff: a.co.Signoff, KeyFingerprint: a.co.Store.KeyFingerprint(), KeyFingerprints: a.co.Store.KeyFingerprints(),
 		Points: a.co.Sheet.Points, Runs: a.co.Store.List()}
 	if run, ok := a.co.Store.Current(); ok {
 		v.Run = &run
