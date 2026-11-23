@@ -15,6 +15,9 @@
 		forceValue,
 		needsNote,
 		offersForce,
+		offersSeal,
+		runLinks,
+		SEAL_NOTICE,
 		resultLine,
 		countdown,
 		type CheckoutForce,
@@ -135,6 +138,20 @@
 	}
 	const release = () => run && act(client.release(run.id));
 
+	// --- seal (sign-off) ---
+	let sealing = $state(false);
+	let sealNote = $state('');
+	let sealProblem = $state('');
+	async function doSeal() {
+		if (!run) return;
+		sealProblem = '';
+		const a = await act(client.seal(run.id, sealNote.trim()));
+		if (a.ok) sealing = false;
+		else sealProblem = a.message;
+	}
+	const pastRuns = $derived((view?.runs ?? []).slice().reverse());
+	const fmtAt = (ms?: number) => (ms ? new Date(ms).toLocaleString() : '');
+
 	let now = $state(0);
 	let frameAt = $state(0);
 	$effect(() => {
@@ -166,12 +183,17 @@
 				<a class="exp" href={`/api/checkout/runs/${encodeURIComponent(run.id)}/export?format=csv`} download>CSV</a>
 				<a class="exp" href={`/api/checkout/runs/${encodeURIComponent(run.id)}/export?format=json`} download>JSON</a>
 				<Button size="sm" variant="ghost" disabled={busy} onclick={abandon}>Abandon run</Button>
+				{#if offersSeal(me, run)}
+					<Button size="sm" variant="primary" disabled={busy || !!force} title={force ? 'let the force go first' : undefined} onclick={() => { sealing = true; sealNote = ''; sealProblem = ''; }}>Sign off…</Button>
+				{/if}
 			{:else}
 				<Button size="sm" disabled={busy} onclick={() => begin(false)}>Begin run</Button>
 				<Button size="sm" variant="secondary" disabled={busy} onclick={() => begin(true)}>Begin rehearsal</Button>
 			{/if}
 		</header>
 
+		{#if run?.unreal}<p class="problem" role="status">This run can never be signed off: {run.unreal}</p>{/if}
+		{#if view.keyFingerprint}<p class="meta">Signing key {view.keyFingerprint}: write it down from here, ahead of time, to check a sealed record against.</p>{/if}
 		{#if message}<p class="problem" role="alert">{message}</p>{/if}
 		{#if view.sheetChanged}
 			<p class="problem" role="alert">The sheet changed since this run began: abandon it and begin again, so every result is against one sheet.</p>
@@ -230,7 +252,38 @@
 			<p class="none">No run is open. Begin one to check the sheet's {view.points.length} points.</p>
 		{/if}
 	{/if}
+	{#if view && pastRuns.length}
+		<h3>Runs</h3>
+		<div class="scroll">
+			<table>
+				<thead><tr><th>Run</th><th>State</th><th>Begun</th><th>By</th><th>Results</th><th>Files</th></tr></thead>
+				<tbody>
+					{#each pastRuns as r (r.id)}
+						<tr>
+							<td>{r.id}{r.rehearsal ? ' (rehearsal)' : ''}</td>
+							<td>{r.state === 'sealed' ? `sealed by ${r.sealedBy ?? ''} ${fmtAt(r.sealedAt)}` : r.state}</td>
+							<td>{fmtAt(r.at)}</td><td>{r.by}</td><td>{r.results ?? ''}</td>
+							<td class="acts">{#each runLinks(r) as l (l.label)}<a class="exp" href={l.href} download={l.label === 'Report' ? undefined : ''} target={l.label === 'Report' ? '_blank' : undefined} rel="noopener">{l.label}</a>{/each}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
 </section>
+
+<Modal open={sealing} title="Sign off this run" size="sm" onclose={() => (sealing = false)}>
+	{#snippet children()}
+		<p class="warn">{SEAL_NOTICE}</p>
+		<p class="warn">The controller signs off only a live run on its current sheet with every point checked and none failing, and (by default) only for someone who recorded none of its results. Your password is asked next.</p>
+		<label class="field"><span>Note (optional)</span><input type="text" bind:value={sealNote} maxlength="500" /></label>
+		{#if sealProblem}<p class="problem" role="alert">{sealProblem}</p>{/if}
+	{/snippet}
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (sealing = false)}>Cancel</Button>
+		<Button variant="primary" disabled={busy} onclick={doSeal}>Sign off</Button>
+	{/snippet}
+</Modal>
 
 <Modal open={!!noteFor} title={noteFor ? `${noteFor.outcome === 'fail' ? 'Fail' : 'Note'}: ${noteFor.id}` : ''} size="sm" onclose={() => (noteFor = null)}>
 	{#snippet children()}
@@ -273,6 +326,7 @@
 	.ck { display: grid; gap: var(--space-2); }
 	header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 	h2 { margin: 0; font-size: var(--font-md, 1rem); }
+	h3 { margin: var(--space-2) 0 0; font-size: var(--font-sm, 0.9rem); }
 	.meta, .none { color: var(--muted); font-size: var(--font-xs); }
 	.none { margin: 0; }
 	.badge { font-size: var(--font-xs); font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); }

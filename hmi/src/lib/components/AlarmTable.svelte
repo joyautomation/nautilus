@@ -13,6 +13,9 @@
 	import type { AlarmInstance, AlarmState, Priority } from '../alarms.svelte.js';
 	import { DEFAULT_SHELVE_TIMES_S, PRIORITY_META, PRIORITY_ORDER, STATE_META } from '../alarms.svelte.js';
 	import AlarmSign from './AlarmSign.svelte';
+	import ChatterBadge from './ChatterBadge.svelte';
+	import { focusSplit, seenWhenText } from '../alarmchatter.js';
+	import type { AlarmFloodBrief } from '../alarms.svelte.js';
 	import OutOfServiceBadge from './OutOfServiceBadge.svelte';
 	import Modal from './Modal.svelte';
 	import Button from './Button.svelte';
@@ -35,7 +38,9 @@
 		operator = '',
 		onselect,
 		pageSize = 100,
-		confirmAck = false
+		confirmAck = false,
+		flood = null,
+		focus = false
 	}: {
 		/** Full instance list — active, unack-RTN, and shelved together (e.g.
 		 * `alarmClient.instances`). Shelved rows are hidden by default; toggle
@@ -66,6 +71,12 @@
 		 *  changes for an existing caller; mount `<ConfirmDialog/>` once and
 		 *  turn it on. */
 		confirmAck?: boolean;
+		/** The flood in progress, if any (#1249). With `focus` it reorders the table. */
+		flood?: AlarmFloodBrief | null;
+		/** Flood focus: what needs a person first, highest priority first, and
+		 *  chattering or long-acknowledged alarms under "also standing". Nothing
+		 *  is hidden for good or acknowledged; it only applies during a flood. */
+		focus?: boolean;
 	} = $props();
 
 	let sortKey = $state<SortKey>('activeTime');
@@ -75,6 +86,8 @@
 	let filterSite = $state('');
 	let filterText = $state('');
 	let showShelved = $state(false);
+	let filterChatter = $state(false);
+	let alsoOpen = $state(false);
 	let page = $state(0);
 	let selected = $state<Set<string>>(new Set());
 
@@ -106,6 +119,7 @@
 			if (!showShelved && a.state === 'shelved') return false;
 			if (filterPriority && a.priority !== filterPriority) return false;
 			if (filterState && a.state !== filterState) return false;
+			if (filterChatter && !a.chatter) return false;
 			if (filterSite && a.site !== filterSite) return false;
 			if (text) {
 				const hay = `${a.name} ${a.tag} ${a.id} ${a.site ?? ''} ${a.area ?? ''}`.toLowerCase();
@@ -141,11 +155,27 @@
 		});
 	});
 
-	const pageCount = $derived(Math.max(1, Math.ceil(sorted.length / pageSize)));
+	// Flood focus: the split of what is filtered; the "also standing" group is
+	// shown only when opened.
+	const split = $derived(focus && flood ? focusSplit(filtered, flood) : null);
+	const ordered = $derived(split ? [...split.first, ...(alsoOpen ? split.also : [])] : sorted);
+	const unackedAlso = $derived((split?.also ?? []).filter((a) => a.state === 'unack-active' || a.state === 'unack-rtn').length);
+	const chatteringCount = $derived(alarms.filter((a) => a.chatter).length);
+
+	// Under flood focus, a row collapsed out of sight is not selected: Ack (N)
+	// must not act on what the operator cannot see.
+	$effect(() => {
+		if (!split) return;
+		const visible = new Set(ordered.map((a) => a.id));
+		const kept = [...untrack(() => selected)].filter((id) => visible.has(id));
+		if (kept.length !== untrack(() => selected).size) selected = new Set(kept);
+	});
+
+	const pageCount = $derived(Math.max(1, Math.ceil(ordered.length / pageSize)));
 	$effect(() => {
 		if (page > pageCount - 1) page = Math.max(0, pageCount - 1);
 	});
-	const pageRows = $derived(sorted.slice(page * pageSize, page * pageSize + pageSize));
+	const pageRows = $derived(ordered.slice(page * pageSize, page * pageSize + pageSize));
 
 	const SORT_LABEL: Record<SortKey, string> = {
 		activeTime: 'Active time',
@@ -304,6 +334,12 @@
 				<input type="checkbox" bind:checked={showShelved} />
 				show shelved
 			</label>
+			{#if chatteringCount || filterChatter}
+				<label class="chip">
+					<input type="checkbox" bind:checked={filterChatter} />
+					Chattering ({chatteringCount})
+				</label>
+			{/if}
 			<!-- Only shown in the stacked layout, where the sortable header is
 			     out of sight — same `sortKey`/`sortDir` the header drives. -->
 			<div class="sortctl" role="group" aria-label="Sort">
@@ -328,7 +364,7 @@
 		</div>
 
 		<div class="actions">
-			<span class="count">{unackedCount} unack · {sorted.length} shown</span>
+			<span class="count">{unackedCount} unack · {ordered.length} shown</span>
 			<Button size="sm" icon="check" disabled={!selected.size || !!ackDenied} title={ackDenied || undefined} onclick={ackSelected}>
 				Ack ({selected.size})
 			</Button>
@@ -406,7 +442,11 @@
 							</span>
 							{#if a.state === 'suppressed'}<OutOfServiceBadge alarm={a} />{/if}
 						</td>
-						<td class="col-label" title={a.tag}>{a.name}</td>
+						<td class="col-label" title={a.tag}>
+							{a.name}
+							{#if a.chatter}<ChatterBadge chatter={a.chatter} {now} />{/if}
+							{#if a.seenWhen}<span class="seen">{seenWhenText(a)}</span>{/if}
+						</td>
 						<td class="col-pipeline">{a.class ?? ([a.site, a.area].filter(Boolean).join(' / ') || '—')}</td>
 						<td class="col-ack num" class:blank={!a.ackMs} data-label="Acked">{fmtTime(a.ackMs)}</td>
 						<td class="col-ackuser" class:blank={!a.ackBy} data-label="by">{a.ackBy ?? '—'}</td>
@@ -417,6 +457,14 @@
 			</tbody>
 		</table>
 	</div>
+
+	{#if split?.also.length}
+		<div class="also">
+			<Button size="sm" variant="ghost" onclick={() => (alsoOpen = !alsoOpen)} aria-expanded={alsoOpen}>
+				Also standing ({split.also.length}{unackedAlso ? `, ${unackedAlso} unacknowledged` : ''}): chattering or acknowledged before the flood. {alsoOpen ? 'Hide' : 'Show'}
+			</Button>
+		</div>
+	{/if}
 
 	{#if pageCount > 1}
 		<div class="pager">
@@ -516,6 +564,14 @@
 		font: inherit;
 		font-size: var(--font-xs);
 		padding: var(--space-1) var(--space-2);
+	}
+	.seen {
+		display: block;
+		font-size: var(--font-2xs);
+		color: var(--muted);
+	}
+	.also {
+		padding: var(--space-1) 0;
 	}
 	.chip {
 		display: inline-flex;

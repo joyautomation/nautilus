@@ -358,3 +358,27 @@ claims:
     source: "#over-a-slow-link"
     tests:
       - go ./cmd/naut TestDeployUsesTheHelper
+
+  - id: DEP-043
+    claim: >-
+      naut deploy sends the upload as xz when the box can unpack it (xzcat,
+      xz or unxz, which the box says when asked, with or without a release)
+      and this machine has xz, preset 6 with the CRC32 check so a small box
+      unpacks it in about 10 MB and BusyBox's decoder reads it; otherwise gzip,
+      and the plan line says why; the whole-controller fallback after a wrong
+      runtime keeps the compression; a box with no xz refuses an xz upload; a
+      helper from before xz is sent gzip.
+    source: "#over-a-slow-link"
+    tests:
+      - go ./cmd/naut TestParseBaseSaysWhetherTheBoxHasXZ
+      - go ./cmd/naut TestPickCompression
+      - go ./cmd/naut TestXZUploadRebuildsTheController
+      - go ./cmd/naut TestXZUploadUnpacksWithBusyboxXzcat
+      - go ./cmd/naut TestABoxWithoutXZGetsGzip
+      - go ./cmd/naut TestAWrongRuntimeFallsBackToTheWholeControllerAsXZ
+      - go ./cmd/naut TestAHelperFromBeforeXZIsGzipOnly
+      - go ./cmd/naut TestAGzipOnlyHelpersPlanLineNamesTheHelper
+      - go ./cmd/naut TestAnEmptyBoxSaysItHasXZ
+      - go ./cmd/naut TestADamagedXZUploadNeverBecomesAController
+      - go ./cmd/naut TestACompressFlagIsChecked
+      - go ./cmd/naut TestDeployHelperRefusesWhatItIsNotFor

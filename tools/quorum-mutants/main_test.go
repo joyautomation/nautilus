@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -53,6 +54,38 @@ func TestBaseline(t *testing.T) {
 	}
 	if ok, _ := baseline(parse(stream("FAIL\tp [build failed]"))); ok {
 		t.Fatal("a baseline that didn't build judged green")
+	}
+}
+
+// A red baseline says why: the failing test's report lines, not the log
+// lines it printed along the way, and only the failing test's (#1120).
+func TestARedBaselineSaysWhy(t *testing.T) {
+	out := func(test, line string) string {
+		return `{"Action":"output","Package":"p","Test":"` + test + `","Output":` + strconv.Quote(line) + `}`
+	}
+	r := parse(stream(
+		out("TestA", "=== RUN   TestA\n"),
+		out("TestA", "2026/11/22 22:57:00 INFO redundancy: this controller leads\n"),
+		out("TestA", "    loopback_test.go:794: b did not hold its lease steadily\n"),
+		out("TestA", "--- FAIL: TestA (3.59s)\n"),
+		failA,
+		out("TestB", "    other_test.go:1: a passing test's log\n"),
+		pass,
+		pkgF,
+	))
+	why := r.why()
+	if !strings.Contains(why, "loopback_test.go:794: b did not hold its lease steadily") || !strings.Contains(why, "--- FAIL: TestA") {
+		t.Fatalf("a red baseline's why: %q, want TestA's report lines", why)
+	}
+	if strings.Contains(why, "INFO") || strings.Contains(why, "other_test.go") {
+		t.Fatalf("a red baseline's why carries a log line or another test's: %q", why)
+	}
+	long := []string{}
+	for i := range 3 * tailLines {
+		long = append(long, out("TestB", "    x_test.go:"+strconv.Itoa(i)+": line\n"))
+	}
+	if n := len(parse(stream(append(long, failB, pkgF)...)).said["TestB"]); n != tailLines {
+		t.Fatalf("kept %d report lines, want the last %d", n, tailLines)
 	}
 }
 

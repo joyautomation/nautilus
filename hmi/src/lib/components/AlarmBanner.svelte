@@ -84,6 +84,10 @@
 		</span>
 	{/if}
 
+	{#if summary?.chattering && !compact}
+		<span class="chattering" title="{summary.chattering} chattering">{summary.chattering} chattering</span>
+	{/if}
+
 	{#if summary?.shelved && !compact}
 		<span class="shelved" title="{summary.shelved} shelved">{summary.shelved} shelved</span>
 	{/if}
@@ -220,6 +224,11 @@
 		flex: none;
 		font-size: var(--font-2xs);
 		color: var(--muted);
+	}
+	.chattering {
+		flex: none;
+		font-size: var(--font-2xs);
+		color: var(--warn);
 	}
 	.shelved {
 		flex: none;

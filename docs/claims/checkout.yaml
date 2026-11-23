@@ -228,6 +228,22 @@ claims:
       - go ./cmd/naut TestCheckoutVerifyCommand
       - go ./server TestEveryWritePathJournalsExactlyOneEntry
 
+  - id: CHK-013
+    claim: >-
+      A run prints as a page: a run not sealed says DRAFT, NOT SIGNED OFF, a
+      sealed run's report is built from its sealed record and is refused when
+      that record no longer verifies, every free-text field is escaped, and the
+      page loads nothing and is served with a policy that allows no script. The
+      Checkout page offers Sign off only to a person with signoff on an open
+      live run, shows the signing key's fingerprint and each run's files, and
+      says what a seal is.
+    source: "#export"
+    tests:
+      - go ./checkout TestReportEscapesAndLoadsNothing
+      - go ./checkout TestReportOfASealedRunNamesWhoSignedAndWhatItWasConnectedTo
+      - go ./server TestCheckoutReport
+      - go ./internal/hmibuild TestTheCheckoutPageIsOptIn
+
   - id: CHK-014
     claim: >-
       On a redundant pair the checkout's runs live in the operator-intent log,

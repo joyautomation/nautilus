@@ -13,6 +13,7 @@
 	import { PRIORITY_META } from '../alarms.svelte.js';
 	import Button from './Button.svelte';
 	import { pagingEvent, pagingOutcome, visibleKind } from '../alarmjournal.js';
+	import { detectionEvent, detectionOutcome } from '../alarmchatter.js';
 
 	const EVENT_LABEL: Record<AlarmEventKind, string> = {
 		active: 'Activated',
@@ -22,7 +23,11 @@
 		unshelve: 'Unshelved',
 		suppress: 'Suppressed',
 		unsuppress: 'Unsuppressed',
-		notify: 'Paged'
+		notify: 'Paged',
+		chatter: 'Chattering began',
+		'chatter-end': 'Chattering ended',
+		flood: 'Alarm flood began',
+		'flood-end': 'Alarm flood ended'
 	};
 
 	// The state an event kind leaves the alarm in — for the "State After"
@@ -35,14 +40,23 @@
 		unshelve: 'restored',
 		suppress: 'suppressed',
 		unsuppress: 'restored',
-		notify: ''
+		notify: '',
+		chatter: '',
+		'chatter-end': '',
+		flood: '',
+		'flood-end': ''
 	};
 
 	// The event and state-after text of a row: a paging row says who was paged.
 	// Several pages in one millisecond share ts, id and kind: tell them apart.
 	const rowKey = (e: AlarmEvent) => `${e.ts}:${e.id}:${e.kind}:${e.level ?? ''}:${e.to ?? ''}:${e.via ?? ''}`;
-	const eventText = (e: AlarmEvent) => (e.kind === 'notify' ? pagingEvent(e) : EVENT_LABEL[e.kind]);
-	const afterText = (e: AlarmEvent) => (e.kind === 'notify' ? pagingOutcome(e) : STATE_AFTER[e.kind]);
+	const eventText = (e: AlarmEvent) =>
+		e.kind === 'notify' ? pagingEvent(e) : (detectionEvent(e) ?? (e.kind === 'active' && e.standing ? 'Seen active' : EVENT_LABEL[e.kind]));
+	const afterText = (e: AlarmEvent) => {
+		if (e.kind === 'notify') return pagingOutcome(e);
+		if (detectionEvent(e)) return detectionOutcome(e);
+		return e.kind === 'active' && e.seenWhen ? `${STATE_AFTER.active} (seen when ${e.seenWhen})` : STATE_AFTER[e.kind];
+	};
 
 	type Preset = '1h' | '24h' | '7d' | 'custom';
 
@@ -76,6 +90,9 @@
 	// screen that never paged looks as it did. Choosing Paged as the event
 	// filter shows them too. The host must fetch them (journalKinds(true)).
 	let showPaging = $state(false);
+	// Chatter and flood rows are hidden the same way (#1249); the host fetches
+	// them with journalKinds(withPaging, true).
+	let showDetection = $state(false);
 	let filterPriority = $state<Priority | ''>('');
 	let filterSite = $state('');
 	let filterText = $state('');
@@ -111,7 +128,7 @@
 		const text = filterText.trim().toLowerCase();
 		return events
 			.filter((e) => {
-				if (!visibleKind(e, filterKind, showPaging)) return false;
+				if (!visibleKind(e, filterKind, showPaging, showDetection)) return false;
 				if (filterPriority && e.priority !== filterPriority) return false;
 				if (filterSite && e.site !== filterSite) return false;
 				if (text && !`${e.name} ${e.id}`.toLowerCase().includes(text)) return false;
@@ -198,6 +215,9 @@
 			{/if}
 			<label class="paging">
 				<input type="checkbox" bind:checked={showPaging} /> Paging
+			</label>
+			<label class="paging">
+				<input type="checkbox" bind:checked={showDetection} /> Chatter &amp; floods
 			</label>
 			<input type="search" placeholder="Search…" bind:value={filterText} aria-label="Search events" />
 			<Button size="sm" variant="secondary" icon="document" onclick={exportCsv} disabled={!filtered.length}>

@@ -111,6 +111,11 @@ func TestDeployHelperRefusesWhatItIsNotFor(t *testing.T) {
 		{"install", "x.part"}, {"install", "nautilus.service"}, {"update", "a", "b"}, {"update"},
 		{"receive", "nautilus.service"}, {"receive", "../../etc/x"}, {"receive", "a b"},
 		{"uninstall", "-rf"}, {"status", "extra"}, {"frobnicate"}, {"restore", "x"},
+		// assemble takes a sixth word only if it is exactly xz (the helper runs under sudo)
+		{"assemble", "w", strings.Repeat("a", 64), "id", "0", strings.Repeat("b", 64), "gz"},
+		{"assemble", "w", strings.Repeat("a", 64), "id", "0", strings.Repeat("b", 64), "xz;id"},
+		{"assemble", "w", strings.Repeat("a", 64), "id", "0", strings.Repeat("b", 64), "xz", "x"},
+		{"assemble", "w", strings.Repeat("a", 64), "id", "0", strings.Repeat("b", 64), ""},
 	} {
 		out, code := e.helper(h, []byte("payload"), args...)
 		if code == 0 || !strings.Contains(out, "refused") {
@@ -119,6 +124,10 @@ func TestDeployHelperRefusesWhatItIsNotFor(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(filepath.Join(e.root, "incoming")); len(entries) > 0 {
 		t.Errorf("a refused receive left files in incoming/: %v", entries)
+	}
+	// and exactly "xz" is allowed through to assemble itself (which then finds nothing uploaded)
+	if out, code := e.helper(h, nil, "assemble", "w", strings.Repeat("a", 64), "id", "0", strings.Repeat("b", 64), "xz"); code == 0 || strings.Contains(out, "refused") || !strings.Contains(out, "nothing uploaded") {
+		t.Errorf("assemble with the sixth word xz: exit %d\n%s", code, out)
 	}
 	if out, _ := e.helper(h, nil, "helper-version"); strings.TrimSpace(out) != helperVersion() {
 		t.Errorf("helper-version %q, want %s (an environment value must not count)", out, helperVersion())

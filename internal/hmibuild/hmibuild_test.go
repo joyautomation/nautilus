@@ -92,6 +92,13 @@ func TestBuildsTheDefaultAppFromMimics(t *testing.T) {
 			t.Errorf("the built default app lacks %q: the layout does not call createAuth()", want)
 		}
 	}
+	// a flood shows on every screen and the alarms page can focus on it; a
+	// chattering alarm wears its badge (#1249)
+	for _, want := range []string{"Alarm flood", "First out", "Also standing", "data-chatter", "nx-flood"} {
+		if !strings.Contains(js.String(), want) {
+			t.Errorf("the built default app lacks %q: the flood banner or chatter badge is not mounted", want)
+		}
+	}
 	for _, want := range []string{"Sign out", "/api/parameters", "/api/config", "needs the config permission"} {
 		if !strings.Contains(js.String(), want) {
 			t.Errorf("the built default app lacks %q", want)
@@ -543,7 +550,7 @@ func TestTheCheckoutPageIsOptIn(t *testing.T) {
 	if !regexp.MustCompile(`label:\s*"Checkout",\s*needs:\s*"checkout"`).MatchString(js) {
 		t.Errorf("the Checkout screen is not gated with needs: checkout")
 	}
-	for _, want := range []string{"/api/checkout", "Begin rehearsal", "is forced by", "/export?format=csv"} {
+	for _, want := range []string{"/api/checkout", "Begin rehearsal", "is forced by", "/export?format=csv", "Sign off this run", "/report"} {
 		if !strings.Contains(js, want) {
 			t.Errorf("the checkout app lacks %q (the page or the banner is not linked)", want)
 		}
