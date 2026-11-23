@@ -38,8 +38,15 @@ import (
 // two in-outs of a call, or a block also names the tag it was handed;
 // neither is refused.
 //
-// What is refused here, with its reason: a STRUCT pin (it needs a named
-// PLC data type, #1299), VAR RETAIN in a block (TIA keeps a
+// A STRUCT pin or result is the struct's PLC data type (structs.go). TIA
+// hands a FUNCTION a STRUCT input by reference, where nautilus hands it a
+// copy: the FC writing to one would write the caller's variable, so that
+// write is refused (assigned, tasks.go), and so is an FC with a STRUCT
+// input that writes a STRUCT manifest tag, itself or through a function
+// it calls: handed that tag, it would read its own write
+// (structInputAliases).
+//
+// What is refused here, with its reason: VAR RETAIN in a block (TIA keeps a
 // multi-instance's retentivity with the block that holds it), a manifest
 // tag named inside a block of a project with several tasks (each task
 // works on its own copy of the tags it shares, and a block called from
@@ -186,6 +193,9 @@ type pouFile struct {
 	file File
 	src  Source
 	deps map[string]bool
+	// structTag is the first STRUCT manifest tag the block writes, "" for
+	// none.
+	structTag string
 }
 
 // writePOUs writes every block the programs reach, and what those reach,
@@ -240,6 +250,7 @@ func (w *writer) writePOUs(out *Output, claim func(name, what string) bool) (ord
 			visit(k, nil)
 		}
 	}
+	w.structInputAliases(written, order)
 	var paths []string
 	for _, k := range order {
 		pf := written[k]
@@ -286,6 +297,64 @@ func (w *writer) writePOU(k string) *pouFile {
 	return first
 }
 
+// structInputAliases refuses a FUNCTION with a STRUCT input that writes a
+// STRUCT manifest tag, itself or through a function it calls: TIA hands
+// the FC its STRUCT input by reference, so a caller binding that tag (or
+// a member of it) to the input would have the FC read its own write,
+// where nautilus reads the copy it was handed. (An FC holds no instance,
+// so what it calls is FCs only.)
+func (w *writer) structInputAliases(written map[string]*pouFile, order []string) {
+	for _, k := range order {
+		p := w.lib.pous[k][0]
+		if p.kind != kindFC {
+			continue
+		}
+		input := ""
+		for _, in := range p.inputs() {
+			if w.structOf(in.typ) != nil {
+				input = in.name
+				break
+			}
+		}
+		if input == "" {
+			continue
+		}
+		seen := map[string]bool{}
+		var find func(k string) (tag, via string)
+		find = func(k string) (string, string) {
+			if seen[k] || written[k] == nil {
+				return "", ""
+			}
+			seen[k] = true
+			if t := written[k].structTag; t != "" {
+				return t, w.lib.pous[k][0].name
+			}
+			deps := make([]string, 0, len(written[k].deps))
+			for d := range written[k].deps {
+				deps = append(deps, d)
+			}
+			sort.Strings(deps)
+			for _, d := range deps {
+				if t, via := find(d); t != "" {
+					return t, via
+				}
+			}
+			return "", ""
+		}
+		tag, via := find(k)
+		if tag == "" {
+			continue
+		}
+		what := "writes the STRUCT tag " + tag
+		if !strings.EqualFold(via, p.name) {
+			what += " (through FUNCTION " + via + ")"
+		}
+		s := w.needed[k]
+		w.diag("siemens/var", s.path, s.line, gapMessage(gapStructured, fmt.Sprintf("%s, which takes the STRUCT input %s and %s", p.what(), input, what),
+			"TIA hands a function its STRUCT input by reference, so a caller passing that tag would have the function read its own write; nautilus reads the copy it was handed"))
+	}
+}
+
 func where(p *pou) string {
 	if p.lib {
 		return "the library"
@@ -308,9 +377,9 @@ func (w *writer) writeOne(p *pou, s site) *pouFile {
 	var header, footer string
 	if p.kind == kindFC {
 		header, footer = "", "END_FUNCTION"
-		if w.structOf(p.ret) != nil {
-			pw.gap("siemens/type", p.lineOf(), gapStructured, "a FUNCTION returning a STRUCT ("+p.name+" : "+strings.TrimSpace(p.ret)+")", "it needs a named PLC data type")
-		} else if t, why := w.sclType(p.ret); why != "" {
+		if why := w.typeRefusal(p.ret, map[string]bool{}); why != "" {
+			pw.diag("siemens/type", p.lineOf(), p.name+": "+why)
+		} else if t, why := w.declType(p.ret, path); why != "" {
 			pw.diag("siemens/type", p.lineOf(), p.name+": "+why)
 		} else {
 			header = "FUNCTION " + name + " : " + t + "\n"
@@ -335,7 +404,7 @@ func (w *writer) writeOne(p *pou, s site) *pouFile {
 		}
 	}
 	file := w.prefix + p.name + ".scl"
-	return &pouFile{file: File{Path: file, Data: pw.fb}, src: Source{Path: path, Body: body}, deps: pw.deps}
+	return &pouFile{file: File{Path: file, Data: pw.fb}, src: Source{Path: path, Body: body}, deps: pw.deps, structTag: pw.structTag}
 }
 
 // lineOf is the line a block's declaration starts on (its first

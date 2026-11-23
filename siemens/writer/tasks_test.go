@@ -259,6 +259,8 @@ func structTwoTasks(t *testing.T, a, b string, extra ...Program) map[string]stri
 		Programs: progs,
 		Globals:  []Global{{Name: "S", Type: "Outer"}, {Name: "O", Type: "Outer"}, {Name: "Level", Type: "REAL"}, {Name: "X", Type: "REAL"}},
 		Tasks:    []Task{{Name: "main", Program: "A", Interval: time.Second}, {Name: "b", Program: "B", Interval: time.Second}},
+		// A STRUCT is a PLC data type, which needs the prefix (#1301 D1b).
+		BlockPrefix: "naut_",
 	})
 	if err != nil || len(diags) > 0 {
 		t.Fatal(err, diags)
@@ -277,29 +279,30 @@ func TestSharedStructWrites(t *testing.T) {
 	f := structTwoTasks(t,
 		"PROGRAM A\nVAR_EXTERNAL S : Outer; O : Outer; END_VAR\nS.In.Flags.2 := TRUE;\nS := O;\nEND_PROGRAM\n",
 		"PROGRAM B\nVAR_EXTERNAL S : Outer; END_VAR\nS.Speed := S.Speed + 1.0;\nEND_PROGRAM\n")
-	fb := f["A.scl"]
+	fb := f["naut_A.scl"]
 	for _, want := range []string{
-		"\t\"Scan_main\".assigned.S.In.Flags.%X2 := TRUE;\n",
-		"\t\"Scan_main\".tags.S.In.Flags := \"Tags\".O.In.Flags;\n",
-		"\t\"Scan_main\".assigned.S.In.Flags := WORD#16#FFFF;\n",
-		"\t\"Scan_main\".assigned.S.In.Run := TRUE;\n",
-		"\t\"Scan_main\".assigned.S.Speed := TRUE;\n",
+		"\t\"naut_Scan_main\".assigned.S.In.Flags.%X2 := TRUE;\n",
+		// The whole struct is copied whole (one PLC data type).
+		"\t\"naut_Scan_main\".tags.S := \"naut_Tags\".O;\n",
+		"\t\"naut_Scan_main\".assigned.S.In.Flags := WORD#16#FFFF;\n",
+		"\t\"naut_Scan_main\".assigned.S.In.Run := TRUE;\n",
+		"\t\"naut_Scan_main\".assigned.S.Speed := TRUE;\n",
 	} {
 		if !strings.Contains(fb, want) {
-			t.Errorf("A.scl lacks %q:\n%s", want, fb)
+			t.Errorf("naut_A.scl lacks %q:\n%s", want, fb)
 		}
 	}
-	if db := f["Scan_main.db"]; !strings.Contains(db, "            In : Struct\n               Flags : WORD;\n               Run : BOOL;") {
+	if db := f["naut_Scan_main.db"]; !strings.Contains(db, "            In : Struct\n               Flags : WORD;\n               Run : BOOL;") {
 		t.Errorf("Scan_main.db flags:\n%s", db)
 	}
-	ob := f["OB_main.scl"]
+	ob := f["naut_OB_main.scl"]
 	for _, want := range []string{
-		"\tIF \"Scan_main\".assigned.S.In.Flags = WORD#16#FFFF THEN\n\t\t\"Tags\".S.In.Flags := \"Scan_main\".tags.S.In.Flags;\n",
-		"\t\tIF \"Scan_main\".assigned.S.In.Flags.%X2 THEN\n",
-		"\tIF \"Scan_main\".assigned.S.In.Run THEN\n",
+		"\tIF \"naut_Scan_main\".assigned.S.In.Flags = WORD#16#FFFF THEN\n\t\t\"naut_Tags\".S.In.Flags := \"naut_Scan_main\".tags.S.In.Flags;\n",
+		"\t\tIF \"naut_Scan_main\".assigned.S.In.Flags.%X2 THEN\n",
+		"\tIF \"naut_Scan_main\".assigned.S.In.Run THEN\n",
 	} {
 		if !strings.Contains(ob, want) {
-			t.Errorf("OB_main.scl lacks %q:\n%s", want, ob)
+			t.Errorf("naut_OB_main.scl lacks %q:\n%s", want, ob)
 		}
 	}
 }

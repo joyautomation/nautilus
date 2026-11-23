@@ -51,6 +51,9 @@ type progWriter struct {
 	consts    []string
 	constVals map[string]string
 	gconsts   map[string]int
+	// structTag is the first STRUCT manifest tag this block writes
+	// (whole or a member of it), "" for none (pous.go, aliasing).
+	structTag string
 }
 
 // elementary maps the IEC elementary types the subset writes. SCL spells
@@ -111,13 +114,16 @@ func (w *writer) program(path string, libs []string, src string, lines []int, pr
 	if !pw.lower(src) {
 		return nil
 	}
+	// An enumeration or alias the program declares is the writer's gap;
+	// the rest of the program is still checked, so one run lists all.
+	typeGap := false
 	for _, td := range prog.TypeDecls {
 		if _, ok := td.Type.(*st.StructType); !ok {
 			pw.gap("siemens/type", td.Pos.Line, gapStructured, "the type "+td.Name, "enumerations and type aliases")
-			return nil
+			typeGap = true
 		}
 	}
-	if !pw.block("FUNCTION_BLOCK "+quote(w.prefix+prog.Name)+"\n", "END_FUNCTION_BLOCK", prog.VarBlocks, prog.Statements) {
+	if !pw.block("FUNCTION_BLOCK "+quote(w.prefix+prog.Name)+"\n", "END_FUNCTION_BLOCK", prog.VarBlocks, prog.Statements) || typeGap {
 		return nil
 	}
 	return pw
@@ -138,8 +144,18 @@ func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st
 		// that starts at its type's zero (the body sets it first) and is
 		// copied to the FC's return value on the way out.
 		u := strings.ToUpper(strings.TrimSpace(pw.pou.ret))
-		t, _ := w.sclType(pw.pou.ret)
-		if _, ok := zero(u); !ok {
+		t, _ := w.declType(pw.pou.ret, pw.path)
+		if w.structOf(u) != nil {
+			// A STRUCT result: the temp is reset member by member, as a
+			// struct temp is.
+			if _, why := w.leaves(u, ""); why != "" {
+				pw.diag("siemens/type", pw.pou.lineOf(), pw.name+": "+why)
+			} else {
+				pw.locals[strings.ToLower(pw.name)] = local{name: pw.name, typ: u}
+				pw.temps = append([]st.VarDecl{{Name: pw.name, Datatype: pw.pou.ret}}, pw.temps...)
+				sections = append(sections, section{"VAR_TEMP", []string{fmt.Sprintf("      %s : %s;", sclName(pw.name), t)}})
+			}
+		} else if _, ok := zero(u); !ok {
 			pw.diag("siemens/type", pw.pou.lineOf(), pw.name+": "+gapMessage(gapOther, "a FUNCTION returning a "+u, ""))
 		} else {
 			pw.locals[strings.ToLower(pw.name)] = local{name: pw.name, typ: u}
@@ -220,15 +236,6 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 	var sections []section
 	typeRefused := map[string]bool{}
 	block := pw.kind != kindProgram
-	// A block's STRUCT pins are refused together, once: a plant model
-	// with six of them says so in one line.
-	var structPins []string
-	structLine := 0
-	defer func() {
-		if len(structPins) > 0 {
-			pw.diag("siemens/type", structLine, gapMessage(gapStructured, fmt.Sprintf("a STRUCT as a pin of %s (%s)", pw.what(), strings.Join(structPins, ", ")), "it needs a named PLC data type"))
-		}
-	}()
 	for _, vb := range vbs {
 		kind := vb.Kind
 		if vb.Constant && kind != "VAR_EXTERNAL" {
@@ -262,7 +269,6 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 				header, temp = "VAR_TEMP", true
 			}
 		}
-		pin := block && (kind == "VAR_INPUT" || kind == "VAR_OUTPUT" || kind == "VAR_IN_OUT")
 		static := kind == "VAR" && !temp
 		if vb.Retain {
 			if kind != "VAR" {
@@ -294,13 +300,6 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 				continue
 			}
 			if sd := w.structOf(v.Datatype); sd != nil {
-				if pin {
-					structPins = append(structPins, v.Name+" : "+sd.name)
-					if structLine == 0 {
-						structLine = v.Pos.Line
-					}
-					continue
-				}
 				if why := w.typeRefusal(v.Datatype, map[string]bool{}); why != "" {
 					if !typeRefused[why] {
 						typeRefused[why] = true
@@ -312,19 +311,14 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapStructured, "a struct variable's initializer", ""))
 					continue
 				}
-				if kind == "VAR_IN_OUT" {
+				if kind == "VAR_IN_OUT" && !block {
 					// The task's OB calls the program's FB with no
 					// arguments: nothing would bind it.
 					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapStructured, "a struct in a program's VAR_IN_OUT", "the task's OB calls the program with nothing to bind it to"))
 					continue
 				}
-				t, why := w.declType(v.Datatype, "      ", nil, !temp)
-				if why != "" {
-					pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: %s", v.Name, why))
-					continue
-				}
 				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
-				line := fmt.Sprintf("      %s : %s;", sclName(v.Name), t)
+				line := fmt.Sprintf("      %s : %s;", sclName(v.Name), w.typeName(sd, pw.path))
 				if temp {
 					// Reset member by member at the start of the body, as
 					// nautilus resets a temp on every scan (#203).
@@ -333,13 +327,20 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 						continue
 					}
 					pw.temps = append(pw.temps, v)
-				} else {
+				} else if kind != "VAR_IN_OUT" {
 					pw.statics[strings.ToLower(v.Name)] = w.shapeOf(v.Name, v.Datatype)
 				}
 				lines = append(lines, line)
 				continue
 			}
 			if p := w.userFB(u); p != nil {
+				if vb.Retain {
+					// Not in any example (#1301 D1b): nautilus retains
+					// the whole instance, and how TIA keeps a
+					// multi-instance in a RETAIN section is unmeasured.
+					pw.gap("siemens/var", v.Pos.Line, gapPOUs, "an instance of "+p.what()+" in VAR RETAIN ("+v.Name+")", "")
+					continue
+				}
 				if !static {
 					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "an instance of "+p.what()+" in "+where, "only a static (VAR) instance is written"))
 					continue
@@ -482,7 +483,7 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 			te = &st.IdentExpr{Name: s.Target, Pos: s.Pos}
 		}
 		if pw.w.structOf(tt) != nil {
-			pw.assignStruct(b, target, tt, s.Value, in, at)
+			pw.assignStruct(b, target, s.Value, in, at)
 		} else {
 			pw.emit(b, at, "%s%s := %s;\n", in, target, pw.store(s.Value, tt, s.Pos.Line))
 		}
@@ -588,26 +589,18 @@ func lineAt(n any) int {
 	return 0
 }
 
-// assignStruct writes an assignment of a whole struct member by member:
-// TIA takes an assignment between two anonymous structs only member-wise.
-// nautilus's lowering, which ran first, has checked that the value is a
-// variable of the same type.
-func (pw *progWriter) assignStruct(b *strings.Builder, target, tt string, v st.Expression, in string, at int) {
+// assignStruct writes an assignment of a whole struct: both sides are of
+// one PLC data type (nautilus's lowering, which ran first, has checked
+// the value's type), so TIA copies it whole, as nautilus does. The value
+// is a variable, a member, or a function returning the struct.
+func (pw *progWriter) assignStruct(b *strings.Builder, target string, v st.Expression, in string, at int) {
 	switch v.(type) {
-	case *st.IdentExpr, *st.MemberExpr:
+	case *st.IdentExpr, *st.MemberExpr, *st.CallExpr:
 	default:
 		pw.gap("siemens/struct", at, gapStructured, "a struct assigned from "+exprShort(v), "")
 		return
 	}
-	src := pw.expr(v, 0)
-	ls, why := pw.w.leaves(tt, "")
-	if why != "" {
-		pw.diag("siemens/struct", at, why)
-		return
-	}
-	for _, l := range ls {
-		pw.emit(b, at, "%s%s%s := %s%s;\n", in, target, l.path, src, l.path)
-	}
+	pw.emit(b, at, "%s%s := %s;\n", in, target, pw.expr(v, 0))
 }
 
 // ident prints a name: a local as #name, a manifest tag as a member of

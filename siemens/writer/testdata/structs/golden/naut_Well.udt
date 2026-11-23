@@ -1,0 +1,10 @@
+TYPE "naut_Well"
+VERSION : 0.1
+   STRUCT
+      Pump : "naut_Motor";
+      Depth : REAL;
+      "Static" : REAL;
+      "Name" : DINT := 7;
+   END_STRUCT;
+
+END_TYPE

@@ -9,10 +9,7 @@ VERSION : 0.1
       Level : REAL := 50.0;
       Local1 : DINT;
       Offset : DINT := -5;
-      Pump : Struct
-         Run : BOOL;
-         Speed : REAL;
-      END_STRUCT;
+      Pump : "naut_Motor";
       Run : BOOL;
       Start : BOOL;
       Status : WORD;

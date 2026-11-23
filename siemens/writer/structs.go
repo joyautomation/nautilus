@@ -11,21 +11,23 @@ import (
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
-// Structured types (#1299). A STRUCT the project declares (in a library
-// file or in a program's own TYPE block) is written inline wherever it is
-// used: a manifest tag of the type becomes a `Struct … END_STRUCT` member
-// of the tags DB, a program variable one of the FB's. TIA would also take
-// it as a PLC data type, but tiad does not import data types yet (TIA puts
-// them beside a customer's own, Ownership.TypesRefused), so nothing here
-// needs one: member access, member-wise assignment and start values work
-// the same on an anonymous struct. A STRUCT pin of the project's own block
-// needs a named type, and is refused until tiad writes them (D1b).
+// Structured types (#1299, #1301 D1b). Every STRUCT the project declares
+// (in a library file or in a program's own TYPE block) that the written
+// SCL reaches is a PLC data type "<prefix><Name>" (a .udt source, tiad
+// generates it into the data types folder of nautilus's group), and every
+// variable, tag, member and pin of it names that type: TIA shows the
+// type as nautilus reads it, a block's pin can take one, and a function
+// can return one. A type nothing reaches is not written (as the project's
+// blocks, pous.go): a library TYPE no program uses is not the CPU's
+// business.
 //
 // Start values follow nautilus exactly: every member starts at its type's
-// declared initial value (`Temp : REAL := 72.5;` inside the STRUCT), and a
-// manifest tag's init: map overrides the members it names, at any depth.
-// nautilus's own seeding (ir.SeedFromInit) checks the map first, so a
-// member it does not know is refused with nautilus's words.
+// declared initial value (`Temp : REAL := 72.5;` inside the STRUCT), which
+// the data type carries, and a manifest tag's init: map overrides the
+// members it names, at any depth, in the tags DB's BEGIN section
+// (`WL101.Pump.Run := TRUE;`). nautilus's own seeding (ir.SeedFromInit)
+// checks the map first, so a member it does not know is refused with
+// nautilus's words.
 
 // library is what the project's library sources declare: the TYPEs the
 // writer writes, and the names it does not translate yet.
@@ -301,33 +303,54 @@ func (w *writer) sclType(t string) (string, string) {
 }
 
 // declType prints a declared type for a declaration: an elementary type
-// as SCL spells it, a struct as an inline `Struct … END_STRUCT` whose
-// members are at ind plus one level. With values, every member gets its
-// start value: its declared initial value, or what start (a manifest
-// init: map, already checked by nautilus's seeding) gives it. Temps take
-// no start values (values false): the body sets them.
-func (w *writer) declType(typ, ind string, start any, values bool) (string, string) {
+// as SCL spells it, a struct as its PLC data type (typeName). path is the
+// nautilus file that declares it, for a compile message on the type.
+func (w *writer) declType(typ, path string) (string, string) {
+	if sd := w.structOf(typ); sd != nil {
+		return w.typeName(sd, path), ""
+	}
+	return w.sclType(typ)
+}
+
+// typeName is the PLC data type of the STRUCT sd, "<prefix><Name>", and
+// records it as reached: Write writes its .udt source (writeTypes), and
+// those of the structs it holds. path is the first nautilus file that
+// names it.
+func (w *writer) typeName(sd *structDef, path string) string {
+	k := strings.ToLower(sd.name)
+	if w.types == nil {
+		w.types = map[string]string{}
+	}
+	if _, ok := w.types[k]; !ok {
+		w.types[k] = path
+	}
+	return quote(w.prefix + sd.name)
+}
+
+// overrides are the BEGIN-section assignments that give a tag of type
+// typ, at path, the start value start (a manifest init: map, already
+// checked by nautilus's seeding), member by member in declaration order:
+// `WL101.Pump.Run := TRUE;`. What the map does not name keeps the data
+// type's own start value. A map that names a member twice or one the
+// type lacks, or a struct given something else than a map, is refused,
+// never dropped.
+func (w *writer) overrides(typ, path string, start any) ([]string, string) {
 	sd := w.structOf(typ)
 	if sd == nil {
-		t, why := w.sclType(typ)
-		if why != "" || start == nil {
-			return t, why
-		}
 		lit, err := InitLiteral(start, typ)
 		if err != nil {
-			return "", err.Error()
+			return nil, err.Error()
 		}
 		v, why := literal(lit)
 		if why != "" {
-			return "", why
+			return nil, why
 		}
-		return t + " := " + v, ""
+		return []string{path + " := " + v + ";"}, ""
 	}
 	m, isMap := start.(map[string]any)
-	if start != nil && !isMap {
-		return "", fmt.Sprintf("the start value %v of the struct %s is not a mapping of member: value", start, sd.name)
+	if !isMap {
+		return nil, fmt.Sprintf("the start value %v of the struct %s is not a mapping of member: value", start, sd.name)
 	}
-	used := 0
 	keys := map[string]string{}
 	sorted := make([]string, 0, len(m))
 	for k := range m {
@@ -336,42 +359,118 @@ func (w *writer) declType(typ, ind string, start any, values bool) (string, stri
 	sort.Strings(sorted) // the same message every run
 	for _, k := range sorted {
 		if other, dup := keys[strings.ToLower(k)]; dup {
-			return "", fmt.Sprintf("the start value names %s and %s, one member of %s", other, k, sd.name)
+			return nil, fmt.Sprintf("the start value names %s and %s, one member of %s", other, k, sd.name)
 		}
 		keys[strings.ToLower(k)] = k
 	}
-	var b strings.Builder
-	b.WriteString("Struct\n")
+	used := 0
+	var out []string
 	for _, f := range sd.fields {
-		var fs any
-		has := false
-		for k, v := range m {
-			if strings.EqualFold(k, f.Name) {
-				fs, has = v, true
-				used++
+		k, has := keys[strings.ToLower(f.Name)]
+		if !has {
+			continue
+		}
+		used++
+		ls, why := w.overrides(f.Datatype, path+"."+sclName(f.Name), m[k])
+		if why != "" {
+			return nil, fmt.Sprintf("member %s: %s", f.Name, why)
+		}
+		out = append(out, ls...)
+	}
+	if used != len(m) {
+		// nautilus's seeding refused an unknown member already; never
+		// drop one silently should it not have run.
+		return nil, fmt.Sprintf("the start value %v names a member %s does not have", start, sd.name)
+	}
+	return out, ""
+}
+
+// writeTypes adds a .udt source for every STRUCT the written SCL reached,
+// and every struct those hold, each after the types it holds (TIA
+// generates a type only once the types it names exist). It answers the
+// files in that order. claim reserves the type's name: blocks and data
+// types share one name space in TIA (measured on V21, "Type conflict:
+// Object X cannot be overwritten").
+func (w *writer) writeTypes(out *Output, claim func(name, what string) bool) []string {
+	keys := make([]string, 0, len(w.types))
+	for k := range w.types {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	state := map[string]int{}
+	var order []string
+	var visit func(k, path string)
+	visit = func(k, path string) {
+		if state[k] != 0 {
+			return // a recursive type is refused where it is declared (typeRefusal)
+		}
+		state[k] = 1
+		sd := w.lib.structs[k]
+		for _, f := range sd.fields {
+			if m := w.structOf(f.Datatype); m != nil {
+				mk := strings.ToLower(m.name)
+				if _, ok := w.types[mk]; !ok {
+					w.types[mk] = path
+				}
+				visit(mk, w.types[mk])
 			}
 		}
-		t, why := w.declType(f.Datatype, ind+"   ", fs, values)
-		if why != "" {
-			return "", fmt.Sprintf("member %s: %s", f.Name, why)
+		state[k] = 2
+		order = append(order, k)
+	}
+	for _, k := range keys {
+		visit(k, w.types[k])
+	}
+	var files []string
+	for _, k := range order {
+		sd := w.lib.structs[k]
+		if w.prefix == "" {
+			// tiad keeps nautilus's types apart from a customer's by the
+			// group and prunes only what carries the prefix; the CLI
+			// never passes an empty one.
+			w.diag("siemens/type", w.types[k], 0, fmt.Sprintf("the TYPE %s needs a block prefix to be written as a PLC data type", sd.name))
+			continue
 		}
-		line := ind + "   " + sclName(f.Name) + " : " + t
-		if values && !has && f.Initial != nil {
+		name := w.prefix + sd.name
+		if !claim(name, "the PLC data type of TYPE "+sd.name) {
+			continue
+		}
+		data, why := w.udtSource(sd)
+		if why != "" {
+			w.diag("siemens/type", w.types[k], 0, fmt.Sprintf("the type %s: %s", sd.name, why))
+			continue
+		}
+		out.Files = append(out.Files, File{Path: name + ".udt", Data: data})
+		out.Sources[name+".udt"] = Source{Path: w.types[k]}
+		files = append(files, name+".udt")
+	}
+	return files
+}
+
+// udtSource is the PLC data type of sd: its members with their declared
+// initial values, a struct member naming its own type.
+func (w *writer) udtSource(sd *structDef) ([]byte, string) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "TYPE %s\n", quote(w.prefix+sd.name))
+	b.WriteString("VERSION : 0.1\n")
+	b.WriteString("   STRUCT\n")
+	for _, f := range sd.fields {
+		t, why := w.declType(f.Datatype, "")
+		if why != "" {
+			return nil, fmt.Sprintf("member %s: %s", f.Name, why)
+		}
+		line := "      " + sclName(f.Name) + " : " + t
+		if f.Initial != nil {
 			v, why := constValue(w.lib, f.Initial)
 			if why != "" {
-				return "", fmt.Sprintf("member %s: its initial value: %s", f.Name, why)
+				return nil, fmt.Sprintf("member %s: its initial value: %s", f.Name, why)
 			}
 			line += " := " + v
 		}
 		b.WriteString(line + ";\n")
 	}
-	if used != len(m) {
-		// nautilus's seeding refused an unknown member already; never
-		// drop one silently should it not have run.
-		return "", fmt.Sprintf("the start value %v names a member %s does not have", start, sd.name)
-	}
-	b.WriteString(ind + "END_STRUCT")
-	return b.String(), ""
+	b.WriteString("   END_STRUCT;\n\nEND_TYPE\n")
+	return []byte(b.String()), ""
 }
 
 // leaf is one elementary member of a struct, by its path below the

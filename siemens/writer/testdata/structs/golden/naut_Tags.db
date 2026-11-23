@@ -2,30 +2,14 @@ DATA_BLOCK "naut_Tags"
 { S7_Optimized_Access := 'TRUE' }
 VERSION : 0.1
    VAR 
-      WL101 : Struct
-         Pump : Struct
-            Run : BOOL := TRUE;
-            Speed : REAL := 50.0;
-            Starts : INT;
-         END_STRUCT;
-         Depth : REAL := 0.45;
-         "Static" : REAL;
-         "Name" : DINT := 7;
-      END_STRUCT;
+      WL101 : "naut_Well";
    END_VAR
    VAR RETAIN
-      WL102 : Struct
-         Pump : Struct
-            Run : BOOL;
-            Speed : REAL := 50.0;
-            Starts : INT;
-         END_STRUCT;
-         Depth : REAL;
-         "Static" : REAL;
-         "Name" : DINT := 7;
-      END_STRUCT;
+      WL102 : "naut_Well";
    END_VAR
 
 BEGIN
+   WL101.Pump.Run := TRUE;
+   WL101.Depth := 0.45;
 
 END_DATA_BLOCK
