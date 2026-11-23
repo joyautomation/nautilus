@@ -446,6 +446,12 @@ func (e *Engine) emit(in *instance, now time.Time, kind, by string) {
 // emitMarked is emit with Event.Standing set on the row: an activation of
 // a condition that stood through a re-baseline (detect.go).
 func (e *Engine) emitMarked(in *instance, now time.Time, kind, by string, standing bool) {
+	e.emitFull(in, now, kind, by, standing, "")
+}
+
+// emitFull is emitMarked with a Reason on the row (a shelve's: why, in the
+// operator's words).
+func (e *Engine) emitFull(in *instance, now time.Time, kind, by string, standing bool, reason string) {
 	e.rev++
 	if in.state == Normal {
 		in.adoptable = false // the occurrence that stood has ended
@@ -466,6 +472,7 @@ func (e *Engine) emitMarked(in *instance, now time.Time, kind, by string, standi
 		By:         by,
 		Occurrence: in.occ,
 		Standing:   standing,
+		Reason:     reason,
 	}
 	if kind == KindActive {
 		ev.SeenWhen = in.seen
@@ -870,6 +877,12 @@ func (in *instance) sameOccurrence(occ map[string]string) error {
 // until must be in the future, and Evaluate restores the state the shelf
 // interrupted the moment it passes.
 func (e *Engine) Shelve(id string, until time.Time, by string) error {
+	return e.ShelveWith(id, until, by, "")
+}
+
+// ShelveWith is Shelve with the operator's reason, written on the shelve
+// row (a chattering alarm's one-click shelve says why; #1249).
+func (e *Engine) ShelveWith(id string, until time.Time, by, reason string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	i, ok := e.byID[id]
@@ -889,7 +902,7 @@ func (e *Engine) Shelve(id string, until time.Time, by string) error {
 		in.state = Shelved
 	}
 	in.shelfUntil, in.shelfBy = until, by
-	e.emit(in, now, KindShelve, by)
+	e.emitFull(in, now, KindShelve, by, false, reason)
 	return nil
 }
 

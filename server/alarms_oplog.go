@@ -420,7 +420,7 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 		l.view[e.ID] = v
 		l.mu.Unlock()
 		if live {
-			if err := l.eng.Shelve(e.ID, time.UnixMilli(e.Until), e.By); err != nil {
+			if err := l.eng.ShelveWith(e.ID, time.UnixMilli(e.Until), e.By, e.Reason); err != nil {
 				slog.Warn("alarm: a committed shelve did not apply", "id", e.ID, "err", err)
 			}
 		}
@@ -1143,7 +1143,7 @@ func (s *Server) alarmAckThroughLogAs(w http.ResponseWriter, r *http.Request, id
 }
 
 // shelveThroughLog proposes a shelve, or an unshelve when until is zero.
-func (s *Server) shelveThroughLog(w http.ResponseWriter, r *http.Request, id string, until time.Time, by string) {
+func (s *Server) shelveThroughLog(w http.ResponseWriter, r *http.Request, id string, until time.Time, by, reason string) {
 	if s.refuseAlarmBeforeRestore(w) {
 		return
 	}
@@ -1153,7 +1153,7 @@ func (s *Server) shelveThroughLog(w http.ResponseWriter, r *http.Request, id str
 		err = s.alarms.CheckUnshelve(id)
 	} else {
 		err = s.alarms.CheckShelve(id, until)
-		e.Kind, e.Until = oplog.KindShelve, until.UnixMilli()
+		e.Kind, e.Until, e.Reason = oplog.KindShelve, until.UnixMilli(), reason
 	}
 	if err != nil {
 		http.Error(w, err.Error(), alarmErrStatus(err))

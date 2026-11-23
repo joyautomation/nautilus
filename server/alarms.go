@@ -466,10 +466,10 @@ func (s *Server) handleAlarmShelve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.alarmLog != nil {
-		s.shelveThroughLog(w, r, req.ID, until, s.recordBy(r, req.By))
+		s.shelveThroughLog(w, r, req.ID, until, s.recordBy(r, req.By), strings.TrimSpace(req.Reason))
 		return
 	}
-	if err := s.alarms.Shelve(req.ID, until, s.recordBy(r, req.By)); err != nil {
+	if err := s.alarms.ShelveWith(req.ID, until, s.recordBy(r, req.By), strings.TrimSpace(req.Reason)); err != nil {
 		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
 	}
@@ -499,7 +499,7 @@ func (s *Server) handleAlarmUnshelve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.alarmLog != nil {
-		s.shelveThroughLog(w, r, req.ID, time.Time{}, s.recordBy(r, req.By))
+		s.shelveThroughLog(w, r, req.ID, time.Time{}, s.recordBy(r, req.By), "")
 		return
 	}
 	if err := s.alarms.Unshelve(req.ID, s.recordBy(r, req.By)); err != nil {

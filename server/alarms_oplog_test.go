@@ -70,8 +70,15 @@ func TestAlarmAckThroughTheLog(t *testing.T) {
 		t.Fatalf("an unknown id: %d, %d entries proposed; want 404 and nothing proposed", rec.Code, len(*got))
 	}
 	// Shelve and unshelve go through the log too.
-	if rec := do(t, s, "POST", "/api/alarms/shelve", `{"id":"LoFlow","seconds":600,"by":"op"}`); rec.Code != http.StatusOK {
+	if rec := do(t, s, "POST", "/api/alarms/shelve", `{"id":"LoFlow","seconds":600,"by":"op","reason":"  seal weeping ","via":"chatter"}`); rec.Code != http.StatusOK {
 		t.Fatalf("shelve: %d %s", rec.Code, rec.Body)
+	}
+	// the reason rides the replicated entry, and so reaches the leader's own row
+	if e := (*got)[1]; e.Kind != oplog.KindShelve || e.Reason != "seal weeping" {
+		t.Fatalf("the proposed shelve is %+v; want Reason \"seal weeping\"", e)
+	}
+	if rows, _ := eng.Journal(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindShelve}}); len(rows) != 1 || rows[0].Reason != "seal weeping" {
+		t.Fatalf("the leader's shelve row = %+v; want the reason through the log", rows)
 	}
 	if rec := do(t, s, "POST", "/api/alarms/unshelve", `{"id":"LoFlow","by":"op"}`); rec.Code != http.StatusOK {
 		t.Fatalf("unshelve: %d %s", rec.Code, rec.Body)

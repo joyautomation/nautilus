@@ -737,3 +737,28 @@ func TestNotifiedJournalsOnly(t *testing.T) {
 		t.Fatalf("notify row %+v", got)
 	}
 }
+
+// A shelve's reason is written on its journal row; a plain Shelve leaves it
+// empty (#1249).
+func TestShelveWithWritesTheReasonOnTheRow(t *testing.T) {
+	r := newRig(t, def("A", "A"), def("B", "B"))
+	r.tags["A"], r.tags["B"] = true, true
+	r.Evaluate()
+	if err := r.ShelveWith("A", r.clk.at(15*time.Minute), "op", "seal weeping"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Shelve("B", r.clk.at(15*time.Minute), "op"); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := r.Journal(time.Time{}, time.Time{}, Filter{Kinds: []string{KindShelve}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, e := range evs {
+		got[e.ID] = e.Reason
+	}
+	if len(got) != 2 || got["A"] != "seal weeping" || got["B"] != "" {
+		t.Fatalf("shelve rows' reasons = %v, want A: seal weeping, B: none", got)
+	}
+}
