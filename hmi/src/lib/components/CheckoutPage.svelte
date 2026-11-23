@@ -43,6 +43,8 @@
 
 	const me = $derived(currentAuth()?.me ?? null);
 	const mayCheck = (pt: CheckoutPoint) => canIn(me, 'checkout', pt.area);
+	// beginning and abandoning a run need checkout for the whole controller
+	const mayRun = $derived(canIn(me, 'checkout', undefined));
 
 	async function load() {
 		const a = await client.view();
@@ -197,13 +199,15 @@
 				<span class="badge" class:rehearsal={run.rehearsal}>{run.rehearsal ? 'Rehearsal: can never be signed' : 'Live run'}</span>
 				<a class="exp" href={`/api/checkout/runs/${encodeURIComponent(run.id)}/export?format=csv`} download>CSV</a>
 				<a class="exp" href={`/api/checkout/runs/${encodeURIComponent(run.id)}/export?format=json`} download>JSON</a>
-				<Button size="sm" variant="ghost" disabled={busy} onclick={abandon}>Abandon run</Button>
+				{#if mayRun}<Button size="sm" variant="ghost" disabled={busy} onclick={abandon}>Abandon run</Button>{/if}
 				{#if offersSeal(me, run)}
 					<Button size="sm" variant="primary" disabled={busy || !!force} title={force ? 'let the force go first' : undefined} onclick={() => { sealing = true; sealNote = ''; sealProblem = ''; }}>Sign off…</Button>
 				{/if}
 			{:else}
-				<Button size="sm" disabled={busy} onclick={() => begin(false)}>Begin run</Button>
-				<Button size="sm" variant="secondary" disabled={busy} onclick={() => begin(true)}>Begin rehearsal</Button>
+				{#if mayRun}
+					<Button size="sm" disabled={busy} onclick={() => begin(false)}>Begin run</Button>
+					<Button size="sm" variant="secondary" disabled={busy} onclick={() => begin(true)}>Begin rehearsal</Button>
+				{/if}
 			{/if}
 		</header>
 

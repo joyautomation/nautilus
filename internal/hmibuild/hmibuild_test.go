@@ -550,7 +550,7 @@ func TestTheCheckoutPageIsOptIn(t *testing.T) {
 	if !regexp.MustCompile(`label:\s*"Checkout",\s*needs:\s*"checkout\|signoff"`).MatchString(js) {
 		t.Errorf("the Checkout screen is not shown to a person with checkout or signoff (a supervisor signs off and holds no checkout)")
 	}
-	if !strings.Contains(js, "split(\"|\")") && !strings.Contains(js, "split(`|`)") && !strings.Contains(js, ".split(\"|\")") && !regexp.MustCompile(`split\(.\|.\)`).MatchString(js) {
+	if !regexp.MustCompile("split\\([\"'`]\\|[\"'`]\\)").MatchString(js) {
 		t.Errorf("the nav does not take a screen's needs as any-of a list joined with |")
 	}
 	// abandoning asks in a dialog of the page's own, never a native prompt (it can be blocked, and then nothing happens)
