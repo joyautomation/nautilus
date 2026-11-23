@@ -216,7 +216,8 @@ refused at check time, with one exception, the table below.
 |---|---|
 | Program | an FB (`naut_Main`) with an instance DB, called from the task's OB |
 | The task | a cyclic interrupt OB at that cycle, 1 ms to 60 s. One task |
-| Manifest tags | one global DB, `naut_Tags` (scalar tags so far; I/O tags as a PLC tag table come later) |
+| Manifest tags | one global DB, `naut_Tags`, with each tag's `init:` as its start value (I/O tags as a PLC tag table come later) |
+| STRUCT types, in a library file or the program | written inline where they are used, with the TYPE's initial values and a tag's `init:` map as start values; a whole struct is copied member by member |
 | TON, TOF, TP, R_TRIG, F_TRIG, CTU, CTD, CTUD | the IEC instructions as multi-instances; counters are 64-bit |
 | SR, RS | written inline on a static |
 | bitwise AND/OR/XOR/NOT, bit access `.3`, shifts and rotates | written on the bit string of the operand's width |
@@ -235,13 +236,14 @@ that closes it.
 
 | Issue | Not translated yet |
 |---|---|
-| #1299 | UDTs, enums, arrays, structured start values |
+| #1299 | enums, arrays |
 | #1300 | more than one task |
 | #1301 | user FUNCTIONs and FUNCTION_BLOCKs, library FBs, `VAR CONSTANT` |
 | #1302 | SFC. It will be written as an SCL state machine first |
 | #1303 | STRING and the string functions |
 | #1304 | TIME arithmetic, LTIME, dates |
 | #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, and more |
+| #1310 | a task's `dt-tag`: nothing on the CPU writes it yet, so integrators and PI loops built on it would read 0 |
 
 Real limits keep their own words, such as a task interval over 60 s or a
 block name collision.

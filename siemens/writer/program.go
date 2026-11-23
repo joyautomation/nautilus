@@ -2,12 +2,8 @@ package writer
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
-	"github.com/joyautomation/nautilus/lang/fbd"
-	"github.com/joyautomation/nautilus/lang/ir"
-	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -26,8 +22,9 @@ type progWriter struct {
 	// computes at 64 bits (types.go).
 	wide bool
 	// statics are the program's static variables (VAR, VAR RETAIN,
-	// VAR_INPUT/OUTPUT), which the Web API can read; temps are not.
-	statics map[string]bool
+	// VAR_INPUT/OUTPUT), which the Web API can read, with what each holds
+	// below it; temps are not.
+	statics map[string]*shape
 	temps   []st.VarDecl
 	// lines is the source line (of the parsed ST) of each line written
 	// after BEGIN, in order.
@@ -80,42 +77,30 @@ func sclType(t string) (string, string) {
 	return "", gapMessage(gapStructured, "the type "+t, "UDTs, enums and user function blocks")
 }
 
-func (w *writer) program(path string, libs []string, prog *st.Program) *progWriter {
-	pw := &progWriter{w: w, path: path, libs: libs, locals: map[string]local{}, statics: map[string]bool{}}
+func (w *writer) program(path string, libs []string, src string, prog *st.Program) *progWriter {
+	pw := &progWriter{w: w, path: path, libs: libs, locals: map[string]local{}, statics: map[string]*shape{}}
 	before := len(w.diags)
 
 	// nautilus's own lowering first: what nautilus cannot run is not
-	// written for the CPU either.
-	globals := map[string]*ir.Type{}
-	for _, g := range w.globals {
-		if t := st.DatatypeToIRType(g.Type); t != nil {
-			globals[g.Name] = t
-		}
-	}
-	if _, err := st.LowerWithOpts(prog, st.LowerOpts{ImplicitGlobals: globals}); err != nil {
-		line := 0
-		if le, ok := st.AsLowerError(err); ok {
-			line = le.Pos.Line
-		}
-		if pw.libraryMiss(err) {
-			// The writer lowers the program alone, without the project's
-			// library files (their TYPEs, FUNCTIONs, FUNCTION_BLOCKs and
-			// global constants), which nautilus compiles with it: what
-			// the program takes from there is the writer's gap.
-			pw.diag("siemens/library", line, fmt.Sprintf("the Siemens writer doesn't translate the project's library (its own types, functions, function blocks and constants) yet (#%d, #%d): %s", gapIssue[gapStructured], gapIssue[gapPOUs], err.Error()))
-			return nil
-		}
-		pw.diag("siemens/nautilus", line, "nautilus refuses this program: "+err.Error())
+	// written for the CPU either. It compiles the program with the
+	// project's library ahead of it, as naut check composes them, so the
+	// library's TYPEs, blocks and constants are in scope; the writer then
+	// refuses what it does not translate of them by name.
+	if !pw.lower(src) {
 		return nil
 	}
 	if len(prog.FBDecls) > 0 || len(prog.FuncDecls) > 0 {
 		pw.gap("siemens/user-pou", 1, gapPOUs, "user FUNCTIONs and FUNCTION_BLOCKs", "")
 	}
-	if len(prog.TypeDecls) > 0 {
-		pw.gap("siemens/type", prog.TypeDecls[0].Pos.Line, gapStructured, "TYPE declarations (UDTs, enums)", "")
+	for _, td := range prog.TypeDecls {
+		if _, ok := td.Type.(*st.StructType); !ok {
+			pw.gap("siemens/type", td.Pos.Line, gapStructured, "the type "+td.Name, "enumerations and type aliases")
+			break
+		}
 	}
 
 	var decls strings.Builder
+	typeRefused := map[string]bool{}
 	for _, vb := range prog.VarBlocks {
 		kind := vb.Kind
 		switch kind {
@@ -154,8 +139,47 @@ func (w *writer) program(path string, libs []string, prog *st.Program) *progWrit
 					continue
 				}
 				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
-				pw.statics[strings.ToLower(v.Name)] = true
-				lines = append(lines, fmt.Sprintf("      %s : Struct\n%s      END_STRUCT;", v.Name, latch.members()))
+				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name, instance: true}
+				lines = append(lines, fmt.Sprintf("      %s : Struct\n%s      END_STRUCT;", sclName(v.Name), latch.members()))
+				continue
+			}
+			if sd := w.structOf(v.Datatype); sd != nil {
+				if why := w.typeRefusal(v.Datatype, map[string]bool{}); why != "" {
+					if !typeRefused[why] {
+						typeRefused[why] = true
+						pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: the type %s: %s", v.Name, sd.name, why))
+					}
+					continue
+				}
+				if v.Initial != nil {
+					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapStructured, "a struct variable's initializer", ""))
+					continue
+				}
+				if kind == "VAR_IN_OUT" {
+					// The task's OB calls the program's FB with no
+					// arguments: nothing would bind it.
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "a struct in a program's VAR_IN_OUT", "the task's OB calls the program with nothing to bind it to"))
+					continue
+				}
+				t, why := w.declType(v.Datatype, "      ", nil, kind != "VAR_TEMP")
+				if why != "" {
+					pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: %s", v.Name, why))
+					continue
+				}
+				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
+				line := fmt.Sprintf("      %s : %s;", sclName(v.Name), t)
+				if kind == "VAR_TEMP" {
+					// Reset member by member at the start of the body, as
+					// nautilus resets a temp on every scan (#203).
+					if _, why := w.leaves(v.Datatype, ""); why != "" {
+						pw.diag("siemens/var", v.Pos.Line, v.Name+": "+why)
+						continue
+					}
+					pw.temps = append(pw.temps, v)
+				} else {
+					pw.statics[strings.ToLower(v.Name)] = w.shapeOf(v.Name, v.Datatype)
+				}
+				lines = append(lines, line)
 				continue
 			}
 			if inst, ok := instances[u]; ok {
@@ -165,15 +189,20 @@ func (w *writer) program(path string, libs []string, prog *st.Program) *progWrit
 				}
 				typ = inst
 			} else {
-				t, why := sclType(v.Datatype)
+				t, why := w.sclType(v.Datatype)
 				if why != "" {
-					pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: %s", v.Name, why))
+					// Once per type in a program: a plant model with 84
+					// instances of one block says so once.
+					if !typeRefused[why] {
+						typeRefused[why] = true
+						pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: %s", v.Name, why))
+					}
 					continue
 				}
 				typ = t
 			}
 			pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
-			line := fmt.Sprintf("      %s : %s", v.Name, typ)
+			line := fmt.Sprintf("      %s : %s", sclName(v.Name), typ)
 			if kind == "VAR_TEMP" {
 				// TIA has no start values for temps, and nautilus resets a
 				// temp to its init on every scan (#203): the body starts
@@ -186,8 +215,11 @@ func (w *writer) program(path string, libs []string, prog *st.Program) *progWrit
 				lines = append(lines, line+";")
 				continue
 			}
-			_, isInst := instances[u]
-			pw.statics[strings.ToLower(v.Name)] = isInst
+			if _, isInst := instances[u]; isInst {
+				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name, instance: true}
+			} else {
+				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name}
+			}
 			if v.Initial != nil {
 				if _, isInst := instances[u]; isInst {
 					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "an instance initializer", ""))
@@ -207,11 +239,18 @@ func (w *writer) program(path string, libs []string, prog *st.Program) *progWrit
 
 	var body strings.Builder
 	for _, v := range pw.temps {
+		if w.structOf(v.Datatype) != nil {
+			ls, _ := w.leaves(v.Datatype, "")
+			for _, l := range ls {
+				pw.emit(&body, v.Pos.Line, "\t#%s%s := %s;\n", sclName(v.Name), l.path, l.init)
+			}
+			continue
+		}
 		init, _ := zero(strings.ToUpper(strings.TrimSpace(v.Datatype)))
 		if v.Initial != nil {
 			init = pw.expr(v.Initial, 0)
 		}
-		pw.emit(&body, v.Pos.Line, "\t#%s := %s;\n", v.Name, init)
+		pw.emit(&body, v.Pos.Line, "\t#%s := %s;\n", sclName(v.Name), init)
 	}
 	pw.stmts(&body, prog.Statements, 1)
 	if len(w.diags) > before {
@@ -228,60 +267,6 @@ func (w *writer) program(path string, libs []string, prog *st.Program) *progWrit
 	b.WriteString("END_FUNCTION_BLOCK\n")
 	pw.fb = []byte(b.String())
 	return pw
-}
-
-// libraryMiss reports a lowering error for a name the project's library
-// sources (Program.Libs) declare as a TYPE, FUNCTION, FUNCTION_BLOCK or
-// VAR_GLOBAL: the writer lowers the program without them. Any other
-// unknown name, a typo included, is nautilus's own refusal.
-func (pw *progWriter) libraryMiss(err error) bool {
-	m := libraryName.FindStringSubmatch(err.Error())
-	return m != nil && libraryDecls(pw.libs)[strings.ToLower(m[1])]
-}
-
-var libraryName = regexp.MustCompile(`(?:unknown type|unknown function|undeclared identifier) "([A-Za-z_][A-Za-z0-9_]*)"`)
-
-// libraryDecls is every name the library sources declare at the top
-// level, lower-cased. A ladder or FBD library is read through its
-// transpiler; a source that reads as none declares nothing.
-func libraryDecls(libs []string) map[string]bool {
-	out := map[string]bool{}
-	for _, src := range libs {
-		prog, err := st.Parse(src)
-		if err != nil {
-			prog = nil
-			if f, _, err := ld.TranspileWithLines(src, libs...); err == nil {
-				if s, _, err := fbd.TranspileWithLines(f); err == nil {
-					prog, _ = st.Parse(s)
-				}
-			}
-			if prog == nil {
-				if s, _, err := fbd.TranspileWithLines(src); err == nil {
-					prog, _ = st.Parse(s)
-				}
-			}
-		}
-		if prog == nil {
-			continue
-		}
-		for _, t := range prog.TypeDecls {
-			out[strings.ToLower(t.Name)] = true
-		}
-		for _, f := range prog.FuncDecls {
-			out[strings.ToLower(f.Name)] = true
-		}
-		for _, f := range prog.FBDecls {
-			out[strings.ToLower(f.Name)] = true
-		}
-		for _, vb := range append(prog.GlobalConsts, prog.VarBlocks...) {
-			if vb.Kind == "VAR_GLOBAL" {
-				for _, v := range vb.Variables {
-					out[strings.ToLower(v.Name)] = true
-				}
-			}
-		}
-	}
-	return out
 }
 
 func lineOf(vb st.VarBlock) int {
@@ -333,6 +318,10 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		} else {
 			tt = pw.typ(&st.IdentExpr{Name: s.Target, Pos: s.Pos})
 			target = pw.ident(target, s.Pos.Line)
+		}
+		if pw.w.structOf(tt) != nil {
+			pw.assignStruct(b, target, tt, s.Value, in, at)
+			break
 		}
 		pw.emit(b, at, "%s%s := %s;\n", in, target, pw.store(s.Value, tt, s.Pos.Line))
 	case *st.IfStmt:
@@ -426,14 +415,44 @@ func lineAt(n any) int {
 	return 0
 }
 
+// assignStruct writes an assignment of a whole struct member by member:
+// TIA takes an assignment between two anonymous structs only member-wise.
+// nautilus's lowering, which ran first, has checked that the value is a
+// variable of the same type.
+func (pw *progWriter) assignStruct(b *strings.Builder, target, tt string, v st.Expression, in string, at int) {
+	switch v.(type) {
+	case *st.IdentExpr, *st.MemberExpr:
+	default:
+		pw.gap("siemens/struct", at, gapStructured, "a struct assigned from "+exprShort(v), "")
+		return
+	}
+	src := pw.expr(v, 0)
+	ls, why := pw.w.leaves(tt, "")
+	if why != "" {
+		pw.diag("siemens/struct", at, why)
+		return
+	}
+	for _, l := range ls {
+		pw.emit(b, at, "%s%s%s := %s%s;\n", in, target, l.path, src, l.path)
+	}
+}
+
 // ident prints a name: a local as #name, a manifest tag as a member of
 // the global DB.
 func (pw *progWriter) ident(name string, line int) string {
 	if l, ok := pw.locals[strings.ToLower(name)]; ok {
-		return "#" + l.name
+		return "#" + sclName(l.name)
 	}
 	if g, ok := pw.w.globals[strings.ToLower(name)]; ok {
-		return quote(pw.w.tagsDB) + "." + g.Name
+		return quote(pw.w.tagsDB) + "." + sclName(g.Name)
+	}
+	if e, ok := pw.w.lib.enumMembers[strings.ToLower(name)]; ok {
+		pw.gap("siemens/enum", line, gapStructured, "enumerations ("+e+")", "")
+		return name
+	}
+	if c, ok := pw.w.lib.consts[strings.ToLower(name)]; ok {
+		pw.gap("siemens/library", line, gapPOUs, "the project's global constant "+c, "")
+		return name
 	}
 	pw.diag("siemens/name", line, fmt.Sprintf("%s is neither a variable of the program nor a manifest tag", name))
 	return name

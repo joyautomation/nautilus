@@ -319,6 +319,28 @@ POST /api/cameras/{id}/ptz    {"action": "move", "x": 0.5, "y": 0, "zoom": 0, "m
 POST /api/cameras/{id}/ptz/stop                                  (no body)
 ```
 
+### Finding ONVIF cameras on the network
+
+```
+naut camera discover [--interface eth0] [--timeout 3s] [--json]
+```
+
+asks the network which ONVIF cameras are on it (WS-Discovery: a multicast probe on
+every interface that is up, or the one named) and prints each answer with a manifest
+row to start from. Run it on a machine on the cameras' network: the probe does not
+cross routers, and some cameras ship with discovery off. It is a command a person
+runs, not something a controller does; it changes nothing, and nothing it finds is
+used until you write the row and set the camera's credentials.
+
+What answers is unauthenticated UDP from anyone on the network, so every answer is
+treated as data: at most 256 devices are kept (and 16 from any one address), answers
+are size-bounded, names and addresses are cleaned of control, format and separator
+characters (a name cannot move your terminal's cursor, rewrite its title or reverse
+its own text), only `http` and `https` addresses without user
+information are listed, and a device whose address is not on the host it answered
+from is flagged ("a camera behind NAT or a bridge, or something pretending to be
+one"): look at that address before you trust it.
+
 ## Pictures when an alarm activates
 
 A camera with `snapshot-on-alarm: true` keeps one still each time an alarm on its

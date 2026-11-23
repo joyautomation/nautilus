@@ -275,7 +275,7 @@ Native LAD (SimaticML FlgNet) is D3.
 | The task (`scan:`) | Cyclic interrupt OB30 at that cycle, 1 ms to 60 s. **One task in v1**: nautilus copies shared tags in at a task's scan start and commits them at its end, while cyclic interrupt OBs preempt each other and touch the tags DB in place. Copy-in/copy-out for several tasks is its own later item. nautilus has no free-running task, so there is no OB1 |
 | Manifest tags | Global DB `"naut_Tags"` (optimized), the Web API symbol `"naut_Tags".Level`. Members are visible and writable to Web API/HMI/OPC UA *(verify the attribute spelling in SCL source)* |
 | I/O-bound tags | PLC tag table, `%I`/`%Q` addresses from the station spec |
-| UDT | PLC data type (`.udt`) |
+| UDT | Written inline (`Struct … END_STRUCT`) where used, with nautilus's start values (#1299, measured on TIA V21). A PLC data type (`.udt`) comes with user FBs (#1301), whose struct parameters need one; tiad refuses data types until it can keep a customer's apart |
 | User FB / function | FB / FC |
 | TON TOF TP R_TRIG F_TRIG | The IEC instructions as multi-instances (`TON_TIME`, …); the members already match (`.Q` `.ET`) |
 | CTU CTD CTUD | `CTU_LINT` etc.: nautilus's counter value is its 64-bit int and keeps counting past 32767 |
@@ -308,8 +308,8 @@ The rules:
   argument, a CASE selector, a REAL target), integer arithmetic is refused.
 - **What it does not translate yet is a writer gap,** never a rule for
   the person: the diagnostic reads "the Siemens writer doesn't translate X
-  yet (#N)", N the issue that closes it. B #1299 UDTs, enums, arrays and
-  structured start values (and, with D, the project's library); C #1300
+  yet (#N)", N the issue that closes it. B #1299 enums and arrays (structs and
+  their start values are written, the library is in scope); C #1300
   more than one task; D #1301 user FUNCTIONs and FUNCTION_BLOCKs, library
   FBs, VAR CONSTANT; E #1302 SFC (an SCL state machine first; GRAPH
   maybe later as an option, James 11-23); F #1303 STRING (TIA's holds 254

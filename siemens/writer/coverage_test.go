@@ -345,23 +345,36 @@ func TestExternalTypes(t *testing.T) {
 	}
 }
 
-// TestLibraryNamesAreAGap: a name the lowering does not know is the
-// writer's gap when a library source declares it (the writer lowers the
-// program alone), and nautilus's refusal when none does.
+// TestLibraryNamesAreAGap: the writer lowers a program with the project's
+// library ahead of it, as naut check does, so a function, block or
+// constant the library declares compiles, and the writer refuses it by
+// name as its gap (#1301) and nothing else; a name no source declares is
+// nautilus's own refusal.
 func TestLibraryNamesAreAGap(t *testing.T) {
 	src := "PROGRAM P\nVAR a : REAL; END_VAR\na := Scale(a);\nEND_PROGRAM\n"
 	lib := "FUNCTION Scale : REAL\nVAR_INPUT x : REAL; END_VAR\nScale := x * 2.0;\nEND_FUNCTION\n"
 	_, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: src, Libs: []string{lib}}}})
-	if len(diags) != 1 || diags[0].Rule != "siemens/library" || !strings.Contains(diags[0].Message, "(#1299, #1301)") {
+	if len(diags) != 1 || diags[0].Rule != "siemens/library" || diags[0].Line != 3 || !strings.Contains(diags[0].Message, "the project's function Scale yet (#1301)") {
 		t.Errorf("with the library: %v", diags)
 	}
 	// A GVL of constants (#176) declares its names too.
 	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a : REAL; END_VAR\na := HI;\nEND_PROGRAM\n", Libs: []string{"VAR_GLOBAL CONSTANT\n    HI : REAL := 80.0;\nEND_VAR\n"}}}})
-	if len(diags) != 1 || diags[0].Rule != "siemens/library" {
+	if len(diags) != 1 || diags[0].Rule != "siemens/library" || diags[0].Line != 3 || !strings.Contains(diags[0].Message, "global constant HI yet (#1301)") {
 		t.Errorf("a GVL constant: %v", diags)
 	}
+	// A library function block, as an instance's type.
+	fb := "FUNCTION_BLOCK Hold\nVAR_INPUT x : BOOL; END_VAR\nEND_FUNCTION_BLOCK\n"
+	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR h : Hold; END_VAR\nh(x := TRUE);\nEND_PROGRAM\n", Libs: []string{fb}}}})
+	if len(diags) != 1 || diags[0].Line != 2 || !strings.Contains(diags[0].Message, "the project's function block Hold yet (#1301)") {
+		t.Errorf("a library block: %v", diags)
+	}
+	// A block of nautilus's own library with no TIA instruction (#1301).
+	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR c : PID; END_VAR\nEND_PROGRAM\n"}}})
+	if len(diags) != 1 || diags[0].Line != 2 || !strings.Contains(diags[0].Message, "nautilus's function block PID yet (#1301)") {
+		t.Errorf("PID: %v", diags)
+	}
 	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: src, Libs: []string{"(* Scale is mentioned here *)\nFUNCTION Scaled : REAL\nVAR_INPUT Scale : REAL; END_VAR\nScaled := Scale;\nEND_FUNCTION\n"}}}})
-	if len(diags) != 1 || diags[0].Rule != "siemens/nautilus" {
+	if len(diags) != 1 || diags[0].Rule != "siemens/nautilus" || diags[0].Line != 3 || !strings.Contains(diags[0].Message, "line 3: ") {
 		t.Errorf("without it: %v", diags)
 	}
 }
@@ -372,7 +385,7 @@ func TestLibraryNamesAreAGap(t *testing.T) {
 // collision, a task TIA cannot run) keep their wording.
 func TestEveryGapNamesItsIssue(t *testing.T) {
 	// The writer-coverage issues filed for #789, B to G and the rest.
-	issues := map[string]bool{"#1299": true, "#1300": true, "#1301": true, "#1302": true, "#1303": true, "#1304": true, "#1305": true}
+	issues := map[string]bool{"#1299": true, "#1300": true, "#1301": true, "#1302": true, "#1303": true, "#1304": true, "#1305": true, "#1310": true}
 	ref := regexp.MustCompile(`yet \((#\d+)(?:, (#\d+))?\)`)
 	notGaps := map[string]bool{"siemens/nautilus": true, "siemens/name": true, "siemens/program": true}
 	var diags []Diag
@@ -395,7 +408,8 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 	}
 	_, d, _ := Write(Input{Globals: []Global{{Name: "Name", Type: "STRING"}}})
 	diags = append(diags, d...)
-	diags = append(diags, Diag{Rule: "siemens/type", Message: StructuredInitGap(map[string]any{"a": 1})})
+	_, d, _ = Write(Input{Globals: []Global{{Name: "A", Type: "ARRAY[1..2] OF REAL", Start: []any{1.0, 2.0}}}})
+	diags = append(diags, d...)
 
 	gaps := 0
 	for _, d := range diags {
@@ -528,5 +542,26 @@ func TestReviewFixes(t *testing.T) {
 	_, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR w, v : WORD; END_VAR\nw := MAX(w, v);\nEND_PROGRAM\n"}}})
 	if len(diags) != 1 || !strings.Contains(diags[0].Message, "MAX of bit strings yet (#1305)") {
 		t.Errorf("MAX of WORDs: %v", diags)
+	}
+}
+
+// TestDtTagRefused: a task's dt-tag is written by nautilus every scan and
+// by nothing on the CPU, so the writer refuses it (#1310) rather than
+// leave a tag the logic integrates over stuck at 0.
+func TestDtTagRefused(t *testing.T) {
+	src := "PROGRAM P\nVAR_EXTERNAL DtS : REAL; Hours : REAL; END_VAR\nHours := Hours + DtS / 3600.0;\nEND_PROGRAM\n"
+	in := Input{
+		Programs: []Program{{Path: "p.st", Source: src}},
+		Globals:  []Global{{Name: "DtS", Type: "REAL"}, {Name: "Hours", Type: "REAL"}},
+		Tasks:    []Task{{Name: "main", Program: "P", Interval: time.Second, DtTag: "DtS"}},
+	}
+	_, diags, err := Write(in)
+	if err != nil || len(diags) != 1 || diags[0].Rule != "siemens/dt-tag" ||
+		!strings.Contains(diags[0].Message, "doesn't translate task main's dt-tag DtS yet (#1310)") || !strings.Contains(diags[0].Message, "would read 0") {
+		t.Errorf("%v %v", diags, err)
+	}
+	in.Tasks[0].DtTag = ""
+	if _, diags, _ := Write(in); len(diags) != 0 {
+		t.Errorf("without a dt-tag: %v", diags)
 	}
 }

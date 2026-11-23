@@ -9,17 +9,14 @@ package main
 import (
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/stproject"
-	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/runtime"
 	swriter "github.com/joyautomation/nautilus/siemens/writer"
 )
@@ -81,7 +78,7 @@ func siemensWriterInput(dir, manifestName string) (swriter.Input, error) {
 		if err != nil {
 			return swriter.Input{}, err
 		}
-		task := swriter.Task{Name: t.Name, Program: name, Interval: time.Duration(t.Scan)}
+		task := swriter.Task{Name: t.Name, Program: name, Interval: time.Duration(t.Scan), DtTag: t.DtTag}
 		if i == 0 {
 			task.Name = runtime.MainTaskName
 		} else {
@@ -124,8 +121,14 @@ func siemensWriterInput(dir, manifestName string) (swriter.Input, error) {
 			Type:   typ,
 			Retain: m.Retain != nil && (d.Retain || d.Role == runtime.RoleSetpoint),
 		}
-		if d.Init != nil {
-			lit, err := siemensInitLiteral(d.Init, typ)
+		switch d.Init.(type) {
+		case nil:
+		case map[string]any, []any:
+			// A struct's or an array's start value: the writer types each
+			// member from the type it resolves.
+			g.Start = d.Init
+		default:
+			lit, err := swriter.InitLiteral(d.Init, typ)
 			if err != nil {
 				return swriter.Input{}, fmt.Errorf("tag %s: %w", d.Name, err)
 			}
@@ -135,74 +138,4 @@ func siemensWriterInput(dir, manifestName string) (swriter.Input, error) {
 	}
 
 	return in, nil
-}
-
-// siemensInitLiteral prints a manifest init: as the ST literal the writer
-// parses. The loader hands every number over as a float64
-// (project.TagDefs), so the tag's type decides the spelling: a whole
-// number is an integer literal for an integer type, keeps a decimal point
-// for REAL and LREAL, and is milliseconds for a TIME (as the runtime reads
-// a numeric TIME seed); a fraction on an integer type or a TIME is refused.
-func siemensInitLiteral(v any, typ string) (string, error) {
-	u := strings.ToUpper(typ)
-	real := u == "REAL" || u == "LREAL"
-	integer := false
-	switch u {
-	case "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "BYTE", "WORD", "DWORD", "LWORD":
-		integer = true
-	}
-	if u == "TIME" {
-		if x, ok := v.(float64); ok {
-			if x != math.Trunc(x) || math.Abs(x) >= 1<<53 {
-				return "", fmt.Errorf("init %v is not a whole number of milliseconds", x)
-			}
-			return "T#" + strconv.FormatInt(int64(x), 10) + "ms", nil
-		}
-	}
-	switch x := v.(type) {
-	case bool:
-		if x {
-			return "TRUE", nil
-		}
-		return "FALSE", nil
-	case int:
-		return siemensNumberLiteral(float64(x), integer, real)
-	case int64:
-		return siemensNumberLiteral(float64(x), integer, real)
-	case float64:
-		return siemensNumberLiteral(x, integer, real)
-	case uint64: // above the int64 range: YAML hands it over unconverted
-		s := strconv.FormatUint(x, 10)
-		if real {
-			s += ".0"
-		}
-		return s, nil
-	case string:
-		t := strings.ToUpper(strings.TrimSpace(x))
-		if strings.HasPrefix(t, "T#") || strings.HasPrefix(t, "TIME#") {
-			return strings.TrimSpace(x), nil
-		}
-		return st.QuoteString(x), nil
-	}
-	if _, ok := v.(map[string]any); ok {
-		return "", errors.New(swriter.StructuredInitGap(v))
-	}
-	return "", fmt.Errorf("init %v is not a value the Siemens target can seed", v)
-}
-
-func siemensNumberLiteral(x float64, integer, real bool) (string, error) {
-	if integer {
-		if x != math.Trunc(x) || math.IsInf(x, 0) {
-			return "", fmt.Errorf("init %v is not a whole number", x)
-		}
-		if math.Abs(x) < 1<<63 {
-			return strconv.FormatInt(int64(x), 10), nil
-		}
-		return strconv.FormatFloat(x, 'f', 0, 64), nil
-	}
-	s := strconv.FormatFloat(x, 'g', -1, 64)
-	if real && !strings.ContainsAny(s, ".eEn") { // n: NaN and Inf stay as they are, for the writer to refuse
-		s += ".0"
-	}
-	return s, nil
 }

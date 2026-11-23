@@ -237,13 +237,47 @@ func TestSiemensWriterInputTypesUntypedTagsAsTheLogicBindsThem(t *testing.T) {
 	}
 }
 
-// TestSiemensWriterInputNamesTheStructuredInitGap: a structured tag's
-// start value is the writer's gap, named with its issue.
-func TestSiemensWriterInputNamesTheStructuredInitGap(t *testing.T) {
-	m := "name: s7\ntasks:\n  - program: main.st\ntags:\n  - {name: Level, role: input, type: REAL}\n  - {name: P, role: state, type: REAL, init: {a: 1}}\n"
-	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": siemensCheckProgram})
-	if _, err := siemensWriterInput(dir, ""); err == nil || !strings.Contains(err.Error(), "tag P: the Siemens writer doesn't translate the structured start value") || !strings.Contains(err.Error(), "yet (#1299)") {
-		t.Errorf("err %v", err)
+// TestSiemensWriterInputSeedsAStructTag: a tag of a STRUCT the project's
+// library declares hands its init: map to the writer as it is, and the
+// writer types each member from the struct, as nautilus seeds it
+// (#1299): the library is in scope for the program and the tag alike.
+func TestSiemensWriterInputSeedsAStructTag(t *testing.T) {
+	types := "TYPE\n  Motor : STRUCT\n    Run : BOOL;\n    Speed : REAL;\n    Starts : DINT := 2;\n  END_STRUCT;\n  Skid : STRUCT\n    Pump : Motor;\n    Level : REAL;\n  END_STRUCT;\nEND_TYPE\n"
+	prog := "PROGRAM Main\nVAR_EXTERNAL P : Motor; S : Skid; END_VAR\nP.Starts := P.Starts + 1;\nS.Level := 1.0;\nEND_PROGRAM\n"
+	m := "name: s7\ntasks:\n  - program: main.st\ntags:\n  - {name: P, role: state, type: Motor, init: {Speed: 40, Run: true}}\n  - name: S\n    role: state\n    type: Skid\n    init:\n      Pump: {Speed: 12.5}\n      Level: 70\n"
+	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": prog, "types.st": types})
+	in, err := siemensWriterInput(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, diags, err := swriter.Write(in)
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("%v %v", diags, err)
+	}
+	for _, f := range out.Files {
+		if f.Path == "naut_Tags.db" && !strings.Contains(string(f.Data), "      P : Struct\n         Run : BOOL := TRUE;\n         Speed : REAL := 40.0;\n         Starts : DINT := 2;\n      END_STRUCT;\n") {
+			t.Errorf("tags DB:\n%s", f.Data)
+		}
+		// A nested map, as YAML decodes it, reaches the nested member.
+		if f.Path == "naut_Tags.db" && !strings.Contains(string(f.Data), "      S : Struct\n         Pump : Struct\n            Run : BOOL;\n            Speed : REAL := 12.5;\n            Starts : DINT := 2;\n         END_STRUCT;\n         Level : REAL := 70.0;\n") {
+			t.Errorf("nested start value:\n%s", f.Data)
+		}
+	}
+}
+
+// TestSiemensWriterInputRefusesADtTag: a task's dt-tag reaches the writer,
+// which refuses it (#1310): check never passes a project whose integrators
+// would read 0 on the CPU.
+func TestSiemensWriterInputRefusesADtTag(t *testing.T) {
+	prog := "PROGRAM Main\nVAR_EXTERNAL DtS : REAL; Hours : REAL; END_VAR\nHours := Hours + DtS;\nEND_PROGRAM\n"
+	m := "name: s7\ntasks:\n  - program: main.st\n    dt-tag: DtS\ntags:\n  - {name: Hours, role: state, type: REAL}\n"
+	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": prog})
+	in, err := siemensWriterInput(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, diags, err := swriter.Write(in); err != nil || len(diags) != 1 || !strings.Contains(diags[0].Message, "dt-tag DtS yet (#1310)") {
+		t.Errorf("%v %v", diags, err)
 	}
 }
 

@@ -283,7 +283,7 @@ func (pw *progWriter) latch(b *strings.Builder, c *st.CallExpr, l local, def lat
 		pw.diag("siemens/call", line, l.name+": "+gapMessage(gapOther, "positional instance arguments", "name the inputs ("+def.set+" := …)"))
 		return
 	}
-	self := "#" + l.name
+	self := "#" + sclName(l.name)
 	for _, a := range c.NamedArgs {
 		pin := strings.ToUpper(a.Name)
 		if pin != def.set && pin != def.reset {
