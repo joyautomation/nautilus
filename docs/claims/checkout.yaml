@@ -240,8 +240,12 @@ claims:
       no majority is refused before anything is proposed and never queued; a
       seal is signed by the controller that proposes it over the chain as it
       stood and is applied only if nothing committed first (else signed
-      again), and any replica rebuilds the sealed record from its own entries
-      and refuses to serve one that does not hash to what was signed; a replica
+      again), every replica checks a seal's signature, key, hash, run, signer, the
+      two-person rule and the results at apply, and any replica rebuilds the
+      sealed record from its own entries (keeping it, so a later edit of the
+      sheet does not lose it) and refuses to serve one that does not hash to
+      what was signed; a replica that reads an entry from a newer build or of
+      an unknown kind stops (and says so) instead of diverging; a replica
       that was away catches up from the log.
     source: "#a-redundant-pair"
     tests:
@@ -254,6 +258,15 @@ claims:
       - go ./checkout TestAReplicaWithAnotherHistoryRefusesTheSealedRecord
       - go ./checkout TestReplayGivesTheSameStoreAndResetEmptiesIt
       - go ./checkout TestConcurrentWritersOnAPairAllLand
+      - go ./checkout TestASealedRecordSurvivesAnEditOfTheSheet
+      - go ./checkout TestApplyRefusesASealThatIsNotWhatItSaysItIs
+      - go ./checkout TestAReplicaThatCannotReadAnEntryHaltsInsteadOfDiverging
+      - go ./checkout TestAWriterIsToldItsOwnResultNotALaterOne
+      - go ./checkout TestALateEndDoesNotEndTheNextForce
+      - go ./checkout TestASealWithoutAPayloadIsRefusedAtApply
+      - go ./server TestAPairsWriteAnswersSayWhetherAnythingIsWaiting
+      - go ./server TestAProposeIsNotAnswerUntilItIsAppliedHere
+      - go ./server TestReconcileEndsAForceNothingDrives
       - go ./checkout TestATakeoverEndsAForceTheLogStillHas
       - go ./server TestACheckoutOnAPairIsOnBothControllers
       - go ./server TestASealSignedOnOneControllerVerifiesFromTheOtherOnAPair

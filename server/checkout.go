@@ -102,6 +102,8 @@ func (a *checkoutAPI) checkoutOff(w http.ResponseWriter) bool {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the I/O checkout is not enabled for this project: add a checkout: section to the manifest (naut checkout init writes the sheet), with an auth: block with users and a state directory to keep the results in (auth.state-dir, or systemd StateDirectory=)"})
 	case a.s.cluster != nil && (a.co.Store == nil || !a.co.Store.IsLog()):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the I/O checkout is not available on this redundant pair: its results would be kept on one controller only (the pair's checkout needs an auth: block with users, as notes do)"})
+	case a.co.Store != nil && a.co.Store.Halted() != "":
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the I/O checkout has stopped on this controller: " + a.co.Store.Halted()})
 	case a.co.Store == nil && a.co.OpenErr != "":
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the I/O checkout is off: its results file could not be opened: " + a.co.OpenErr})
 	case a.co.Store == nil:
@@ -442,6 +444,14 @@ func (a *checkoutAPI) checkoutWriteAs(w http.ResponseWriter, r *http.Request, pe
 		writeJSON(w, status, out)
 	case errors.Is(err, checkout.ErrNoRun):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
+	case errors.Is(err, checkout.ErrNoMajority):
+		// refused before anything was proposed: nothing is waiting
+		w.Header().Set(outcomeHeader, "refused")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+	case errors.Is(err, checkout.ErrUnknown):
+		// proposed and not confirmed: it may still be recorded
+		w.Header().Set(outcomeHeader, "unknown")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 	case errors.Is(err, checkout.ErrNotOpen), errors.Is(err, checkout.ErrRunOpen), errors.Is(err, checkout.ErrSealRefused), errors.Is(err, errSheetChanged), errors.Is(err, checkout.ErrForceActive), errors.Is(err, checkout.ErrNoForce):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case status == http.StatusConflict:
