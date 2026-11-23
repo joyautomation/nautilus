@@ -70,9 +70,9 @@ func BenchmarkImageCopyInScan(b *testing.B) {
 	}
 	scan := func() { rt.Scan() }
 	copied := func() {
-		rt.prog.requestImage()
+		rt.prog.requestImage(imageStamp(1, 0))
 		rt.Scan()
-		rt.prog.takeImage(MainTaskName, &img.Tasks[0])
+		rt.prog.takeImage(MainTaskName, &img.Tasks[0], imageStamp(1, 0))
 	}
 	src := append([]ir.Leaf(nil), img.Tasks[0].Leaves...)
 	dst := make([]ir.Leaf, len(src))

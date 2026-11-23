@@ -121,7 +121,7 @@ func TestATakeoverDropsAFrameCopyMadeBeforeIt(t *testing.T) {
 	rt := newRetained(t, &fakeStore{}, nil)
 	rt.RequestImage()
 	rt.Scan()
-	if !rt.prog.imageReady() {
+	if _, ok := rt.prog.imageReady(imageStamp(rt.imgRound, 0)); !ok {
 		t.Fatal("no copy after a requested scan: the case proves nothing")
 	}
 	rt.prog.ResetFrame() // what takeover does to every program

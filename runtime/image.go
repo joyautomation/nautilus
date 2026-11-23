@@ -87,9 +87,14 @@ type TaskImage struct {
 // neither side allocates.
 type imageCap struct {
 	want atomic.Bool
+	// reqStamp is the stamp the next copy carries (imageStamp), stored
+	// before want, so a scan that sees want sees a stamp at least as new.
+	reqStamp atomic.Uint64
 
 	mu     sync.Mutex
 	ready  bool
+	stamp  uint64 // the request the copy served (imageStamp)
+	order  uint64 // when the copy was made, among all copies (imageCopyOrder)
 	leaves []ir.Leaf
 	prog   *ir.Program
 	nowMs  int64
@@ -103,6 +108,27 @@ type imageCap struct {
 	source   string
 }
 
+// imageStamp names one request: the round (RequestImage starts one) and
+// the phase within it, 0 for the first copies and 1 for the re-copy of the
+// faster tasks. A copy carries the stamp of the request it served, so an
+// image takes only copies made for its own request, never one left over
+// from a round whose image was not taken.
+func imageStamp(round uint64, phase int) uint64 { return round<<1 | uint64(phase) }
+
+// imageCopyOrder numbers the copies in the order they are made, across
+// programs, so TakeImage can tell which task's copy came last. Only a scan
+// that copies touches it.
+var imageCopyOrder atomic.Uint64
+
+// stampCurrent reports whether a copy of stamp is the one wanted.
+func stampCurrent(stamp, want uint64) bool {
+	if mutRuntime("copy_from_older_round") {
+		// An older round's copy of the same phase passes.
+		return stamp&1 == want&1 && stamp>>1 <= want>>1
+	}
+	return stamp == want
+}
+
 // captureLocked copies the frame if the stream asked. The caller (Run)
 // holds p.mu, at the end of a scan.
 func (p *Program) captureLocked(tags *Tags) {
@@ -110,7 +136,12 @@ func (p *Program) captureLocked(tags *Tags) {
 		_ = p.prog.Layout() // the hash inside the scan, which guard (a) forbids
 	}
 	c := &p.img
+	// Clear the request before reading its stamp: a request that comes in
+	// meanwhile sets want again and the next scan serves it, and one that
+	// came before is the stamp this copy carries.
+	c.want.Store(false)
 	c.mu.Lock()
+	c.stamp, c.order = c.reqStamp.Load(), imageCopyOrder.Add(1)
 	c.leaves = ir.FlattenInto(c.leaves, p.frame)
 	c.prog, c.nowMs, c.scans, c.src, c.ready = p.prog, tags.NowMs(), p.scans, p.source, true
 	// The tags the program writes, as its commit just left them: one
@@ -122,26 +153,29 @@ func (p *Program) captureLocked(tags *Tags) {
 		tags.copyTagsLocked(p.carry, p.carryIdx, &c.tags)
 		tags.mu.RUnlock()
 	}
-	c.want.Store(false)
 	c.mu.Unlock()
 }
 
-// requestImage asks for a copy at the end of the next scan.
-func (p *Program) requestImage() { p.img.want.Store(true) }
+// requestImage asks for a copy at the end of the next scan, stamped so.
+func (p *Program) requestImage(stamp uint64) {
+	p.img.reqStamp.Store(stamp)
+	p.img.want.Store(true)
+}
 
-// imageReady reports whether a copy waits to be taken.
-func (p *Program) imageReady() bool {
+// imageReady reports whether a copy of this stamp waits to be taken, and
+// when it was made (imageCopyOrder).
+func (p *Program) imageReady(stamp uint64) (order uint64, ok bool) {
 	p.img.mu.Lock()
 	defer p.img.mu.Unlock()
-	return p.img.ready
+	return p.img.order, p.img.ready && stampCurrent(p.img.stamp, stamp)
 }
 
 // takeImage moves the waiting copy into dst, handing dst's old leaf buffer
 // back for the next copy. False when there is none.
-func (p *Program) takeImage(task string, dst *TaskImage) bool {
+func (p *Program) takeImage(task string, dst *TaskImage, stamp uint64) bool {
 	c := &p.img
 	c.mu.Lock()
-	if !c.ready {
+	if !c.ready || !stampCurrent(c.stamp, stamp) {
 		c.mu.Unlock()
 		return false
 	}
@@ -154,7 +188,7 @@ func (p *Program) takeImage(task string, dst *TaskImage) bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.ready || c.prog != prog {
+	if !c.ready || c.prog != prog || !stampCurrent(c.stamp, stamp) {
 		return false // a newer program's copy replaced it; take that one next
 	}
 	if !known {
@@ -190,42 +224,98 @@ type namedProgram struct {
 	prog *Program
 }
 
-// RequestImage asks every task's program to copy its frame at the end of
-// its next scan. The copy is values only (ir.FlattenInto into a buffer it
-// reuses); the hashing and encoding happen in TakeImage and EncodeImage,
-// on the caller's goroutine.
+// RequestImage starts a round: it asks every task's program to copy its
+// frame at the end of its next scan. The copy is values only
+// (ir.FlattenInto into a buffer it reuses); the hashing and encoding happen
+// in TakeImage and EncodeImage, on the caller's goroutine.
+//
+// A new round supersedes the last: a copy made for an earlier round, whose
+// image was never taken, is not taken into this one.
 func (r *Runtime) RequestImage() {
-	r.prog.requestImage()
+	r.imgMu.Lock()
+	defer r.imgMu.Unlock()
+	r.requestImageLocked()
+}
+
+func (r *Runtime) requestImageLocked() {
+	r.imgRound++
+	r.imgPhase = 0
+	r.imgSlowest = -1
+	st := imageStamp(r.imgRound, 0)
+	r.prog.requestImage(st)
 	for _, tr := range r.tasks {
-		tr.prog.requestImage()
+		tr.prog.requestImage(st)
 	}
 }
 
 // TakeImage moves the frame copies into img once every task has made one
-// since RequestImage, and reports whether it did. It fills Tasks and Seq;
-// Term, Build and Retain are the caller's (RetainImage). img's leaf buffers
-// go back to the programs for their next copies, so a caller that keeps
-// one Image allocates nothing after the first rounds.
+// for the current round, and reports whether it did. It fills Tasks and
+// Seq; Term, Build and Retain are the caller's (RetainImage). img's leaf
+// buffers go back to the programs for their next copies, so a caller that
+// keeps one Image allocates nothing after the first rounds. Callers loop on
+// it until it is true.
+//
+// With more than one task, the first complete set of copies is not taken:
+// a fast task copied right after the request and has run on until the
+// slowest task's copy, up to that task's period. TakeImage asks every task
+// but the one that copied last to copy again, and takes the image when they
+// have. Each task's state is then at most one of its own scan periods older
+// than the image, and the re-copies are all from after the slowest copy. A
+// runtime with one task does no second round.
 func (r *Runtime) TakeImage(img *Image) bool {
+	r.imgMu.Lock()
+	defer r.imgMu.Unlock()
+	if r.imgRound == 0 || r.imgPhase > 1 {
+		return false // not asked for, or already taken
+	}
 	progs := r.namedPrograms()
-	for _, np := range progs {
-		if !np.prog.imageReady() {
+	stamps := make([]uint64, len(progs)) // one per task, off the scan path
+	for i := range stamps {
+		stamps[i] = imageStamp(r.imgRound, 0)
+		if r.imgPhase == 1 && i != r.imgSlowest {
+			stamps[i] = imageStamp(r.imgRound, 1)
+		}
+	}
+	var last uint64
+	slowest := -1
+	for i, np := range progs {
+		order, ok := np.prog.imageReady(stamps[i])
+		if !ok {
 			return false
 		}
+		if order >= last {
+			last, slowest = order, i
+		}
+	}
+	if r.imgPhase == 0 && len(progs) > 1 && !mutRuntime("copy_first_scan_only") {
+		// Every task has copied, the slowest last: ask the others again.
+		r.imgPhase, r.imgSlowest = 1, slowest
+		st := imageStamp(r.imgRound, 1)
+		for i, np := range progs {
+			if i != slowest {
+				np.prog.requestImage(st)
+			}
+		}
+		return false
 	}
 	if cap(img.Tasks) < len(progs) {
 		img.Tasks = append(img.Tasks[:cap(img.Tasks)], make([]TaskImage, len(progs)-cap(img.Tasks))...)
 	}
 	img.Tasks = img.Tasks[:len(progs)]
 	for i, np := range progs {
-		if !np.prog.takeImage(np.name, &img.Tasks[i]) {
+		if !np.prog.takeImage(np.name, &img.Tasks[i], stamps[i]) {
 			// A swap replaced a program's copy between the check and the
-			// take: the tasks taken so far are spent, so ask every task
-			// again rather than mix two rounds in one image.
-			r.RequestImage()
+			// take: the tasks taken so far are spent, so start a new round
+			// rather than mix two rounds in one image.
+			r.requestImageLocked()
 			return false
 		}
 	}
+	// The round is done: nothing is still asked for.
+	for _, np := range progs {
+		np.prog.img.want.Store(false)
+	}
+	r.imgPhase = 2
 	img.Seq = r.imageSeq.Add(1)
 	if mutRuntime("image_seq_from_scans") {
 		img.Seq = img.Tasks[0].Scans

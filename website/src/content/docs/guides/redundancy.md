@@ -443,8 +443,8 @@ redundancy:
   hot-max-age: 4s   # default 3 × lease + 2 × the stream's interval; 0 = always cold
 ```
 
-hot-max-age is judged on the image; a fast task's state can be older by
-up to the slowest task's period. The journal entry and `GET /api/cluster`
+hot-max-age is judged on the image; each task's state is at most one of
+its own scan periods older than the image. The journal entry and `GET /api/cluster`
 (`stream.takeoverOldestFrameMs`) give the oldest task state a hot
 takeover installed. The default covers a crash, a kill and a cut-off leader. Set it lower if
 re-running up to that much of the logic after a takeover is worse for
