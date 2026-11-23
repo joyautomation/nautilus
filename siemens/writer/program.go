@@ -295,12 +295,13 @@ func (pw *progWriter) diag(rule string, line int, msg string) {
 	pw.w.diag(rule, pw.path, line, msg)
 }
 
-// diverges warns where the CPU behaves differently from nautilus in a
-// case the writer documents rather than refuses: nautilus faults the scan
-// on it, the CPU sets ENO FALSE and carries on (Output.Warnings).
-func (pw *progWriter) diverges(line int, what, onNautilus, onSiemens string) {
+// diverges warns where the CPU can behave differently from nautilus, in
+// an edge case the writer documents rather than refuses: when cond holds,
+// nautilus faults the scan and the CPU carries on (Output.Warnings). The
+// callers leave out what is provably in range (a constant).
+func (pw *progWriter) diverges(line int, what, cond, onSiemens string) {
 	pw.w.warnings = append(pw.w.warnings, Diag{Rule: "siemens/divergence", Path: pw.path, Line: line,
-		Message: fmt.Sprintf("%s: %s faults the scan in nautilus; on Siemens %s and the scan carries on", what, onNautilus, onSiemens)})
+		Message: fmt.Sprintf("%s can differ if %s: nautilus faults the scan; on Siemens %s and the scan carries on", what, cond, onSiemens)})
 }
 
 func indent(n int) string { return strings.Repeat("\t", n) }

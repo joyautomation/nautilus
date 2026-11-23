@@ -313,7 +313,7 @@ func TestCheckSiemensTargetWarnsWhereTheCPUDiffers(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit %d, want 0:\n%s", code, out)
 	}
-	if !strings.Contains(out, "main.st:3:1: warning: siemens target: MUX: a selector K outside 0..1 faults the scan in nautilus; on Siemens MUX sets ENO FALSE and the scan carries on [siemens/divergence]") {
+	if !strings.Contains(out, "main.st:3:1: warning: siemens target: MUX can differ if the selector K is outside 0..1: nautilus faults the scan; on Siemens MUX sets ENO FALSE and the scan carries on [siemens/divergence]") {
 		t.Fatalf("no divergence warning at main.st:3:\n%s", out)
 	}
 }

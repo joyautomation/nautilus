@@ -428,7 +428,7 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 // shift count, TRUNC and a REAL → integer conversion. A constant K in
 // range, an unsigned count and an integer conversion get none.
 func TestDivergencesAreWarnedWhereTheyBite(t *testing.T) {
-	src := "PROGRAM P\nVAR a, k : INT; u : UINT; w : WORD; r : REAL; l : LINT; d : DINT; END_VAR\n" +
+	src := "PROGRAM P\nVAR a, k : INT; u : UINT; w : WORD; r : REAL; l : LINT; d : DINT; s : USINT; END_VAR\n" +
 		"a := MUX(k, a, 1);\n" + // 3: warned
 		"a := MUX(1, a, 2);\n" + // 4: constant in range
 		"a := MUX(2, a, 2);\n" + // 5: constant out of range: warned
@@ -437,6 +437,10 @@ func TestDivergencesAreWarnedWhereTheyBite(t *testing.T) {
 		"l := TRUNC(r);\n" + // 8: warned
 		"d := REAL_TO_DINT(r);\n" + // 9: warned
 		"d := INT_TO_DINT(a);\n" + // 10
+		"d := REAL_TO_DINT(2.5);\n" + // 11: a constant in range
+		"l := TRUNC(-3.7);\n" + // 12: a constant in range
+		"a := REAL_TO_INT(40000.0);\n" + // 13: a constant out of range: warned
+		"s := REAL_TO_USINT(-1.0);\n" + // 14: a negative constant, no USINT: warned
 		"END_PROGRAM\n"
 	out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}})
 	if err != nil || len(diags) > 0 {
@@ -444,15 +448,15 @@ func TestDivergencesAreWarnedWhereTheyBite(t *testing.T) {
 	}
 	var lines []int
 	for _, w := range out.Warnings {
-		if w.Rule != "siemens/divergence" || w.Path != "p.st" || !strings.Contains(w.Message, "faults the scan in nautilus; on Siemens") {
+		if w.Rule != "siemens/divergence" || w.Path != "p.st" || !strings.Contains(w.Message, " can differ if ") || !strings.Contains(w.Message, ": nautilus faults the scan; on Siemens ") {
 			t.Errorf("warning %v", w)
 		}
 		lines = append(lines, w.Line)
 	}
-	if fmt.Sprint(lines) != "[3 5 6 8 9]" {
-		t.Errorf("warned lines %v, want [3 5 6 8 9]: %v", lines, out.Warnings)
+	if fmt.Sprint(lines) != "[3 5 6 8 9 13 14]" {
+		t.Errorf("warned lines %v, want [3 5 6 8 9 13 14]: %v", lines, out.Warnings)
 	}
-	if !strings.Contains(out.Warnings[0].Message, "MUX: a selector K outside 0..1 faults the scan in nautilus; on Siemens MUX sets ENO FALSE and the scan carries on") {
+	if out.Warnings[0].Message != "MUX can differ if the selector K is outside 0..1: nautilus faults the scan; on Siemens MUX sets ENO FALSE and the scan carries on" {
 		t.Errorf("MUX warning %q", out.Warnings[0].Message)
 	}
 
@@ -483,7 +487,7 @@ func TestWarningsPointAtTheDiagramLine(t *testing.T) {
 	lines := strings.Split(string(src), "\n")
 	found := false
 	for _, w := range out.Warnings {
-		if !strings.HasPrefix(w.Message, "MUX:") {
+		if !strings.HasPrefix(w.Message, "MUX ") {
 			continue
 		}
 		found = true

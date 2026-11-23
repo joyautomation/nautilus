@@ -345,12 +345,18 @@ The rules:
   `naut check --target siemens` (and deploy) **warning at its use site**
   (`[siemens/divergence]`, `writer.Output.Warnings`), never silent:
 
-  | Construct | Warned when | nautilus | S7-1500 |
+  | Construct | Warned unless | nautilus | S7-1500 |
   |---|---|---|---|
-  | `MUX(K, IN0, …)` | K is not a constant in range | K out of range faults the scan | MUX sets ENO FALSE, the scan carries on |
-  | `SHL`/`SHR`/`ROL`/`ROR` | the count N is signed | a negative N faults the scan | N is converted to TIA's unsigned count, beyond the width |
-  | `TRUNC`, `TRUNC_<int>` | always | a value beyond the integer (or NaN) faults the scan | the conversion sets ENO FALSE, the scan carries on |
-  | `REAL_TO_<int>`, `TO_<int>` of a REAL | always | the same | the same |
+  | `MUX(K, IN0, …)` | K is a constant in range | K out of range faults the scan | MUX sets ENO FALSE, the scan carries on |
+  | `SHL`/`SHR`/`ROL`/`ROR` | the count N is unsigned or a constant | a negative N faults the scan | N is converted to TIA's unsigned count, beyond the width |
+  | `TRUNC`, `TRUNC_<int>` | the argument is a constant in range | a value beyond the integer (or NaN) faults the scan | the conversion sets ENO FALSE, the scan carries on |
+  | `REAL_TO_<int>`, `TO_<int>` of a REAL | the same | the same | the same |
+
+  Only the out-of-range case differs: the rounding is the same (REAL →
+  integer half to even in nautilus, as TIA documents CONVERT and ROUND;
+  TRUNC toward zero in both; TIA's side from its documentation, not yet
+  measured on a CPU). A REAL source is seldom provably in range, so
+  these warnings fire on most REAL → integer conversions.
 
 - Temps have no start value in TIA. nautilus re-sets a temp to its init on
   every scan (#203), so the body starts by assigning each one.

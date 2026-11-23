@@ -2,6 +2,7 @@ package writer
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -308,7 +309,9 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			pw.gap("siemens/function", line, gapOther, "TRUNC of anything but one REAL or LREAL", "")
 			return ""
 		}
-		pw.diverges(line, "TRUNC", "a value beyond the 64-bit range (or NaN)", "TRUNC_LINT sets ENO FALSE")
+		if !realConstFits(argExprs[0], "LINT", math.Trunc) {
+			pw.diverges(line, "TRUNC", "the value exceeds the 64-bit range (or is NaN)", "TRUNC_LINT sets ENO FALSE")
+		}
 		return "TRUNC_LINT(" + args[0] + ")"
 	case strings.HasPrefix(name, "TRUNC_") || strings.HasPrefix(name, "REAL_TRUNC_") || strings.HasPrefix(name, "LREAL_TRUNC_"):
 		_, to, _ := strings.Cut(name, "TRUNC_")
@@ -316,7 +319,9 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			pw.gap("siemens/function", line, gapOther, name+" of this argument", "")
 			return ""
 		}
-		pw.diverges(line, name, "a value beyond "+to+" (or NaN)", "TRUNC_"+to+" sets ENO FALSE")
+		if !realConstFits(argExprs[0], to, math.Trunc) {
+			pw.diverges(line, name, "the value exceeds "+to+"'s range (or is NaN)", "TRUNC_"+to+" sets ENO FALSE")
+		}
 		return "TRUNC_" + to + "(" + args[0] + ")"
 	case mathFuncs[name]:
 		if len(args) != 1 {
@@ -363,7 +368,7 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			return ""
 		}
 		if k, ok := litInt(argExprs[0]); !ok || k < 0 || k >= int64(len(args)-1) {
-			pw.diverges(line, "MUX", fmt.Sprintf("a selector K outside 0..%d", len(args)-2), "MUX sets ENO FALSE")
+			pw.diverges(line, "MUX", fmt.Sprintf("the selector K is outside 0..%d", len(args)-2), "MUX sets ENO FALSE")
 		}
 		return "MUX(" + formal(ir.FormalNames(name, len(args)), args) + ")"
 	case name == "SHL" || name == "SHR" || name == "ROL" || name == "ROR":
@@ -392,13 +397,13 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 				pw.gap("siemens/function", line, gapString, name, "")
 				return ""
 			}
-			pw.gap("siemens/conversion", line, gapOther, name+" of a value of no declared type", "name the source type ("+to+" from INT: INT_TO_"+to+")")
+			pw.gap("siemens/conversion", line, gapOther, name+" of a value of no declared type", "name the source type (…_TO_"+to+")")
 			return ""
 		}
-		return pw.conversion(from+"_TO_"+to, from, to, args, line)
+		return pw.conversion(from+"_TO_"+to, from, to, argExprs[0], args, line)
 	}
 	if from, to, ok := strings.Cut(name, "_TO_"); ok && from != "" {
-		return pw.conversion(name, from, to, args, line)
+		return pw.conversion(name, from, to, first(argExprs), args, line)
 	}
 	pw.gap("siemens/function", line, functionGap(name), name, "")
 	return ""
@@ -406,7 +411,7 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 
 // conversion writes the explicit conversion name, from one elementary
 // type to another.
-func (pw *progWriter) conversion(name, from, to string, args []string, line int) string {
+func (pw *progWriter) conversion(name, from, to string, arg st.Expression, args []string, line int) string {
 	if from == "LTIME" || to == "LTIME" {
 		pw.gap("siemens/ltime", line, gapTime, "LTIME conversions", "nautilus's LTIME is milliseconds, TIA's nanoseconds")
 		return ""
@@ -432,10 +437,46 @@ func (pw *progWriter) conversion(name, from, to string, args []string, line int)
 		}
 		return wrap(toLINT(from, args[0]), to)
 	}
-	if isReal(from) && isInt(to) {
-		pw.diverges(line, name, "a value beyond "+to+" (or NaN)", name+" sets ENO FALSE")
+	// Both round half to even (lang/ir conversions.go; TIA's CONVERT and
+	// ROUND by its documentation): only the out-of-range case differs.
+	if isReal(from) && isInt(to) && !realConstFits(arg, to, math.RoundToEven) {
+		pw.diverges(line, name, "the value exceeds "+to+"'s range (or is NaN)", name+" sets ENO FALSE")
 	}
 	return name + "(" + args[0] + ")"
+}
+
+// first is the first argument, or nil.
+func first(args []st.Expression) st.Expression {
+	if len(args) == 0 {
+		return nil
+	}
+	return args[0]
+}
+
+// realConstFits reports a REAL constant that round takes into integer
+// type t: a conversion of it cannot fault, so it gets no warning.
+func realConstFits(e st.Expression, t string, round func(float64) float64) bool {
+	neg := false
+	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
+		neg, e = true, u.Operand
+	}
+	n, ok := e.(*st.NumberLit)
+	if !ok || n.Base != 10 && n.Base != 0 {
+		return false
+	}
+	f, err := strconv.ParseFloat(strings.ReplaceAll(n.Value, "_", ""), 64)
+	if err != nil {
+		return false
+	}
+	if neg {
+		f = -f
+	}
+	r := round(f)
+	w := intWidth[t]
+	if w.bits == 64 {
+		return r >= -9.2e18 && r <= 9.2e18 && (w.signed || r >= 0)
+	}
+	return r >= -9e15 && r <= 9e15 && inRange(int64(r), t)
 }
 
 // functionGap is the gap a builtin the writer has no translation for
@@ -514,7 +555,7 @@ func (pw *progWriter) shift(name string, argExprs []st.Expression, args []string
 		n = nt + "_TO_" + unsignedOf(nt) + "(" + n + ")"
 	case isInt(nt) && intWidth[nt].signed:
 		n = nt + "_TO_" + unsignedOf(bitsFor(nt)) + "(" + n + ")"
-		pw.diverges(line, name, "a negative count N", "it becomes an unsigned count beyond the width")
+		pw.diverges(line, name, "the count N is negative", "it becomes an unsigned count beyond the width")
 	case isInt(nt), nt == tAnyInt:
 	default:
 		pw.gap("siemens/function", line, gapOther, name+" by a count of type "+orUnknown(nt), "")
