@@ -138,3 +138,81 @@ claims:
     tests:
       - go ./internal/contextmap TestWasmStaysFreeOfControllerCode
       - go ./internal/contextmap TestContextMap
+
+  - id: CAM-010
+    claim: >-
+      `snapshot-on-alarm` and `snapshot-alarms` need a still (a kind that has
+      one or a snapshot-url), the camera-snapshots policy has bounds, and `naut
+      check` refuses a snapshot-alarms id the project does not have and warns
+      when no alarm is on the equipment a camera asks about.
+    source: "#pictures-when-an-alarm-activates"
+    tests:
+      - go ./camera TestSnapshotOnAlarmNeedsAStillAndThePolicyHasBounds
+      - go ./cmd/naut TestCameraAlarmChecks
+
+  - id: CAM-011
+    claim: >-
+      A new activation of an alarm on a camera's equipment (or named by it) keeps
+      a still, not a standing activation, an acknowledgement or an alarm with no
+      occurrence; only the controller that leads captures; a flood inside five
+      seconds shares one picture; each capture is journalled by the system, a
+      camera that did not answer is journalled as an error without its address,
+      and no picture is kept while the filesystem is under the floor.
+    source: "#pictures-when-an-alarm-activates"
+    tests:
+      - go ./server TestAnAlarmActivationKeepsTheStillOfTheCamerasThatWatchItsEquipment
+      - go ./server TestAnAlarmFloodSharesAPictureAndAStandbyKeepsNone
+      - go ./server TestNoPicturesAreKeptWhileTheDiskIsNearlyFull
+      - go ./server TestAFloodThatArrivesWhileTheFirstFetchRunsAllGetThePicture
+      - go ./server TestAnActivationThatFindsTheCapturePlacesBusyIsJournalled
+    note: >-
+      The capture is exercised through the notifier the alarm engine calls, with
+      events made by the test; the engine's own delivery to it is the existing
+      Notifier path.
+
+  - id: CAM-012
+    claim: >-
+      Pictures are kept under names the store makes (a name that is not one never
+      reaches the filesystem), by alarm occurrence in an append-only index that
+      survives a restart (a lost picture, a stray file and a torn last line are
+      dropped), in a 0700 directory with 0600 files; nothing is kept past
+      keep-days, whether or not anything is being written, nor past the count and
+      byte bounds (the bytes also capped at 5% of the free space at start); a
+      purge drops pictures and their index rows.
+    source: "#how-long-they-are-kept"
+    tests:
+      - go ./camera TestSnapshotsAreKeptByOccurrenceAndOnlyUnderNamesTheStoreMade
+      - go ./camera TestSnapshotsSurviveARestartAndDropWhatIsGone
+      - go ./camera TestSnapshotRetentionByCountBytesAndAge
+      - go ./camera TestSnapshotsNeverFillTheFilesystem
+      - go ./camera TestPurgeDropsPicturesAndTheirIndexRows
+      - go ./camera TestAFloodSharesOnePictureAndEachAlarmFindsIt
+      - go ./camera TestSharedPicturesKeepEveryOccurrenceAcrossARestart
+      - go ./camera TestTheByteBoundNeverTrimsEverythingAndASaveSaysWhenItDidNotKeep
+      - go ./camera TestAnOversizedPictureDeletesNothingAndTheCapCountsWhatIsHeld
+
+  - id: CAM-013
+    claim: >-
+      Seeing a kept picture needs read and the camera permission (403 "no
+      permission to view cameras" otherwise); a name that is not the store's is a
+      404; looking at a kept picture is journalled (camera.snapshot-view: the
+      person, the picture and its occurrences, once per person and picture in ten
+      minutes); a purge needs the config permission, says what it purges, and is
+      journalled; `naut camera snapshots purge` sends exactly that.
+    source: "#how-long-they-are-kept"
+    tests:
+      - go ./server TestKeptPicturesNeedThePermissionAndPurgeIsAudited
+      - go ./server TestPurgeRefusesDaysOutOfRange
+      - go ./cmd/naut TestCameraPurgeCommand
+
+  - id: CAM-014
+    claim: >-
+      The alarm journal shows a thumbnail of the picture kept for an activation,
+      asks lazily and only for rows shown, asks no more after a 404, and says once
+      that the person has no permission to view cameras.
+    source: "#pictures-when-an-alarm-activates"
+    tests: []
+    note: >-
+      The kit's client and helpers are tested in hmi/tests (not run by this
+      inventory); the journal's rendering was seen in a browser against a running
+      controller, not automated.

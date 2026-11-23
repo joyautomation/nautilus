@@ -243,6 +243,8 @@ export { default as CheckoutBanner } from './components/CheckoutBanner.svelte';
 export { default as CameraPanel } from './components/CameraPanel.svelte';
 export { CameraClient, formatBps, camerasFor, watchingText, nextState as cameraNext, LIVE_CAPTION } from './camera.js';
 export type { Camera, CameraMode, CameraState, CameraEvent } from './camera.js';
+export { SnapshotClient, parseSnaps, thumbSplit, NO_SNAP_VIEW } from './alarmsnaps.js';
+export type { AlarmSnap, SnapResult, SnapState } from './alarmsnaps.js';
 export { CheckoutClient, FORCE_SECONDS, forceValue, canIn, offersForce, countdown, clock, forceBanner, resultLine, needsNote, runLinks, offersSeal, SEAL_NOTICE } from './checkout.js';
 export type { CheckoutPoint, CheckoutResult, CheckoutRun, CheckoutRunView, CheckoutView, CheckoutForce, CheckoutAnswer, CountdownState, Progress as CheckoutProgress, PointKind } from './checkout.js';
 export { PushClient, pushState, readPushEnv, realPushBrowser, enablePush, disablePush, endpointId, keyBytes } from './push.js';

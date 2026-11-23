@@ -1,7 +1,12 @@
 package main
 
 import (
+	"encoding/json"
+	"github.com/joyautomation/nautilus/alarm"
 	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -66,13 +71,16 @@ func TestCameraCredentialsAreCheckedAgainstTheSecretsFile(t *testing.T) {
 }
 
 func TestACameraProjectGetsOptionsAndOthersGetNone(t *testing.T) {
-	if cameraOptions(camProject(), "", nil, os.Getenv, io.Discard) != nil {
+	if func() bool {
+		co, _ := cameraOptions(camProject(), "", nil, nil, os.Getenv, io.Discard)
+		return co != nil
+	}() {
 		t.Error("a project with no cameras got camera options")
 	}
 	dir := secureDir(t)
 	proj := camProject(camera.Camera{ID: "dock", Asset: "A", Kind: camera.KindSnapshot, URL: "http://10.0.0.1/s", Credentials: true})
 	proj.AuthStateDir = dir
-	co := cameraOptions(proj, "", nil, os.Getenv, io.Discard)
+	co, _ := cameraOptions(proj, "", nil, nil, os.Getenv, io.Discard)
 	if co == nil || len(co.Cameras) != 1 {
 		t.Fatalf("options: %+v", co)
 	}
@@ -85,5 +93,56 @@ func TestACameraProjectGetsOptionsAndOthersGetNone(t *testing.T) {
 	// read when a picture is asked for: a password changed on the box needs no restart
 	if v, ok := co.Fetcher.Secret("camera.dock"); !ok || v != "viewer:pw" {
 		t.Errorf("the secret set after start: %q %v", v, ok)
+	}
+}
+
+func TestCameraAlarmChecks(t *testing.T) {
+	proj := camProject(
+		camera.Camera{ID: "a", Asset: "P101", Kind: camera.KindVirtual, SnapshotOnAlarm: true},
+		camera.Camera{ID: "b", Asset: "TK9", Kind: camera.KindVirtual, SnapshotOnAlarm: true, SnapshotAlarms: []string{"HiLevel", "Nope"}},
+	)
+	defs := []alarm.Def{{ID: "HiLevel", Equipment: "p101"}}
+	errs, warns := checkCameraAlarms(proj, defs)
+	if len(errs) != 1 || !strings.Contains(errs[0], `no alarm "Nope"`) {
+		t.Errorf("errors: %v", errs)
+	}
+	if len(warns) != 1 || !strings.Contains(warns[0], `camera "b"`) || !strings.Contains(warns[0], "TK9") {
+		t.Errorf("warnings: %v", warns)
+	}
+}
+
+func TestCameraPurgeCommand(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" || r.URL.Path != "/api/camera-snapshots/purge" {
+			w.WriteHeader(404)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&got)
+		io.WriteString(w, `{"purged":3}`)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	port := u.Port()
+	if rc := runCamera([]string{"snapshots", "purge", "--host", u.Hostname(), "--port", port, "--older-than-days", "7"}); rc != 0 {
+		t.Fatalf("exit %d", rc)
+	}
+	if got["all"] != false || got["olderThanDays"] != float64(7) {
+		t.Errorf("sent %v", got)
+	}
+	if rc := runCamera([]string{"snapshots", "purge", "--host", u.Hostname(), "--port", port, "--all"}); rc != 0 || got["all"] != true {
+		t.Errorf("--all: %d %v", rc, got)
+	}
+	// say one thing, a host, and nothing else
+	for _, args := range [][]string{
+		{"snapshots", "purge", "--host", "h"},
+		{"snapshots", "purge", "--host", "h", "--all", "--older-than-days", "3"},
+		{"snapshots", "purge", "--all"},
+		{"snapshots", "purge", "--host", "h", "--all", "extra"},
+		{"bogus"},
+	} {
+		if rc := runCamera(args); rc != 2 {
+			t.Errorf("%v: exit %d, want 2", args, rc)
+		}
 	}
 }

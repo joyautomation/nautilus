@@ -37,6 +37,8 @@ cameras:
 | `credentials` | `true` when the camera wants a user name and password. They are kept in the secrets file, never in the manifest. |
 | `interval` | Seconds between stills on the asset page (default 5, 1 to 3600). |
 | `max-viewers` | How many people may watch the camera live at once (default 2, up to 16). |
+| `snapshot-on-alarm` | `true` keeps a still when an alarm on the asset's equipment activates (see [Pictures when an alarm activates](#pictures-when-an-alarm-activates)). Needs a still: a `snapshot-url`, or a kind that has one. |
+| `snapshot-alarms` | Alarm ids, of any equipment, that also keep a still. |
 
 ### Credentials
 
@@ -140,11 +142,69 @@ A live view also ends after **15 minutes** (the picture stops: click Watch live 
 the person signs out or may no longer read, and when the browser stops reading
 (each write to it has a 10-second limit).
 
+## Pictures when an alarm activates
+
+A camera with `snapshot-on-alarm: true` keeps one still each time an alarm on its
+asset's equipment activates (an alarm's `equipment:` key is the plant's equipment
+id, case ignored), and `snapshot-alarms: [ids]` adds particular alarms. The
+picture is attached to the alarm's occurrence, and the alarm journal shows it
+beside the activation.
+
+```yaml
+camera-snapshots:        # optional: how long, how many, how much
+  keep-days: 30
+  max-count: 500
+  max-mb: 200
+```
+
+- **Only a new activation** keeps a picture: not a condition that stood through a
+  restart or a takeover, an acknowledgement or a return to normal.
+- **Only the controller that leads** captures. After a takeover, pictures taken
+  by the previous leader stay on its box, not on the new leader's.
+- **A flood shares a picture.** An alarm that activates within five seconds of
+  the camera's last picture, or while a picture of that camera is being fetched,
+  is attached to that picture instead of fetching another. At most two captures run at once, and a capture of another camera that finds both
+  places taken is skipped and journalled as failed ("captures are busy").
+- **Each capture is journalled**, by the system, as `camera.snapshot` (the
+  camera, the alarm and its occurrence, the file and its size, or why it failed).
+- **Looking at a kept picture is journalled**, as a live view is: `camera.snapshot-view` names the person, the picture and the occurrences it is for, once per person and picture in ten minutes (a journal page loads every thumbnail, and a reload would otherwise write a row for each).
+- **No picture leaves the controller in a page.** Pictures are never put in an
+  SMS, an email or a push; they are seen in the alarm journal by a person with
+  `read` and the `camera` permission, who is refused with "no permission to view
+  cameras" otherwise.
+
+### How long they are kept
+
+These are pictures of people, so they are bounded in time as well as in space:
+
+- Nothing is kept longer than `keep-days` (30 by default). The bound holds when
+  nothing is being written.
+- At most `max-count` pictures (500) and `max-mb` megabytes (200), the oldest out.
+- The bytes are also capped at 5% of the state filesystem's free space when the
+  controller starts, and **no picture is kept** (the capture is journalled as
+  failed, and a line is logged) while less than 5% of the filesystem, or 256 MB,
+  is free. Pictures never take the space the retained state and the
+  operator-intent log need.
+
+On a small state filesystem (256 MB or less) the floor is always reached, so no
+picture is ever kept there: the journal says why (`camera.snapshot`, failed, "nearly
+full"), and the fix is a larger filesystem or no `snapshot-on-alarm`.
+
+They live in `snapshots/` of the controller's state directory (mode 0700, the
+files 0600), under names the controller makes. To drop them sooner:
+
+```
+naut camera snapshots purge --host controller --all
+naut camera snapshots purge --host controller --older-than-days 7
+```
+
+A purge needs the `config` permission and a fresh password (`NAUTILUS_TOKEN` or a
+token always counts as fresh), and is journalled as `camera.snapshot-purge`.
+
 ## What is not here yet
 
 - RTSP and HLS cameras: live video of those kinds, and ONVIF discovery and pan
   and tilt, are later steps. Until then they show a still if a `snapshot-url` is
   given.
-- A snapshot stored with an alarm.
 - The playground draws no camera: the camera relay is controller-only code and
   is not in the browser build.

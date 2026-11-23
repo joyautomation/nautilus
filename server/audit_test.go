@@ -284,6 +284,15 @@ func auditRows() []auditRow {
 		ckHdr["Cookie"], ckHdr["Origin"] = c.Name+"="+c.Value, "http://localhost"
 		return srv
 	}
+	// the camera snapshot purge rows: akhan (an engineer: config) signs in
+	camHdr := map[string]string{}
+	camSrv := func(t *testing.T) *Server {
+		srv, toks, _ := snapServer(t, "http://127.0.0.1:1/x", snapDir(t, nil), nil)
+		_ = toks
+		c := signIn(t, srv, "akhan")
+		camHdr["Cookie"], camHdr["Origin"] = c.Name+"="+c.Value, "http://localhost"
+		return srv
+	}
 	ckRun := func(t *testing.T, s *Server) {
 		if _, err := ckOf(s).Store.Begin(false, ckOf(s).Sheet.Hash(), "T", "akhan", "user:akhan"); err != nil {
 			t.Fatal(err)
@@ -334,6 +343,12 @@ func auditRows() []auditRow {
 	none := plain(Options{})
 	tok := plain(Options{AuthToken: "s3cret"})
 	return []auditRow{
+		{name: "camera snapshot purge", pattern: "POST /api/camera-snapshots/purge", server: camSrv, person: true, header: camHdr,
+			method: "POST", path: "/api/camera-snapshots/purge", body: `{"all":true}`,
+			action: "camera.snapshot-purge", target: "camera-snapshots", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "camera snapshot purge with no credential", pattern: "POST /api/camera-snapshots/purge", server: camSrv, person: true,
+			method: "POST", path: "/api/camera-snapshots/purge", body: `{"all":true}`,
+			action: "camera.snapshot-purge", target: "", user: "anonymous", source: "api", result: "refused"},
 		{name: "checkout begin", pattern: "POST /api/checkout/runs", server: ckSrv, person: true, header: ckHdr,
 			method: "POST", path: "/api/checkout/runs", body: `{"rehearsal":true}`,
 			action: "checkout.begin", target: "*", user: "user:akhan", source: "hmi", result: "ok"},

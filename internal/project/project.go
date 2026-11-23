@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/auth"
@@ -74,8 +75,11 @@ type Manifest struct {
 	// Cameras are the plant's cameras (#724): each bound to an asset the
 	// plant.yaml names; the controller relays them. Checked as rows by
 	// ReadManifest, against the plant by CheckCameras.
-	Cameras CameraRows   `yaml:"cameras"`
-	Tasks   []TaskConfig `yaml:"tasks"`
+	Cameras CameraRows `yaml:"cameras"`
+	// CameraSnapshots is how long and how much of the pictures kept when an
+	// alarm activates (#724): keep-days, max-count, max-mb.
+	CameraSnapshots CameraSnapshotsCfg `yaml:"camera-snapshots"`
+	Tasks           []TaskConfig       `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
 	// tag set stays a separate reviewable artifact instead of a 500-line
@@ -1225,8 +1229,14 @@ type Project struct {
 	// CheckoutSheet is the sheet it names.
 	Checkout *CheckoutConfig
 	// Cameras are the manifest's cameras: section (#724).
-	Cameras  CameraRows
-	checkout any // the sheet, see CheckoutSheet
+	Cameras CameraRows
+	// CameraSnapshots is the manifest's camera-snapshots: policy (#724).
+	CameraSnapshots CameraSnapshotsCfg
+	// AlarmNotifiers are heard by the alarm engine besides the manifest's
+	// alarms.notify: ones: what a controller composes in (the cameras'
+	// snapshot on alarm, #724).
+	AlarmNotifiers []alarm.Notifier
+	checkout       any // the sheet, see CheckoutSheet
 
 	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
@@ -1440,7 +1450,7 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 	if err := m.readCheckout(fsys, !noSheet); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	if err := validateCameras(m.Cameras); err != nil {
+	if err := validateCameras(m.Cameras, m.CameraSnapshots); err != nil {
 		return nil, fmt.Errorf("%s: cameras: %w", name, err)
 	}
 	if m.Parameters != nil {
@@ -1950,28 +1960,29 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 
 			TrustedProxies: proxies,
 		},
-		sparkplug:   m.Sparkplug,
-		substitutes: substitutes,
-		drivers:     drivers,
-		devices:     m.devices,
-		Plant:       m.plant,
-		OPCUA:       m.OPCUA,
-		Retain:      m.Retain,
-		WriteBack:   m.WriteBackMode(),
-		Audit:       m.Audit,
-		Auth:        m.authPolicy,
-		Redundancy:  m.Redundancy,
-		Alarms:      m.Alarms,
-		HMIDir:      hmiDir,
-		HMIMissing:  hmiMissing,
-		HMIApp:      hmiApp,
-		HMIScreens:  screens,
-		HMIPlant:    plantPages,
-		PWA:         m.PWA,
-		PWAIcon:     m.pwaIcon,
-		Checkout:    m.Checkout,
-		Cameras:     m.Cameras,
-		checkout:    m.checkoutSheet,
+		sparkplug:       m.Sparkplug,
+		substitutes:     substitutes,
+		drivers:         drivers,
+		devices:         m.devices,
+		Plant:           m.plant,
+		OPCUA:           m.OPCUA,
+		Retain:          m.Retain,
+		WriteBack:       m.WriteBackMode(),
+		Audit:           m.Audit,
+		Auth:            m.authPolicy,
+		Redundancy:      m.Redundancy,
+		Alarms:          m.Alarms,
+		HMIDir:          hmiDir,
+		HMIMissing:      hmiMissing,
+		HMIApp:          hmiApp,
+		HMIScreens:      screens,
+		HMIPlant:        plantPages,
+		PWA:             m.PWA,
+		PWAIcon:         m.pwaIcon,
+		Checkout:        m.Checkout,
+		Cameras:         m.Cameras,
+		CameraSnapshots: m.CameraSnapshots,
+		checkout:        m.checkoutSheet,
 
 		AuthStateDir: m.authStateDir(),
 		AuthOIDC:     m.authOIDC(),

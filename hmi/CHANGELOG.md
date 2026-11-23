@@ -4,6 +4,13 @@
 
 ### Added
 
+- **A picture is kept when an alarm activates** (#724 slice 2, kit side): `<AlarmJournal>` shows a small thumbnail (a
+  link to the full picture, up to 3 cameras then "+N") on each `Activated` row that has one. Pictures are asked for
+  lazily, three requests at a time; a controller that keeps none (404) is asked once and the journal looks as
+  before, and a person without the `camera` permission sees one line, not one per row. `AlarmJournal` takes
+  `snapshotClient` (null: no request); `AlarmEvent.occurrence`. New exports: `SnapshotClient`, `parseSnaps`,
+  `thumbSplit`, `NO_SNAP_VIEW`.
+
 - **`<CameraPanel {asset}/>`: the controller's built-in cameras on an asset page** (#724 slice 1, kit side): a refreshing still
   by default, live video only after "Watch live", with the measured bitrate and a Stop button; live stops when the
   tab is hidden, on a stream error and when the page goes away. A failure shows the controller's own message (the

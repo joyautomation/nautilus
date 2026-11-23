@@ -290,6 +290,8 @@ export interface AlarmEvent {
 	site?: string;
 	state?: AlarmState;
 	by?: string;
+	/** Which activation this row belongs to (#724): the key for the pictures kept when it activated. */
+	occurrence?: string;
 	/** Notify rows only (#715): the escalation level (1 first), who was
 	 * paged (a principal, never an address), the channel kind, the result
 	 * (`sent`, `failed`, `nobody-on-call`, and for #1249 `held` (a chattering

@@ -738,6 +738,9 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		}
 	}
 
+	if durable {
+		notify = append(notify, p.AlarmNotifiers...)
+	}
 	eng, err := alarm.New(alarm.Options{
 		Defs: defs,
 		Read: read,

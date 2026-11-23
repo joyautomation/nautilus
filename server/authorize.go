@@ -45,14 +45,16 @@ const (
 // one missing here. With an auth: block, an action missing here is
 // refused.
 var actionPerm = map[string]string{
-	"tag.write":            PermWrite,
-	"push.subscribe":       auth.Read, // any person who may read may be paged; read-gated per alarm at send
-	"push.unsubscribe":     auth.Read,
-	"camera.view":          auth.Camera, // watching a camera live (#724)
-	"alarm.ack":            PermAck,
-	"alarm.shelve":         PermShelve,
-	"alarm.unshelve":       PermShelve,
-	"alarm.out-of-service": PermOOS,
+	"tag.write":             PermWrite,
+	"push.subscribe":        auth.Read, // any person who may read may be paged; read-gated per alarm at send
+	"push.unsubscribe":      auth.Read,
+	"camera.view":           auth.Camera, // watching a camera live (#724)
+	"camera.snapshot-view":  auth.Camera, // looking at a picture kept for an alarm (#724)
+	"camera.snapshot-purge": PermConfig,  // dropping the pictures kept for alarms (#724)
+	"alarm.ack":             PermAck,
+	"alarm.shelve":          PermShelve,
+	"alarm.unshelve":        PermShelve,
+	"alarm.out-of-service":  PermOOS,
 	// Back in service shows alarms again: whoever may acknowledge them.
 	"alarm.in-service":         PermAck,
 	"sfc.step":                 PermSFC,

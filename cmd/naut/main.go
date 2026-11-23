@@ -248,6 +248,8 @@ func main() {
 		os.Exit(runNotes(os.Args[2:]))
 	case "checkout":
 		os.Exit(runCheckout(os.Args[2:]))
+	case "camera":
+		os.Exit(runCamera(os.Args[2:]))
 	case "alarms":
 		os.Exit(runAlarms(os.Args[2:]))
 	case "pull":

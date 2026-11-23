@@ -893,6 +893,8 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 	// Cameras (#724): each names equipment the plant has, and a camera that
 	// needs credentials has them in the secrets file.
 	camErrs, camWarns := proj.CheckCameras()
+	ce, cw := checkCameraAlarms(proj, defs)
+	camErrs, camWarns = append(camErrs, ce...), append(camWarns, cw...)
 	if len(proj.Cameras) > 0 {
 		sd, _ := controllerStateDir("the camera credentials", proj.AuthStateDir, proj.Name, dir, true, os.Getenv)
 		e2, w2 := checkCameraSecrets(proj, sd, false)

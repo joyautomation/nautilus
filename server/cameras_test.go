@@ -29,14 +29,19 @@ func camServer(t *testing.T, cams []camera.Camera, secrets map[string]string) (*
 	o := Options{}
 	co.Install(&o)
 	// jsmith's role holds read and not the camera permission: values, not the floor
-	srv, toks, _ := patServerSettings(t, newTestRuntime(t), o, auth.Settings{
+	srv, toks, _ := patServerSettings(t, newTestRuntime(t), o, camSettings())
+	return srv, toks
+}
+
+// camSettings: akhan an engineer; jsmith holds read and not the camera permission.
+func camSettings() auth.Settings {
+	return auth.Settings{
 		Roles: map[string]auth.RoleDef{"blind": {Inherits: auth.Operator, Deny: []string{auth.Camera}}},
 		Users: map[string][]auth.Grant{
 			"akhan":  {{Role: auth.Engineer}},
 			"jsmith": {{Role: "blind"}},
 		},
-	})
-	return srv, toks
+	}
 }
 
 func camJPEG(t *testing.T) []byte {

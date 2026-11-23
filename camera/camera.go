@@ -60,6 +60,41 @@ type Camera struct {
 	IntervalSeconds int `yaml:"interval" json:"interval"`
 	// MaxViewers is how many people may watch this camera live at once.
 	MaxViewers int `yaml:"max-viewers" json:"maxViewers"`
+	// SnapshotOnAlarm keeps a still when an alarm of the asset's equipment
+	// activates; SnapshotAlarms adds alarm ids (of any equipment). Both need a
+	// snapshot source. The pictures are kept under the state directory for the
+	// camera-snapshots: policy, keyed by the alarm occurrence.
+	SnapshotOnAlarm bool     `yaml:"snapshot-on-alarm" json:"-"`
+	SnapshotAlarms  []string `yaml:"snapshot-alarms" json:"-"`
+}
+
+// SnapshotPolicy is the manifest's camera-snapshots: section: how long, how
+// many and how many megabytes of alarm pictures are kept. They are pictures of
+// people, so there is a bound on time as well as on space.
+type SnapshotPolicy struct {
+	KeepDays int `yaml:"keep-days"` // default 30
+	MaxCount int `yaml:"max-count"` // default 500
+	MaxMB    int `yaml:"max-mb"`    // default 200
+}
+
+// DefaultKeepDays is how long alarm pictures are kept unless the policy says.
+const DefaultKeepDays = 30
+
+// Validate checks the policy's bounds.
+func (p *SnapshotPolicy) Validate() error {
+	if p == nil {
+		return nil
+	}
+	if p.KeepDays < 0 || p.KeepDays > 3650 {
+		return fmt.Errorf("camera-snapshots.keep-days is %d: between 1 and 3650", p.KeepDays)
+	}
+	if p.MaxCount < 0 || p.MaxCount > 100000 {
+		return fmt.Errorf("camera-snapshots.max-count is %d: between 1 and 100000", p.MaxCount)
+	}
+	if p.MaxMB < 0 || p.MaxMB > 100000 {
+		return fmt.Errorf("camera-snapshots.max-mb is %d: between 1 and 100000", p.MaxMB)
+	}
+	return nil
 }
 
 // Live reports whether the camera can be watched live (a stream, not only
@@ -152,6 +187,14 @@ func Validate(cams []Camera) []error {
 		}
 		if c.IntervalSeconds != 0 && (c.IntervalSeconds < MinIntervalSeconds || c.IntervalSeconds > MaxIntervalSeconds) {
 			bad("interval is %d seconds: between %d and %d", c.IntervalSeconds, MinIntervalSeconds, MaxIntervalSeconds)
+		}
+		if (c.SnapshotOnAlarm || len(c.SnapshotAlarms) > 0) && !c.HasSnapshot() {
+			bad("snapshot-on-alarm needs a still: this kind has none, so name a snapshot-url")
+		}
+		for _, id := range c.SnapshotAlarms {
+			if strings.TrimSpace(id) == "" {
+				bad("snapshot-alarms holds an empty alarm id")
+			}
 		}
 		if c.MaxViewers < 0 || c.MaxViewers > MaxMaxViewers {
 			bad("max-viewers is %d: between 1 and %d", c.MaxViewers, MaxMaxViewers)
