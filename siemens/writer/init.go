@@ -16,6 +16,50 @@ import (
 // for REAL and LREAL, and is milliseconds for a TIME (as the runtime reads
 // a numeric TIME seed); a fraction on an integer type or a TIME is refused.
 func InitLiteral(v any, typ string) (string, error) {
+	s, err := initLiteral(v, typ)
+	if err != nil {
+		return "", err
+	}
+	// The value must fit the type: TIA refuses an out-of-range start
+	// value at import, and nautilus would not hold the same value.
+	u := strings.ToUpper(strings.TrimSpace(typ))
+	if isInt(u) || isBits(u) {
+		if why := intFits(s, u); why != "" {
+			return "", fmt.Errorf("init %v %s", v, why)
+		}
+	}
+	if u == "REAL" {
+		if f, err := strconv.ParseFloat(s, 64); err == nil && math.Abs(f) > math.MaxFloat32 {
+			return "", fmt.Errorf("init %v is beyond REAL's range", v)
+		}
+	}
+	return s, nil
+}
+
+// intFits says why integer literal s does not fit integer or bit string
+// type u, or "".
+func intFits(s, u string) string {
+	bits, signed := uint(0), false
+	if w, ok := intWidth[u]; ok {
+		bits, signed = w.bits, w.signed
+	} else {
+		bits = bitStrings[u]
+	}
+	if signed {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || bits < 64 && (n < -(int64(1)<<(bits-1)) || n >= int64(1)<<(bits-1)) {
+			return "is out of " + u + "'s range"
+		}
+		return ""
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil || bits < 64 && n >= uint64(1)<<bits {
+		return "is out of " + u + "'s range"
+	}
+	return ""
+}
+
+func initLiteral(v any, typ string) (string, error) {
 	u := strings.ToUpper(typ)
 	real := u == "REAL" || u == "LREAL"
 	integer := false
@@ -54,6 +98,14 @@ func InitLiteral(v any, typ string) (string, error) {
 		if strings.HasPrefix(t, "T#") || strings.HasPrefix(t, "TIME#") {
 			return strings.TrimSpace(x), nil
 		}
+		if u == "TIME" {
+			// nautilus seeds a TIME from the duration without its prefix
+			// too (`3s`, `500ms`).
+			return "T#" + strings.TrimSpace(x), nil
+		}
+		if !strings.HasPrefix(u, "STRING") && !strings.HasPrefix(u, "WSTRING") && u != "CHAR" && u != "WCHAR" {
+			return "", fmt.Errorf("init %q is not a %s", x, typ)
+		}
 		return st.QuoteString(x), nil
 	}
 	return "", fmt.Errorf("init %v is not a value the Siemens target can seed", v)
@@ -70,8 +122,13 @@ func numberLiteral(x float64, integer, real bool) (string, error) {
 		return strconv.FormatFloat(x, 'f', 0, 64), nil
 	}
 	s := strconv.FormatFloat(x, 'g', -1, 64)
-	if real && !strings.ContainsAny(s, ".eEn") { // n: NaN and Inf stay as they are, for the writer to refuse
-		s += ".0"
+	if real && !strings.ContainsAny(s, ".n") { // n: NaN and Inf stay as they are, for the writer to refuse
+		// A REAL literal keeps its decimal point: 45.0, 1.0e+40.
+		if m, e, ok := strings.Cut(s, "e"); ok {
+			s = m + ".0e" + e
+		} else {
+			s += ".0"
+		}
 	}
 	return s, nil
 }

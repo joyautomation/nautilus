@@ -2,6 +2,7 @@ package writer
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/fbd"
@@ -34,6 +35,10 @@ type library struct {
 	structs map[string]*structDef
 	// other TYPEs: enumerations, aliases (lower-cased name -> as declared).
 	otherTypes map[string]string
+	// conflicts are TYPE names two sources declare differently: nautilus
+	// lowers each program with its own, while the writer's tags DB and
+	// member typing take one per name, so it refuses them.
+	conflicts map[string]string
 	// The library's FUNCTION_BLOCKs, FUNCTIONs and global constants
 	// (lower-cased name -> as declared): with the library in scope
 	// nautilus compiles a program that uses them, and the writer refuses
@@ -87,7 +92,7 @@ func libraryST(libs []string) []string {
 // loadLibrary reads the library sources and the programs' own TYPE
 // blocks.
 func loadLibrary(libs []string, own []*st.Program) *library {
-	lib := &library{structs: map[string]*structDef{}, otherTypes: map[string]string{},
+	lib := &library{structs: map[string]*structDef{}, otherTypes: map[string]string{}, conflicts: map[string]string{},
 		fbs: map[string]string{}, funcs: map[string]string{}, consts: map[string]string{}, enumMembers: map[string]string{}}
 	srcs := libraryST(libs)
 	var all st.Program
@@ -116,8 +121,24 @@ func loadLibrary(libs []string, own []*st.Program) *library {
 	if len(srcs) > 0 {
 		lib.src = strings.Join(srcs, "\n") + "\n"
 	}
+	// The programs' own TYPEs: one declared the same way in several
+	// programs is one type; declared differently, it is refused.
+	seen := map[string]string{}
+	for _, td := range all.TypeDecls {
+		seen[strings.ToLower(td.Name)] = typeSignature(td)
+	}
 	for _, p := range own {
-		all.TypeDecls = append(all.TypeDecls, p.TypeDecls...)
+		for _, td := range p.TypeDecls {
+			k, sig := strings.ToLower(td.Name), typeSignature(td)
+			if prev, ok := seen[k]; ok {
+				if prev != sig {
+					lib.conflicts[k] = td.Name
+				}
+				continue
+			}
+			seen[k] = sig
+			all.TypeDecls = append(all.TypeDecls, td)
+		}
 	}
 	for _, td := range all.TypeDecls {
 		k := strings.ToLower(td.Name)
@@ -138,10 +159,35 @@ func loadLibrary(libs []string, own []*st.Program) *library {
 	return lib
 }
 
-// structOf is the STRUCT a declared type names, or nil.
+// typeSignature is a TYPE's declaration with its positions left out: two
+// declarations with one signature are one type.
+func typeSignature(td st.TypeDecl) string {
+	s, ok := td.Type.(*st.StructType)
+	if !ok {
+		return "other:" + td.Type.String()
+	}
+	var b strings.Builder
+	for _, f := range s.Fields {
+		init := ""
+		if f.Initial != nil {
+			init, _ = constValue(loadLibrary(nil, nil), f.Initial)
+			if init == "" {
+				init = "?"
+			}
+		}
+		fmt.Fprintf(&b, "%s:%s:%s;", strings.ToLower(f.Name), strings.ToUpper(strings.TrimSpace(f.Datatype)), init)
+	}
+	return b.String()
+}
+
+// structOf is the STRUCT a declared type names, or nil (also for a name
+// two programs declare differently: sclType refuses it).
 func (w *writer) structOf(typ string) *structDef {
 	u := strings.TrimSpace(typ)
 	if u == "" || elementary[strings.ToUpper(u)] {
+		return nil
+	}
+	if _, ok := w.lib.conflicts[strings.ToLower(u)]; ok {
 		return nil
 	}
 	return w.lib.structs[strings.ToLower(u)]
@@ -179,6 +225,11 @@ func (w *writer) typeRefusal(typ string, seen map[string]bool) string {
 		if f.Initial != nil && w.structOf(f.Datatype) != nil {
 			return fmt.Sprintf("member %s: %s", f.Name, gapMessage(gapStructured, "a struct member's initializer", ""))
 		}
+		if f.Initial != nil {
+			if _, why := constValue(w.lib, f.Initial); why != "" {
+				return fmt.Sprintf("member %s: its initial value: %s", f.Name, why)
+			}
+		}
 	}
 	return ""
 }
@@ -191,6 +242,9 @@ func (w *writer) sclType(t string) (string, string) {
 		return typ, ""
 	}
 	k := strings.ToLower(strings.TrimSpace(t))
+	if name, ok := w.lib.conflicts[k]; ok {
+		return "", gapMessage(gapStructured, "the TYPE "+name+", which two programs declare differently", "nautilus gives each program its own; the tags DB takes one")
+	}
 	if name, ok := w.lib.fbs[k]; ok {
 		return "", gapMessage(gapPOUs, "the project's function block "+name, "")
 	}
@@ -233,6 +287,18 @@ func (w *writer) declType(typ, ind string, start any, values bool) (string, stri
 		return "", fmt.Sprintf("the start value %v of the struct %s is not a mapping of member: value", start, sd.name)
 	}
 	used := 0
+	keys := map[string]string{}
+	sorted := make([]string, 0, len(m))
+	for k := range m {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted) // the same message every run
+	for _, k := range sorted {
+		if other, dup := keys[strings.ToLower(k)]; dup {
+			return "", fmt.Sprintf("the start value names %s and %s, one member of %s", other, k, sd.name)
+		}
+		keys[strings.ToLower(k)] = k
+	}
 	var b strings.Builder
 	b.WriteString("Struct\n")
 	for _, f := range sd.fields {
@@ -250,8 +316,11 @@ func (w *writer) declType(typ, ind string, start any, values bool) (string, stri
 		}
 		line := ind + "   " + sclName(f.Name) + " : " + t
 		if values && !has && f.Initial != nil {
-			pw := &progWriter{w: w, locals: map[string]local{}}
-			line += " := " + pw.expr(f.Initial, 0)
+			v, why := constValue(w.lib, f.Initial)
+			if why != "" {
+				return "", fmt.Sprintf("member %s: its initial value: %s", f.Name, why)
+			}
+			line += " := " + v
 		}
 		b.WriteString(line + ";\n")
 	}
@@ -289,8 +358,11 @@ func (w *writer) leaves(typ, path string) ([]leaf, string) {
 			return nil, why
 		}
 		if f.Initial != nil && len(ls) == 1 {
-			pw := &progWriter{w: w, locals: map[string]local{}}
-			ls[0].init = pw.expr(f.Initial, 0)
+			v, why := constValue(w.lib, f.Initial)
+			if why != "" {
+				return nil, fmt.Sprintf("member %s: its initial value: %s", f.Name, why)
+			}
+			ls[0].init = v
 		}
 		out = append(out, ls...)
 	}
@@ -314,22 +386,25 @@ func (w *writer) seedCheck(typ string, start any) string {
 	return ""
 }
 
-// shape is what a readable name holds below it, for Output.Symbol: nil
-// for a scalar; members for a struct; any member one level down for a
-// function block instance.
+// shape is what a readable name holds below it, for Output.Symbol, with
+// the name as declared: members for a struct; any member one level down
+// for a function block instance; neither for a scalar.
 type shape struct {
+	name     string
 	instance bool
 	members  map[string]*shape // lower-cased
 }
 
-func (w *writer) shapeOf(typ string) *shape {
+// shapeOf is the shape of a name declared with type typ.
+func (w *writer) shapeOf(name, typ string) *shape {
+	s := &shape{name: name}
 	sd := w.structOf(typ)
 	if sd == nil {
-		return nil
+		return s
 	}
-	s := &shape{members: map[string]*shape{}}
+	s.members = map[string]*shape{}
 	for _, f := range sd.fields {
-		s.members[strings.ToLower(f.Name)] = w.shapeOf(f.Datatype)
+		s.members[strings.ToLower(f.Name)] = w.shapeOf(f.Name, f.Datatype)
 	}
 	return s
 }
@@ -390,6 +465,8 @@ var sclKeywords = map[string]bool{
 	"VERSION": true, "TITLE": true, "AUTHOR": true, "FAMILY": true, "NAME": true,
 	"KNOW_HOW_PROTECT": true, "STATIC": true, "VAR_STAT": true, "BEGIN": true,
 	"DATA_BLOCK": true, "ORGANIZATION_BLOCK": true, "NON_RETAIN": true, "GOTO": true,
+	"REGION": true, "END_REGION": true, "LABEL": true, "CONST": true, "VARIANT": true,
+	"POINTER": true, "ANY": true, "REF": true, "DATA": true, "VOID": true, "NULL": true,
 }
 
 // sclName writes a name, quoted when SCL reserves it.

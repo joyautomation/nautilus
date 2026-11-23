@@ -181,23 +181,25 @@ func (o Output) member(k, root, path string) (string, bool) {
 	if !known {
 		return "", false
 	}
-	sym := root + "." + sclName(parts[0])
+	// Each part as the writer declared it: the caller's case may differ.
+	sym := root + "." + sclName(s.name)
 	for i, p := range parts[1:] {
 		switch {
-		case s == nil:
-			return "", false
 		case s.instance:
 			if i != len(parts)-2 || p == "" {
 				return "", false
 			}
+			sym += "." + p // an IEC pin, as nautilus names it
+		case s.members == nil:
+			return "", false
 		default:
 			next, ok := s.members[strings.ToLower(p)]
 			if !ok {
 				return "", false
 			}
 			s = next
+			sym += "." + sclName(s.name)
 		}
-		sym += "." + sclName(p)
 	}
 	return sym, true
 }
@@ -279,7 +281,7 @@ func Write(in Input) (Output, []Diag, error) {
 	w.lib = loadLibrary(libs, own)
 	out := Output{Roots: map[string]string{"": quote(tagsDB)}, names: map[string]map[string]*shape{"": {}}, Sources: map[string]Source{}}
 	for _, g := range in.Globals {
-		out.names[""][strings.ToLower(g.Name)] = w.shapeOf(g.Type)
+		out.names[""][strings.ToLower(g.Name)] = w.shapeOf(g.Name, g.Type)
 	}
 	// Every block name, lower-cased (TIA's are case-insensitive): a
 	// program named Tags would make an FB and a DB both "Tags".
@@ -522,14 +524,14 @@ func (w *writer) globalDB() ([]byte, bool) {
 			}
 			continue
 		}
-		if g.Start != nil {
-			w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, gapMessage(gapStructured, fmt.Sprintf("the start value %v of a %s", g.Start, g.Type), "")))
-			ok = false
-			continue
-		}
 		typ, why := w.sclType(g.Type)
 		if why != "" {
 			w.diag("siemens/type", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
+			ok = false
+			continue
+		}
+		if g.Start != nil {
+			w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, gapMessage(gapStructured, fmt.Sprintf("the start value %v of a %s", g.Start, g.Type), "")))
 			ok = false
 			continue
 		}
@@ -586,8 +588,35 @@ func literal(src string) (string, string) {
 	default:
 		return "", fmt.Sprintf("init %q is not a literal", src)
 	}
-	pw := &progWriter{w: &writer{globals: map[string]Global{}, lib: loadLibrary(nil, nil)}, locals: map[string]local{}}
-	return pw.expr(a.Value, 0), ""
+	return constValue(loadLibrary(nil, nil), a.Value)
+}
+
+// constValue prints a constant (a manifest init, a TYPE member's initial
+// value) for a declaration, or says why it cannot: a negative number is
+// folded to one literal (SCL's declarations take -5, not an expression),
+// and whatever the expression printer refuses is refused here, never
+// printed as an empty value.
+func constValue(lib *library, e st.Expression) (string, string) {
+	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
+		if n, ok := u.Operand.(*st.NumberLit); ok {
+			return "-" + number(n), ""
+		}
+	}
+	switch e.(type) {
+	case *st.NumberLit, *st.BoolLit, *st.StringLit, *st.TimeLit, *st.TypedLit:
+	default:
+		return "", gapMessage(gapStructured, "an initial value written as an expression", "a start value is one literal in SCL")
+	}
+	scratch := &writer{globals: map[string]Global{}, lib: lib}
+	pw := &progWriter{w: scratch, locals: map[string]local{}}
+	s := pw.expr(e, 0)
+	if len(scratch.diags) > 0 {
+		return "", scratch.diags[0].Message
+	}
+	if s == "" {
+		return "", fmt.Sprintf("the value %s has no SCL form here", exprShort(e))
+	}
+	return s, ""
 }
 
 // ExternalTypes is the type the programs declare for each tag they bind

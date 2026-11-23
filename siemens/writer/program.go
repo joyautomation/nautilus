@@ -139,7 +139,7 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 					continue
 				}
 				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
-				pw.statics[strings.ToLower(v.Name)] = &shape{instance: true}
+				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name, instance: true}
 				lines = append(lines, fmt.Sprintf("      %s : Struct\n%s      END_STRUCT;", sclName(v.Name), latch.members()))
 				continue
 			}
@@ -153,6 +153,12 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 				}
 				if v.Initial != nil {
 					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapStructured, "a struct variable's initializer", ""))
+					continue
+				}
+				if kind == "VAR_IN_OUT" {
+					// The task's OB calls the program's FB with no
+					// arguments: nothing would bind it.
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "a struct in a program's VAR_IN_OUT", "the task's OB calls the program with nothing to bind it to"))
 					continue
 				}
 				t, why := w.declType(v.Datatype, "      ", nil, kind != "VAR_TEMP")
@@ -171,7 +177,7 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 					}
 					pw.temps = append(pw.temps, v)
 				} else {
-					pw.statics[strings.ToLower(v.Name)] = w.shapeOf(v.Datatype)
+					pw.statics[strings.ToLower(v.Name)] = w.shapeOf(v.Name, v.Datatype)
 				}
 				lines = append(lines, line)
 				continue
@@ -210,9 +216,9 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 				continue
 			}
 			if _, isInst := instances[u]; isInst {
-				pw.statics[strings.ToLower(v.Name)] = &shape{instance: true}
+				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name, instance: true}
 			} else {
-				pw.statics[strings.ToLower(v.Name)] = nil
+				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name}
 			}
 			if v.Initial != nil {
 				if _, isInst := instances[u]; isInst {

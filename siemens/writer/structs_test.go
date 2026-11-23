@@ -52,7 +52,7 @@ func TestStructsGolden(t *testing.T) {
 	}
 	for path, want := range map[string]string{
 		"WL101.Pump.Run": `"naut_Tags".WL101.Pump.Run`,
-		"wl101.depth":    `"naut_Tags".wl101.depth`,
+		"wl101.depth":    `"naut_Tags".WL101.Depth`, // as declared
 		"WL101.Static":   `"naut_Tags".WL101."Static"`,
 		"WL101":          `"naut_Tags".WL101`,
 		"Main.last.Run":  `"naut_Main_DB".last.Run`,
@@ -202,5 +202,73 @@ func TestRefusedOncePerType(t *testing.T) {
 	_, diags = writeStructs("PROGRAM P\nVAR_EXTERNAL k : INT; END_VAR\nVAR m : BOOL; END_VAR\nm := Run = Run;\nEND_PROGRAM\n", []Global{{Name: "k", Type: "INT"}}, "TYPE Mode : (Idle, Run); END_TYPE\n")
 	if len(diags) == 0 || diags[0].Rule != "siemens/enum" || !strings.Contains(diags[0].Message, "enumerations (Mode) yet (#1299)") {
 		t.Errorf("bare member: %v", diags)
+	}
+}
+
+// TestStartValueEdges: the Sonnet review's cases (#1311). A negative
+// start value is one literal, never an empty one; a value out of its
+// type's range, a TYPE two programs declare differently, a struct
+// VAR_IN_OUT, and a start value naming one member twice are refused; a
+// REAL in exponent form keeps its decimal point; a TIME seeds from a bare
+// duration, as nautilus seeds it.
+func TestStartValueEdges(t *testing.T) {
+	lib := "TYPE M : STRUCT i : INT; s : SINT := -3; r : REAL; d : TIME; w : WORD; END_STRUCT; END_TYPE\n"
+	src := "PROGRAM P\nVAR_EXTERNAL k : INT; m : M; END_VAR\nk := 1;\nEND_PROGRAM\n"
+	db := func(globals []Global) (string, []Diag) {
+		out, diags := writeStructs(src, globals, lib)
+		for _, f := range out.Files {
+			if f.Path == "naut_Tags.db" {
+				return string(f.Data), diags
+			}
+		}
+		return "", diags
+	}
+	got, diags := db([]Global{{Name: "k", Type: "INT", Init: "-5"}, {Name: "m", Type: "M", Start: map[string]any{"i": -5.0, "r": 1e20, "d": "5s"}}})
+	for _, want := range []string{"k : INT := -5;", "i : INT := -5;", "s : SINT := -3;", "r : REAL := 1.0e+20;", "d : TIME := T#5s;"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("lacks %q: %v\n%s", want, diags, got)
+		}
+	}
+	for start, want := range map[string]any{
+		"is out of INT's range":     map[string]any{"i": 40000.0},
+		"is out of WORD's range":    map[string]any{"w": -1.0},
+		"is beyond REAL's range":    map[string]any{"r": 1e40},
+		"names I and i, one member": map[string]any{"i": 1.0, "I": 2.0},
+	} {
+		_, diags := db([]Global{{Name: "k", Type: "INT"}, {Name: "m", Type: "M", Start: want}})
+		if len(diags) != 1 || !strings.Contains(diags[0].Message, start) {
+			t.Errorf("%v: %v, want %q", want, diags, start)
+		}
+	}
+	// Two programs, one TYPE name, two bodies: refused by name.
+	_, diags, _ = Write(Input{Programs: []Program{
+		{Path: "a.st", Source: "TYPE N : STRUCT a : INT := 5; END_STRUCT; END_TYPE\nPROGRAM A\nVAR s : N; END_VAR\ns.a := s.a + 1;\nEND_PROGRAM\n"},
+		{Path: "b.st", Source: "TYPE N : STRUCT a : REAL := 1.5; END_STRUCT; END_TYPE\nPROGRAM B\nVAR s : N; END_VAR\ns.a := 2.0;\nEND_PROGRAM\n"},
+	}})
+	if len(diags) != 2 || !strings.Contains(diags[0].Message, "the TYPE N, which two programs declare differently") {
+		t.Errorf("conflicting TYPEs: %v", diags)
+	}
+	// The same declaration in two programs is one type.
+	_, diags, _ = Write(Input{Programs: []Program{
+		{Path: "a.st", Source: "TYPE N : STRUCT a : INT := 5; END_STRUCT; END_TYPE\nPROGRAM A\nVAR s : N; END_VAR\nEND_PROGRAM\n"},
+		{Path: "b.st", Source: "TYPE N : STRUCT\n  a : INT := 5;\nEND_STRUCT; END_TYPE\nPROGRAM B\nVAR s : N; END_VAR\nEND_PROGRAM\n"},
+	}})
+	if len(diags) != 0 {
+		t.Errorf("one TYPE declared twice alike: %v", diags)
+	}
+	_, diags = writeStructs("PROGRAM P\nVAR_IN_OUT io : M; END_VAR\nEND_PROGRAM\n", nil, lib)
+	if len(diags) == 0 || !strings.Contains(diags[0].Message, "a struct in a program's VAR_IN_OUT") {
+		t.Errorf("VAR_IN_OUT: %v", diags)
+	}
+	// A TYPE member's initial value the writer cannot print is refused
+	// once, with the member, never written as an empty value.
+	_, diags = writeStructs(strings.Replace(src, "m : M", "m, m2 : Q", 1), []Global{{Name: "k", Type: "INT"}, {Name: "m", Type: "Q"}, {Name: "m2", Type: "Q"}}, "TYPE Q : STRUCT i : INT := 1 + 2; END_STRUCT; END_TYPE\n")
+	if len(diags) != 1 || !strings.Contains(diags[0].Message, "member i: its initial value") || diags[0].Path == "" {
+		t.Errorf("member initial value: %v", diags)
+	}
+	// A literal TIA's TIME cannot hold is refused, not written empty.
+	_, diags = writeStructs(strings.Replace(src, "m : M", "m : Q", 1), []Global{{Name: "k", Type: "INT"}, {Name: "m", Type: "Q"}}, "TYPE Q : STRUCT d : TIME := T#30d; END_STRUCT; END_TYPE\n")
+	if len(diags) != 1 || !strings.Contains(diags[0].Message, "member d: its initial value: the Siemens writer doesn't translate the time literal 30d yet (#1304): it is beyond TIA") {
+		t.Errorf("TIME beyond range: %v", diags)
 	}
 }
