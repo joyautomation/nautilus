@@ -298,6 +298,24 @@ priority is a later step. Until then, don't change the priority of the
 interrupt another. A task's `priority:` in `nautilus.yaml` (a Linux
 real-time priority) has no effect on a Siemens target.
 
+## Your own blocks and functions
+
+Each `FUNCTION_BLOCK` your project declares (in a library file, in a
+program's file, or from a `dialect:` such as the Logix `TONR`) becomes an
+FB named `naut_<Name>`. Each instance lives inside the block that declares
+it, as a multi-instance, so in TIA `m101` reads as `#m101` inside
+`naut_Main`, the way it reads in nautilus. Each `FUNCTION` becomes an FC
+that returns its result. `VAR CONSTANT` stays `VAR CONSTANT`, and a
+library's global constant is copied, with its name and value, into each
+block that uses it.
+
+Only the blocks your programs use are written. A library block nothing
+calls is left out, and it refuses nothing.
+
+A block called from a program with several tasks can't read a manifest
+tag inside its body: each task works on its own copy of the tags it
+shares. Pass the tag to the block as a pin instead.
+
 ## What does not translate yet
 
 These are gaps in the writer, not rules for you. The diagnostic reads
@@ -306,13 +324,12 @@ that closes it.
 
 | Issue | Not translated yet |
 |---|---|
-| #1299 | enums, arrays |
-| #1301 | user FUNCTIONs and FUNCTION_BLOCKs, library FBs, `VAR CONSTANT` |
+| #1299 | enums, arrays, a STRUCT as a pin of your own block or a function's result |
+| #1301 | nautilus's `PID` |
 | #1302 | SFC. It will be written as an SCL state machine first |
 | #1303 | STRING and the string functions |
 | #1304 | TIME arithmetic, LTIME, dates |
-| #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, and more |
-| #1310 | a task's `dt-tag`: nothing on the CPU writes it yet, so integrators and PI loops built on it would read 0 |
+| #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, a manifest tag named inside a block when the project has several tasks, and more |
 
 Real limits keep their own words, such as a task interval over 60 s or a
 block name collision.

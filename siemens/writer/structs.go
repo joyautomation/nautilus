@@ -18,8 +18,8 @@ import (
 // it as a PLC data type, but tiad does not import data types yet (TIA puts
 // them beside a customer's own, Ownership.TypesRefused), so nothing here
 // needs one: member access, member-wise assignment and start values work
-// the same on an anonymous struct. Named types come with user function
-// blocks (#1301), whose struct parameters need them.
+// the same on an anonymous struct. A STRUCT pin of the project's own block
+// needs a named type, and is refused until tiad writes them (D1b).
 //
 // Start values follow nautilus exactly: every member starts at its type's
 // declared initial value (`Temp : REAL := 72.5;` inside the STRUCT), and a
@@ -44,6 +44,11 @@ type library struct {
 	// nautilus compiles a program that uses them, and the writer refuses
 	// them as its gap (#1301).
 	fbs, funcs, consts map[string]string
+	// constDecls are the global constants' declarations (#1301), by
+	// lower-cased name; pous the project's FUNCTION_BLOCKs and FUNCTIONs,
+	// each name with every declaration of it (pous.go).
+	constDecls map[string]st.VarDecl
+	pous       map[string][]*pou
 	// enumMembers are the enumerations' member names, each with its
 	// type's name: a bare member (Idle) is an enumeration value, the
 	// writer's gap until enums are written.
@@ -67,22 +72,37 @@ type structDef struct {
 // none is left out (check reports it).
 func libraryST(libs []string) []string {
 	var out []string
+	for _, l := range libraryParts(libs) {
+		out = append(out, l.src)
+	}
+	return out
+}
+
+// libSource is one library source as ST; st is set when it was written
+// in ST (its lines are the file's own).
+type libSource struct {
+	src string
+	st  bool
+}
+
+func libraryParts(libs []string) []libSource {
+	var out []libSource
 	for _, src := range libs {
 		if _, err := st.Parse(src); err == nil {
-			out = append(out, src)
+			out = append(out, libSource{src, true})
 			continue
 		}
 		if f, _, err := ld.TranspileWithLines(src, libs...); err == nil {
 			if s, _, err := fbd.TranspileWithLines(f); err == nil {
 				if _, err := st.Parse(s); err == nil {
-					out = append(out, s)
+					out = append(out, libSource{s, false})
 					continue
 				}
 			}
 		}
 		if s, _, err := fbd.TranspileWithLines(src); err == nil {
 			if _, err := st.Parse(s); err == nil {
-				out = append(out, s)
+				out = append(out, libSource{s, false})
 			}
 		}
 	}
@@ -93,14 +113,19 @@ func libraryST(libs []string) []string {
 // blocks.
 func loadLibrary(libs []string, own []*st.Program) *library {
 	lib := &library{structs: map[string]*structDef{}, otherTypes: map[string]string{}, conflicts: map[string]string{},
-		fbs: map[string]string{}, funcs: map[string]string{}, consts: map[string]string{}, enumMembers: map[string]string{}}
-	srcs := libraryST(libs)
+		fbs: map[string]string{}, funcs: map[string]string{}, consts: map[string]string{}, enumMembers: map[string]string{},
+		constDecls: map[string]st.VarDecl{}, pous: map[string][]*pou{}}
+	parts := libraryParts(libs)
+	var srcs []string
 	var all st.Program
-	for _, src := range srcs {
+	for _, part := range parts {
+		src := part.src
+		srcs = append(srcs, src)
 		prog, err := st.Parse(src)
 		if err != nil {
 			continue
 		}
+		lib.addPOUs(prog, "", nil, true, part.st)
 		all.TypeDecls = append(all.TypeDecls, prog.TypeDecls...)
 		all.FBDecls = append(all.FBDecls, prog.FBDecls...)
 		all.GlobalConsts = append(all.GlobalConsts, prog.GlobalConsts...)
@@ -114,6 +139,9 @@ func loadLibrary(libs []string, own []*st.Program) *library {
 			if vb.Kind == "VAR_GLOBAL" {
 				for _, v := range vb.Variables {
 					lib.consts[strings.ToLower(v.Name)] = v.Name
+					if vb.Constant {
+						lib.constDecls[strings.ToLower(v.Name)] = v
+					}
 				}
 			}
 		}
@@ -128,6 +156,19 @@ func loadLibrary(libs []string, own []*st.Program) *library {
 		seen[strings.ToLower(td.Name)] = typeSignature(td)
 	}
 	for _, p := range own {
+		// A program file's own file-level constants (#176) too: nautilus
+		// lowers each file with its own, and refuses a name another file
+		// does not declare before the writer sees it.
+		for _, vb := range p.GlobalConsts {
+			if vb.Kind == "VAR_GLOBAL" && vb.Constant {
+				for _, v := range vb.Variables {
+					if _, ok := lib.constDecls[strings.ToLower(v.Name)]; !ok {
+						lib.consts[strings.ToLower(v.Name)] = v.Name
+						lib.constDecls[strings.ToLower(v.Name)] = v
+					}
+				}
+			}
+		}
 		for _, td := range p.TypeDecls {
 			k, sig := strings.ToLower(td.Name), typeSignature(td)
 			if prev, ok := seen[k]; ok {
@@ -246,7 +287,7 @@ func (w *writer) sclType(t string) (string, string) {
 		return "", gapMessage(gapStructured, "the TYPE "+name+", which two programs declare differently", "nautilus gives each program its own; the tags DB takes one")
 	}
 	if name, ok := w.lib.fbs[k]; ok {
-		return "", gapMessage(gapPOUs, "the project's function block "+name, "")
+		return "", gapMessage(gapOther, "the project's function block "+name+" here", "")
 	}
 	if name, ok := w.lib.otherTypes[k]; ok {
 		return "", gapMessage(gapStructured, "the type "+name, "enumerations and type aliases")
@@ -467,6 +508,9 @@ var sclKeywords = map[string]bool{
 	"DATA_BLOCK": true, "ORGANIZATION_BLOCK": true, "NON_RETAIN": true, "GOTO": true,
 	"REGION": true, "END_REGION": true, "LABEL": true, "CONST": true, "VARIANT": true,
 	"POINTER": true, "ANY": true, "REF": true, "DATA": true, "VOID": true, "NULL": true,
+	// The block kinds (#1301: an FB instance named db failed the import of
+	// its block, "The specified value "db" is invalid", on TIA V21).
+	"DB": true, "DI": true, "FB": true, "FC": true, "OB": true, "UDT": true, "SFB": true, "SFC": true,
 	// Data type names nautilus takes as names (#1310: a tag named Dt
 	// failed the import of the tags DB, "The specified value "Dt" is
 	// invalid", as did a temp named dt).
@@ -479,7 +523,10 @@ var sclKeywords = map[string]bool{
 
 // sclName writes a name, quoted when SCL reserves it.
 func sclName(n string) string {
-	if sclKeywords[strings.ToUpper(n)] {
+	// A name with two underscores in a row is no SCL identifier (TIA V21:
+	// "Syntax error at letter '_'" on a tag EPIC__Online, #1301); quoted,
+	// any name is.
+	if sclKeywords[strings.ToUpper(n)] || strings.Contains(n, "__") {
 		return `"` + n + `"`
 	}
 	return n

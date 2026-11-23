@@ -1,0 +1,25 @@
+FUNCTION "naut_Scale" : REAL
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      Raw : REAL;
+      Lo : REAL;
+      Hi : REAL;
+   END_VAR
+   VAR_TEMP 
+      span : REAL;
+      Scale : REAL;
+   END_VAR
+
+BEGIN
+	#Scale := 0.0;
+	#span := 0.0;
+	#span := #Hi - #Lo;
+	IF #span <= 0.0 THEN
+		#Scale := #Lo;
+		#naut_Scale := #Scale;
+		RETURN;
+	END_IF;
+	#Scale := #Lo + #Raw * #span / 100.0;
+	#naut_Scale := #Scale;
+END_FUNCTION

@@ -56,8 +56,8 @@ func TestCheckPassesAGoodSiemensStation(t *testing.T) {
 
 var goodSiemensManifest = strings.NewReplacer("AGENT", "http://127.0.0.1:8190", "NAME", "plc-1").Replace(siemensCheckManifest)
 
-// A construct the SCL writer refuses (VAR CONSTANT, on line 2).
-const siemensRefusedProgram = "PROGRAM main\nVAR CONSTANT k : REAL := 2.0; END_VAR\nVAR x : REAL; END_VAR\nx := Level * k;\nEND_PROGRAM\n"
+// A construct the SCL writer refuses (an array, on line 2).
+const siemensRefusedProgram = "PROGRAM main\nVAR k : ARRAY[1..2] OF REAL; END_VAR\nVAR x : REAL; END_VAR\nx := Level * k[1];\nEND_PROGRAM\n"
 
 // TestCheckSiemensTargetRunsTheWritersRules: a project with a
 // target.siemens section is checked against the writer without a flag,
@@ -67,7 +67,7 @@ func TestCheckSiemensTargetRunsTheWritersRules(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1:\n%s", code, out)
 	}
-	if !strings.Contains(out, "main.st:2:1: siemens target: the Siemens writer doesn't translate VAR CONSTANT yet (#1301) [siemens/var]") {
+	if !strings.Contains(out, "main.st:2:1: siemens target: k: the Siemens writer doesn't translate arrays yet (#1299) [siemens/type]") {
 		t.Fatalf("no writer diagnostic at main.st:2:\n%s", out)
 	}
 }
@@ -116,7 +116,7 @@ func TestCheckTargetSiemensFlag(t *testing.T) {
 		t.Fatalf("without the flag: exit %d, want 0:\n%s", code, out)
 	}
 	out, code = capture(t, func() int { return runCheck([]string{"--target", "siemens", dir}) })
-	if code != 1 || !strings.Contains(out, "[siemens/var]") {
+	if code != 1 || !strings.Contains(out, "[siemens/type]") {
 		t.Fatalf("with --target siemens: exit %d, want 1 with the writer's rule:\n%s", code, out)
 	}
 }

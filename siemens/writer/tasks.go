@@ -171,8 +171,8 @@ func flagAll(u *tagUse, l leaf) string {
 func (w *writer) sharing(in Input, progs []parsed) map[string]*share {
 	uses := map[string]map[string]*tagUse{} // program, lower-cased
 	for _, p := range progs {
-		scratch := &writer{globals: w.globals, lib: w.lib, tagsDB: w.tagsDB, prefix: w.prefix}
-		if pw := scratch.program(p.path, p.libs, p.src, p.prog); pw != nil {
+		scratch := &writer{globals: w.globals, lib: w.lib, tagsDB: w.tagsDB, prefix: w.prefix, tasks: w.tasks}
+		if pw := scratch.program(p.path, p.libs, p.src, p.lines, p.prog); pw != nil {
 			uses[strings.ToLower(p.prog.Name)] = pw.uses
 		}
 	}

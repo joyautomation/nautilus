@@ -190,9 +190,8 @@ func TestDeclTypeNeverDropsAStartValue(t *testing.T) {
 // write yet say so once per program, and a bare enumeration member names
 // the enum gap rather than an unknown name.
 func TestRefusedOncePerType(t *testing.T) {
-	fb := "FUNCTION_BLOCK Plant\nVAR_INPUT x : BOOL; END_VAR\nEND_FUNCTION_BLOCK\n"
-	_, diags := writeStructs("PROGRAM P\nVAR a, b : Plant; c : Plant; m1, m2 : Motor; END_VAR\nEND_PROGRAM\n", nil, fb, motorLib)
-	if len(diags) != 3 || !strings.Contains(diags[0].Message, "function block Plant yet (#1301)") || !strings.Contains(diags[1].Message, "member Tag:") {
+	_, diags := writeStructs("PROGRAM P\nVAR a, b : Motor; c : Motor; m1, m2 : Motor; END_VAR\nEND_PROGRAM\n", nil, motorLib)
+	if len(diags) != 2 || !strings.Contains(diags[0].Message, "member Tag:") {
 		t.Errorf("once per type: %v", diags)
 	}
 	_, diags = writeStructs("PROGRAM P\nVAR m : INT; END_VAR\nIF m = 0 THEN m := 1; END_IF;\nEND_PROGRAM\n", nil, "TYPE Mode : (Idle, Run); END_TYPE\n")

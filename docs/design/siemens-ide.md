@@ -276,8 +276,8 @@ Native LAD (SimaticML FlgNet) is D3.
 | Each task (`scan:`) | A cyclic interrupt OB at its cycle, 1 ms to 60 s: OB30 to OB38, then from OB123. nautilus copies shared tags in at a task's scan start and commits what the scan assigned at its end (runtime/scanview.go); the writer does the same per task (#1300, siemens/writer/tasks.go): a tag two or more tasks name is read and written in a per-task copy (`naut_Scan_<task>`), copied in by the OB before the FB call, and committed after it under per-member / per-bit "assigned" flags. Every OB keeps TIA's default priority (13 on V21, measured 2026-11-23, equal for OB30/31/123), so no task OB preempts another; rate-monotonic priorities with the copy under DIS_AIRT are the follow-up. nautilus has no free-running task, so there is no OB1 |
 | Manifest tags | Global DB `"naut_Tags"` (optimized), the Web API symbol `"naut_Tags".Level`. Members are visible and writable to Web API/HMI/OPC UA *(verify the attribute spelling in SCL source)* |
 | I/O-bound tags | PLC tag table, `%I`/`%Q` addresses from the station spec |
-| UDT | Written inline (`Struct … END_STRUCT`) where used, with nautilus's start values (#1299, measured on TIA V21). A PLC data type (`.udt`) comes with user FBs (#1301), whose struct parameters need one; tiad refuses data types until it can keep a customer's apart |
-| User FB / function | FB / FC |
+| UDT | Written inline (`Struct … END_STRUCT`) where used, with nautilus's start values (#1299, measured on TIA V21). A STRUCT pin of a user FB or function needs a PLC data type (`.udt`), refused until tiad writes data types it keeps apart from a customer's (D1b) |
+| User FB / function | The project's FUNCTION_BLOCK → FB `"naut_<Name>"`, each instance a multi-instance in the block that declares it (`m101 : "naut_MotorStarter";`, `#m101(...)`), so its data lives inside the caller's as in nautilus. FUNCTION → FC with its return type; the body works on a temp named like the function, sets every local first (an FC's temps start undefined, nautilus starts each call afresh) and copies the result to the return value at the end and at each RETURN. Only the blocks a program reaches are written, callees first (TIA generates a block only once those it instantiates exist, measured on V21). Arguments are stored as nautilus stores them (store rule, `=>` as an assignment after the call); a VAR_IN_OUT is TIA's InOut. `VAR CONSTANT` → SCL `VAR CONSTANT`; a library's global constant → a `VAR CONSTANT` copy, same name, in each block that names it (a PLC constant tag table is the later native form) (#1301, D1) |
 | TON TOF TP R_TRIG F_TRIG | The IEC instructions as multi-instances (`TON_TIME`, …); the members already match (`.Q` `.ET`) |
 | CTU CTD CTUD | `CTU_LINT` etc.: nautilus's counter value is its 64-bit int and keeps counting past 32767 |
 | SR RS | Written inline as set/reset logic on a static, since they are believed to be LAD/FBD boxes that SCL cannot call *(verify)* |
@@ -305,15 +305,18 @@ The rules:
   refused before anything else.
 - **Integer arithmetic** is 64-bit in nautilus, wrapped only at the store
   (#800). The writer widens every narrow operand to LINT and wraps
-  explicitly at the store. Where it cannot (an FB input, a function
-  argument, a CASE selector, a REAL target), integer arithmetic is refused.
+  explicitly at the store, an argument of the project's own FB or
+  function included (nautilus stores an argument by the same rule). Where
+  it cannot (an input of a standard block, an argument of a standard
+  function, a CASE selector, a REAL target), integer arithmetic is refused.
 - **What it does not translate yet is a writer gap,** never a rule for
   the person: the diagnostic reads "the Siemens writer doesn't translate X
   yet (#N)", N the issue that closes it. B #1299 enums and arrays (structs and
   their start values are written, the library is in scope); C #1300
   more than one task (written since C: per-task copies of shared tags);
-  D #1301 user FUNCTIONs and FUNCTION_BLOCKs, library
-  FBs, VAR CONSTANT; E #1302 SFC (an SCL state machine first; GRAPH
+  D #1301 nautilus's PID (D2; the project's FUNCTIONs, FUNCTION_BLOCKs,
+  dialect blocks such as TONR and VAR CONSTANT are written since D1, a
+  STRUCT pin waits for PLC data types, D1b); E #1302 SFC (an SCL state machine first; GRAPH
   maybe later as an option, James 11-23); F #1303 STRING (TIA's holds 254
   characters, a nautilus STRING has no length) and the string functions;
   G #1304 TIME arithmetic, LTIME and dates (64-bit milliseconds against

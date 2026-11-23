@@ -11,7 +11,7 @@ type gap int
 
 const (
 	gapStructured gap = iota // enums, arrays, what structs.go does not write
-	gapPOUs                  // user FUNCTIONs and FBs, library FBs, VAR CONSTANT
+	gapPOUs                  // nautilus's blocks with no TIA instruction (PID)
 	gapSFC                   // SFC programs
 	gapString                // STRING and the string functions
 	gapTime                  // TIME arithmetic, LTIME, dates

@@ -1,0 +1,53 @@
+FUNCTION_BLOCK "naut_Station"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      Run : BOOL;
+      Level : REAL;
+   END_VAR
+   VAR_OUTPUT 
+      High : BOOL;
+      Count : DINT;
+      Total : INT;
+   END_VAR
+   VAR_IN_OUT 
+      Starts : INT;
+   END_VAR
+   VAR 
+      "db" : "naut_Debounce";
+      edge : R_TRIG;
+      i : INT;
+      hold : TON_TIME;
+   END_VAR
+   VAR_TEMP 
+      scratch : INT;
+   END_VAR
+   VAR CONSTANT 
+      GAIN : REAL := 2.0;
+      TOP : INT := 6;
+      HI_LIMIT : REAL := 80.0;
+      LOW : INT := -2;
+      STEPS : INT := 3;
+      T_DELAY : TIME := T#30ms;
+   END_VAR
+
+BEGIN
+	#scratch := 10;
+	#"db"(IN := #Run, PT := #T_DELAY);
+	#edge(CLK := #"db".Q);
+	IF #edge.Q THEN
+		#Starts := LINT_TO_INT((((INT_TO_LINT(#Starts) + 1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+		#Count := LINT_TO_DINT((((DINT_TO_LINT(#Count) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	END_IF;
+	#High := #Level * #GAIN > #HI_LIMIT;
+	#Total := 0;
+	FOR #i := 1 TO #STEPS DO
+		#Total := LINT_TO_INT((((INT_TO_LINT(#Total) + INT_TO_LINT(#i)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	END_FOR;
+	CASE #Total OF
+		#TOP:
+			#Total := #LOW;
+	END_CASE;
+	#scratch := LINT_TO_INT((((INT_TO_LINT(#scratch) + INT_TO_LINT(#Total)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	#hold(IN := #High, PT := #hold.PT);
+END_FUNCTION_BLOCK
