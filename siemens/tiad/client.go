@@ -339,6 +339,10 @@ type Health struct {
 	Openness string   `json:"openness"` // Openness API version in use
 	Sessions int      `json:"sessions"`
 	Targets  []string `json:"targets"` // CPU addresses tiad may go online to
+	// UI is whether the agent runs TIA Portal with its user interface
+	// (TIAD_UI=1): it can then show a block in TIA's editor
+	// (Session.Show), and it refuses every download.
+	UI bool `json:"ui"`
 }
 
 func (c *Client) Health(ctx context.Context) (Health, error) {
@@ -1153,4 +1157,25 @@ func (s *Session) Save(ctx context.Context, archive bool) (string, error) {
 	}
 	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("save"), map[string]bool{"archive": archive}, &r)
 	return r.Path, err
+}
+
+// Shown is the block a Show opened in TIA's editor.
+type Shown struct {
+	Block  string `json:"block"`
+	Type   string `json:"type"`
+	Number int    `json:"number"`
+	// Group is the block's group, a path from the program blocks' root
+	// ("" for the root).
+	Group string `json:"group"`
+}
+
+// Show opens the program block named block (compared without case, as
+// TIA names blocks) in TIA Portal's editor, on the agent's screen. Only
+// an agent started with TIAD_UI=1 has an editor to show it in (Health.UI);
+// any other refuses (KindBadRequest), as it does a block the project does
+// not hold (KindNotFound). It changes nothing in the project.
+func (s *Session) Show(ctx context.Context, block string) (Shown, error) {
+	var r Shown
+	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("show"), map[string]string{"block": block}, &r)
+	return r, err
 }

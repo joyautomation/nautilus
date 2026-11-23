@@ -32,6 +32,10 @@ namespace Tiad
             r.Add("POST", "/v1/sessions/{id}/save", Save);
         }
 
+        // UiRefusesDownload is a download's refusal on an agent started
+        // with TIAD_UI=1.
+        public const string UiRefusesDownload = "this agent runs TIA Portal with its user interface (TIAD_UI=1), for viewing only, and refuses every download: a click or a dialog in the visible Portal could change or stall it. Restart the agent without TIAD_UI to download; nothing was sent to the CPU";
+
         bool Target(string address)
         {
             return cfg.Targets.Contains(address);
@@ -258,6 +262,10 @@ namespace Tiad
         {
             string bad = req.Validate();
             if (bad != null) throw TiadException.BadRequest("{0}", bad);
+            // An agent that shows TIA's window is for viewing only: a click
+            // or a modal dialog in the visible Portal could change or stall
+            // a load, dry runs included.
+            if (cfg.Ui) throw TiadException.BadRequest("{0}", UiRefusesDownload);
             if (!Target(req.Address))
             {
                 throw new TiadException(403, Kinds.TargetRefused, req.Address + " is not in TIAD_TARGETS");

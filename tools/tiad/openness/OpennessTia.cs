@@ -296,17 +296,21 @@ namespace Tiad.Openness
         readonly System.Diagnostics.Process process;
         readonly object processMu = new object();
 
-        // OpennessTia starts TIA Portal, without its user interface. This
-        // is the one place tiad starts TIA.
+        // OpennessTia starts TIA Portal, without its user interface unless
+        // TIAD_UI is 1 (Config.Ui, which the agent checked at its start:
+        // a window to show blocks in, for viewing only). This is the one
+        // place tiad starts TIA.
         public OpennessTia()
         {
+            bool ui = Environment.GetEnvironmentVariable("TIAD_UI") == "1";
             pcInterface = Environment.GetEnvironmentVariable("TIAD_PC_INTERFACE") ?? "";
             // Before TIA starts: every selection tiad may write must exist
             // in this Openness, since enum names are strings to the compiler.
             CheckSelections();
             try
             {
-                portal = new TiaPortal(TiaPortalMode.WithoutUserInterface);
+                portal = new TiaPortal(ui ? TiaPortalMode.WithUserInterface : TiaPortalMode.WithoutUserInterface);
+                if (ui) Log.Line("TIA Portal started WITH its user interface (TIAD_UI=1): viewing only, downloads are refused");
             }
             catch (Exception e)
             {
@@ -1703,6 +1707,29 @@ namespace Tiad.Openness
                 PlcBlock b = ug == null ? null : FindIn(ug, name);
                 if (b == null) throw new TiaException("no block \"" + name + "\" in group \"" + group + "\" to delete");
                 b.Delete();
+                return true;
+            });
+        }
+
+        // Show opens the block in TIA's editor (IShowable.ShowInEditor):
+        // only a portal with its user interface has one.
+        public void Show(object project, string group, string name)
+        {
+            Tia<bool>(delegate
+            {
+                PlcBlockGroup g = Software(Of(project).Project).BlockGroup;
+                if (group != "")
+                {
+                    foreach (string part in group.Split('/'))
+                    {
+                        g = g.Groups.Find(part);
+                        if (g == null) throw new TiaException("no block group \"" + group + "\" to show a block of");
+                    }
+                }
+                PlcBlock b = null;
+                foreach (PlcBlock x in g.Blocks) if (string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase)) b = x;
+                if (b == null) throw new TiaException("no block \"" + name + "\" in group \"" + group + "\" to show");
+                b.ShowInEditor();
                 return true;
             });
         }

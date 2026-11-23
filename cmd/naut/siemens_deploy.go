@@ -523,13 +523,7 @@ func (d *siemensDeployer) checkLastDeploy(ctx context.Context, address string, o
 	if err != nil {
 		return lastDeploy{}, err
 	}
-	var latest *tiad.Deploy
-	for i := range list.Deploys {
-		if list.Deploys[i].Status != tiad.DeployNotLoaded {
-			latest = &list.Deploys[i]
-			break
-		}
-	}
+	latest := latestLoad(list)
 	if latest == nil {
 		why := "no deploy record for this CPU: whatever it runs now is replaced"
 		if list.UnreadableLines > 0 {
@@ -566,6 +560,41 @@ func (d *siemensDeployer) checkLastDeploy(ctx context.Context, address string, o
 		}
 	}
 	return ld, nil
+}
+
+// latestLoad is the newest record that may have loaded its CPU (loaded or
+// in doubt), nil for none: what the CPU should run.
+func latestLoad(list tiad.DeployList) *tiad.Deploy {
+	for i := range list.Deploys {
+		if list.Deploys[i].Status != tiad.DeployNotLoaded {
+			return &list.Deploys[i]
+		}
+	}
+	return nil
+}
+
+// siemensTiadClient is the agent's client: its URL from --agent, then
+// $NAUTILUS_TIAD_URL, then target.siemens.agent, then tiad.DefaultURL; its
+// token from NAUTILUS_TIAD_TOKEN(_FILE), never a flag.
+func siemensTiadClient(getenv func(string) string, agentFlag, manifestAgent string) (*tiad.Client, error) {
+	agent := agentFlag
+	if agent == "" {
+		agent = getenv("NAUTILUS_TIAD_URL")
+	}
+	if agent == "" {
+		agent = manifestAgent
+	}
+	if agent == "" {
+		agent = tiad.DefaultURL
+	}
+	token, err := siemensSecret(getenv, "NAUTILUS_TIAD_TOKEN")
+	if err != nil {
+		return nil, err
+	}
+	if token == "" {
+		return nil, errors.New("set NAUTILUS_TIAD_TOKEN or NAUTILUS_TIAD_TOKEN_FILE to the agent's token (it is never a flag)")
+	}
+	return tiad.New(agent, token), nil
 }
 
 // readAdoption reads the deploy's adoption record, nil without one.
@@ -962,26 +991,10 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 		online = &tiad.OnlineSecrets{FullAccessPassword: sec.FullAccessPassword}
 	}
 
-	agent := o.agentFlag
-	if agent == "" {
-		agent = o.getenv("NAUTILUS_TIAD_URL")
-	}
-	if agent == "" {
-		agent = tgt.Agent
-	}
-	if agent == "" {
-		agent = tiad.DefaultURL
-	}
-	token, err := siemensSecret(o.getenv, "NAUTILUS_TIAD_TOKEN")
-	if err != nil {
+	if d.client, err = siemensTiadClient(o.getenv, o.agentFlag, tgt.Agent); err != nil {
 		d.fail("%v", err)
 		return 2
 	}
-	if token == "" {
-		d.fail("set NAUTILUS_TIAD_TOKEN or NAUTILUS_TIAD_TOKEN_FILE to the agent's token (it is never a flag)")
-		return 2
-	}
-	d.client = tiad.New(agent, token)
 	address := st.CPU.Address
 
 	// 3. Before the session: what the CPU's deploy record says. tiad's

@@ -32,6 +32,9 @@ type Target interface {
 	SetQuestions(t testing.TB, qs []tiad.Question)
 	// Loaded lists every download that loaded the CPU.
 	Loaded(t testing.TB) []Loaded
+	// Shown lists every block a show opened in TIA's editor, as
+	// "group/name" ("name" at the root), in order.
+	Shown(t testing.TB) []string
 	// SetDevice scripts the CPU's identity, as an upload and an online
 	// read report it, and with noIdentify a TIA side that cannot read it
 	// online (tiad.Openness today).
@@ -84,6 +87,8 @@ type Loaded struct {
 type Config struct {
 	Token   string
 	Targets []string
+	// UI is TIAD_UI=1: TIA with its user interface, for viewing only.
+	UI bool
 }
 
 // closeFirst closes s, so the next project can open: TIA opens one project
@@ -105,6 +110,7 @@ func GoFake(t *testing.T, cfg Config) Target {
 		f.Token = cfg.Token
 	}
 	f.Targets = cfg.Targets
+	f.UI = cfg.UI
 	_, c := f.Serve(t)
 	return goFake{f, c}
 }
@@ -127,6 +133,7 @@ func (g goFake) SetAccess(_ testing.TB, a AccessScript) { g.f.SetAccess(a) }
 func (g goFake) SetFingerprint(_ testing.TB, fs FingerprintScript) {
 	g.f.SetFingerprint(fs)
 }
+func (g goFake) Shown(testing.TB) []string                { return g.f.Shown() }
 func (g goFake) SetArchiveFails(_ testing.TB, msg string) { g.f.SetArchiveFails(msg) }
 func (g goFake) SetLogon(_ testing.TB, l LogonScript)     { g.f.SetLogon(l) }
 func (g goFake) SetImportReplacesForeign(_ testing.TB, on bool) {
@@ -170,6 +177,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("Deploys", func(t *testing.T) { contractDeploys(t, start) })
 	t.Run("Verify", func(t *testing.T) { contractVerify(t, start) })
 	t.Run("Adopt", func(t *testing.T) { contractAdopt(t, start) })
+	t.Run("Show", func(t *testing.T) { contractShow(t, start) })
 	t.Run("Credentials", func(t *testing.T) { contractCredentials(t, start) })
 	t.Run("WebServer", func(t *testing.T) { contractWebServer(t, start) })
 	t.Run("WebUsers", func(t *testing.T) { contractWebUsers(t, start) })

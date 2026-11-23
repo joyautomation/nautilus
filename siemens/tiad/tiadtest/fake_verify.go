@@ -148,6 +148,9 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 	s := f.newSession("deploy:" + d.ID)
 	res.Session = s.id
 	defer func() {
+		if f.VerifyCloseError != "" {
+			return
+		}
 		delete(f.sessions, s.id)
 		f.retireIfTrusted()
 	}()
@@ -175,6 +178,11 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 	f.noteCompare(address, password, loggedOn, equal)
 	res.BlindTrust = f.blindTrust
 	res.Differences = []tiad.Difference{}
+	// As the agent's compare names them: every program block the
+	// archived project holds ("Main [OB1]").
+	held.project.sessionBlocks(func(b projectBlock) {
+		res.Blocks = append(res.Blocks, fmt.Sprintf("%s [%s%d]", b.name, b.kind, b.number))
+	})
 	res.Verdict = tiad.VerifyEqual
 	if !equal {
 		res.Verdict = tiad.VerifyDifferent
@@ -204,5 +212,17 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 			res.Fingerprint = vf
 		}
 	}
+	if f.VerifyCloseError != "" {
+		res.CloseError = f.VerifyCloseError + ": close it again (DELETE /v1/sessions/" + s.id + ")"
+	}
 	return res, nil
+}
+
+// sessionBlocks calls each with the project's program blocks as a session
+// on it reads them (session.projectBlocks).
+func (p savedProject) sessionBlocks(each func(projectBlock)) {
+	s := &session{blocks: p.blocks, groups: p.groups, obInfo: p.obInfo}
+	for _, b := range s.projectBlocks() {
+		each(b)
+	}
 }

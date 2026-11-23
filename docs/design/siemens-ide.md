@@ -225,6 +225,31 @@ the TIA project is not saved. The steps:
 The NDJSON route for the extension's Download button comes later. It will
 call the same steps.
 
+**Built (verify):** `naut siemens verify [--deploy ID] [dir]`
+(`cmd/naut/siemens_verify.go`). It asks whether the CPU at
+`target.siemens.station.cpu.address` still runs a deploy. By default the
+deploy is the newest record that may have loaded the CPU (`--deploy` names
+another one). The call is `POST /v1/deploys/verify`: TIA Portal's own
+online compare, through Openness, on a copy of that deploy's archive.
+It is read-only and reaches the CPU. It prints the deploy, the blocks the
+compare saw, any differences and the verdict. It exits 0 only on equal. A
+different verdict on the CPU's latest deploy says the CPU was changed
+outside nautilus. An older deploy names the latest one instead. A broken
+archive, a record whose CPU is another address, an open session (tiad
+holds one project at a time) and a verify that left its session open
+each exit 1 and say why. The password, when the CPU asks credentials
+going online, comes from `NAUTILUS_SIEMENS_FULL_ACCESS_PASSWORD`.
+
+**Built (show, viewing only):** an agent started with `TIAD_UI=1`
+(`install-tiad.ps1 -Ui`) runs TIA Portal with its user interface on the
+logged-on console desktop. `POST /v1/sessions/{id}/show` then opens a
+block of the session's project in TIA's own editor (§3.4). Such an agent
+refuses every download, dry runs included: a click or a modal dialog in the
+visible Portal could change or stall a load. Restart the agent without
+`TIAD_UI` to download. For a demo, the order is: deploy, `naut siemens
+verify`, then open the saved project and show the block. The verify needs
+the agent free of sessions, and the show keeps one open.
+
 ## 2. Codegen
 
 **Everything is emitted as SCL source, LD and FBD included.** Nobody opens
@@ -340,8 +365,9 @@ for the owned blocks. Each deploy then:
 ### 3.1 Process
 
 A C# agent on a Windows VM built from the `STACK=tia` golden image. It runs
-TIA Portal Openness without a user interface and serves JSON over HTTP. It
-copies `logixd`, the Logix agent:
+TIA Portal Openness without a user interface (with one under `TIAD_UI=1`,
+for viewing only) and serves JSON over HTTP. It copies `logixd`, the Logix
+agent:
 
 - **Stateless across clones (D1).** The TIA VM is recreated from the golden
   image, so tiad keeps nothing that must survive a clone. Every deploy
@@ -374,6 +400,7 @@ copies `logixd`, the Logix agent:
   | `TIAD_RETIRE_WATCH` | `3m` | How long a retire of a TIA instance that trusted blindly may take before tiad counts TIA as gone (§3.8; a Go duration, at most `1h`). TIA's dispose has no bound of its own |
   | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
   | `TIAD_NO_TIA` | — | `1` fails the `tia` gate, so no call can start TIA. tiad is installed and tested this way before a clone's trial may start |
+  | `TIAD_UI` | — | `1` starts TIA Portal with its user interface, for viewing only: `show` opens a block in TIA's editor, and every download is refused (§1, "Built (show)"). Anything but `1` or unset refuses to start |
 
 - **No browser ever calls tiad.** A request that carries an `Origin`
   header is refused (403), whatever token it has. A JSON body must be
@@ -844,7 +871,7 @@ state across the first start, to find a read that works before it.
 
 | Call | Body → data |
 |---|---|
-| `GET /v1/health` | → `{version, tia, openness, sessions, targets}` |
+| `GET /v1/health` | → `{version, tia, openness, sessions, targets, ui}`. `ui`: the agent runs TIA with its user interface (`TIAD_UI=1`) |
 | `GET /v1/probe` | → `{usable, gates: [{name, ok, state, detail, remedy}]}`. Gates: `tia`, `openness-group`, `openness-allowlist`, `licence`, `workdir`. `usable`: no gate blocks. Always 200 |
 | `PUT /v1/files/{path}` | raw bytes → `{path, size}` |
 | `GET /v1/files/{path}` | → raw bytes. `GET /v1/files` lists the work dir: `{files: [{path, size}]}` |
@@ -875,6 +902,7 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
 | `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
+| `POST /v1/sessions/{id}/show` | `{block}` → `{block, type, number, group}`. Opens the program block named `block` (compared without case) in TIA Portal's editor, with Openness's `ShowInEditor`. Refused (`bad_request`) unless the agent runs with `TIAD_UI=1`, before TIA is asked anything; a block the project lacks is `not_found`. It changes nothing in the project. `group` is the block's group path (`""` for the root) |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 | `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, outsideChanges?, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
 | `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
