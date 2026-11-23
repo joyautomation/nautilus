@@ -14,6 +14,7 @@ import (
 	"net/textproto"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -114,14 +115,14 @@ func TestSnapshotFetchesWithBasicAndDigestCredentials(t *testing.T) {
 		w.Write(jb)
 	}))
 	defer digestSrv.Close()
-	f := &Fetcher{Secret: secrets(map[string]string{"camera.cam": "viewer:pw", "camera.wrong": "viewer:nope"})}
+	f := &Fetcher{Secret: secrets(map[string]string{"camera.basic-cam": "viewer:pw", "camera.digest-cam": "viewer:pw", "camera.basic-wrong": "viewer:nope", "camera.digest-wrong": "viewer:nope"})}
 	for name, srv := range map[string]*httptest.Server{"basic": basic, "digest": digestSrv} {
-		c := Camera{ID: "cam", Asset: "A", Kind: KindSnapshot, URL: srv.URL + "/snap.jpg", Credentials: true}
+		c := Camera{ID: name + "-cam", Asset: "A", Kind: KindSnapshot, URL: srv.URL + "/snap.jpg", Credentials: true}
 		got, err := f.Snapshot(context.Background(), c)
 		if err != nil || !bytes.Equal(got, jb) {
 			t.Errorf("%s: %v", name, err)
 		}
-		c.ID = "wrong"
+		c.ID = name + "-wrong"
 		if _, err := f.Snapshot(context.Background(), c); err == nil || !strings.Contains(err.Error(), "refused the controller's credentials") {
 			t.Errorf("%s with a wrong password: %v", name, err)
 		}
@@ -508,4 +509,75 @@ func rst(c net.Conn) {
 		tc.SetLinger(0)
 	}
 	c.Close()
+}
+
+// One HTTP client for the camera, not one per still: a transport per request
+// stranded a keep-alive connection at the camera for every fetch.
+func TestStillsShareTheirConnectionsToTheCamera(t *testing.T) {
+	jb := jpegBytes()
+	var opened atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(jb) }))
+	srv.Config.ConnState = func(_ net.Conn, s http.ConnState) {
+		if s == http.StateNew {
+			opened.Add(1)
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+	f := &Fetcher{}
+	for i := 0; i < 40; i++ {
+		if _, err := f.Snapshot(context.Background(), Camera{ID: "c", Asset: "A", Kind: KindSnapshot, URL: srv.URL}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := opened.Load(); n > 3 {
+		t.Errorf("40 stills opened %d connections to the camera, want them shared", n)
+	}
+}
+
+// A camera that asked for digest is never sent the password in basic, whoever
+// answers in its place; and a header that offers both is answered in digest.
+func TestACameraThatAskedForDigestIsNeverDowngradedToBasic(t *testing.T) {
+	jb := jpegBytes()
+	var basicSeen atomic.Int64
+	var mode atomic.Value
+	mode.Store("digest")
+	cam := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a := r.Header.Get("Authorization")
+		switch {
+		case strings.HasPrefix(a, "Basic "):
+			basicSeen.Add(1)
+			w.WriteHeader(401)
+		case strings.HasPrefix(a, "Digest "):
+			w.Write(jb)
+		case mode.Load() == "digest":
+			w.Header().Set("Www-Authenticate", `Digest realm="cam", nonce="n", qop="auth"`)
+			w.WriteHeader(401)
+		case mode.Load() == "both":
+			w.Header().Set("Www-Authenticate", `Basic realm="cam", Digest realm="cam", nonce="n", qop="auth"`)
+			w.WriteHeader(401)
+		default: // "basic"
+			w.Header().Set("Www-Authenticate", `Basic realm="cam"`)
+			w.WriteHeader(401)
+		}
+	}))
+	defer cam.Close()
+	f := &Fetcher{Secret: secrets(map[string]string{"camera.d": "viewer:pw"})}
+	c := Camera{ID: "d", Asset: "A", Kind: KindSnapshot, URL: cam.URL, Credentials: true}
+	if _, err := f.Snapshot(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	mode.Store("basic") // someone in the middle now asks for basic
+	if _, err := f.Snapshot(context.Background(), c); err == nil || !strings.Contains(err.Error(), "not sending the password") {
+		t.Errorf("a digest camera suddenly asking for basic: %v", err)
+	}
+	if basicSeen.Load() != 0 {
+		t.Errorf("the password went out in basic %d times", basicSeen.Load())
+	}
+	// both offered in one header: digest
+	f2 := &Fetcher{Secret: secrets(map[string]string{"camera.e": "viewer:pw"})}
+	mode.Store("both")
+	if _, err := f2.Snapshot(context.Background(), Camera{ID: "e", Asset: "A", Kind: KindSnapshot, URL: cam.URL, Credentials: true}); err != nil || basicSeen.Load() != 0 {
+		t.Errorf("a header offering both: %v (basic seen %d)", err, basicSeen.Load())
+	}
 }

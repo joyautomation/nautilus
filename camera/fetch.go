@@ -38,6 +38,8 @@ type Fetcher struct {
 	Client *http.Client
 
 	learned sync.Map // camera id -> "basic" or "digest": what its camera asked for
+	once    sync.Once
+	made    *http.Client
 }
 
 // Bounds on a camera that does not answer or stops sending: a place is never
@@ -52,15 +54,23 @@ const (
 // variable so a test need not wait for it).
 var StreamIdle = _streamIdle
 
+// client is the HTTP client, made once: a transport per request would strand a
+// keep-alive connection (and its goroutines) at the camera for every still.
 func (f *Fetcher) client() *http.Client {
 	if f.Client != nil {
 		return f.Client
 	}
+	f.once.Do(func() { f.made = f.newClient() })
+	return f.made
+}
+
+func (f *Fetcher) newClient() *http.Client {
 	return &http.Client{
 		Transport: &http.Transport{
 			DialContext:           (&net.Dialer{Timeout: dialTimeout}).DialContext,
 			ResponseHeaderTimeout: headerTimeout,
 			MaxIdleConnsPerHost:   2,
+			IdleConnTimeout:       30 * time.Second,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
@@ -166,21 +176,34 @@ func (f *Fetcher) get(ctx context.Context, c Camera, u string) (*http.Response, 
 		ch := resp.Header.Values("Www-Authenticate")
 		resp.Body.Close()
 		var authz string
+		var dig string
 		for _, h := range ch {
-			switch lh := strings.ToLower(h); {
-			case strings.HasPrefix(lh, "digest "):
-				d, err := digest(h, user, pass, http.MethodGet, requestURI(u))
-				if err != nil {
-					return nil, err
-				}
-				authz = d
-				f.learned.Store(c.ID, "digest")
-			case strings.HasPrefix(lh, "basic") && authz == "":
-				authz = basic(user, pass)
-				f.learned.Store(c.ID, "basic")
-			}
-			if strings.HasPrefix(authz, "Digest ") {
+			// a header may offer both ("Basic ..., Digest ..."): digest is preferred
+			if i := strings.Index(strings.ToLower(h), "digest "); i >= 0 {
+				dig = h[i:]
 				break
+			}
+		}
+		learned, _ := f.learned.Load(c.ID)
+		switch {
+		case dig != "":
+			d, err := digest(dig, user, pass, http.MethodGet, requestURI(u))
+			if err != nil {
+				return nil, err
+			}
+			authz = d
+			f.learned.Store(c.ID, "digest")
+		case learned == "digest":
+			// a camera that asked for digest is never sent the password in basic,
+			// whoever answers in its place
+			return nil, errors.New("the camera asked for digest before and now asks for basic: not sending the password")
+		default:
+			for _, h := range ch {
+				if strings.HasPrefix(strings.ToLower(h), "basic") {
+					authz = basic(user, pass)
+					f.learned.Store(c.ID, "basic")
+					break
+				}
 			}
 		}
 		if authz != "" {

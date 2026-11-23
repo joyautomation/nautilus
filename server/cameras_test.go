@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -382,4 +383,65 @@ func TestALiveViewEndsWhenThePersonSignsOutOrTimeRunsOut(t *testing.T) {
 	if err != nil || hr.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("HEAD on a stream: %v %v", err, hr)
 	}
+}
+
+// Without sign-in everyone is "anonymous": the per-person cap must count the
+// browser's address, or two live streams would be every viewer's total.
+func TestWithoutSignInThePersonCapCountsTheAddressNotEveryone(t *testing.T) {
+	back := mjpegBackend(t)
+	defer back.Close()
+	co := &CameraOptions{Cameras: []camera.Camera{{ID: "m", Asset: "A", Kind: camera.KindMJPEG, URL: back.URL, MaxViewers: 8}}}
+	o := Options{}
+	co.Install(&o)
+	srv := New(newTestRuntime(t), o)
+	h := srv.Handler()
+	var wg sync.WaitGroup
+	cancels := []context.CancelFunc{}
+	defer func() {
+		for _, c := range cancels {
+			c()
+		}
+		wg.Wait()
+	}()
+	// a stream from addr that stays open; returns the status it was answered with
+	open := func(addr string) int {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancels = append(cancels, cancel)
+		req := httptest.NewRequest("GET", "/api/cameras/m/stream", nil).WithContext(ctx)
+		req.RemoteAddr, req.Host = addr, "localhost"
+		rec := &flushRecorder{ResponseRecorder: httptest.NewRecorder(), began: make(chan struct{})}
+		wg.Add(1)
+		go func() { defer wg.Done(); h.ServeHTTP(rec, req) }()
+		select {
+		case <-rec.began: // the first byte is written: the status was set before it
+			return rec.Code
+		case <-time.After(3 * time.Second):
+			return rec.Code
+		}
+	}
+	if s := open("192.0.2.1:1000"); s != 200 {
+		t.Fatalf("first stream: %d", s)
+	}
+	if s := open("192.0.2.1:1001"); s != 200 {
+		t.Fatalf("second stream from the same address: %d", s)
+	}
+	// the same address cannot take a third; a different address is not counted against it
+	if s := open("192.0.2.1:1002"); s != http.StatusTooManyRequests {
+		t.Errorf("third stream from one address: %d, want 429", s)
+	}
+	if s := open("192.0.2.2:1000"); s != 200 {
+		t.Errorf("a stream from another address: %d, want 200 (everyone shares one anonymous cap)", s)
+	}
+}
+
+// flushRecorder tells when the first byte of a body is written.
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	once  sync.Once
+	began chan struct{}
+}
+
+func (f *flushRecorder) Write(p []byte) (int, error) {
+	f.once.Do(func() { close(f.began) })
+	return f.ResponseRecorder.Write(p)
 }
