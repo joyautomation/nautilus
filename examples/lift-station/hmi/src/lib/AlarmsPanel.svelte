@@ -6,12 +6,13 @@
 	// on the right over whichever view is showing; × or Escape closes it.
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { AlarmTable, AlarmJournal, journalKinds, type AlarmEvent } from '@joyautomation/nautilus-hmi';
+	import { AlarmTable, AlarmJournal, FloodBanner, journalKinds, type AlarmEvent } from '@joyautomation/nautilus-hmi';
 	import { alarms } from '$lib/client.svelte';
 
 	let { open = $bindable(false) }: { open?: boolean } = $props();
 
 	let tab = $state<'active' | 'history'>('active');
+	let focus = $state(false);
 	let now = $state(Date.now());
 	let events = $state<AlarmEvent[]>([]);
 	let loading = $state(false);
@@ -20,7 +21,7 @@
 	async function load(from: number, to: number) {
 		range = { from, to };
 		loading = true;
-		events = (await alarms.journal(from, to, { kinds: journalKinds(true) })).events;
+		events = (await alarms.journal(from, to, { kinds: journalKinds(true, true) })).events;
 		loading = false;
 	}
 
@@ -58,9 +59,15 @@
 				<p class="err" role="alert">{alarms.error}</p>
 			{/if}
 			{#if tab === 'active'}
+				<!-- a flood in progress: first out, the equipment behind it, and
+				     Focus to put what needs a person first (nothing is hidden for good) -->
+				<FloodBanner flood={alarms.flood} {now} focused={focus} onfocus={(on) => (focus = on)} />
 				<AlarmTable
 					alarms={alarms.instances}
 					{now}
+					flood={alarms.flood}
+					{focus}
+					onchattershelve={async (id, seconds, reason, by) => (await alarms.shelve(id, seconds, by, { reason, via: 'chatter' })) !== null}
 					onack={(ids, by) => alarms.ack(ids, by)}
 					onshelve={(id, until, by) => alarms.shelve(id, Math.max(1, Math.round((until - Date.now()) / 1000)), by)}
 					onunshelve={(id, by) => alarms.unshelve(id, by)}

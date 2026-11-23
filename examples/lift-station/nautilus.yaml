@@ -102,6 +102,7 @@ tags:
   - { name: P101_InjectFault, role: setpoint, init: false, desc: "Bench only: trip P-101's VFD fault" }
   - { name: P101_InjectSealFail, role: setpoint, init: false, desc: "Bench only: trip P-101's seal-leak probe" }
   - { name: P101_InjectOverTemp, role: setpoint, init: false, desc: "Bench only: trip P-101's over-temperature contact" }
+  - { name: P101_FlapOverTemp, role: setpoint, init: false, desc: "Bench only: make P-101's over-temperature contact chatter (3 s on, 2 s off)" }
   - { name: P102_InjectFault, role: setpoint, init: false, desc: "Bench only: trip P-102's VFD fault" }
   - { name: P102_InjectSealFail, role: setpoint, init: false, desc: "Bench only: trip P-102's seal-leak probe" }
   - { name: P102_InjectOverTemp, role: setpoint, init: false, desc: "Bench only: trip P-102's over-temperature contact" }
@@ -113,6 +114,17 @@ alarms:
   defaults: { ack-required: true, auto-clear: true, shelve: true }
   shelve-times: [15m, 1h, 4h]
   journal: { keep: 500 }
+  # Live detection (#1249), on by default and spelled out here so it can be
+  # tuned. An alarm CHATTERS at 3 activations within 60 s (the ISA-18.2
+  # rate); the station is in a FLOOD at more than 6 activations of all its
+  # alarms within 10 min (ISA-18.2's 10 is for a whole plant; a lift station
+  # with fourteen alarms floods at fewer). Set P101_FlapOverTemp to see the
+  # chatter badge, the shelve-with-a-reason dialog and, with a storm
+  # (InflowGpm 950) and a few injected faults, the flood banner. Detection
+  # marks and journals; it never shelves or acknowledges by itself. A
+  # standalone controller counts nothing for its first minute.
+  chatter: { window: 60s, count: 3 }
+  flood: { window: 10m, threshold: 6 }
   defs:
     # `equipment:` groups an alarm with the piece of equipment it is on: out of
     # service takes the whole piece (P101) out at once, not one alarm tag at a time.
