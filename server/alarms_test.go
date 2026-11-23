@@ -228,9 +228,12 @@ func TestAckShelveAndUnshelve(t *testing.T) {
 		t.Errorf("ack of an unknown id = %d, want 404", rec.Code)
 	}
 
-	rec = do(t, srv, "POST", "/api/alarms/shelve", `{"id":"LoFlow","seconds":600,"by":"operator1"}`)
+	rec = do(t, srv, "POST", "/api/alarms/shelve", `{"id":"LoFlow","seconds":600,"by":"operator1","reason":" seal weeping ","via":"chatter"}`)
 	if rec.Code != 200 {
 		t.Fatalf("shelve status = %d: %s", rec.Code, rec.Body)
+	}
+	if j := do(t, srv, "GET", "/api/alarms/journal?kind=shelve", ""); !strings.Contains(j.Body.String(), `"reason":"seal weeping"`) {
+		t.Errorf("the shelve row lacks the trimmed reason: %s", j.Body)
 	}
 	var recd alarm.Record
 	if err := json.Unmarshal(rec.Body.Bytes(), &recd); err != nil {
