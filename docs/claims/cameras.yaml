@@ -368,3 +368,32 @@ claims:
       run in Chrome against a controller and a fake RTSP camera serving a real
       H.264 clip: it plays through MSE and measures the bitrate. Not run: Safari
       or an iPhone (the managed and native paths), Firefox, a hidden tab, and a real camera.
+
+  - id: CAM-021
+    claim: >-
+      An ONVIF camera is found from its device service address: the controller
+      asks for the media service, the profiles, and the stream and snapshot
+      addresses of the smallest H.264 profile (or the one the row names), keeps
+      the answer for ten minutes and a failure for five seconds, and then treats
+      the camera as an RTSP one with the same relay, caps and journal.
+    source: "#onvif-cameras"
+    tests:
+      - go ./camera TestAnONVIFDeviceIsResolvedToItsSubStreamOnTheManifestsHost
+      - go ./camera TestADeviceThatIsDownIsNotAskedAtEveryRequest
+      - go ./camera TestAnONVIFCameraStreamsThroughTheSameRelayAndAStillComesFromItsSnapshotAddress
+      - go ./camera TestAnONVIFCameraIsAnHLSCameraWithAStillAndPinsNoHostOfItsOwn
+
+  - id: CAM-022
+    claim: >-
+      What an ONVIF device answers is never followed: the host of every address
+      it returns is the manifest's, the scheme must be the one asked for, user
+      information is dropped, answers over 1 MB, non-SOAP answers and DTD
+      entities are refused, a fault's reason is shown trimmed and without
+      control characters, and a profile token that is not plain is not used.
+      Credentials leave as a WS-Security digest (the device's own clock read
+      first), or in the HTTP scheme the device asks for, never in the clear
+      before it asks, and a refusal does not name the password.
+    source: "#onvif-cameras"
+    tests:
+      - go ./camera TestWhatAnONVIFDeviceSendsIsNeverTrustedOrFollowed
+      - go ./camera TestONVIFCredentialsGoOutAsADigestAndAWrongPasswordIsRefusedPlainly

@@ -679,7 +679,11 @@
           },
           "snapshot-url": {
             "type": "string",
-            "description": "A JPEG URL the controller fetches for the asset page's picture."
+            "description": "A JPEG URL the controller fetches for the asset page's picture. An onvif camera finds its own."
+          },
+          "profile": {
+            "type": "string",
+            "description": "An onvif camera's media profile to stream (its token or name); empty is the smallest H.264 picture."
           },
           "interval": {
             "type": "integer",

@@ -62,8 +62,16 @@ func (h *HLSHub) Budget() *MemBudget { return h.budget }
 // Session returns camera c's session, starting it if there is none or the last one
 // ended, and marks it used.
 func (h *HLSHub) Session(c Camera) (*HLSSession, error) {
-	if c.Kind != KindRTSP {
+	if !c.HLS() {
 		return nil, errors.New("camera: not an RTSP camera")
+	}
+	if c.Kind == KindONVIF {
+		// the device's stream address (kept for a while; a device that is down is not
+		// asked again at once)
+		var err error
+		if c, err = h.f.Resolve(context.Background(), c); err != nil {
+			return nil, err
+		}
 	}
 	user, pass, err := h.f.credentials(c)
 	if err != nil {
