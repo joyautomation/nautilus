@@ -17,14 +17,24 @@ export const STATE_KINDS: AlarmEventKind[] = ['active', 'rtn', 'ack', 'shelve', 
  * too: every state kind plus notify. Without `withPaging` it is undefined,
  * which is the controller's default (state changes only).
  */
-export function journalKinds(withPaging: boolean): AlarmEventKind[] | undefined {
-	return withPaging ? [...STATE_KINDS, 'notify'] : undefined;
+export function journalKinds(withPaging: boolean, withDetection = false): AlarmEventKind[] | undefined {
+	if (!withPaging && !withDetection) return undefined;
+	return [...STATE_KINDS, ...(withPaging ? (['notify'] as const) : []), ...(withDetection ? DETECTION_KINDS : [])];
 }
 
+/** Chatter and flood rows (#1249): left out of a query unless named, like notify. */
+export const DETECTION_KINDS: AlarmEventKind[] = ['chatter', 'chatter-end', 'flood', 'flood-end'];
+
 /** Whether a row shows: a paging row only when paging is on or Paged is the kind filter. */
-export function visibleKind(e: Pick<AlarmEvent, 'kind'>, filterKind: AlarmEventKind | '', showPaging: boolean): boolean {
+export function visibleKind(
+	e: Pick<AlarmEvent, 'kind'>,
+	filterKind: AlarmEventKind | '',
+	showPaging: boolean,
+	showDetection = false
+): boolean {
 	if (filterKind) return e.kind === filterKind;
-	return e.kind !== 'notify' || showPaging;
+	if (e.kind === 'notify') return showPaging;
+	return showDetection || !DETECTION_KINDS.includes(e.kind);
 }
 
 /** "Paged, level 2" for a paging row. */

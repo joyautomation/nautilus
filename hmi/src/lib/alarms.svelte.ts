@@ -152,6 +152,54 @@ export interface AlarmInstance {
 	suppressUntilMs?: number;
 	/** Set when its suppress-when could not be read, so it is shown. */
 	warning?: string;
+	/** Present only while the alarm is chattering (#1249). */
+	chatter?: AlarmChatter;
+	/** On an alarm whose last activation was seen as something came back
+	 * ("site RTU9 came back"): it began sometime while it could not be seen,
+	 * so `activeMs` is when it was seen, not when the fault began (#1249). */
+	seenWhen?: string;
+}
+
+/** An alarm's chattering episode (`alarm.Chatter` in Go). */
+export interface AlarmChatter {
+	/** Epoch ms the episode began, and of its last activation. */
+	sinceMs: number;
+	lastMs: number;
+	/** Activations in this episode; `episodes` counts every episode since the engine started. */
+	activations: number;
+	episodes: number;
+	/** The detection rule in force: `count` activations within `windowMs`. */
+	windowMs: number;
+	count: number;
+}
+
+/** An alarm flood in progress, counts only (`alarm.FloodBrief` in Go). */
+export interface AlarmFloodBrief {
+	id: string;
+	sinceMs: number;
+	/** Activations in the current window; `total` since the flood began; `peak` the most in any window. */
+	count: number;
+	total: number;
+	peak: number;
+	windowMs: number;
+	threshold: number;
+	/** The ring overflowed: `count` and `peak` read as at least that many. */
+	saturated?: boolean;
+}
+
+/** One piece of equipment's share of a flood. */
+export interface AlarmFloodGroup {
+	equipment: string;
+	area?: string;
+	count: number;
+}
+
+/** The flood with its first-out alarms and groups (`GET /api/alarms` `flood`). */
+export interface AlarmFlood extends AlarmFloodBrief {
+	/** The first activations of the flood, in time order. */
+	firstOut: AlarmBrief[];
+	/** The top equipment, most first. */
+	groups: AlarmFloodGroup[];
 }
 
 /** The newest unacknowledged alarm, carried on the summary for the banner
@@ -175,6 +223,10 @@ export interface AlarmSummary {
 	byPriority: Partial<Record<Priority, number>>;
 	worst?: Priority;
 	newest?: AlarmBrief;
+	/** Alarms chattering now; omitted when none (#1249). */
+	chattering?: number;
+	/** The flood in progress, numbers only; omitted when there is none. */
+	flood?: AlarmFloodBrief;
 	rev: number;
 }
 
@@ -189,7 +241,12 @@ export type AlarmEventKind =
 	| 'suppress'
 	| 'unsuppress'
 	/** One notification an escalation policy sent or tried (#715); not a state change. */
-	| 'notify';
+	| 'notify'
+	/** Detection rows (#1249); left out of a journal query unless named. */
+	| 'chatter'
+	| 'chatter-end'
+	| 'flood'
+	| 'flood-end';
 
 export interface AlarmEvent {
 	/** Epoch ms, from the runtime Clock — so acceptance tests replay deterministically. */
@@ -209,6 +266,16 @@ export interface AlarmEvent {
 	via?: string;
 	result?: string;
 	reason?: string;
+	/** Detection rows: activations counted, the most in any window, the
+	 * window in ms, and when the episode began (an end row's `ts` minus it
+	 * is its length). `standing` marks an `active` row that was not a new
+	 * activation; `seenWhen` says what the alarm was seen coming back from. */
+	count?: number;
+	peak?: number;
+	windowMs?: number;
+	sinceMs?: number;
+	standing?: boolean;
+	seenWhen?: string;
 }
 
 /** Query filters for `journal()` — mirrors `alarm.Filter` / the
@@ -231,6 +298,8 @@ interface AlarmsGetResponse {
 	/** Every piece of equipment, quiet ones too (with ?suppressed=1). */
 	equipment?: string[];
 	summary: AlarmSummary;
+	/** Present only during a flood. */
+	flood?: AlarmFlood;
 	alarms: AlarmInstance[];
 }
 
@@ -298,6 +367,8 @@ export class AlarmClient {
 	outOfService = $state<OutOfService[]>([]);
 	/** Every piece of equipment the alarms belong to, quiet ones too: what can be taken out of service. */
 	equipment = $state<string[]>([]);
+	/** The flood in progress, with first-out and groups; null when there is none. */
+	flood = $state<AlarmFlood | null>(null);
 	/** True while a fetch of the full list is in flight. */
 	loading = $state(false);
 	/** Last fetch/ack/shelve error message, if any. Cleared on the next
@@ -320,6 +391,11 @@ export class AlarmClient {
 
 	get active(): AlarmInstance[] {
 		return this.instances.filter((a) => a.state !== 'shelved' && a.state !== 'suppressed');
+	}
+
+	/** Alarms chattering now, most activations first. */
+	get chattering(): AlarmInstance[] {
+		return this.instances.filter((a) => a.chatter).sort((a, b) => (b.chatter?.activations ?? 0) - (a.chatter?.activations ?? 0));
 	}
 
 	/** Alarms hidden by suppression (out of service, designed, substituted), with why. */
@@ -356,6 +432,7 @@ export class AlarmClient {
 			const body = (await res.json()) as AlarmsGetResponse;
 			this.instances = body.alarms ?? [];
 			this.equipment = body.equipment ?? [];
+			this.flood = body.flood ?? null;
 			this.summary = body.summary ?? this.summary;
 			this.supported = true;
 			this.error = null;
