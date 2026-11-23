@@ -643,7 +643,13 @@ func TestIOWatchReCheck(t *testing.T) {
 		}
 		t.Cleanup(srv.Stop)
 		srv.Unit(1).SetHolding(0, 4)
-		eventually(t, "DEV_A reads", func() bool { return r.rt.TagQuality("A_In").IsGood() })
+		// Every tag of the device, not one: the watch counts DEV_A as
+		// answering only once all its tags have read, and A_In and A_Cmd are
+		// separate poll blocks, so unlocking after the first would let the
+		// revert's re-check see the second still pending (a flake under -race).
+		eventually(t, "DEV_A reads", func() bool {
+			return r.rt.TagQuality("A_In").IsGood() && r.rt.TagQuality("A_Cmd").IsGood()
+		})
 		r.io.applying.Unlock()
 		if w := waitWatch(t, r); w.State != WatchAnswered {
 			t.Fatalf("watch %+v: the device answered before the revert could run", w)
