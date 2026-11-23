@@ -242,6 +242,7 @@ that closes it.
 | #1303 | STRING and the string functions |
 | #1304 | TIME arithmetic, LTIME, dates |
 | #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, and more |
+| #1310 | a task's `dt-tag`: nothing on the CPU writes it yet, so integrators and PI loops built on it would read 0 |
 
 Real limits keep their own words, such as a task interval over 60 s or a
 block name collision.

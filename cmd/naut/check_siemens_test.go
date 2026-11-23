@@ -247,6 +247,22 @@ func TestSiemensWriterInputNamesTheStructuredInitGap(t *testing.T) {
 	}
 }
 
+// TestSiemensWriterInputRefusesADtTag: a task's dt-tag reaches the writer,
+// which refuses it (#1310): check never passes a project whose integrators
+// would read 0 on the CPU.
+func TestSiemensWriterInputRefusesADtTag(t *testing.T) {
+	prog := "PROGRAM Main\nVAR_EXTERNAL DtS : REAL; Hours : REAL; END_VAR\nHours := Hours + DtS;\nEND_PROGRAM\n"
+	m := "name: s7\ntasks:\n  - program: main.st\n    dt-tag: DtS\ntags:\n  - {name: Hours, role: state, type: REAL}\n"
+	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": prog})
+	in, err := siemensWriterInput(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, diags, err := swriter.Write(in); err != nil || len(diags) != 1 || !strings.Contains(diags[0].Message, "dt-tag DtS yet (#1310)") {
+		t.Errorf("%v %v", diags, err)
+	}
+}
+
 // TestSiemensWriterInputRefusesWhatTheRuntimeRefuses: two tasks running
 // one PROGRAM, and a later task named like the main task, are refused
 // with the runtime's own words, so check never passes a project naut run

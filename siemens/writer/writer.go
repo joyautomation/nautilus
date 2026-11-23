@@ -83,6 +83,9 @@ type Task struct {
 	Name     string
 	Program  string // the PROGRAM's name
 	Interval time.Duration
+	// DtTag is the task's dt-tag: the tag nautilus writes the measured
+	// scan-to-scan seconds into each scan. "" when it has none.
+	DtTag string
 }
 
 // Input is everything the writer needs from a project.
@@ -310,6 +313,15 @@ func Write(in Input) (Output, []Diag, error) {
 	// later, as its own item.
 	if len(in.Tasks) > 1 {
 		w.diag("siemens/task", "nautilus.yaml", 0, gapMessage(gapTasks, fmt.Sprintf("more than one task (%d here)", len(in.Tasks)), "nautilus's per-task copy of shared tags has no SCL form yet"))
+	}
+	// nautilus writes a task's dt-tag every scan; nothing on the CPU
+	// would, so the tag would stay 0 and every integrator built on it
+	// would stop (#1310). RUNTIME() is the translation, once its first
+	// scan is measured against nautilus's.
+	for _, t := range in.Tasks {
+		if t.DtTag != "" {
+			w.diag("siemens/dt-tag", "nautilus.yaml", 0, gapMessage(gapDtTag, fmt.Sprintf("task %s's dt-tag %s", t.Name, t.DtTag), "nothing on the CPU writes it, so integrators and PI loops built on it would read 0"))
+		}
 	}
 	for i, t := range in.Tasks {
 		if i > 0 {

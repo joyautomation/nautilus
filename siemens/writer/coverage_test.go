@@ -372,7 +372,7 @@ func TestLibraryNamesAreAGap(t *testing.T) {
 // collision, a task TIA cannot run) keep their wording.
 func TestEveryGapNamesItsIssue(t *testing.T) {
 	// The writer-coverage issues filed for #789, B to G and the rest.
-	issues := map[string]bool{"#1299": true, "#1300": true, "#1301": true, "#1302": true, "#1303": true, "#1304": true, "#1305": true}
+	issues := map[string]bool{"#1299": true, "#1300": true, "#1301": true, "#1302": true, "#1303": true, "#1304": true, "#1305": true, "#1310": true}
 	ref := regexp.MustCompile(`yet \((#\d+)(?:, (#\d+))?\)`)
 	notGaps := map[string]bool{"siemens/nautilus": true, "siemens/name": true, "siemens/program": true}
 	var diags []Diag
@@ -528,5 +528,26 @@ func TestReviewFixes(t *testing.T) {
 	_, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR w, v : WORD; END_VAR\nw := MAX(w, v);\nEND_PROGRAM\n"}}})
 	if len(diags) != 1 || !strings.Contains(diags[0].Message, "MAX of bit strings yet (#1305)") {
 		t.Errorf("MAX of WORDs: %v", diags)
+	}
+}
+
+// TestDtTagRefused: a task's dt-tag is written by nautilus every scan and
+// by nothing on the CPU, so the writer refuses it (#1310) rather than
+// leave a tag the logic integrates over stuck at 0.
+func TestDtTagRefused(t *testing.T) {
+	src := "PROGRAM P\nVAR_EXTERNAL DtS : REAL; Hours : REAL; END_VAR\nHours := Hours + DtS / 3600.0;\nEND_PROGRAM\n"
+	in := Input{
+		Programs: []Program{{Path: "p.st", Source: src}},
+		Globals:  []Global{{Name: "DtS", Type: "REAL"}, {Name: "Hours", Type: "REAL"}},
+		Tasks:    []Task{{Name: "main", Program: "P", Interval: time.Second, DtTag: "DtS"}},
+	}
+	_, diags, err := Write(in)
+	if err != nil || len(diags) != 1 || diags[0].Rule != "siemens/dt-tag" ||
+		!strings.Contains(diags[0].Message, "doesn't translate task main's dt-tag DtS yet (#1310)") || !strings.Contains(diags[0].Message, "would read 0") {
+		t.Errorf("%v %v", diags, err)
+	}
+	in.Tasks[0].DtTag = ""
+	if _, diags, _ := Write(in); len(diags) != 0 {
+		t.Errorf("without a dt-tag: %v", diags)
 	}
 }
