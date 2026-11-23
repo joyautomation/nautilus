@@ -126,6 +126,7 @@ func (co *CameraOptions) mount(s *Server, mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/cameras/{id}/stream", a.stream)
 	mux.HandleFunc("GET /api/cameras/{id}/ptz", a.ptzPresets)
 	mux.Handle("POST /api/cameras/{id}/ptz", a.s.audited("camera.ptz", a.ptzTarget, a.ptz))
+	mux.Handle("POST /api/cameras/{id}/ptz/stop", a.s.audited("camera.ptz-stop", a.ptzStopTarget, a.ptzStop))
 }
 
 // cameraView is a camera as the browser is told of it: no address, no secret.

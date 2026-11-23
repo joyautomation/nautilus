@@ -138,12 +138,26 @@ export class CameraClient {
 	 * permission asks for the password once and the move is sent again; the answer is
 	 * the controller's own words when it refuses.
 	 */
-	async ptz(id: string, body: PtzCommand): Promise<PtzResult> {
+	async ptz(id: string, body: PtzCommand, signal?: AbortSignal): Promise<PtzResult> {
+		return this.#post(`${this.#url}/${encodeURIComponent(id)}/ptz`, JSON.stringify(body), signal);
+	}
+
+	/**
+	 * Stop a camera. A way back: it needs no ptz permission and no fresh password, and
+	 * it is sent with `keepalive`, so it still goes when the page is closing.
+	 */
+	async ptzStop(id: string): Promise<PtzResult> {
+		return this.#post(`${this.#url}/${encodeURIComponent(id)}/ptz/stop`, '', undefined, true);
+	}
+
+	async #post(url: string, body: string, signal?: AbortSignal, keepalive = false): Promise<PtzResult> {
 		try {
-			const res = await this.#fetch(`${this.#url}/${encodeURIComponent(id)}/ptz`, {
+			const res = await this.#fetch(url, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', ...this.#headers() },
-				body: JSON.stringify(body)
+				body: body || undefined,
+				signal,
+				keepalive
 			});
 			if (res.ok) return { ok: true, status: res.status, message: '' };
 			let message = '';
@@ -195,10 +209,7 @@ export interface PtzPreset {
 	name: string;
 }
 
-export type PtzCommand =
-	| { action: 'move'; x: number; y: number; zoom: number; ms: number }
-	| { action: 'stop' }
-	| { action: 'preset'; preset: string };
+export type PtzCommand = { action: 'move'; x: number; y: number; zoom: number; ms: number } | { action: 'preset'; preset: string };
 
 export interface PtzResult {
 	ok: boolean;

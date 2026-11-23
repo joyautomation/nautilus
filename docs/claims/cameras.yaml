@@ -412,11 +412,13 @@ claims:
       A camera marked ptz: true is moved by people who hold the ptz permission
       (whole-controller, elevated, the operator role and up, and only with the
       camera permission too): a move is bounded to ten seconds and told to the
-      device with the same limit, the controller stops it when the time is up and
-      when it shuts down, a stop is never refused for being quick, moves are one at
-      a time per camera, a preset is gone to only if the device lists it, a
-      refused request never reaches the camera, and every request is journalled
-      as camera.ptz.
+      device with the same limit, the controller owns its stop (when the time is
+      up, when the move's answer was lost, after a failed preset, when a stop
+      overtook the move, and at shutdown), a stop needs only the camera
+      permission and no fresh password and never waits for a move or is refused
+      for being quick, moves are one at a time per camera, a preset is gone to
+      only if the device lists it, a refused request never reaches the camera,
+      and every request is journalled as camera.ptz (a stop as camera.ptz-stop).
     source: "#pan-tilt-and-zoom"
     tests:
       - go ./camera TestAMoveIsBoundedToldToTheDeviceAndStoppedOnRequest
@@ -425,6 +427,11 @@ claims:
       - go ./server TestACameraIsMovedBoundedStoppedAndJournalled
       - go ./server TestPTZRefusesWhatItShouldWithoutAskingTheCamera
       - go ./server TestMovesCannotBeSentFasterThanOneAtATime
+      - go ./server TestAStopNeedsNeitherThePTZPermissionNorAFreshPassword
+      - go ./server TestAViewerMayStopACameraAndMayNotMoveIt
+      - go ./server TestAFailedRequestNeverCancelsTheStopOfAMoveAlreadyRunning
+      - go ./server TestAMoveWhoseAnswerWasLostIsStoppedAnyway
+      - go ./server TestAStopThatOvertakesItsMoveIsNotUndoneByIt
     note: >-
       Run against a fake device only; pending: a real pan and tilt camera.
 

@@ -14,6 +14,9 @@
 	let preset = $state('');
 	let message = $state('');
 	let held: PtzDirection | null = null;
+	// the held move's request: let go while it is still waiting (the password prompt, a slow link)
+	// and it is cancelled, so it is never sent after the stop
+	let moving: { ctl: AbortController; done: Promise<unknown> } | null = null;
 
 	async function send(p: Promise<{ ok: boolean; status: number; message: string }>) {
 		const r = await p;
@@ -21,15 +24,25 @@
 		message = r.ok || r.status === 429 ? '' : r.message;
 	}
 
-	function press(dir: PtzDirection) {
+	function press(e: PointerEvent, dir: PtzDirection) {
+		// only the main button (or a touch): a right click opens a menu that can swallow the release
+		if (e.button !== 0 || held) return;
 		held = dir;
-		void send(client.ptz(id, ptzMove(dir, PTZ_HOLD_MS)));
+		const ctl = new AbortController();
+		const done = client.ptz(id, ptzMove(dir, PTZ_HOLD_MS), ctl.signal).then((r) => {
+			if (!ctl.signal.aborted) message = r.ok || r.status === 429 ? '' : r.message;
+		});
+		moving = { ctl, done };
 	}
 
 	function release() {
 		if (!held) return;
 		held = null;
-		void send(client.ptz(id, { action: 'stop' }));
+		const m = moving;
+		moving = null;
+		m?.ctl.abort();
+		// the stop goes after the move has settled (answered or cancelled), never beside it
+		void (m ? m.done : Promise.resolve()).then(() => send(client.ptzStop(id)));
 	}
 
 	function nudge(e: KeyboardEvent, dir: PtzDirection) {
@@ -71,7 +84,7 @@
 				class={b.dir}
 				aria-label={b.label}
 				title="{b.label}: hold to move"
-				onpointerdown={() => press(b.dir)}
+				onpointerdown={(e) => press(e, b.dir)}
 				onpointerleave={release}
 				onpointercancel={release}
 				onkeydown={(e) => nudge(e, b.dir)}
@@ -79,7 +92,7 @@
 				{b.glyph}
 			</button>
 		{/each}
-		<button type="button" class="stop" aria-label="Stop the camera" onclick={() => send(client.ptz(id, { action: 'stop' }))}>■</button>
+		<button type="button" class="stop" aria-label="Stop the camera" onclick={() => send(client.ptzStop(id))}>■</button>
 	</div>
 	{#if presets.length}
 		<label class="presets">

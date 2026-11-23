@@ -28,7 +28,9 @@ type ONVIFOpts struct {
 	Stream     string      // the stream URI the device hands out (default rtsp://10.9.9.9:554/live: a host the controller must replace)
 	Snapshot   string      // "" none; the device hands it out as given
 	Presets    [][2]string // token, name
-	Skew       time.Duration
+	// MoveDelay makes ContinuousMove slow to answer (the move itself is recorded when it arrives).
+	MoveDelay time.Duration
+	Skew      time.Duration
 	// Misbehave: "fault", "huge", "garbage", "no-media", "bad-media-scheme", "bad-stream-scheme", "https-downgrade", "snapshot-slow", "userinfo", "evil-token", "slow", "doctype"
 	Misbehave string
 }
@@ -225,6 +227,13 @@ func (d *ONVIF) answer(op, body string) string {
 		tok := between(body, "ProfileToken>", "<")
 		return head + `<trt:GetStreamUriResponse xmlns:trt="x" xmlns:tt="y"><trt:MediaUri><tt:Uri>` + strings.Replace(uri, "/live", "/live/"+tok, 1) + `</tt:Uri></trt:MediaUri></trt:GetStreamUriResponse>` + tail
 	case "ContinuousMove":
+		if d.o.MoveDelay > 0 {
+			time.Sleep(d.o.MoveDelay)
+		}
+		if d.o.Misbehave == "move-500" {
+			d.move("move-lost")
+			return "<html>oops"
+		}
 		pt := between(body, "PanTilt ", "/>")
 		zm := between(body, "Zoom x=\"", "\"")
 		d.move("move " + strings.NewReplacer(`x="`, "", `" y="`, " ", `"`, "").Replace(strings.TrimSpace(pt)) + " " + zm + " " + between(body, "Timeout>", "<"))

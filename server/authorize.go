@@ -52,6 +52,7 @@ var actionPerm = map[string]string{
 	"camera.snapshot-view":  auth.Camera, // looking at a picture kept for an alarm (#724)
 	"camera.snapshot-purge": PermConfig,  // dropping the pictures kept for alarms (#724)
 	"camera.ptz":            auth.PTZ,    // moving a camera (#724)
+	"camera.ptz-stop":       auth.Camera, // stopping one: a way back, for whoever may see it
 	"alarm.ack":             PermAck,
 	"alarm.shelve":          PermShelve,
 	"alarm.unshelve":        PermShelve,

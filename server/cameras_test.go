@@ -40,6 +40,7 @@ func camSettings() auth.Settings {
 		Users: map[string][]auth.Grant{
 			"akhan":  {{Role: auth.Engineer}},
 			"jsmith": {{Role: "blind"}},
+			"vera":   {{Role: auth.Viewer}},
 		},
 	}
 }

@@ -59,7 +59,7 @@ func patServerSettings(t *testing.T, rt *runtime.Runtime, o Options, settings au
 	path := filepath.Join(dir, users.FileName)
 	f := users.New()
 	toks := map[string]string{}
-	for _, n := range []string{"akhan", "jsmith", "ghost"} {
+	for _, n := range []string{"akhan", "jsmith", "ghost", "vera"} {
 		if err := f.Add(n, "password-"+n); err != nil {
 			t.Fatal(err)
 		}

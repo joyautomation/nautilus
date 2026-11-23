@@ -123,13 +123,30 @@ describe('pan, tilt and zoom', () => {
 	});
 	it('posts the command, and says the controller\'s words when it refuses', async () => {
 		const a = fake([json({ ok: true }), json({ error: 'too fast: one move at a time' }, 429), json({ error: 'no permission' }, 403), new Error('offline')]);
-		expect(await a.client.ptz('c 1', { action: 'stop' })).toEqual({ ok: true, status: 200, message: '' });
+		expect(await a.client.ptz('c 1', ptzMove('up', 400))).toEqual({ ok: true, status: 200, message: '' });
 		expect(a.sent[0].url).toBe('/api/cameras/c%201/ptz');
 		expect(a.sent[0].method).toBe('POST');
-		expect(JSON.parse(a.sent[0].body!)).toEqual({ action: 'stop' });
+		expect(JSON.parse(a.sent[0].body!)).toEqual({ action: 'move', x: 0, y: 0.5, zoom: 0, ms: 400 });
 		expect(await a.client.ptz('c1', ptzMove('left', 400))).toEqual({ ok: false, status: 429, message: 'too fast: one move at a time' });
 		expect((await a.client.ptz('c1', { action: 'preset', preset: '1' })).message).toBe('no permission');
-		expect(await a.client.ptz('c1', { action: 'stop' })).toEqual({ ok: false, status: 0, message: 'The controller did not answer.' });
+		expect(await a.client.ptzStop('c1')).toEqual({ ok: false, status: 0, message: 'The controller did not answer.' });
+	});
+	it('a stop goes to its own route, with keepalive, and a move can be cancelled before it is sent', async () => {
+		const seen: any[] = [];
+		const f = (async (url: string, init?: RequestInit) => {
+			seen.push({ url, keepalive: init?.keepalive, body: init?.body, signal: init?.signal });
+			if (init?.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+			return new Response('{}', { status: 200 });
+		}) as unknown as typeof fetch;
+		const c = new CameraClient({ fetch: f });
+		expect((await c.ptzStop('c1')).ok).toBe(true);
+		expect(seen[0].url).toBe('/api/cameras/c1/ptz/stop');
+		expect(seen[0].keepalive).toBe(true);
+		expect(seen[0].body).toBe(undefined);
+		const ctl = new AbortController();
+		ctl.abort();
+		const r = await c.ptz('c1', ptzMove('left', 400), ctl.signal);
+		expect(r.ok).toBe(false);
 	});
 	it('lists presets, and none on any failure', async () => {
 		const a = fake([json({ presets: [{ token: '1', name: 'Home' }, { token: '2' }, { name: 'no token' }, 5] }), json({}, 404), new Error('x')]);
