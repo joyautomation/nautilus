@@ -399,7 +399,7 @@ func (s *HLSStream) Playlist() string {
 		maxd = math.Max(maxd, g.dur)
 	}
 	var b strings.Builder
-	b.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n")
+	b.WriteString("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-INDEPENDENT-SEGMENTS\n")
 	fmt.Fprintf(&b, "#EXT-X-TARGETDURATION:%d\n", int(math.Ceil(maxd)))
 	fmt.Fprintf(&b, "#EXT-X-MEDIA-SEQUENCE:%d\n", s.segs[0].seq)
 	b.WriteString("#EXT-X-MAP:URI=\"init.mp4\"\n")

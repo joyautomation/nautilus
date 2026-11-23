@@ -158,8 +158,18 @@ stream in H.264, and a low-resolution one is the right one for a slow link.
   They are never in an error, a log or an answer, and neither is the camera's address.
 - **The stream starts on the first request and stops 30 seconds after the last one.**
   A camera nobody is watching is not being read.
-- **The player** is the kit's own (the asset page's "Watch live"): Safari and iPhone
-  play the HLS playlist natively, other browsers through Media Source Extensions.
+- **The player** is the kit's own (the asset page's "Watch live"): a browser with
+  Media Source Extensions (Chrome, Firefox, Edge, Safari on a Mac) plays it through
+  them, and measures the bitrate; an iPhone (iOS 17.1 and later) uses Apple's managed
+  variant of the same thing, and one with neither is given the playlist and plays it
+  natively, with the bitrate not measured. None of the iPhone or Safari paths has been
+  run on a device yet. The segments are written the way
+  ffmpeg's HLS muxer writes them (a `styp` and a `sidx` in front of each `moof`/`mdat`,
+  an `iso5` `ftyp`, `EXT-X-INDEPENDENT-SEGMENTS`), which iPhones play. Chrome's own
+  native HLS player, which is new, is not relied on: it fails on live playlists,
+  ffmpeg's own included (see the maintainers' notes in the PR), so the kit's player
+  is used wherever Media Source Extensions exist. An RTSP camera with no
+  `snapshot-url` has no still to show: the page says so and offers Watch live.
   The latency is a few segments, about 4 to 8 seconds; this is not a control view.
 - **Who may view, the caps and the journal** are the same as for motion-JPEG: a
   viewer is a lease kept alive by the player's requests and dropped 15 seconds
@@ -239,8 +249,9 @@ stream in H.264, and a low-resolution one is the right one for a slow link.
   They are never in an error, a log or an answer, and neither is the camera's address.
 - **The stream starts on the first request and stops 30 seconds after the last one.**
   A camera nobody is watching is not being read.
-- **The player** is the kit's own (the asset page's "Watch live"): Safari and iPhone
-  play the HLS playlist natively, other browsers through Media Source Extensions.
+- **The player** is the kit's own (the asset page's "Watch live"): browsers play it
+  through Media Source Extensions (iOS 17.1 and later through Apple's managed
+  variant), older Safari natively. Only Chrome has been tried so far.
   The latency is a few segments, about 4 to 8 seconds; this is not a control view.
 - **Who may view, the caps and the journal** are the same as for motion-JPEG: a
   viewer is a lease kept alive by the player's requests and dropped 15 seconds

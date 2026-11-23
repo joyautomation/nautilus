@@ -70,7 +70,7 @@ func TestTheClipBecomesAnHLSPlaylistOfWholeGOPSegments(t *testing.T) {
 		s.Feed(au)
 	}
 	pl := s.Playlist()
-	for _, want := range []string{"#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-TARGETDURATION:", "#EXT-X-MEDIA-SEQUENCE:1", `#EXT-X-MAP:URI="init.mp4"`, "seg-1.m4s", "seg-2.m4s"} {
+	for _, want := range []string{"#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS", "#EXT-X-TARGETDURATION:", "#EXT-X-MEDIA-SEQUENCE:1", `#EXT-X-MAP:URI="init.mp4"`, "seg-1.m4s", "seg-2.m4s"} {
 		if !strings.Contains(pl, want) {
 			t.Errorf("the playlist lacks %q:\n%s", want, pl)
 		}
@@ -79,7 +79,7 @@ func TestTheClipBecomesAnHLSPlaylistOfWholeGOPSegments(t *testing.T) {
 	// twenty pictures, the first being the first two seconds'
 	init := s.Init()
 	bs := boxes(t, init)
-	if len(bs) != 2 || bs[0].typ != "ftyp" || bs[1].typ != "moov" {
+	if len(bs) != 2 || bs[0].typ != "ftyp" || bs[1].typ != "moov" || !bytes.HasPrefix(bs[0].body, []byte("iso5")) {
 		t.Fatalf("the init segment's boxes: %v", bs)
 	}
 	if !bytes.Contains(init, []byte("avc1")) || !bytes.Contains(init, []byte("avcC")) {
@@ -90,8 +90,13 @@ func TestTheClipBecomesAnHLSPlaylistOfWholeGOPSegments(t *testing.T) {
 		t.Fatal("no segment 1")
 	}
 	fb := boxes(t, seg)
-	if len(fb) != 2 || fb[0].typ != "moof" || fb[1].typ != "mdat" {
-		t.Fatalf("the fragment's boxes: %v", fb)
+	if len(fb) != 4 || fb[0].typ != "styp" || fb[1].typ != "sidx" || fb[2].typ != "moof" || fb[3].typ != "mdat" {
+		t.Fatalf("the segment's boxes: %v", fb)
+	}
+	// the sidx says what the segment is: one reference, its size and its duration
+	if sx := fb[1].body; len(sx) != 44 || binary.BigEndian.Uint32(sx[4:8]) != 1 || binary.BigEndian.Uint32(sx[8:12]) != VideoTimescale ||
+		binary.BigEndian.Uint32(sx[36:40]) != uint32(180000) || binary.BigEndian.Uint32(sx[32:36])&0x7fffffff != uint32(8+len(fb[2].body)+8+len(fb[3].body)) {
+		t.Errorf("the sidx: % x", sx)
 	}
 	// the samples in the mdat are the clip's pictures, length-prefixed, parameter sets left out
 	var want []byte
@@ -103,8 +108,8 @@ func TestTheClipBecomesAnHLSPlaylistOfWholeGOPSegments(t *testing.T) {
 		want = append(want, AVCC(au.NALs)...)
 		n++
 	}
-	if !bytes.Equal(fb[1].body, want) {
-		t.Errorf("the mdat holds %d bytes, want the first 20 pictures' %d", len(fb[1].body), len(want))
+	if !bytes.Equal(fb[3].body, want) {
+		t.Errorf("the mdat holds %d bytes, want the first 20 pictures' %d", len(fb[3].body), len(want))
 	}
 	if _, ok := s.Segment(99); ok {
 		t.Error("a segment that was never made")
