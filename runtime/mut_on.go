@@ -46,6 +46,13 @@ import "os"
 //   - stream_flush_term_unkeyed: a flush that ran for an earlier term counts for the new one (#710 S1b review).
 //   - stream_failed_load_streams: a takeover whose retain store could not be read is not flagged, so its leader streams initial values (#710 S1b review).
 //   - stream_store_bad_forgotten: a store read that failed before the takeover (the file moved aside) is not counted as its failed load (#710 S1b review).
+//   - image_tags_carry_io: an image carries the inputs and outputs, which the field gives back and the first scan recomputes (#710 S2a).
+//   - image_tags_written_only: an image carries only the tags a program writes, not an operator's (#710 S2a).
+//   - image_tag_forced_value: an image carries a forced tag's forced value, not its actual one (#710 S2a).
+//   - image_tags_at_take: a task's tags are copied when the image is taken, not at the end of the scan its frame was copied at (#710 S2a).
+//   - image_source_unhashed: a task's image names no running source (#710 S2a).
+//   - shadow_tags_layout_unchecked: the shadow applies the tags of a leader that carries another set (#710 S2a).
+//   - image_tags_retained_twice: an image's store section carries the retained tags the retain section already carries (#710 S2a).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutRuntime(name string) bool { return name == mutOn }

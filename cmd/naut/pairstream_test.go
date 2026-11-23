@@ -26,7 +26,9 @@ import (
 // pairStreamProject is pairProject's pair with a retain: section and what
 // a takeover must keep (#710 S1b): a retained scalar setpoint, a UDT
 // setpoint, an array setpoint (a long one, so an image has some size), a
-// VAR RETAIN local, and room for an online edit.
+// VAR RETAIN local, and room for an online edit; and Mode, a state tag
+// only an operator writes, not retained, which only a hot takeover keeps
+// (#710 S2).
 func pairStreamProject(a, b, w string) fstest.MapFS {
 	return fstest.MapFS{
 		"nautilus.yaml": &fstest.MapFile{Data: []byte(fmt.Sprintf(`name: pairstream
@@ -38,6 +40,7 @@ tags:
   - { name: SP, role: setpoint, init: 0.0 }
   - { name: Rec, role: setpoint, type: Recipe }
   - { name: Table, role: setpoint, type: 'ARRAY[1..2000] OF REAL' }
+  - { name: Mode, role: state, init: 0 }
 redundancy:
   experimental: true
   peers:
@@ -633,5 +636,60 @@ func TestPairStatusShowsWritesCut(t *testing.T) {
 	code, body, _ := r.call(lead, "GET", "/api/cluster", "")
 	if code != 200 || !strings.Contains(body, `"writesCut":{"plc9":1}`) {
 		t.Fatalf("GET /api/cluster = %d %s; want writesCut with plc9", code, body)
+	}
+}
+
+// The leader sends each standby the newest image format both read (#710
+// S2): format 1, with no tags, to one that names none (a build before S2,
+// mid rolling update, which reads only 1 and must still carry its retained
+// values); format 2, with the carried tags, to one that names 2.
+func TestPairStreamSendsEachStandbyAFormatItReads(t *testing.T) {
+	r := newStreamRig(t, nil)
+	lead := r.leader()
+	r.inSync(t, other(lead))
+	first := func(formats string) *runtime.Image {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, r.peerScheme()+r.peer[lead]+streamPath(r.cluster()), nil)
+		req.Header.Set(node.TokenHeader, r.token)
+		if formats != "" {
+			req.Header.Set(streamFormatsHeader, formats)
+		}
+		resp, err := r.peerHTTP().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("formats %q: the leader answers %d", formats, resp.StatusCode)
+		}
+		var hdr [9]byte
+		if _, err := io.ReadFull(resp.Body, hdr[:]); err != nil || hdr[0] != streamImage {
+			t.Fatalf("formats %q: the first frame: %v %q", formats, err, hdr[0])
+		}
+		body := make([]byte, int(hdr[5])<<24|int(hdr[6])<<16|int(hdr[7])<<8|int(hdr[8]))
+		if _, err := io.ReadFull(resp.Body, body); err != nil {
+			t.Fatal(err)
+		}
+		var img runtime.Image
+		if err := runtime.DecodeImage(body, &img); err != nil {
+			t.Fatalf("formats %q: %v", formats, err)
+		}
+		return &img
+	}
+	if img := first(""); img.Format != 1 || img.TagsLayout != "" || len(img.Retain) == 0 {
+		t.Errorf("no formats named: format %d, tags layout %q, %d retain bytes; want format 1 with the retain section", img.Format, img.TagsLayout, len(img.Retain))
+	}
+	if img := first(streamFormats()); img.Format != 2 || img.TagsLayout == "" || img.Tags.Len() == 0 {
+		t.Errorf("formats %q: format %d, tags layout %q, %d store tags; want format 2 with the tags (Mode)", streamFormats(), img.Format, img.TagsLayout, img.Tags.Len())
+	}
+}
+
+// askedFormat reads the standby's formats leniently: the newest this build
+// writes that the standby names, else 1.
+func TestStreamAskedFormat(t *testing.T) {
+	for h, want := range map[string]byte{"": 1, "1": 1, "1,2": 2, " 2 , 1 ": 2, "1,2,9": 2, "9": 1, "x,y": 1} {
+		if got := askedFormat(h); got != want {
+			t.Errorf("askedFormat(%q) = %d, want %d", h, got, want)
+		}
 	}
 }

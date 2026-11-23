@@ -1453,6 +1453,24 @@ The leader streams **images** of its state to the standby (#710 S1; rulings 2026
   - **Every task's program frame**: every variable, function-block internals (timers,
     counters, edges), SFC steps and their times. An SFC lowers to ST, so its steps are frame
     slots. The frame is flattened by `ir.FlattenInto` into 32-byte `ir.Leaf` values.
+  - **The carried tags** (S2a; naut-lead's ruling 2026-11-23): every tag the field does not
+    provide, whoever writes it, a program or an operator: state, setpoint and memory tags,
+    retained or not. Not the inputs (they come back from the field), not the outputs (the
+    first scan recomputes them), not the substitute companions the runtime owns. So a hot
+    takeover keeps a mode an operator switched on the HMI even when it is not retained; what
+    must survive a **cold** takeover still belongs in retain.
+    - The tags a task's programs write go **with its frame**, copied from the store right
+      after that scan's commit, so a counter in the frame and the tag it set are of one scan.
+    - The others are copied from the store when the image is taken. A retained one is left
+      out there: the retain section, taken at the same moment, already carries it.
+    - A forced tag goes as its **actual** value: forces are not carried (§4.2).
+    - A tag that holds a function block (an FB bound as a global, or a STRUCT or ARRAY of
+      one) is not carried, nor a dt-tag (the runtime writes it each scan).
+    - An image waits for every task's scan, so a slow task paces the images: an operator's
+      write to a tag that task also writes reaches the standby with that task's next copy.
+    - The set is fixed when the runtime starts. Its **tags layout** (each tag's name and
+      declared type, `ir.TagsLayout`) is in the image, and a standby applies the tags only
+      when its own is the same, all or none.
   - Alarm ack and shelve state is **not** taken from an image: it comes from the pair's
     `oplog` (§1).
 - **Where the copy happens.** Each task copies its frame at the **end of its own scan**,
@@ -1468,15 +1486,26 @@ The leader streams **images** of its state to the standby (#710 S1; rulings 2026
   - its place in the stream, `(term, seq)`: `seq` only grows within a leadership (a program's
     scan count does not: an online edit resets it);
   - the leader's build;
-  - per task: the frame's **layout**, the timers' time base `NowMs` at the copy, and the scan
-    count. The layout (`ir.Program.Layout`) is a hash of every slot's name, kind, binding,
+  - per task: the frame's **layout**, the hash of the **source** it ran (S2a: the layout
+    leaves bodies out), the timers' time base `NowMs` at the copy, and the scan count. The layout (`ir.Program.Layout`) is a hash of every slot's name, kind, binding,
     RETAIN/CONSTANT/TEMP flags and declared type (`LREAL` is not `REAL`), walked into every
     STRUCT, ARRAY, enumeration and FB type, plus `ir.FrameFormat`. Initial values and bodies are
     not in it, so a hot takeover (S2) also requires the same build and running sources.
   - A CRC-32C over the whole image.
 
   A timer's internals are absolute on the leader's `NowMs` (its wall clock), so a hot takeover
-  rebases them by the image age (§4.2).
+  rebases them by the image age (§4.2). Each built-in FB lists the slots that hold such a time
+  (`FBDef.TimeBase`: TON and TP's start, TOF's stop, PID's last call), and
+  `ir.RebaseFrame` moves them, into every nested FB and array of FBs; an SFC's step times are
+  hidden TONs. A PID's is cleared rather than moved, so its first scan on the new leader has
+  dt 0 rather than integrating across the takeover (ruling Q4).
+  `TestTimeBaseCoversEveryClockSlot` runs every registered FB on two clocks and fails on a
+  slot that keeps the clock without being listed.
+- **Format.** The standby's stream request names the formats it reads
+  (`X-Nautilus-Image-Formats: 1,2`), and the leader sends the newest both read. Format 2 adds
+  the sources and the carried tags; a standby of a build before S2 names none and gets format
+  1, so a pair mid rolling update still carries its retained values. A format 1 image is never
+  taken over hot, and the status says the leader sends no tags.
 - **Pace.** Full images, at most one every 100 ms, are sent on connect and after any gap.
   - A bytes-per-second budget (default 1 MB/s, configurable) stretches the interval rather
     than dropping images. The status reports the effective interval and the image age.

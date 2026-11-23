@@ -410,6 +410,13 @@ old leader's:
 Alarm acknowledgements, shelves and substitutes travel through the
 pair's operator-intent log instead, and are not taken from the stream.
 
+Each image also carries every program's variables and the value of every
+tag the field does not provide (state and memory tags, whoever wrote
+them, retained or not), ready for the hot takeover that will continue
+from them. Until then a takeover is cold, and only the retained values
+above come through it: anything that must survive a cold takeover, or a
+restart, belongs in `retain`.
+
 **What a takeover can lose.** A setpoint the leader accepted in the last
 stream interval before it crashed (about 100 ms) never reached the
 standby. When the leader is cut off rather than killed, it keeps
@@ -440,7 +447,9 @@ redundancy:
 `naut redundancy status` and `GET /api/cluster` (`stream`) show how the
 stream stands. On the standby: `in-sync`, `connecting`, `behind`,
 `layout-differs` (it runs another program for a task, so it keeps no
-frame for it), `too-big`, `refused` (an image failed its term check, or
+frame for it; or its manifest carries another set of tags than the
+leader's; or the leader runs an older nautilus that sends no tags, as
+mid way through an upgrade), `too-big`, `refused` (an image failed its term check, or
 the retain file already stands after the leader's images), `not-persisted`
 (the retain file cannot be written: a full or read-only disk) or `off`,
 with the newest image's place (term, seq), its age on the standby's

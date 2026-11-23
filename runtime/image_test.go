@@ -393,8 +393,11 @@ func TestImageDecodeRefusesDamage(t *testing.T) {
 // sealed is body as a whole image: the header in front, a valid checksum
 // behind, so a malformed body reaches the parser instead of dying at the
 // checksum.
-func sealed(body []byte) []byte {
-	b := append([]byte{'n', 's', 'i', imageFormat}, body...)
+func sealed(body []byte) []byte { return sealedAs(1, body) }
+
+// sealedAs is body behind a header of the given format and a checksum.
+func sealedAs(format byte, body []byte) []byte {
+	b := append([]byte{'n', 's', 'i', format}, body...)
 	return binary.LittleEndian.AppendUint32(b, crc32.Checksum(b, castagnoli))
 }
 
@@ -405,11 +408,19 @@ func FuzzDecodeImage(f *testing.F) {
 		Task: "main", Layout: "abc", NowMs: -5, Scans: 2,
 		Leaves: leavesOf(ir.BoolVal(true), ir.IntVal(-7), ir.Value{Kind: ir.TypeInt, I: 10, S: "Run"}, ir.RealVal(1.5), ir.TimeVal(300), ir.StringVal("s"), ir.Value{}),
 	}}}
-	wire := mustEncode(f, nil, img)
-	f.Add(wire[4 : len(wire)-4])
-	f.Fuzz(func(t *testing.T, body []byte) {
+	img.Tasks[0].Source, img.TagsLayout = "src", "tl"
+	img.Tasks[0].Tags = TagValues{Idx: []int{0}, Ends: []int{1}, Leaves: leavesOf(ir.IntVal(4))}
+	img.Tags = TagValues{Idx: []int{1, 2}, Ends: []int{1, 3}, Leaves: leavesOf(ir.StringVal("op"), ir.RealVal(1), ir.BoolVal(true))}
+	for _, format := range ImageFormats {
+		wire, err := EncodeImageFormat(nil, img, format)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(format, wire[4:len(wire)-4])
+	}
+	f.Fuzz(func(t *testing.T, format byte, body []byte) {
 		var out Image
-		if err := DecodeImage(sealed(body), &out); err != nil && !errors.Is(err, ErrImage) {
+		if err := DecodeImage(sealedAs(format, body), &out); err != nil && !errors.Is(err, ErrImage) {
 			t.Fatalf("not ErrImage: %v", err)
 		}
 	})
@@ -451,6 +462,31 @@ func TestImageDecodeRefusesMalformedBodies(t *testing.T) {
 	var out Image
 	if err := DecodeImage(sealed(uv(head(), 0)), &out); err != nil {
 		t.Fatalf("the minimal image: %v", err)
+	}
+	// Format 2: the tags sections (#710 S2).
+	tail2 := func(b []byte) []byte { // tags layout "", tagsNowMs 0
+		return binary.AppendVarint(uv(b, 0), 0)
+	}
+	for name, body := range map[string][]byte{
+		"no tags layout":            uv(head(), 0),
+		"a huge tag count":          uv(tail2(uv(head(), 0)), 1<<40),
+		"a tag of huge leaf count":  uv(uv(uv(tail2(uv(head(), 0)), 1), 0), 1<<40),
+		"a tag at a huge place":     uv(uv(uv(tail2(uv(head(), 0)), 1), 1<<40), 0),
+		"a tag leaf of bad kind":    append(uv(uv(uv(tail2(uv(head(), 0)), 1), 0), 1), 99),
+		"a task with no source":     task(uv(head(), 1), 0),
+		"bytes after the tags":      append(uv(tail2(uv(head(), 0)), 0), 7),
+		"a format this build lacks": nil,
+	} {
+		wire := sealedAs(2, body)
+		if body == nil {
+			wire = sealedAs(imageFormat+1, uv(head(), 0))
+		}
+		if err := DecodeImage(wire, &out); !errors.Is(err, ErrImage) {
+			t.Errorf("format 2, %s: got %v, want ErrImage", name, err)
+		}
+	}
+	if err := DecodeImage(sealedAs(2, uv(tail2(uv(head(), 0)), 0)), &out); err != nil || out.Format != 2 {
+		t.Fatalf("the minimal format 2 image: %v (format %d)", err, out.Format)
 	}
 }
 
@@ -494,13 +530,52 @@ func TestImageCodecEveryLeafKind(t *testing.T) {
 		)},
 		{Task: "aux", Layout: "l2"},
 	}}
+	img.Tasks[0].Source, img.Tasks[1].Source, img.TagsLayout, img.TagsNowMs = "s1", "s2", "tl", 1_700_000_000_456
+	img.Tasks[0].Tags = TagValues{Idx: []int{0, 3}, Ends: []int{1, 3}, Leaves: leavesOf(ir.BoolVal(true), ir.RealVal(2.5), ir.Value{Kind: ir.TypeInt, I: 10, S: "Run"})}
+	img.Tags = TagValues{Idx: []int{1}, Ends: []int{1}, Leaves: leavesOf(ir.StringVal("op"))}
+	img.Format = imageFormat
 	var out Image
 	if err := DecodeImage(mustEncode(t, nil, img), &out); err != nil {
 		t.Fatal(err)
 	}
-	out.Tasks[1].Leaves = nil // decoded as an empty slice
+	normImage(&out)
 	if !reflect.DeepEqual(&out, img) {
 		t.Fatalf("got %+v\nwant %+v", out, *img)
+	}
+	// Format 1 is the same image without its tags and sources.
+	wire, err := EncodeImageFormat(nil, img, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := DecodeImage(wire, &out); err != nil {
+		t.Fatal(err)
+	}
+	normImage(&out)
+	want := *img
+	want.Format, want.TagsLayout, want.TagsNowMs, want.Tags = 1, "", 0, TagValues{}
+	want.Tasks = append([]TaskImage(nil), img.Tasks...)
+	for i := range want.Tasks {
+		want.Tasks[i].Source, want.Tasks[i].Tags = "", TagValues{}
+	}
+	if !reflect.DeepEqual(&out, &want) {
+		t.Fatalf("format 1: got %+v\nwant %+v", out, want)
+	}
+}
+
+// normImage turns the empty slices a decode leaves into nil, as a literal
+// writes them.
+func normImage(img *Image) {
+	nilTags := func(tv *TagValues) {
+		if len(tv.Idx) == 0 {
+			*tv = TagValues{}
+		}
+	}
+	nilTags(&img.Tags)
+	for i := range img.Tasks {
+		if len(img.Tasks[i].Leaves) == 0 {
+			img.Tasks[i].Leaves = nil
+		}
+		nilTags(&img.Tasks[i].Tags)
 	}
 }
 

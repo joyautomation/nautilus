@@ -97,6 +97,11 @@ func registerPID() {
 			{Name: "_lastMs", Type: TimeT}, {Name: "_integral", Type: RealT}, {Name: "_prevPV", Type: RealT},
 			{Name: "_dFilt", Type: RealT}, {Name: "_havePrev", Type: BoolT}, {Name: "_prevAuto", Type: BoolT},
 		},
+		// A hot takeover clears the last call's time rather than shifting
+		// it: the first scan on the new leader gets dt 0 (no integral or
+		// derivative over the image's age), as a scan after a cold start
+		// does (#710 S2, naut-lead's ruling Q4).
+		TimeBase: []TimeBaseSlot{{Index: nLASTMS, Clear: true}},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			auto := inst.Slots[iAUTO].B
 			pv := inst.Slots[iPV].F

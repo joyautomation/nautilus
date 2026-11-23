@@ -432,6 +432,14 @@ var Mutations = []string{
 	"lease_condition_dropped",           // naut: a voter's lease refusal raises no condition (#710 1 s lease)
 	"witness_lease_no_alarm",            // naut: the witness refusing the pair's lease raises no system alarm (#710 1 s lease)
 	"lease_check_unwarned",              // naut: naut check says nothing of a pair lease under 1 s (#710 1 s lease)
+	"image_tags_carry_io",               // runtime: an image carries the inputs and outputs, which the field gives back and the first scan recomputes (#710 S2a)
+	"image_tags_written_only",           // runtime: an image carries only the tags a program writes, not an operator's (#710 S2a)
+	"image_tag_forced_value",            // runtime: an image carries a forced tag's forced value, not its actual one (#710 S2a)
+	"image_tags_at_take",                // runtime: a task's tags are copied when the image is taken, not at the end of the scan its frame was copied at (#710 S2a)
+	"image_source_unhashed",             // runtime: a task's image names no running source (#710 S2a)
+	"shadow_tags_layout_unchecked",      // runtime: the shadow applies the tags of a leader that carries another set (#710 S2a)
+	"image_tags_retained_twice",         // runtime: an image's store section carries the retained tags the retain section already carries (#710 S2a)
+	"stream_format_ignored",             // naut: the leader sends its newest image format whatever the standby reads (#710 S2a)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")
