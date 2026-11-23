@@ -169,7 +169,7 @@ func (a *cameraAPI) camera(w http.ResponseWriter, r *http.Request) (camera.Camer
 		// seconds is not (a refusal flood is coalesced by the recorder either way)
 		if strings.HasSuffix(r.URL.Path, "/stream") {
 			a.s.audit.record(audit.Entry{Action: "camera.view", Target: c.ID, User: a.s.principalOf(r), Source: audit.SourceHMI, Result: audit.ResultRefused,
-				From: r.RemoteAddr, Session: a.s.sessionOfEntry(r), Detail: map[string]any{"event": "start", "asset": c.Asset, "reason": noView, "class": audit.ClassAuth}})
+				From: a.s.clientAddr(r), Session: a.s.sessionOfEntry(r), Detail: map[string]any{"event": "start", "asset": c.Asset, "reason": noView, "class": audit.ClassAuth}})
 		}
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": noView})
 		return camera.Camera{}, false
