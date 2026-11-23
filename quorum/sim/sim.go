@@ -272,8 +272,15 @@ type node struct {
 
 	voter *quorum.Voter
 	cand  *quorum.Candidate
-	adopt *quorum.Adoption
-	nonce uint64
+	// imgEpoch models a standby's state image (#710 S2c-1): the epoch of
+	// the last leader renewal from its peer that reached this boot's
+	// voter, as its stream would have brought an image. Lost at a
+	// restart, spent when it leads. wasLeading: its gate at the last
+	// gate().
+	imgEpoch   uint64
+	wasLeading bool
+	adopt      *quorum.Adoption
+	nonce      uint64
 	// seen is the voter's handshake state after the last call into the
 	// adoption, so a change (a proposal, an adoption in memory) is seen;
 	// cnt is what the protocol says this controller counts (countTruth).
@@ -591,6 +598,7 @@ func (w *World) start(n *node) {
 		panic(err) // a sim bug: the config is built here
 	}
 	n.cand = c
+	n.imgEpoch, n.wasLeading = 0, false
 	n.adopt = quorum.NewAdoption(n.voter, c, now)
 	n.seen = st
 	// The ground truth of what counts (design §3.1), kept apart from the
@@ -706,7 +714,22 @@ func (w *World) scan(n *node) {
 // lease end (local), or closed.
 func (w *World) gate(n *node) {
 	now := w.local(n)
-	if n.up && n.cand != nil && n.cand.Leading(now) {
+	leading := n.up && n.cand != nil && n.cand.Leading(now)
+	if leading && !n.wasLeading {
+		// A takeover: judge the hot check on the image this boot holds
+		// (HotOracle), and lead with the standby in sync, as far as the
+		// stream goes here (one image, current).
+		epoch := n.cand.Term()
+		w.rec.LeadStarts = append(w.rec.LeadStarts, LeadStart{At: w.now, Node: n.addr, Epoch: epoch})
+		if n.imgEpoch != 0 {
+			hot, why := n.cand.HotCheck().Verdict(n.imgEpoch, 1)
+			w.rec.Takeovers = append(w.rec.Takeovers, HotTakeover{At: w.now, Node: n.addr, Image: n.imgEpoch, Epoch: epoch, Hot: hot, Why: why})
+		}
+		n.imgEpoch = 0
+	}
+	n.wasLeading = leading
+	if leading {
+		n.cand.SetMark(1, true)
 		w.rec.gate(n.addr, w.now, true, n.cand.LeaseEnd(), n.cand.VoteTerm())
 		return
 	}
@@ -788,6 +811,9 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 		n.voter.LearnFences(req.Fences, learnNames(n.addr)...) // its write goes with Handle's (MarkWrite)
 		if n.adopt != nil && w.fromPeer(n, from) && !(req.Term == 0 && req.ID == quorum.ProbeID) {
 			n.adopt.OnPeer(now) // a relay probe is for the voter only (#1029 step 1)
+		}
+		if req.Renewal && req.Epoch != 0 && n.cand != nil && req.From == nodeIDs[peerOf(n.addr)] && !n.cand.Leading(now) {
+			n.imgEpoch = req.Epoch // the peer leads: its stream's image (HotOracle)
 		}
 		if from != n.addr {
 			dups, _ := n.voter.Duplicates()

@@ -30,16 +30,30 @@ import "slices"
 const maxEpochRecords = 4
 
 // recordsFrom is the term from which this voter's records cover every
-// grant, 0 for none (see above).
+// grant, 0 for none (see above). A commissioned controller's voter covers
+// what came after its Floor too: an adoption raises the floor above every
+// term either controller (and, for a lost file, the witness) knew was
+// promised, so any leadership an earlier life of this voter granted is at
+// or below it. The witness has no floor: a fresh or rebuilt one knows
+// nothing until its first campaign grant.
 func (v *Voter) recordsFrom() uint64 {
-	switch {
-	case v.st.RecordsFrom != 0:
+	if v.st.RecordsFrom != 0 {
 		return v.st.RecordsFrom
-	case v.st.Promised != 0:
-		return v.st.Promised + 1
+	}
+	base := v.st.Promised
+	if !v.isWitness && v.st.Incarnation != 0 && !mut("records_from_floor_unset") {
+		base = max(base, v.st.Floor)
+		return base + 1
+	}
+	if base != 0 {
+		return base + 1
 	}
 	return 0
 }
+
+// Covers reports whether records that start at from cover every grant
+// above epoch e: what a hot takeover needs of a voter (HotCheck.Verdict).
+func Covers(from, e uint64) bool { return from != 0 && from <= e+1 }
 
 // recordGrant records a campaign's grant of term to name in the state the
 // grant writes. It reports whether the state changed.

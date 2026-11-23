@@ -52,8 +52,17 @@ func TestACampaignGrantRecordsItsEpoch(t *testing.T) {
 // records knows what came after its Promised, and stays in its old format
 // until a campaign's grant writes records.
 func TestRecordsCoverOnlyWhatTheStateKnows(t *testing.T) {
-	if f := ready("W").recordsFrom(); f != 0 {
-		t.Fatalf("a fresh voter's records from %d, want 0 (none)", f)
+	if f := ready("A").recordsFrom(); f != 0 {
+		t.Fatalf("an uncommissioned voter's records from %d, want 0 (none)", f)
+	}
+	w, _ := NewWitness("W", lease, VoterState{}, 0, func() uint64 { return 7 })
+	if f := w.recordsFrom(); f != 0 {
+		t.Fatalf("a fresh witness's records from %d, want 0 (a rebuilt one knows nothing)", f)
+	}
+	// A commissioned controller's voter: any leadership an earlier life
+	// granted is at or below the floor its adoption set.
+	if f := NewVoter("A", lease, VoterState{Incarnation: 9, Gen: 1, Floor: 1000}, 0).recordsFrom(); f != 1001 {
+		t.Fatalf("a commissioned voter's records from %d, want 1001 (above its floor)", f)
 	}
 	v := NewVoter("W", lease, VoterState{Promised: 12, GrantedTo: "A", Incarnation: 9}, 0)
 	if f := v.recordsFrom(); f != 13 {

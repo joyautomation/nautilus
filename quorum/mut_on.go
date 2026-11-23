@@ -459,6 +459,12 @@ var Mutations = []string{
 	"mark_from_refused_renewal",         // a voter keeps the mark of a renewal it refused (#710 S2c-1)
 	"reply_mark_after_grant",            // a voter keeps a renewal's mark before its grant is durable, so a failed write leaves it (#710 S2c-1)
 	"mark_term_compared",                // a mark holds the renewal's vote term, not the leader's epoch (#710 S2c-1)
+	"mark_from_losing_round",            // a hot takeover reads earlier campaign rounds' replies too, not only the winning one's (#710 S2c-1)
+	"unknown_counts_toward_majority",    // a reply whose records don't cover the image's epoch counts toward the known majority (#710 S2c-1)
+	"own_record_ignored",                // a hot takeover misses this controller's own leadership after the image (#710 S2c-1)
+	"mark_tie_current_wins",             // of two marks at one (epoch, sequence), the current one wins (#710 S2c-1)
+	"later_leader_ignored",              // a hot takeover goes on over an epoch the voters granted the old leader after its image (#710 S2c-1)
+	"records_from_floor_unset",          // a commissioned controller's voter with no records yet covers nothing, not what came after its floor (#710 S2c-1)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")
