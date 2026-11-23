@@ -9,6 +9,7 @@ import (
 	"image/jpeg"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
@@ -138,12 +139,29 @@ func TestSnapshotRefusesWhatIsNotAStillAndNeverRepeatsCredentialsOrAddress(t *te
 	defer other.Close()
 	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL, 302) }))
 	defer redir.Close()
+	// a camera that takes the connection and closes it without a word: a transport
+	// error of the kind the address is in
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
 	f := &Fetcher{Secret: secrets(map[string]string{"camera.c": "u:topsecret"})}
 	for name, tc := range map[string]struct{ url, want string }{
 		"oversize":            {big.URL, "larger than"},
 		"not a jpeg":          {html.URL, "did not return a JPEG"},
 		"other-host redirect": {redir.URL, "another host"},
 		"nothing listening":   {"http://127.0.0.1:1/x", "did not answer"},
+		"closed unanswered":   {"http://" + ln.Addr().String() + "/x", "did not answer"},
 	} {
 		_, err := f.Snapshot(context.Background(), Camera{ID: "c", Asset: "A", Kind: KindSnapshot, URL: tc.url, Credentials: true})
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

@@ -135,6 +135,7 @@ func TestACameraStreamIsLiveJournalledAndCapped(t *testing.T) {
 	defer ts.Close()
 
 	resp, stop := camOpen(t, ts, "one", toks["akhan"])
+	defer stop() // ts.Close waits for every stream to end, a failing test included
 	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "multipart/x-mixed-replace") {
 		t.Fatalf("the stream: %d %v", resp.StatusCode, resp.Header)
 	}
@@ -167,6 +168,10 @@ func TestACameraStreamIsLiveJournalledAndCapped(t *testing.T) {
 	}
 	// the camera's own cap: a second viewer is told why
 	r2, stop2 := camOpen(t, ts, "one", toks["jsmith"])
+	if r2.StatusCode == 200 {
+		stop2()
+		t.Fatal("a second viewer of a one-viewer camera was let in")
+	}
 	b2, _ := io.ReadAll(r2.Body)
 	stop2()
 	if r2.StatusCode != http.StatusTooManyRequests || !strings.Contains(string(b2), "max-viewers") {
