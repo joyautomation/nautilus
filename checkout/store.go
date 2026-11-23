@@ -64,6 +64,7 @@ const (
 	kindForce    = "force"    // a checkout force began on a point
 	kindForceEnd = "forceend" // and ended
 	kindSeal     = "seal"     // the run was signed off (seal.go)
+	kindKey      = "key"      // a pair: a controller says which key it signs with
 )
 
 // entry is one line of the file.
@@ -241,9 +242,10 @@ type Store struct {
 	// take it).
 	propose  func(ctx context.Context, by string, body []byte) (uint64, error)
 	propMu   sync.Mutex
-	lines    [][]byte         // the canonical chain, in committed order
-	rejected map[uint64]error // log entries apply refused, by the log's sequence number
-	sheet    *Sheet           // the sheet a replica rebuilds a sealed export from
+	lines    [][]byte          // the canonical chain, in committed order
+	rejected map[uint64]error  // log entries apply refused, by the log's sequence number
+	sheet    *Sheet            // the sheet a replica rebuilds a sealed export from
+	keys     map[string]string // a pair: each controller's signing key fingerprint, as it announced it
 }
 
 // appendFile is the file as the store uses it (a test's can fail).
@@ -428,6 +430,14 @@ func (s *Store) apply(e entry) error {
 			return errors.New("an abandon while a force stands")
 		}
 		r.State, r.Reason, r.EndedAt, r.EndedBy = StateAbandoned, e.Reason, e.At, e.By
+	case kindKey:
+		if e.By == "" || e.Note == "" {
+			return errors.New("a key announcement that names no controller or key")
+		}
+		if s.keys == nil {
+			s.keys = map[string]string{}
+		}
+		s.keys[e.By] = e.Note
 	case kindSeal:
 		r := s.runs[e.Run]
 		if r == nil || r.State != StateOpen {

@@ -127,6 +127,10 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		if a.s.tagWriter != nil {
 			return nil, http.StatusNotImplemented, fmt.Errorf("this server mirrors a controller it does not run: force on that controller")
 		}
+		if a.s.cluster != nil && !a.s.cluster.Status().IsLeader {
+			// a force drives an output: only the controller that runs the program
+			return nil, http.StatusConflict, fmt.Errorf("this controller is the standby: force an output on the controller that is running the program")
+		}
 		pt, ok := a.co.Sheet.Point(req.Point)
 		if !ok {
 			return nil, http.StatusUnprocessableEntity, fmt.Errorf("the sheet has no point %s", req.Point)
