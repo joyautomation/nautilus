@@ -547,10 +547,17 @@ func TestTheCheckoutPageIsOptIn(t *testing.T) {
 		t.Errorf("a project with a checkout section has no /checkout page: %v", on.Pages)
 	}
 	js := bundle(on)
-	if !regexp.MustCompile(`label:\s*"Checkout",\s*needs:\s*"checkout"`).MatchString(js) {
-		t.Errorf("the Checkout screen is not gated with needs: checkout")
+	if !regexp.MustCompile(`label:\s*"Checkout",\s*needs:\s*"checkout\|signoff"`).MatchString(js) {
+		t.Errorf("the Checkout screen is not shown to a person with checkout or signoff (a supervisor signs off and holds no checkout)")
 	}
-	for _, want := range []string{"/api/checkout", "Begin rehearsal", "is forced by", "/export?format=csv", "Sign off this run", "/report"} {
+	if !strings.Contains(js, "split(\"|\")") && !strings.Contains(js, "split(`|`)") && !strings.Contains(js, ".split(\"|\")") && !regexp.MustCompile(`split\(.\|.\)`).MatchString(js) {
+		t.Errorf("the nav does not take a screen's needs as any-of a list joined with |")
+	}
+	// abandoning asks in a dialog of the page's own, never a native prompt (it can be blocked, and then nothing happens)
+	if strings.Contains(js, "Why is this run abandoned?") {
+		t.Errorf("the Checkout page asks for an abandon reason with a native prompt")
+	}
+	for _, want := range []string{"/api/checkout", "Begin rehearsal", "is forced by", "Abandon this run", "/export?format=csv", "Sign off this run", "/report"} {
 		if !strings.Contains(js, want) {
 			t.Errorf("the checkout app lacks %q (the page or the banner is not linked)", want)
 		}
