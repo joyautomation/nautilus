@@ -2,7 +2,7 @@
 // which segments to fetch, the buffer rules, the bitrate meter, and the loop
 // against a fake fetch and a fake MediaSource.
 import { describe, it, expect } from './harness.js';
-import { parsePlaylist, codecFromInit, nextSegments, bufferTrim, liveSeek, BitrateMeter, playHls, MAX_SEGMENTS, FALLBACK_CODEC } from '../src/lib/hls.js';
+import { APPEND_FAILED, RESTARTED, NATIVE_FAILED, parsePlaylist, codecFromInit, nextSegments, bufferTrim, liveSeek, BitrateMeter, playHls, MAX_SEGMENTS, FALLBACK_CODEC } from '../src/lib/hls.js';
 
 const playlist = (seq: number, n: number, extra = '') =>
 	['#EXTM3U', '#EXT-X-VERSION:7', '#EXT-X-TARGETDURATION:2', `#EXT-X-MEDIA-SEQUENCE:${seq}`, '#EXT-X-MAP:URI="init.mp4"', extra]
@@ -120,7 +120,19 @@ class FakeBuf {
 	#fire(t: string) {
 		queueMicrotask(() => [...(this.#l[t] ?? [])].forEach((f) => f()));
 	}
+	/** what the next appends do instead of working: 'quota' throws QuotaExceededError, 'error' fires the error event */
+	failures: Array<'quota' | 'error'> = [];
+	/** appends that work before the failures begin (the init segment) */
+	skip = 0;
+	attempts = 0;
 	appendBuffer(d: Uint8Array) {
+		this.attempts++;
+		const fail = this.skip-- > 0 ? undefined : this.failures.shift();
+		if (fail === 'quota') throw Object.assign(new Error('full'), { name: 'QuotaExceededError' });
+		if (fail === 'error') {
+			this.#fire('error');
+			return;
+		}
 		this.appended.push(d);
 		this.buffered = { length: 1, start: () => 0, end: () => this.appended.length * 2 };
 		this.#fire('updateend');
@@ -142,7 +154,15 @@ class FakeMS {
 	constructor() {
 		FakeMS.last = this;
 	}
-	addEventListener() {}
+	streaming = true;
+	#l: Record<string, Array<() => void>> = {};
+	addEventListener(t: string, f: () => void) {
+		(this.#l[t] ??= []).push(f);
+	}
+	emit(t: string) {
+		this.streaming = t === 'startstreaming';
+		[...(this.#l[t] ?? [])].forEach((f) => f());
+	}
 	addSourceBuffer(t: string) {
 		this.types.push(t);
 		return this.buf;
@@ -156,7 +176,7 @@ class FakeMS {
 }
 const init = new Uint8Array([0, 0, 0, 8, 0x61, 0x76, 0x63, 0x43, 1, 0x4d, 0x00, 0x28]);
 const flush = async () => {
-	for (let i = 0; i < 60; i++) await Promise.resolve();
+	for (let i = 0; i < 400; i++) await Promise.resolve();
 };
 
 function rig(handler: (url: string) => Response | Error) {
@@ -292,5 +312,127 @@ describe('playHls', () => {
 		h.stop();
 		expect(bit).toEqual([]);
 		expect(FALLBACK_CODEC).toBe('avc1.42E01E');
+	});
+});
+
+describe('playHls (what a real browser does that the first fakes could not)', () => {
+	it('a segment the browser refuses ends the view with a message and is not retried for ever', async () => {
+		const r = rig(serve(() => 10));
+		FakeMS.last = FakeMS.last; // the rig made its MediaSource
+		await flush();
+		r.h.stop();
+		const r2 = rig(serve(() => 10));
+		FakeMS.last.buf.skip = 1;
+		FakeMS.last.buf.failures = ['error', 'error', 'error', 'error', 'error', 'error'];
+		await flush();
+		for (let i = 0; i < 6; i++) {
+			r2.sleeps.shift()?.();
+			await flush();
+		}
+		expect(r2.errors).toEqual([[APPEND_FAILED, 0]]);
+		expect(FakeMS.last.buf.attempts <= 3).toBe(true);
+	});
+
+	it('a full buffer is made room in once and the segment goes in again', async () => {
+		const r = rig(serve(() => 10));
+		const ms = FakeMS.last;
+		ms.buf.skip = 1;
+		ms.buf.failures = ['quota'];
+		await flush();
+		for (let i = 0; i < 3; i++) {
+			r.sleeps.shift()?.();
+			await flush();
+		}
+		expect(r.errors).toEqual([]);
+		expect(ms.buf.removed.length > 0).toBe(true);
+		r.h.stop();
+	});
+
+	it('a stream that restarted (its sequence begins again below ours) ends the view with a message', async () => {
+		let seq = 20;
+		const r = rig(serve(() => seq));
+		await flush();
+		seq = 1;
+		r.sleeps.shift()!();
+		await flush();
+		r.sleeps.shift()?.();
+		await flush();
+		expect(r.errors).toEqual([[RESTARTED, 0]]);
+	});
+
+	it('where the browser plays HLS itself, its error is asked about and the controller words shown', async () => {
+		const listeners: Record<string, () => void> = {};
+		const v: any = { src: '', play: () => Promise.resolve(), addEventListener: (t: string, f: () => void) => (listeners[t] = f), removeEventListener: (t: string) => delete listeners[t] };
+		const errors: Array<[string, number]> = [];
+		const h = playHls(v, '/api/cameras/c1/hls', {
+			env: { native: true, MediaSource: undefined, ManagedMediaSource: undefined },
+			fetch: (async () => new Response(JSON.stringify({ error: 'no permission to view cameras' }), { status: 403 })) as any,
+			onError: (m, s) => errors.push([m, s])
+		});
+		listeners.error();
+		await flush();
+		expect(errors).toEqual([['no permission to view cameras', 403]]);
+		h.stop();
+		expect(listeners.error).toBe(undefined);
+		// and when the controller answers fine, the browser simply could not play it
+		const l2: Record<string, () => void> = {};
+		const e2: Array<[string, number]> = [];
+		playHls({ src: '', play: () => Promise.resolve(), addEventListener: (t: string, f: () => void) => (l2[t] = f), removeEventListener() {} } as any, '/h', {
+			env: { native: true, MediaSource: undefined, ManagedMediaSource: undefined },
+			fetch: (async () => new Response('#EXTM3U')) as any,
+			onError: (m, s) => e2.push([m, s])
+		});
+		l2.error();
+		await flush();
+		expect(e2).toEqual([[NATIVE_FAILED, 0]]);
+	});
+
+	it("Apple's managed MediaSource is used when there is no MediaSource: remote playback off, and segments only while it asks for them", async () => {
+		const sleeps: Array<() => void> = [];
+		const asked: string[] = [];
+		const video: any = { src: '', currentTime: 0, muted: false, play: () => Promise.resolve(), removeAttribute() {}, load() {}, disableRemotePlayback: false };
+		Object.defineProperty(video, 'buffered', { get: () => FakeMS.last?.buf.buffered ?? { length: 0, start: () => 0, end: () => 0 } });
+		const errors: Array<[string, number]> = [];
+		let seq = 10;
+		const h = playHls(video, '/api/cameras/c1/hls', {
+			fetch: (async (url: string) => {
+				asked.push(url);
+				return serve(() => seq)(url);
+			}) as any,
+			onError: (m, s) => errors.push([m, s]),
+			env: {
+				MediaSource: undefined,
+				ManagedMediaSource: FakeMS,
+				native: true, // an iPhone can play HLS natively too: managed MSE is preferred
+				sleep: (_ms, signal) => new Promise<void>((res) => { sleeps.push(res); signal.addEventListener('abort', () => res()); }),
+				now: () => 0,
+				createObjectURL: () => 'blob:fake',
+				revokeObjectURL: () => {}
+			}
+		});
+		const ms = FakeMS.last;
+		expect(h.native).toBe(false);
+		expect(video.disableRemotePlayback).toBe(true);
+		await flush();
+		expect(asked.filter((u) => u.endsWith('.m4s')).length).toBe(2);
+		// the browser has enough: only the playlist is read from here on
+		ms.emit('endstreaming');
+		seq = 11;
+		sleeps.shift()!();
+		await flush();
+		sleeps.shift()?.();
+		await flush();
+		const segsWhileStopped = asked.filter((u) => u.endsWith('.m4s')).length;
+		expect(segsWhileStopped).toBe(2);
+		expect(asked.filter((u) => u.endsWith('index.m3u8')).length >= 2).toBe(true);
+		// and it takes data again when asked
+		ms.emit('startstreaming');
+		sleeps.shift()?.();
+		await flush();
+		sleeps.shift()?.();
+		await flush();
+		expect(asked.filter((u) => u.endsWith('.m4s')).length > segsWhileStopped).toBe(true);
+		expect(errors).toEqual([]);
+		h.stop();
 	});
 });

@@ -355,7 +355,7 @@ claims:
   - id: CAM-020
     claim: >-
       The asset page plays an RTSP camera's HLS stream (through Media Source
-      Extensions where the browser has them, natively where it has only HLS),
+      Extensions where the browser has them, Apple's managed variant on a recent iPhone, natively where it has only HLS),
       starting only on a click, showing the measured bitrate and stopping on Stop,
       when the tab is hidden and when the page goes away; a camera with no still
       shows a placeholder and no broken image.
@@ -367,4 +367,4 @@ claims:
       in hmi/tests/hls.test.ts, which this inventory does not run. The player was
       run in Chrome against a controller and a fake RTSP camera serving a real
       H.264 clip: it plays through MSE and measures the bitrate. Not run: Safari
-      or an iPhone (the native path), Firefox, a hidden tab, and a real camera.
+      or an iPhone (the managed and native paths), Firefox, a hidden tab, and a real camera.

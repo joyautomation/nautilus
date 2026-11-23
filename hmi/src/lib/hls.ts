@@ -156,6 +156,8 @@ export interface HlsOptions {
 	/** Everything the browser provides, injectable for tests. */
 	env?: {
 		MediaSource?: any;
+		/** Apple's MSE variant (iOS 17.1 and later), used when there is no MediaSource. */
+		ManagedMediaSource?: any;
 		/** Whether the video element plays HLS natively (Safari, iOS). */
 		native?: boolean;
 		sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
@@ -175,6 +177,16 @@ export const INTERRUPTED = 'The live video was interrupted.';
 export const UNSUPPORTED = 'This browser cannot play live video from this camera.';
 const UNREADABLE = 'The live video could not be read.';
 const RETRIES = 3;
+export const APPEND_FAILED = 'The browser could not play this live video (it refused a segment).';
+export const RESTARTED = "The camera's stream restarted: click Watch live again.";
+export const NATIVE_FAILED = 'This browser could not play the live video from this camera.';
+
+/** A SourceBuffer that would not take a segment (not a network problem: never retried as one). */
+class AppendError extends Error {
+	constructor(readonly quota: boolean) {
+		super('append failed');
+	}
+}
 
 class PlayError extends Error {
 	constructor(
@@ -213,16 +225,22 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 	const base = baseUrl.replace(/\/+$/, '');
 	const playlistUrl = `${base}/index.m3u8`;
 	const native = env.native ?? (typeof video.canPlayType === 'function' && video.canPlayType('application/vnd.apple.mpegurl') !== '');
-	const MS = 'MediaSource' in env ? env.MediaSource : (globalThis as any).MediaSource;
+	const stdMS = 'MediaSource' in env ? env.MediaSource : (globalThis as any).MediaSource;
+	const managedMS = 'ManagedMediaSource' in env ? env.ManagedMediaSource : (globalThis as any).ManagedMediaSource;
+	// the standard MSE where there is one; on an iPhone (iOS 17.1 and later) Apple's managed
+	// variant, which asks for data and tells us to stop (startstreaming/endstreaming)
+	const MS = stdMS ?? managedMS;
+	const managed = !stdMS && !!managedMS;
 	const doFetch = opts.fetch ?? ((u: string, i?: RequestInit) => globalThis.fetch(u, i));
 	const sleep = env.sleep ?? defaultSleep;
-	const now = env.now ?? (() => Date.now());
+	const now = env.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()));
 	const ctl = new AbortController();
 	let stopped = false;
 	let failedOnce = false;
 	let sb: any = null;
 	let ms: any = null;
 	let objectUrl = '';
+	let nativeCleanup: (() => void) | null = null;
 
 	const fail = (message: string, status: number) => {
 		if (stopped || failedOnce) return;
@@ -234,6 +252,7 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 	function stop() {
 		if (stopped) return;
 		stopped = true;
+		nativeCleanup?.();
 		ctl.abort();
 		try {
 			if (ms && ms.readyState === 'open') {
@@ -270,6 +289,29 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 	// same thing everywhere: Chrome's own native HLS is newer and refuses what the
 	// controller's segments are, a Safari without MSE (iPhone) is where native is needed)
 	if (native && !MS) {
+		const onNativeError = () => {
+			// the element says only that it failed: the controller's own words, if it said any
+			void (async () => {
+				try {
+					const res = await doFetch(playlistUrl, { credentials: 'same-origin', cache: 'no-store' });
+					if (!res.ok) {
+						let message = '';
+						try {
+							const j: any = JSON.parse(await res.text());
+							if (j && typeof j.error === 'string') message = j.error;
+						} catch {
+							// not JSON
+						}
+						return fail(message || `The camera did not answer (${res.status}).`, res.status);
+					}
+				} catch {
+					// no answer: the generic words below
+				}
+				fail(NATIVE_FAILED, 0);
+			})();
+		};
+		video.addEventListener?.('error', onNativeError);
+		nativeCleanup = () => video.removeEventListener?.('error', onNativeError);
 		video.src = playlistUrl;
 		void video.play?.()?.catch?.(() => {});
 		return { stop, native: true };
@@ -310,7 +352,7 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 			};
 			const bad = () => {
 				cleanup();
-				reject(new PlayError(INTERRUPTED, 0));
+				reject(new AppendError(false));
 			};
 			const cleanup = () => {
 				s.removeEventListener('updateend', ok);
@@ -320,9 +362,9 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 			s.addEventListener('error', bad);
 			try {
 				s.appendBuffer(data);
-			} catch {
+			} catch (e: any) {
 				cleanup();
-				reject(new PlayError(INTERRUPTED, 0));
+				reject(new AppendError(e?.name === 'QuotaExceededError'));
 			}
 		});
 
@@ -344,6 +386,14 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 
 	async function run() {
 		ms = new MS();
+		if (managed) {
+			// Apple's managed MSE refuses to play to a remote device unless told it may not
+			try {
+				(video as any).disableRemotePlayback = true;
+			} catch {
+				// a fake element
+			}
+		}
 		objectUrl = (env.createObjectURL ?? ((o: unknown) => URL.createObjectURL(o as MediaSource)))(ms);
 		video.src = objectUrl;
 		await new Promise<void>((resolve) => {
@@ -363,23 +413,48 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 		sb.mode = 'segments';
 		await append(init);
 
+		// the managed variant tells us when to stop and start taking data
+		let streaming = true;
+		if (managed) {
+			streaming = (ms as any).streaming !== false;
+			ms.addEventListener('startstreaming', () => (streaming = true));
+			ms.addEventListener('endstreaming', () => (streaming = false));
+		}
 		let last: number | null = null;
 		let started = false;
-		let errors = 0;
+		let segErrors = 0;
+		let plErrors = 0;
 		for (;;) {
 			if (stopped) return;
-			for (const seg of nextSegments(playlist, last)) {
+			// while the browser has enough, only the playlist is read (that keeps the lease)
+			for (const seg of streaming ? nextSegments(playlist, last) : []) {
 				if (stopped) return;
 				let retry = false;
+				let quotaTried = false;
 				try {
 					const data = new Uint8Array(await (await get(`${base}/${seg.uri}`)).arrayBuffer());
 					meter.add(data.length, now());
-					await append(data);
-					errors = 0;
+					for (;;) {
+						try {
+							await append(data);
+							break;
+						} catch (e) {
+							// a full buffer is made room in once, then the segment goes in again
+							if (e instanceof AppendError && e.quota && !quotaTried && sb) {
+								quotaTried = true;
+								const r = rangesOf(sb.buffered);
+								if (r.length) await remove({ start: r[0].start, end: Math.max(r[0].start + 1, Math.min(video.currentTime - 1, r[r.length - 1].end - 4)) });
+								continue;
+							}
+							throw e;
+						}
+					}
+					segErrors = 0;
 				} catch (e) {
 					if (stopped) return;
+					if (e instanceof AppendError) throw new PlayError(APPEND_FAILED, 0); // the browser refused it: no retry loop
 					// a segment that left the window is skipped, the next poll catches up
-					if (e instanceof PlayError && e.status === 0 && ++errors <= RETRIES) retry = true;
+					if (e instanceof PlayError && e.status === 0 && ++segErrors <= RETRIES) retry = true;
 					else if (!(e instanceof PlayError && e.status === 404)) throw e;
 				}
 				if (retry) break; // a network blip: poll again, the segment is asked for once more
@@ -396,7 +471,7 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 						video.muted = true;
 						void video.play?.()?.catch?.(() => {});
 					} catch {
-						// autoplay may be blocked: the controls stay
+						// autoplay may be blocked: the next segment tries again
 					}
 				}
 			}
@@ -406,12 +481,15 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 			if (stopped) return;
 			try {
 				playlist = await readPlaylist();
-				errors = 0;
+				plErrors = 0;
 			} catch (e) {
 				if (stopped) return;
-				if (e instanceof PlayError && e.status === 0 && ++errors <= RETRIES) continue;
+				if (e instanceof PlayError && e.status === 0 && ++plErrors <= RETRIES) continue;
 				throw e;
 			}
+			// a stream that restarted (its sequence numbers begin again below ours) is not one
+			// this player can follow: the init segment and the timeline are new
+			if (last !== null && playlist.mediaSequence + playlist.segments.length - 1 < last) throw new PlayError(RESTARTED, 0);
 		}
 	}
 
@@ -424,6 +502,7 @@ export function playHls(video: HTMLVideoElement, baseUrl: string, opts: HlsOptio
 	run().catch((e) => {
 		if (stopped) return;
 		if (e instanceof PlayError) fail(e.message, e.status);
+		else if (e instanceof AppendError) fail(APPEND_FAILED, 0);
 		else fail(INTERRUPTED, 0);
 	});
 	return { stop, native: false };

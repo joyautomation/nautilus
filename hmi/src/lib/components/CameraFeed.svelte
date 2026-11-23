@@ -110,7 +110,7 @@
 		<!-- svelte-ignore a11y_media_has_caption -->
 		<video bind:this={video} muted playsinline autoplay aria-label={alt}></video>
 	{:else if !live && !camera.snapshot}
-		<div class="nostill" role="img" aria-label={alt}>No still image: click Watch live to see the camera.</div>
+		<div class="nostill" role="group" aria-label={alt}>No still image: click Watch live to see the camera.</div>
 	{:else}
 	{#key live}
 		<img {src} {alt} onerror={failed} onload={loaded} />
