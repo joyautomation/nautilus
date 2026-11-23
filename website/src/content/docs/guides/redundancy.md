@@ -472,7 +472,10 @@ API port; the two ports may differ. The leader announces its port to
 the standby in the peer handshake, and the standby forwards API writes
 there. Until the standby has heard it (the first second or so after a
 start, or from a peer running an older release), it answers reads
-itself and refuses writes, saying no leader is known.
+itself and refuses writes, saying no leader is known. A standby that
+started before its peer asks again within a lease or so of the peer
+coming up; while the peer stays unreachable it asks less often, up to
+every 16 leases (at least 5 s).
 
 A forwarded request has deadlines: 2 s to connect to the leader (then
 the standby waits for the next leader and sends it there, since the

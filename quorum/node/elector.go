@@ -448,6 +448,14 @@ type Elector struct {
 	gate    atomic.Pointer[gateState]
 	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
 	wake    chan struct{}
+	// helloNow asks the hello loop for a hello at once, from the fast
+	// start: the link to the peer came up, or the peer's votes carry a new
+	// boot nonce (it restarted). peerDown and peerVoteNonce, under mu, are
+	// what those are judged against.
+	helloNow      chan struct{}
+	peerDown      bool
+	peerVoteNonce uint64
+
 	w       *writer
 	running atomic.Bool
 	ctx     context.Context // Run's: sends end with it
@@ -521,7 +529,7 @@ func New(o Options) (*Elector, error) {
 		call: caller{client: client, token: o.Token, lease: o.Lease, members: members(o.Self, o.Peer)},
 		peer: baseURL(o.PeerAddr, o.TLS != nil), wit: baseURL(o.WitnessAddr, o.TLS != nil), nonce: drawNonce(),
 		waiters: map[waitKey]chan quorum.Reply{}, written: make(chan struct{}), mismatch: map[string]string{}, links: map[string]string{},
-		wake: make(chan struct{}, 1), events: make(chan Event, 64), decided: make(chan struct{}),
+		wake: make(chan struct{}, 1), helloNow: make(chan struct{}, 1), events: make(chan Event, 64), decided: make(chan struct{}),
 	}
 	e.call.note, e.call.tls = e.noteLink, o.TLS != nil
 	free := func() {}
@@ -1153,6 +1161,9 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 // cleared when a call to it gets an answer. An error that says nothing
 // about TLS (a timeout, a refused connection) leaves them as they stand.
 func (e *Elector) noteLink(url string, err error) {
+	if strings.HasPrefix(url, e.peer+Prefix) && strings.HasSuffix(url, "/vote") {
+		e.notePeerLink(err) // votes only: a hello's own failure must not count, or each vote would ask again
+	}
 	if mut("peer_tls_mismatch_unnamed") {
 		return
 	}
@@ -1326,6 +1337,12 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 			e.peerAt, e.peerHeard = now, true
 		}
 		e.v.Hear(now, req.From, req.Nonce, req.Promise)
+		if req.Nonce != e.peerVoteNonce {
+			// The peer's first vote, or a new boot of it: its hello
+			// answer may say something new (its API address among it).
+			e.peerVoteNonce = req.Nonce
+			defer e.hellosAgain()
+		}
 		e.c.Observe(req.Term)
 		quorum.YieldTo(now, e.v, e.c, req)
 	}
@@ -1610,21 +1627,91 @@ func helloEvery(lease time.Duration) time.Duration { return max(16*lease, 5*time
 // hello runs the client-token check against the peer: at start and every
 // 16 leases (at least every 5 s), raising EventClientToken when the
 // answer changes.
+//
+// A hello that gets no verified answer is retried sooner (#1120): the
+// standby's leader API address, its credential checks and the peer's
+// configuration all come only from a verified answer, and with a peer
+// that started after this controller (both powered up together, or the
+// peer restarted) a whole interval would refuse the standby's writes
+// instead of forwarding them for up to 16 leases. The retry starts at
+// helloRetry and doubles up to the interval, so a dead peer is not asked
+// (a TLS handshake each time) every second for ever. A link to the peer
+// that comes up, or a new boot of the peer heard in its votes, sends a
+// hello at once and starts the retries over (hellosAgain).
+//
+// The ask is spaced too: a hello it sends comes at least helloRetry after
+// the one before, so two processes behind the peer's name (their votes
+// alternating boot nonces) or a link that flaps at every other call send
+// a hello a lease or so at most, never one after another (#1120 review).
 func (e *Elector) hello(ctx context.Context) {
 	every := helloEvery(e.o.Lease)
+	first := helloRetry(e.o.Lease)
+	retry := first
 	for {
-		e.checkToken(ctx)
+		sent := time.Now()
+		wait := every
+		if !e.checkToken(ctx) && !mut("hello_retry_slow") {
+			wait = retry
+			retry = min(2*retry, every)
+		} else {
+			retry = first
+		}
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
-		case <-time.After(every):
+		case <-t.C:
+		case <-e.helloNow:
+			t.Stop()
+			retry = first
+			if gap := time.Until(sent.Add(first)); gap > 0 && !mut("hello_asks_unspaced") {
+				t = time.NewTimer(gap)
+				select {
+				case <-ctx.Done():
+					t.Stop()
+					return
+				case <-t.C:
+				}
+			}
 		}
 	}
 }
 
-func (e *Elector) checkToken(ctx context.Context) {
+// helloRetry is the first retry after a hello with no verified answer:
+// a lease, at least a second.
+func helloRetry(lease time.Duration) time.Duration { return max(lease, time.Second) }
+
+// hellosAgain asks the hello loop for a hello now, if it is not asked
+// already.
+func (e *Elector) hellosAgain() {
+	if mut("hello_not_asked_again") {
+		return
+	}
+	select {
+	case e.helloNow <- struct{}{}:
+	default:
+	}
+}
+
+// notePeerLink follows the link to the peer from its vote calls'
+// outcomes: one answered after one that was not is the link coming up
+// (the peer started, or a cut healed), and the hello goes at once.
+func (e *Elector) notePeerLink(err error) {
+	e.mu.Lock()
+	up := err == nil && e.peerDown
+	e.peerDown = err != nil
+	e.mu.Unlock()
+	if up {
+		e.hellosAgain()
+	}
+}
+
+// checkToken sends one hello and reports whether it got a verified
+// answer.
+func (e *Elector) checkToken(ctx context.Context) bool {
 	if e.mute() {
-		return // a spare says nothing to its peer, its boot nonce included
+		return true // a spare says nothing to its peer, its boot nonce included: nothing to retry
 	}
 	c := newChallenge()
 	q := url.Values{"c": {c}, "from": {string(e.o.Self)}}
@@ -1632,17 +1719,17 @@ func (e *Elector) checkToken(ctx context.Context) {
 	body, err := e.call.call(ctx, max(e.o.Lease, time.Second), http.MethodGet, e.peer+Prefix+e.o.Cluster+"/hello?"+q.Encode(), nil)
 	if err != nil {
 		e.credentialsUnknown() // the check can't run: no stale banner
-		return
+		return false
 	}
 	var h helloAnswer
 	if json.Unmarshal(body, &h) != nil {
 		e.credentialsUnknown()
-		return
+		return false
 	}
 	if h.Node != string(e.o.Peer) {
 		e.log.Error("redundancy: the peer's address answers as another node", "addr", e.o.PeerAddr, "want", e.o.Peer, "got", h.Node)
 		e.credentialsUnknown()
-		return
+		return false
 	}
 	pi, verified := e.answerVerified(c, h)
 	if verified {
@@ -1667,6 +1754,7 @@ func (e *Elector) checkToken(ctx context.Context) {
 	case changed:
 		e.log.Info("redundancy: the peer holds the same client token")
 	}
+	return verified
 }
 
 // checkCredentials judges the peer's credential answer for challenge c
