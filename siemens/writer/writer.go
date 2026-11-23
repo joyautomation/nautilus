@@ -14,9 +14,11 @@
 //
 // What it does not translate yet it refuses with a rule-tagged
 // diagnostic, never a guess, worded as the writer's gap with the issue
-// that closes it (gaps.go): more than one task, user FUNCTIONs and
-// FUNCTION_BLOCKs, enums, arrays, STRING, LTIME, TIME arithmetic, SFC,
-// and every builtin outside the table in expr.go. STRUCTs the project
+// that closes it (gaps.go): user FUNCTIONs and FUNCTION_BLOCKs, enums,
+// arrays, STRING, LTIME, TIME arithmetic, SFC, and every builtin outside
+// the table in expr.go. Each task is its own cyclic interrupt OB, and
+// the tags tasks share are copied per task as nautilus copies them
+// (tasks.go). STRUCTs the project
 // declares are written inline (structs.go), with nautilus's start
 // values; programs are lowered with the project's library in scope, as
 // naut check compiles them.
@@ -299,7 +301,7 @@ func Write(in Input) (Output, []Diag, error) {
 		return true
 	}
 
-	progs := map[string]bool{}
+	var ready []parsed
 	for _, p := range in.Programs {
 		if isSFC(p) {
 			w.diag("siemens/sfc", p.Path, 1, gapMessage(gapSFC, "SFC programs", "they will be written as SCL state machines"))
@@ -313,12 +315,24 @@ func Write(in Input) (Output, []Diag, error) {
 		if err != nil {
 			return Output{}, nil, fmt.Errorf("%s: %w", p.Path, err)
 		}
-		mark, wmark := len(w.diags), len(w.warnings)
 		if !strings.EqualFold(prog.TopKeyword, "PROGRAM") || prog.Name == "" {
 			w.diag("siemens/program", p.Path, 1, "the source declares no PROGRAM")
 			continue
 		}
-		pw := w.program(p.Path, p.Libs, src, prog)
+		ready = append(ready, parsed{path: p.Path, src: src, libs: p.Libs, lines: lines, prog: prog})
+	}
+	// With more than one task, what each task shares with the others
+	// (tasks.go), before any program is written: a program's FB reads a
+	// shared tag from its task's copy.
+	if len(in.Tasks) > 1 {
+		w.shares = w.sharing(in, ready)
+	}
+
+	progs := map[string]bool{}
+	for _, p := range ready {
+		prog, lines := p.prog, p.lines
+		mark, wmark := len(w.diags), len(w.warnings)
+		pw := w.program(p.path, p.libs, p.src, prog)
 		for i := mark; i < len(w.diags); i++ {
 			w.diags[i].Line = mapLine(lines, w.diags[i].Line)
 		}
@@ -341,8 +355,8 @@ func Write(in Input) (Output, []Diag, error) {
 		for i, l := range pw.lines {
 			body[i] = mapLine(lines, l)
 		}
-		out.Sources[fbName+".scl"] = Source{Path: p.Path, Body: body}
-		out.Sources[dbName+".db"] = Source{Path: p.Path}
+		out.Sources[fbName+".scl"] = Source{Path: p.path, Body: body}
+		out.Sources[dbName+".db"] = Source{Path: p.path}
 		out.Roots[prog.Name] = quote(dbName)
 	}
 
@@ -363,14 +377,6 @@ func Write(in Input) (Output, []Diag, error) {
 		out.Sources[name+".scl"] = Source{Path: w.guarded[fn]}
 	}
 
-	// One task in v1. nautilus copies shared tags in at a task's scan
-	// start and commits them at its end, while cyclic interrupt OBs
-	// preempt each other and touch the tags DB in place: with two tasks
-	// the CPU would see a different data model. Copy-in/copy-out comes
-	// later, as its own item.
-	if len(in.Tasks) > 1 {
-		w.diag("siemens/task", "nautilus.yaml", 0, gapMessage(gapTasks, fmt.Sprintf("more than one task (%d here)", len(in.Tasks)), "nautilus's per-task copy of shared tags has no SCL form yet"))
-	}
 	// nautilus writes a task's dt-tag every scan; nothing on the CPU
 	// would, so the tag would stay 0 and every integrator built on it
 	// would stop (#1310). RUNTIME() is the translation, once its first
@@ -380,11 +386,17 @@ func Write(in Input) (Output, []Diag, error) {
 			w.diag("siemens/dt-tag", "nautilus.yaml", 0, gapMessage(gapDtTag, fmt.Sprintf("task %s's dt-tag %s", t.Name, t.DtTag), "nothing on the CPU writes it, so integrators and PI loops built on it would read 0"))
 		}
 	}
+	// One cyclic interrupt OB per task: OB30 to OB38, then from 123, the
+	// numbers an S7-1500 gives cyclic interrupts.
+	runBy := map[string]string{}
 	for i, t := range in.Tasks {
-		if i > 0 {
-			break
+		pk := strings.ToLower(t.Program)
+		if other, twice := runBy[pk]; twice {
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s runs program %s, which task %s runs too", t.Name, t.Program, other))
+			continue
 		}
-		if !progs[strings.ToLower(t.Program)] {
+		runBy[pk] = t.Name
+		if !progs[pk] {
 			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s runs program %s, which the writer could not write (its diagnostics are above)", t.Name, t.Program))
 			continue
 		}
@@ -399,12 +411,34 @@ func Write(in Input) (Output, []Diag, error) {
 			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: interval %s is over the 60 s an S7-1500 cyclic interrupt allows", t.Name, t.Interval))
 			continue
 		}
-		ob := OB{Name: prefix + "OB_" + t.Name, Number: 30, Cycle: t.Interval}
+		number := 30 + i
+		if i > 8 {
+			number = 123 + i - 9
+		}
+		ob := OB{Name: prefix + "OB_" + t.Name, Number: number, Cycle: t.Interval}
 		if !claim(ob.Name, "the OB of task "+t.Name) {
 			continue
 		}
+		sh := w.shares[pk]
+		if sh != nil {
+			if !claim(sh.db, "the scan DB of task "+t.Name) {
+				continue
+			}
+			db, why := w.scanDB(sh)
+			if why != "" {
+				w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: %s", t.Name, why))
+				continue
+			}
+			out.Files = append(out.Files, File{Path: sh.db + ".db", Data: db})
+			out.Sources[sh.db+".db"] = Source{Path: "nautilus.yaml"}
+		}
+		src, why := w.obSource(ob, prefix+t.Program+"_DB", sh)
+		if why != "" {
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: %s", t.Name, why))
+			continue
+		}
 		out.OBs = append(out.OBs, ob)
-		out.Files = append(out.Files, File{Path: ob.Name + ".scl", Data: obSource(ob, prefix+t.Program+"_DB")})
+		out.Files = append(out.Files, File{Path: ob.Name + ".scl", Data: src})
 		out.Sources[ob.Name+".scl"] = Source{Path: "nautilus.yaml"}
 	}
 
@@ -445,6 +479,9 @@ type writer struct {
 	// guarded are the guarded division functions the programs call
 	// (ops.go), each with the first program that called it.
 	guarded map[string]string
+	// shares is what each program (lower-cased) shares with the other
+	// tasks (tasks.go).
+	shares map[string]*share
 }
 
 func (w *writer) useGuarded(fn, path string) {
@@ -472,18 +509,6 @@ func instanceDB(fb, db string) []byte {
 	// override it.
 	fmt.Fprintf(&b, "%s\n", quote(fb))
 	b.WriteString("\nBEGIN\n\nEND_DATA_BLOCK\n")
-	return []byte(b.String())
-}
-
-func obSource(ob OB, instDB string) []byte {
-	var b strings.Builder
-	fmt.Fprintf(&b, "ORGANIZATION_BLOCK %s\n", quote(ob.Name))
-	fmt.Fprintf(&b, "TITLE = \"Cyclic interrupt, %s\"\n", ob.Cycle)
-	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\n")
-	b.WriteString("VERSION : 0.1\n")
-	b.WriteString("\nBEGIN\n")
-	fmt.Fprintf(&b, "\t%s();\n", quote(instDB))
-	b.WriteString("END_ORGANIZATION_BLOCK\n")
 	return []byte(b.String())
 }
 

@@ -38,7 +38,7 @@ func golden(t *testing.T, fixture string, globals []Global) Output {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, diags, err := Write(Input{
+	return goldenInput(t, fixture, Input{
 		Programs: []Program{{Path: "Main.st", Source: string(src)}},
 		Globals:  globals,
 		Tasks:    []Task{{Name: "main", Program: "Main", Interval: 100 * time.Millisecond}},
@@ -46,6 +46,13 @@ func golden(t *testing.T, fixture string, globals []Global) Output {
 		// collide with TIA's own "Main" [OB1] (#789).
 		BlockPrefix: "naut_",
 	})
+}
+
+// goldenInput writes in and compares every generated file with
+// testdata/<fixture>/golden/.
+func goldenInput(t *testing.T, fixture string, in Input) Output {
+	t.Helper()
+	out, diags, err := Write(in)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +107,10 @@ func TestGolden(t *testing.T) {
 }
 
 func TestTaskRules(t *testing.T) {
-	prog := []Program{{Path: "p.st", Source: "PROGRAM P\nVAR x : REAL; END_VAR\nx := x + 1.0;\nEND_PROGRAM\n"}}
+	prog := []Program{
+		{Path: "p.st", Source: "PROGRAM P\nVAR x : REAL; END_VAR\nx := x + 1.0;\nEND_PROGRAM\n"},
+		{Path: "q.st", Source: "PROGRAM Q\nVAR x : REAL; END_VAR\nx := x + 1.0;\nEND_PROGRAM\n"},
+	}
 	for _, c := range []struct {
 		name  string
 		tasks []Task
@@ -109,7 +119,12 @@ func TestTaskRules(t *testing.T) {
 		{"no interval", []Task{{Name: "main", Program: "P"}}, "no interval"},
 		{"over 60 s", []Task{{Name: "main", Program: "P", Interval: 61 * time.Second}}, "60 s"},
 		{"sub-millisecond", []Task{{Name: "main", Program: "P", Interval: 1500 * time.Microsecond}}, "whole number"},
-		{"two tasks", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "P", Interval: 2 * time.Second}}, "more than one task (2 here) yet (#1300)"},
+		{"one program, two tasks", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "P", Interval: 2 * time.Second}}, "task slow runs program P, which task main runs too"},
+		// The rules hold for every task, not the first alone.
+		{"second task over 60 s", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "Q", Interval: 61 * time.Second}}, "task slow: interval 1m1s is over the 60 s"},
+		{"second task sub-millisecond", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "fast", Program: "Q", Interval: 1500 * time.Microsecond}}, "task fast: interval 1.5ms is not a whole number"},
+		{"second task no interval", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "fast", Program: "Q"}}, "task fast has no interval"},
+		{"second task no program", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "fast", Program: "R", Interval: time.Second}}, "task fast runs program R, which the writer could not write"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, diags, err := Write(Input{Programs: prog, Tasks: c.tasks})

@@ -215,7 +215,8 @@ refused at check time, with one exception, the table below.
 | nautilus | Siemens |
 |---|---|
 | Program | an FB (`naut_Main`) with an instance DB, called from the task's OB |
-| The task | a cyclic interrupt OB at that cycle, 1 ms to 60 s. One task |
+| Each task | a cyclic interrupt OB at its cycle, 1 ms to 60 s: OB30 to OB38, then from OB123 |
+| A tag two or more tasks use | a copy per task, as nautilus keeps one: the task's OB copies the tag in before its program runs and writes back only what the scan assigned (see [More than one task](#more-than-one-task)) |
 | Manifest tags | one global DB, `naut_Tags`, with each tag's `init:` as its start value (I/O tags as a PLC tag table come later) |
 | STRUCT types, in a library file or the program | written inline where they are used, with the TYPE's initial values and a tag's `init:` map as start values; a whole struct is copied member by member |
 | TON, TOF, TP, R_TRIG, F_TRIG, CTU, CTD, CTUD | the IEC instructions as multi-instances; counters are 64-bit |
@@ -228,6 +229,33 @@ refused at check time, with one exception, the table below.
 Field drivers (Modbus, OPC UA client, EtherNet/IP, MQTT, IT) do not run
 on a Siemens target. They run in `naut`.
 
+## More than one task
+
+nautilus runs each task's scan on its own copy of the tags it shares with
+other tasks. At the end of the scan only what the scan assigned is written
+back, member by member and bit by bit. A scan never sees another task's
+half-finished scan, and a tag a scan did not assign keeps what another
+task or an operator wrote meanwhile.
+
+The Siemens program does the same. A tag that only one task uses stays in
+`naut_Tags`, and its program reads and writes it there. For a tag that two
+or more tasks use, each of those tasks gets a DB, `naut_Scan_<task>`,
+which holds:
+
+- the task's copy of each such tag;
+- a flag for each part of the tag the program can write, set by the
+  statement that writes it.
+
+The task's OB copies the tags in, calls the program, writes back what
+the flags mark, and clears them.
+
+All the task OBs run at the priority TIA gives a new cyclic interrupt OB
+(13 on TIA V21), so none interrupts another. That keeps the copy-in and
+the write-back in one piece. It also means a fast task can wait behind a
+slow one, which nautilus's tasks never do. Giving faster tasks a higher
+priority is a later step. A task's `priority:` in `nautilus.yaml` (a Linux
+real-time priority) has no effect on a Siemens target.
+
 ## What does not translate yet
 
 These are gaps in the writer, not rules for you. The diagnostic reads
@@ -237,7 +265,6 @@ that closes it.
 | Issue | Not translated yet |
 |---|---|
 | #1299 | enums, arrays |
-| #1300 | more than one task |
 | #1301 | user FUNCTIONs and FUNCTION_BLOCKs, library FBs, `VAR CONSTANT` |
 | #1302 | SFC. It will be written as an SCL state machine first |
 | #1303 | STRING and the string functions |

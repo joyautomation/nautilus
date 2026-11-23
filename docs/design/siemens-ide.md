@@ -272,7 +272,7 @@ Native LAD (SimaticML FlgNet) is D3.
 | nautilus | SCL / TIA |
 |---|---|
 | Program | FB `"naut_Main"` with an instance DB `"naut_Main_DB"`, called from its task's OB `"naut_OB_main"`. Every generated block name carries the block prefix (below) |
-| The task (`scan:`) | Cyclic interrupt OB30 at that cycle, 1 ms to 60 s. **One task in v1**: nautilus copies shared tags in at a task's scan start and commits them at its end, while cyclic interrupt OBs preempt each other and touch the tags DB in place. Copy-in/copy-out for several tasks is its own later item. nautilus has no free-running task, so there is no OB1 |
+| Each task (`scan:`) | A cyclic interrupt OB at its cycle, 1 ms to 60 s: OB30 to OB38, then from OB123. nautilus copies shared tags in at a task's scan start and commits what the scan assigned at its end (runtime/scanview.go); the writer does the same per task (#1300, siemens/writer/tasks.go): a tag two or more tasks name is read and written in a per-task copy (`naut_Scan_<task>`), copied in by the OB before the FB call, and committed after it under per-member / per-bit "assigned" flags. Every OB keeps TIA's default priority (13 on V21, measured 2026-11-23, equal for OB30/31/123), so no task OB preempts another; rate-monotonic priorities with the copy under DIS_AIRT are the follow-up. nautilus has no free-running task, so there is no OB1 |
 | Manifest tags | Global DB `"naut_Tags"` (optimized), the Web API symbol `"naut_Tags".Level`. Members are visible and writable to Web API/HMI/OPC UA *(verify the attribute spelling in SCL source)* |
 | I/O-bound tags | PLC tag table, `%I`/`%Q` addresses from the station spec |
 | UDT | Written inline (`Struct … END_STRUCT`) where used, with nautilus's start values (#1299, measured on TIA V21). A PLC data type (`.udt`) comes with user FBs (#1301), whose struct parameters need one; tiad refuses data types until it can keep a customer's apart |
@@ -310,7 +310,8 @@ The rules:
   the person: the diagnostic reads "the Siemens writer doesn't translate X
   yet (#N)", N the issue that closes it. B #1299 enums and arrays (structs and
   their start values are written, the library is in scope); C #1300
-  more than one task; D #1301 user FUNCTIONs and FUNCTION_BLOCKs, library
+  more than one task (written since C: per-task copies of shared tags);
+  D #1301 user FUNCTIONs and FUNCTION_BLOCKs, library
   FBs, VAR CONSTANT; E #1302 SFC (an SCL state machine first; GRAPH
   maybe later as an option, James 11-23); F #1303 STRING (TIA's holds 254
   characters, a nautilus STRING has no length) and the string functions;

@@ -1,0 +1,19 @@
+ORGANIZATION_BLOCK "naut_OB_fast"
+TITLE = "Cyclic interrupt, 10ms"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	// The tags this task shares with others, copied in: the program works on the copy.
+	"naut_Scan_fast".tags.Alarm := "naut_Tags".Alarm;
+	"naut_Scan_fast".tags.Done := "naut_Tags".Done;
+	"naut_Scan_fast".tags.Level := "naut_Tags".Level;
+	"naut_Scan_fast".tags.Pump.Run := "naut_Tags".Pump.Run;
+	"naut_Scan_fast".tags.Pump.Speed := "naut_Tags".Pump.Speed;
+	"naut_Fast_DB"();
+	// What the scan assigned, back into the tags DB, member by member and bit by bit.
+	IF "naut_Scan_fast".assigned.Level THEN
+		"naut_Tags".Level := "naut_Scan_fast".tags.Level;
+		"naut_Scan_fast".assigned.Level := FALSE;
+	END_IF;
+END_ORGANIZATION_BLOCK

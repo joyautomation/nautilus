@@ -1,0 +1,13 @@
+FUNCTION_BLOCK "naut_Fast"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	IF "naut_Scan_fast".tags.Pump.Run AND NOT ("naut_Scan_fast".tags.Done OR "naut_Scan_fast".tags.Alarm) THEN
+		"naut_Scan_fast".tags.Level := "naut_Scan_fast".tags.Level + "naut_Scan_fast".tags.Pump.Speed * 0.01;
+		"naut_Scan_fast".assigned.Level := TRUE;
+	ELSE
+		"naut_Scan_fast".tags.Level := "naut_Scan_fast".tags.Level - 0.5;
+		"naut_Scan_fast".assigned.Level := TRUE;
+	END_IF;
+END_FUNCTION_BLOCK

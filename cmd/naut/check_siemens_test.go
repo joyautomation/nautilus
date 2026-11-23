@@ -73,10 +73,10 @@ func TestCheckSiemensTargetRunsTheWritersRules(t *testing.T) {
 }
 
 // TestCheckSiemensTargetReportsProjectRules: a rule with no source line
-// (the writer writes one task so far) is reported against the manifest
-// check reads, here one named with -m.
+// (a task's dt-tag, which nothing on the CPU writes yet) is reported
+// against the manifest check reads, here one named with -m.
 func TestCheckSiemensTargetReportsProjectRules(t *testing.T) {
-	m := strings.Replace(goodSiemensManifest, "    scan: 100ms\n", "    scan: 100ms\n  - program: other.st\n    scan: 50ms\n", 1)
+	m := strings.Replace(goodSiemensManifest, "    scan: 100ms\n", "    scan: 100ms\n  - program: other.st\n    scan: 50ms\n    dt-tag: OtherDtS\n", 1)
 	dir := writeProject(t, map[string]string{
 		"s7.yaml":  m,
 		"main.st":  siemensCheckProgram,
@@ -86,8 +86,22 @@ func TestCheckSiemensTargetReportsProjectRules(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1:\n%s", code, out)
 	}
-	if !strings.Contains(out, "s7.yaml: siemens target: the Siemens writer doesn't translate more than one task (2 here) yet (#1300)") || !strings.Contains(out, "[siemens/task]") {
+	if !strings.Contains(out, "s7.yaml: siemens target: the Siemens writer doesn't translate task other's dt-tag OtherDtS yet (#1310)") || !strings.Contains(out, "[siemens/dt-tag]") {
 		t.Fatalf("no task diagnostic against s7.yaml:\n%s", out)
+	}
+}
+
+// TestCheckSiemensTargetWritesTwoTasks: two tasks sharing a tag pass the
+// writer (#1300): each is its own OB, the shared tag copied per task.
+func TestCheckSiemensTargetWritesTwoTasks(t *testing.T) {
+	m := strings.Replace(goodSiemensManifest, "    scan: 100ms\n", "    scan: 100ms\n  - name: other\n    program: other.st\n    scan: 50ms\n", 1)
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": m,
+		"main.st":       siemensCheckProgram,
+		"other.st":      "PROGRAM other\nVAR y : REAL; END_VAR\ny := Level;\nEND_PROGRAM\n",
+	})
+	if code != 0 || strings.Contains(out, "siemens target") {
+		t.Fatalf("exit %d, want 0 and no writer diagnostic:\n%s", code, out)
 	}
 }
 

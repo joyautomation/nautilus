@@ -398,9 +398,7 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 		"TYPE Mode : (Run, Stop); END_TYPE\nPROGRAM P\nVAR a : INT; END_VAR\nEND_PROGRAM\n",
 		"FUNCTION F : INT\nF := 1;\nEND_FUNCTION\nPROGRAM P\nVAR a : INT; END_VAR\na := F();\nEND_PROGRAM\n",
 	} {
-		_, d, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}, Tasks: []Task{
-			{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "P", Interval: time.Second},
-		}})
+		_, d, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}, Tasks: []Task{{Name: "main", Program: "P", Interval: time.Second}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -431,7 +429,7 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 		}
 		gaps++
 	}
-	if gaps < 12 {
+	if gaps < 11 {
 		t.Errorf("only %d gaps exercised: %v", gaps, diags)
 	}
 }
