@@ -191,6 +191,24 @@ func (e Entry) NoteBody() (n NoteEntry, ok bool) {
 	return n, true
 }
 
+// CheckoutEntryOf is the log entry that carries one I/O checkout entry (#719):
+// a run begun, a result, a force and its end, an abandon, a seal. The body is
+// the checkout store's own entry JSON, in Value (the field every build keeps),
+// and the store, not the log, decides at apply what it means: the same
+// decision on every replica, from the same sequence.
+func CheckoutEntryOf(by string, body []byte) Entry {
+	return Entry{Kind: KindCheckout, By: by, Value: json.RawMessage(body)}
+}
+
+// CheckoutBody is the checkout entry a KindCheckout entry carries; ok is false
+// for another kind and for an entry with no body.
+func (e Entry) CheckoutBody() (body []byte, ok bool) {
+	if e.Kind != KindCheckout || len(e.Value) == 0 {
+		return nil, false
+	}
+	return e.Value, true
+}
+
 // SessionEntry is one change to a browser sign-in (#716): a session opened
 // on the leader, or ended. It is data the log carries for the server's
 // session store, which decides what it means; like a note it travels in
@@ -279,6 +297,11 @@ const (
 	// log is never compacted, so a copy that was wiped is brought every
 	// note back by catch-up, as it is every acknowledgement.
 	KindNote = "note"
+
+	// KindCheckout is one entry of an I/O checkout run (#719 slice 5): see
+	// CheckoutEntryOf. A build from before it keeps the entry whole (the body
+	// is in Value) and applies it when it is upgraded and replays.
+	KindCheckout = "checkout"
 
 	// KindSession is a browser session opening or ending on the leader
 	// (#716): see SessionEntry. It lets a session survive a takeover, and

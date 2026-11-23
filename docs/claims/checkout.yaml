@@ -227,3 +227,44 @@ claims:
       - go ./checkout TestTheSigningKey
       - go ./cmd/naut TestCheckoutVerifyCommand
       - go ./server TestEveryWritePathJournalsExactlyOneEntry
+
+  - id: CHK-014
+    claim: >-
+      On a redundant pair the checkout's runs live in the operator-intent log,
+      not in a file: every entry is proposed through the log and applied at
+      commit on every replica by one deterministic apply (the log's own
+      sequence number and time, never the clock), so both controllers hold
+      the same runs and write the same canonical results file; an entry apply
+      refuses (a second run begun on the other controller in the same moment)
+      is skipped alike on every replica and the proposer is told; a write with
+      no majority is refused before anything is proposed and never queued; a
+      seal is signed by the controller that proposes it over the chain as it
+      stood and is applied only if nothing committed first (else signed
+      again), and any replica rebuilds the sealed record from its own entries
+      and refuses to serve one that does not hash to what was signed; a replica
+      that was away catches up from the log.
+    source: "#a-redundant-pair"
+    tests:
+      - go ./checkout TestAPairHoldsOneRunOnBothControllers
+      - go ./checkout TestTwoBeginsInTheSameMomentLoseTheSecondOnEveryReplica
+      - go ./checkout TestAPairRefusesWritesWithoutAMajority
+      - go ./checkout TestASealOnOneControllerVerifiesFromTheOther
+      - go ./checkout TestASealThatRacedAResultIsSignedAgain
+      - go ./checkout TestAReplicaWithAnotherSheetRefusesTheSealedRecord
+      - go ./checkout TestAReplicaWithAnotherHistoryRefusesTheSealedRecord
+      - go ./checkout TestReplayGivesTheSameStoreAndResetEmptiesIt
+      - go ./checkout TestConcurrentWritersOnAPairAllLand
+      - go ./checkout TestATakeoverEndsAForceTheLogStillHas
+      - go ./server TestACheckoutOnAPairIsOnBothControllers
+      - go ./server TestASealSignedOnOneControllerVerifiesFromTheOtherOnAPair
+      - go ./server TestACheckoutWriteWithoutAMajorityIsRefusedAndNeverQueued
+      - go ./server TestAControllerThatWasAwayCatchesUpTheRuns
+      - go ./server TestCheckoutLogHandsOtherKindsOn
+      - go ./server TestARealisticCheckoutRunIsAFewMegabytesOfLog
+    partial: true
+    note: >-
+      The store, the log adapter and the oplog kind are built and tested on
+      real oplog nodes; naut run does not use them yet (a pair still answers
+      that the checkout is not available): that wiring, the takeover's end of
+      a standing force, the two keys' fingerprints on the page and the refusal
+      to enable it beside an older controller are the next step.

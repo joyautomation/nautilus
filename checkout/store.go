@@ -3,6 +3,7 @@ package checkout
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -99,9 +100,14 @@ type entry struct {
 	Forced  any `json:"forced,omitempty"`
 	Seconds int `json:"seconds,omitempty"`
 
-	// kind seal: the SHA-256 of the signed payload, and the signature (seal.go)
-	SealSha string `json:"sealsha,omitempty"`
-	Sig     string `json:"sig,omitempty"`
+	// kind seal: the SHA-256 of the signed payload, and the signature (seal.go);
+	// on a pair, the payload itself, the public key and the chain position it
+	// was signed at (there is no record file: every replica rebuilds the record)
+	SealSha string          `json:"sealsha,omitempty"`
+	Sig     string          `json:"sig,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+	PubKey  string          `json:"pubkey,omitempty"`
+	PrevSeq int64           `json:"prevseq,omitempty"`
 
 	// kinds result, abandon and seal
 	Note   string `json:"note,omitempty"`
@@ -193,6 +199,11 @@ type Run struct {
 	forces map[string][]*forceState
 	// standing is the checkout force that has begun and not ended.
 	standing *forceState
+	// a sealed run's signed payload, signature and key, kept in log mode so
+	// any replica can serve the record
+	sealPayload json.RawMessage
+	sealSig     string
+	sealKey     string
 }
 
 type forceState struct {
@@ -222,6 +233,17 @@ type Store struct {
 	key         *signKey
 	keyReplaced bool
 	keyErr      error
+
+	// log mode (a redundant pair, #719 slice 5): no file; the entries are the
+	// operator-intent log's, proposed through propose and applied at commit on
+	// every replica by ApplyLogged. propMu serializes this replica's own
+	// proposals (s.mu is released while one commits, so the commit's apply can
+	// take it).
+	propose  func(ctx context.Context, by string, body []byte) (uint64, error)
+	propMu   sync.Mutex
+	lines    [][]byte         // the canonical chain, in committed order
+	rejected map[uint64]error // log entries apply refused, by the log's sequence number
+	sheet    *Sheet           // the sheet a replica rebuilds a sealed export from
 }
 
 // appendFile is the file as the store uses it (a test's can fail).
@@ -358,6 +380,11 @@ func (s *Store) apply(e entry) error {
 		if e.Run == "" || s.runs[e.Run] != nil {
 			return errors.New("a run that is empty or already begun")
 		}
+		if s.openRun() != nil {
+			// one run is open at a time: on a pair, two controllers may begin
+			// one in the same moment, and every replica refuses the second alike
+			return ErrRunOpen
+		}
 		s.runs[e.Run] = &Run{ID: e.Run, State: StateOpen, Rehearsal: e.Rehearsal, SheetHash: e.SheetHash, Title: e.Title,
 			EvidenceSha: e.EvSha, Unreal: e.Unreal, At: e.At, By: e.By, Principal: e.Principal, lastResults: map[string][]Result{}, forces: map[string][]*forceState{}}
 		s.ord = append(s.ord, e.Run)
@@ -412,7 +439,15 @@ func (s *Store) apply(e entry) error {
 		if r.Rehearsal {
 			return errors.New("a seal of a rehearsal run")
 		}
+		if len(e.Payload) > 0 && e.PrevSeq != s.seq {
+			// the payload was signed over the chain as it stood; something
+			// committed first: the signer builds it again
+			return errSealRaced
+		}
 		r.State, r.SealedAt, r.SealedBy, r.SealSeq = StateSealed, e.At, e.By, e.Seq
+		if len(e.Payload) > 0 {
+			r.sealPayload, r.sealSig, r.sealKey = e.Payload, e.Sig, e.PubKey
+		}
 	default:
 		return fmt.Errorf("unknown entry kind %q", e.Kind)
 	}
@@ -424,6 +459,9 @@ func (s *Store) apply(e entry) error {
 // good size, so the entry that failed leaves nothing behind; if that fails
 // too, the store takes no more entries until it is opened again.
 func (s *Store) append(e entry) error {
+	if s.propose != nil {
+		return s.appendLogged(e)
+	}
 	if s.f == nil {
 		return errors.New("checkout: the store is closed")
 	}
@@ -546,6 +584,9 @@ func (s *Store) RecordWith(run, point, outcome, note string, seen any, quality, 
 	}
 	if r.State != StateOpen {
 		return Result{}, ErrNotOpen
+	}
+	if evidenceSha == r.EvidenceSha {
+		evidenceSha = "" // the same devices as the run began against: said once, in the run
 	}
 	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, Override: override, EvSha: evidenceSha, By: by, Principal: principal}
 	if err := s.append(e); err != nil {
