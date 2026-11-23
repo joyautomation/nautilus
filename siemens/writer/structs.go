@@ -39,6 +39,10 @@ type library struct {
 	// nautilus compiles a program that uses them, and the writer refuses
 	// them as its gap (#1301).
 	fbs, funcs, consts map[string]string
+	// enumMembers are the enumerations' member names, each with its
+	// type's name: a bare member (Idle) is an enumeration value, the
+	// writer's gap until enums are written.
+	enumMembers map[string]string
 	// types is nautilus's own resolution of every TYPE, for seeding a start
 	// value the way the runtime does (nil when the TYPEs do not resolve:
 	// nautilus's lowering then refuses the program anyway).
@@ -84,7 +88,7 @@ func libraryST(libs []string) []string {
 // blocks.
 func loadLibrary(libs []string, own []*st.Program) *library {
 	lib := &library{structs: map[string]*structDef{}, otherTypes: map[string]string{},
-		fbs: map[string]string{}, funcs: map[string]string{}, consts: map[string]string{}}
+		fbs: map[string]string{}, funcs: map[string]string{}, consts: map[string]string{}, enumMembers: map[string]string{}}
 	srcs := libraryST(libs)
 	var all st.Program
 	for _, src := range srcs {
@@ -122,6 +126,11 @@ func loadLibrary(libs []string, own []*st.Program) *library {
 			continue
 		}
 		lib.otherTypes[k] = td.Name
+		if e, ok := td.Type.(*st.EnumType); ok {
+			for _, m := range e.Members {
+				lib.enumMembers[strings.ToLower(m.Name)] = td.Name
+			}
+		}
 	}
 	if types, err := st.Types(&all); err == nil {
 		lib.types = types
@@ -219,7 +228,11 @@ func (w *writer) declType(typ, ind string, start any, values bool) (string, stri
 		}
 		return t + " := " + v, ""
 	}
-	m, _ := start.(map[string]any)
+	m, isMap := start.(map[string]any)
+	if start != nil && !isMap {
+		return "", fmt.Sprintf("the start value %v of the struct %s is not a mapping of member: value", start, sd.name)
+	}
+	used := 0
 	var b strings.Builder
 	b.WriteString("Struct\n")
 	for _, f := range sd.fields {
@@ -228,6 +241,7 @@ func (w *writer) declType(typ, ind string, start any, values bool) (string, stri
 		for k, v := range m {
 			if strings.EqualFold(k, f.Name) {
 				fs, has = v, true
+				used++
 			}
 		}
 		t, why := w.declType(f.Datatype, ind+"   ", fs, values)
@@ -240,6 +254,11 @@ func (w *writer) declType(typ, ind string, start any, values bool) (string, stri
 			line += " := " + pw.expr(f.Initial, 0)
 		}
 		b.WriteString(line + ";\n")
+	}
+	if used != len(m) {
+		// nautilus's seeding refused an unknown member already; never
+		// drop one silently should it not have run.
+		return "", fmt.Sprintf("the start value %v names a member %s does not have", start, sd.name)
 	}
 	b.WriteString(ind + "END_STRUCT")
 	return b.String(), ""
@@ -283,7 +302,7 @@ func (w *writer) leaves(typ, path string) ([]leaf, string) {
 // the wrong kind) is refused here in its words.
 func (w *writer) seedCheck(typ string, start any) string {
 	if w.lib.types == nil {
-		return ""
+		return "the project's TYPEs do not resolve, so nautilus's seeding cannot check it"
 	}
 	t, err := st.ResolveTypeName(typ, w.lib.types)
 	if err != nil {

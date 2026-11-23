@@ -100,6 +100,7 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 	}
 
 	var decls strings.Builder
+	typeRefused := map[string]bool{}
 	for _, vb := range prog.VarBlocks {
 		kind := vb.Kind
 		switch kind {
@@ -139,12 +140,15 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 				}
 				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
 				pw.statics[strings.ToLower(v.Name)] = &shape{instance: true}
-				lines = append(lines, fmt.Sprintf("      %s : Struct\n%s      END_STRUCT;", v.Name, latch.members()))
+				lines = append(lines, fmt.Sprintf("      %s : Struct\n%s      END_STRUCT;", sclName(v.Name), latch.members()))
 				continue
 			}
 			if sd := w.structOf(v.Datatype); sd != nil {
 				if why := w.typeRefusal(v.Datatype, map[string]bool{}); why != "" {
-					pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: the type %s: %s", v.Name, sd.name, why))
+					if !typeRefused[why] {
+						typeRefused[why] = true
+						pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: the type %s: %s", v.Name, sd.name, why))
+					}
 					continue
 				}
 				if v.Initial != nil {
@@ -181,13 +185,18 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 			} else {
 				t, why := w.sclType(v.Datatype)
 				if why != "" {
-					pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: %s", v.Name, why))
+					// Once per type in a program: a plant model with 84
+					// instances of one block says so once.
+					if !typeRefused[why] {
+						typeRefused[why] = true
+						pw.diag("siemens/type", v.Pos.Line, fmt.Sprintf("%s: %s", v.Name, why))
+					}
 					continue
 				}
 				typ = t
 			}
 			pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
-			line := fmt.Sprintf("      %s : %s", v.Name, typ)
+			line := fmt.Sprintf("      %s : %s", sclName(v.Name), typ)
 			if kind == "VAR_TEMP" {
 				// TIA has no start values for temps, and nautilus resets a
 				// temp to its init on every scan (#203): the body starts
@@ -235,7 +244,7 @@ func (w *writer) program(path string, libs []string, src string, prog *st.Progra
 		if v.Initial != nil {
 			init = pw.expr(v.Initial, 0)
 		}
-		pw.emit(&body, v.Pos.Line, "\t#%s := %s;\n", v.Name, init)
+		pw.emit(&body, v.Pos.Line, "\t#%s := %s;\n", sclName(v.Name), init)
 	}
 	pw.stmts(&body, prog.Statements, 1)
 	if len(w.diags) > before {
@@ -430,6 +439,10 @@ func (pw *progWriter) ident(name string, line int) string {
 	}
 	if g, ok := pw.w.globals[strings.ToLower(name)]; ok {
 		return quote(pw.w.tagsDB) + "." + sclName(g.Name)
+	}
+	if e, ok := pw.w.lib.enumMembers[strings.ToLower(name)]; ok {
+		pw.gap("siemens/enum", line, gapStructured, "enumerations ("+e+")", "")
+		return name
 	}
 	if c, ok := pw.w.lib.consts[strings.ToLower(name)]; ok {
 		pw.gap("siemens/library", line, gapPOUs, "the project's global constant "+c, "")

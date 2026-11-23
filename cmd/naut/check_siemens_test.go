@@ -242,9 +242,9 @@ func TestSiemensWriterInputTypesUntypedTagsAsTheLogicBindsThem(t *testing.T) {
 // writer types each member from the struct, as nautilus seeds it
 // (#1299): the library is in scope for the program and the tag alike.
 func TestSiemensWriterInputSeedsAStructTag(t *testing.T) {
-	types := "TYPE\n  Motor : STRUCT\n    Run : BOOL;\n    Speed : REAL;\n    Starts : DINT := 2;\n  END_STRUCT;\nEND_TYPE\n"
-	prog := "PROGRAM Main\nVAR_EXTERNAL P : Motor; END_VAR\nP.Starts := P.Starts + 1;\nEND_PROGRAM\n"
-	m := "name: s7\ntasks:\n  - program: main.st\ntags:\n  - {name: P, role: state, type: Motor, init: {Speed: 40, Run: true}}\n"
+	types := "TYPE\n  Motor : STRUCT\n    Run : BOOL;\n    Speed : REAL;\n    Starts : DINT := 2;\n  END_STRUCT;\n  Skid : STRUCT\n    Pump : Motor;\n    Level : REAL;\n  END_STRUCT;\nEND_TYPE\n"
+	prog := "PROGRAM Main\nVAR_EXTERNAL P : Motor; S : Skid; END_VAR\nP.Starts := P.Starts + 1;\nS.Level := 1.0;\nEND_PROGRAM\n"
+	m := "name: s7\ntasks:\n  - program: main.st\ntags:\n  - {name: P, role: state, type: Motor, init: {Speed: 40, Run: true}}\n  - name: S\n    role: state\n    type: Skid\n    init:\n      Pump: {Speed: 12.5}\n      Level: 70\n"
 	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": prog, "types.st": types})
 	in, err := siemensWriterInput(dir, "")
 	if err != nil {
@@ -257,6 +257,10 @@ func TestSiemensWriterInputSeedsAStructTag(t *testing.T) {
 	for _, f := range out.Files {
 		if f.Path == "naut_Tags.db" && !strings.Contains(string(f.Data), "      P : Struct\n         Run : BOOL := TRUE;\n         Speed : REAL := 40.0;\n         Starts : DINT := 2;\n      END_STRUCT;\n") {
 			t.Errorf("tags DB:\n%s", f.Data)
+		}
+		// A nested map, as YAML decodes it, reaches the nested member.
+		if f.Path == "naut_Tags.db" && !strings.Contains(string(f.Data), "      S : Struct\n         Pump : Struct\n            Run : BOOL;\n            Speed : REAL := 12.5;\n            Starts : DINT := 2;\n         END_STRUCT;\n         Level : REAL := 70.0;\n") {
+			t.Errorf("nested start value:\n%s", f.Data)
 		}
 	}
 }

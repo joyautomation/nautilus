@@ -138,3 +138,69 @@ func TestStructRefusals(t *testing.T) {
 		t.Errorf("enum: %v", diags)
 	}
 }
+
+// TestReservedNamesQuotedEverywhere: a local named as SCL reserves is
+// quoted where it is declared, reset, read, written and called, and a
+// member prints as its TYPE spells it.
+func TestReservedNamesQuotedEverywhere(t *testing.T) {
+	src := "PROGRAM P\nVAR_EXTERNAL P1 : Pump; END_VAR\nVAR Name : INT; Static : TON; Author : SR; END_VAR\nVAR_TEMP Title : BOOL; END_VAR\nName := Name + 1;\nStatic(IN := TRUE, PT := T#1s);\nTitle := Static.Q;\nAuthor(S1 := Title, R := FALSE);\np1.count := 2;\nEND_PROGRAM\n"
+	out, diags := writeStructs(src, []Global{{Name: "P1", Type: "Pump"}}, motorLib)
+	if len(diags) > 0 {
+		t.Fatal(diags)
+	}
+	var fb string
+	for _, f := range out.Files {
+		if f.Path == "naut_P.scl" {
+			fb = string(f.Data)
+		}
+	}
+	for _, want := range []string{
+		"      \"Name\" : INT;\n", "      \"Static\" : TON_TIME;\n", "      \"Title\" : BOOL;\n",
+		"\t#\"Title\" := FALSE;\n",
+		"\t#\"Name\" := LINT_TO_INT(",
+		"\t#\"Static\"(IN := TRUE, PT := T#1s);\n",
+		"\t#\"Title\" := #\"Static\".Q;\n",
+		"\t\"naut_Tags\".P1.Count := 2;\n",
+		"\t#\"Author\".S1 := #\"Title\";\n",
+	} {
+		if !strings.Contains(fb, want) {
+			t.Errorf("FB lacks %q:\n%s", want, fb)
+		}
+	}
+}
+
+// TestDeclTypeNeverDropsAStartValue: a start value that is not a map, or
+// names a member the struct lacks, is refused even where nautilus's
+// seeding did not run first.
+func TestDeclTypeNeverDropsAStartValue(t *testing.T) {
+	w := &writer{lib: loadLibrary([]string{motorLib}, nil)}
+	if _, why := w.declType("Pump", "", map[string]any{"Run": true, "Spin": true}, true); !strings.Contains(why, "names a member Pump does not have") {
+		t.Errorf("unknown key: %q", why)
+	}
+	if _, why := w.declType("Pump", "", true, true); !strings.Contains(why, "not a mapping") {
+		t.Errorf("not a map: %q", why)
+	}
+	w.lib.types = nil
+	if why := w.seedCheck("Pump", map[string]any{"Run": true}); why == "" {
+		t.Error("an unresolved TYPE table let the start value through unchecked")
+	}
+}
+
+// TestRefusedOncePerType: many variables of a type the writer cannot
+// write yet say so once per program, and a bare enumeration member names
+// the enum gap rather than an unknown name.
+func TestRefusedOncePerType(t *testing.T) {
+	fb := "FUNCTION_BLOCK Plant\nVAR_INPUT x : BOOL; END_VAR\nEND_FUNCTION_BLOCK\n"
+	_, diags := writeStructs("PROGRAM P\nVAR a, b : Plant; c : Plant; m1, m2 : Motor; END_VAR\nEND_PROGRAM\n", nil, fb, motorLib)
+	if len(diags) != 3 || !strings.Contains(diags[0].Message, "function block Plant yet (#1301)") || !strings.Contains(diags[1].Message, "member Tag:") {
+		t.Errorf("once per type: %v", diags)
+	}
+	_, diags = writeStructs("PROGRAM P\nVAR m : INT; END_VAR\nIF m = 0 THEN m := 1; END_IF;\nEND_PROGRAM\n", nil, "TYPE Mode : (Idle, Run); END_TYPE\n")
+	if len(diags) != 0 {
+		t.Fatalf("no enum used: %v", diags)
+	}
+	_, diags = writeStructs("PROGRAM P\nVAR_EXTERNAL k : INT; END_VAR\nVAR m : BOOL; END_VAR\nm := Run = Run;\nEND_PROGRAM\n", []Global{{Name: "k", Type: "INT"}}, "TYPE Mode : (Idle, Run); END_TYPE\n")
+	if len(diags) == 0 || diags[0].Rule != "siemens/enum" || !strings.Contains(diags[0].Message, "enumerations (Mode) yet (#1299)") {
+		t.Errorf("bare member: %v", diags)
+	}
+}

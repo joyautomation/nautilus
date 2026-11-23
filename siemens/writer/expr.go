@@ -77,7 +77,13 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 			pw.gap("siemens/partial", e.Pos.Line, gapOther, "the partial access ."+e.Member, "bit access (.3, .%X3) is written")
 			return ""
 		}
-		return pw.widen(pw.typ(e), pw.expr(e.Object, unaryPrec+1)+"."+sclName(e.Member))
+		member := e.Member
+		if sd := pw.w.structOf(pw.typ(e.Object)); sd != nil {
+			if f, ok := sd.fieldOf(member); ok {
+				member = f.Name // as the TYPE spells it
+			}
+		}
+		return pw.widen(pw.typ(e), pw.expr(e.Object, unaryPrec+1)+"."+sclName(member))
 	case *st.IndexExpr:
 		pw.gap("siemens/type", e.Pos.Line, gapStructured, "arrays", "")
 		return ""
@@ -276,7 +282,7 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			}
 			parts = append(parts, fmt.Sprintf("%s => %s", pin, pw.expr(o.Target, 0)))
 		}
-		return "#" + l.name + "(" + strings.Join(parts, ", ") + ")"
+		return "#" + sclName(l.name) + "(" + strings.Join(parts, ", ") + ")"
 	}
 
 	if f, ok := pw.w.lib.funcs[strings.ToLower(c.Name)]; ok {
