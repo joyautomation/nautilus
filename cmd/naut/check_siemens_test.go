@@ -67,13 +67,13 @@ func TestCheckSiemensTargetRunsTheWritersRules(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1:\n%s", code, out)
 	}
-	if !strings.Contains(out, "main.st:2:1: siemens target: VAR CONSTANT is not in the first subset [siemens/var]") {
+	if !strings.Contains(out, "main.st:2:1: siemens target: the Siemens writer doesn't translate VAR CONSTANT yet (#1301) [siemens/var]") {
 		t.Fatalf("no writer diagnostic at main.st:2:\n%s", out)
 	}
 }
 
 // TestCheckSiemensTargetReportsProjectRules: a rule with no source line
-// (the first subset writes one task) is reported against the manifest
+// (the writer writes one task so far) is reported against the manifest
 // check reads, here one named with -m.
 func TestCheckSiemensTargetReportsProjectRules(t *testing.T) {
 	m := strings.Replace(goodSiemensManifest, "    scan: 100ms\n", "    scan: 100ms\n  - program: other.st\n    scan: 50ms\n", 1)
@@ -86,7 +86,7 @@ func TestCheckSiemensTargetReportsProjectRules(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1:\n%s", code, out)
 	}
-	if !strings.Contains(out, "s7.yaml: siemens target: 2 tasks:") || !strings.Contains(out, "[siemens/task]") {
+	if !strings.Contains(out, "s7.yaml: siemens target: the Siemens writer doesn't translate more than one task (2 here) yet (#1300)") || !strings.Contains(out, "[siemens/task]") {
 		t.Fatalf("no task diagnostic against s7.yaml:\n%s", out)
 	}
 }
@@ -201,6 +201,52 @@ tags:
 	}
 }
 
+// TestSiemensWriterInputTypesUntypedTagsAsTheLogicBindsThem: a tag with
+// no type: takes the type a program's VAR_EXTERNAL binds it as, as the
+// runtime does (`init: 0` on a tag declared INT is an INT, seeded 0), not
+// the REAL its init alone suggests; a typed tag keeps its type:, and a
+// tag no program declares keeps its init's.
+func TestSiemensWriterInputTypesUntypedTagsAsTheLogicBindsThem(t *testing.T) {
+	m := "name: s7\ntasks:\n  - program: main.st\ntags:\n" +
+		"  - {name: X, role: state, init: 0}\n" +
+		"  - {name: W, role: state, init: 0}\n" +
+		"  - {name: Level, role: input, type: REAL}\n" +
+		"  - {name: Free, role: state, init: 0}\n"
+	prog := "PROGRAM main\nVAR_EXTERNAL X : INT; W : WORD; Level : REAL; END_VAR\nX := X + 1;\nW := W AND 16#FF;\nEND_PROGRAM\n"
+	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": prog})
+	in, err := siemensWriterInput(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]swriter.Global{}
+	for _, g := range in.Globals {
+		got[g.Name] = g
+	}
+	for name, w := range map[string]swriter.Global{
+		"X":     {Name: "X", Type: "INT", Init: "0"},
+		"W":     {Name: "W", Type: "WORD", Init: "0"},
+		"Level": {Name: "Level", Type: "REAL"},
+		"Free":  {Name: "Free", Type: "REAL", Init: "0.0"},
+	} {
+		if got[name] != w {
+			t.Errorf("%s = %+v, want %+v", name, got[name], w)
+		}
+	}
+	if _, diags, err := swriter.Write(in); err != nil || len(diags) > 0 {
+		t.Fatalf("the program writes as nautilus types it: %v %v", diags, err)
+	}
+}
+
+// TestSiemensWriterInputNamesTheStructuredInitGap: a structured tag's
+// start value is the writer's gap, named with its issue.
+func TestSiemensWriterInputNamesTheStructuredInitGap(t *testing.T) {
+	m := "name: s7\ntasks:\n  - program: main.st\ntags:\n  - {name: Level, role: input, type: REAL}\n  - {name: P, role: state, type: REAL, init: {a: 1}}\n"
+	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "main.st": siemensCheckProgram})
+	if _, err := siemensWriterInput(dir, ""); err == nil || !strings.Contains(err.Error(), "tag P: the Siemens writer doesn't translate the structured start value") || !strings.Contains(err.Error(), "yet (#1299)") {
+		t.Errorf("err %v", err)
+	}
+}
+
 // TestSiemensWriterInputRefusesWhatTheRuntimeRefuses: two tasks running
 // one PROGRAM, and a later task named like the main task, are refused
 // with the runtime's own words, so check never passes a project naut run
@@ -254,5 +300,60 @@ func TestSiemensBlockPrefix(t *testing.T) {
 		if code != 1 || !strings.Contains(out, "error: target.siemens.block-prefix:") {
 			t.Errorf("%q: exit %d:\n%s", extra, code, out)
 		}
+	}
+}
+
+// TestCheckSiemensTargetWarnsWhereTheCPUDiffers: a construct the writer
+// translates but the CPU runs differently in an edge case (here a MUX
+// selector out of range: nautilus faults, the CPU sets ENO) is a warning
+// at its line, and check still passes.
+func TestCheckSiemensTargetWarnsWhereTheCPUDiffers(t *testing.T) {
+	prog := "PROGRAM main\nVAR x : REAL; k : INT; END_VAR\nx := MUX(k, Level, 0.0);\nEND_PROGRAM\n"
+	out, code := checkIn(t, map[string]string{"nautilus.yaml": goodSiemensManifest, "main.st": prog})
+	if code != 0 {
+		t.Fatalf("exit %d, want 0:\n%s", code, out)
+	}
+	if !strings.Contains(out, "main.st:3:1: warning: siemens target: MUX can differ if the selector K is outside 0..1: nautilus faults the scan; on Siemens MUX sets ENO FALSE and the scan carries on [siemens/divergence]") {
+		t.Fatalf("no divergence warning at main.st:3:\n%s", out)
+	}
+}
+
+// TestCheckSiemensTargetSummarizesConversions: REAL → integer conversions
+// that can differ on the CPU are one summary line per program, the sites
+// listed under -v; a MUX keeps its own line either way.
+func TestCheckSiemensTargetSummarizesConversions(t *testing.T) {
+	prog := "PROGRAM main\nVAR d : DINT; i : INT; k : INT; x : REAL; END_VAR\nd := REAL_TO_DINT(Level);\ni := REAL_TO_INT(Level * 2.0);\nd := REAL_TO_DINT(2.5);\nx := MUX(k, Level, 0.0);\nEND_PROGRAM\n"
+	files := map[string]string{"nautilus.yaml": goodSiemensManifest, "main.st": prog}
+	out, code := checkIn(t, files)
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"main.st: warning: siemens target: 2 REAL → integer conversions can differ on Siemens if a value exceeds its range (nautilus faults the scan; Siemens sets ENO FALSE and continues): see the Siemens target guide; -v lists them [siemens/conversion-range]",
+		"main.st:6:1: warning: siemens target: MUX can differ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "main.st:3:1: warning") {
+		t.Errorf("a conversion site listed without -v:\n%s", out)
+	}
+	dir := writeProject(t, files)
+	out, code = capture(t, func() int { return runCheck([]string{"-v", dir}) })
+	if code != 0 {
+		t.Fatalf("-v exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"2 REAL → integer conversions can differ on Siemens if a value exceeds its range (nautilus faults the scan; Siemens sets ENO FALSE and continues): see the Siemens target guide [siemens/conversion-range]",
+		"main.st:3:1: warning: siemens target: REAL_TO_DINT can differ",
+		"main.st:4:1: warning: siemens target: REAL_TO_INT can differ",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("-v: missing %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "main.st:5:1") {
+		t.Errorf("the constant 2.5 warned:\n%s", out)
 	}
 }

@@ -306,15 +306,61 @@ The rules:
   (#800). The writer widens every narrow operand to LINT and wraps
   explicitly at the store. Where it cannot (an FB input, a function
   argument, a CASE selector, a REAL target), integer arithmetic is refused.
-- **Refused in the first subset:** division by anything but a non-zero
-  constant (nautilus gives 0 and counts it; the CPU's answer is not pinned
-  down), TRUNC (LINT in nautilus, DINT in TIA), LTIME (milliseconds in
-  nautilus, nanoseconds in TIA), TIME arithmetic (64-bit against 32-bit
-  milliseconds), bitwise operators, STRING (TIA's holds 254 characters, a
-  nautilus STRING has no length), arrays, UDTs, enums, user POUs and SR/RS.
-- **Known divergence, documented rather than refused:** a REAL → integer
-  conversion out of range faults the scan in nautilus, while the CPU sets
-  ENO FALSE and carries on.
+- **What it does not translate yet is a writer gap,** never a rule for
+  the person: the diagnostic reads "the Siemens writer doesn't translate X
+  yet (#N)", N the issue that closes it. B #1299 UDTs, enums, arrays and
+  structured start values (and, with D, the project's library); C #1300
+  more than one task; D #1301 user FUNCTIONs and FUNCTION_BLOCKs, library
+  FBs, VAR CONSTANT; E #1302 SFC (an SCL state machine first; GRAPH
+  maybe later as an option, James 11-23); F #1303 STRING (TIA's holds 254
+  characters, a nautilus STRING has no length) and the string functions;
+  G #1304 TIME arithmetic, LTIME and dates (64-bit milliseconds against
+  TIA's 32-bit TIME and nanosecond LTIME); #1305 the rest (ULINT and LWORD
+  arithmetic, ATAN2, integer ABS, …). Real limits keep their own words (a
+  task interval over 60 s, a block name collision).
+- **Coverage PR A (#789)** writes:
+  - bitwise AND/OR/XOR of one integer or bit string type on the bit string
+    of its width (`WORD_TO_INT(INT_TO_WORD(a) AND INT_TO_WORD(b))`), a
+    literal taking the other operand's type when it holds it; any other
+    mix, and NOT, at 64 bits through LWORD as nautilus computes them, the
+    store wrapping; NOT stored into its operand's own type at that width;
+  - bit access `.3` / `.%X3` as TIA's `.%X3`; bit strings in arithmetic as
+    the unsigned integer of their width (LWORD arithmetic is a gap);
+  - division and MOD by anything but a non-zero constant through a
+    generated FC per type (`"naut_DIV_LINT"`, `MOD_LINT`, `DIV_REAL`,
+    `DIV_LREAL`) that answers 0 for a zero divisor, as nautilus does,
+    written only when used and first in the file list;
+  - TRUNC as `TRUNC_LINT` (nautilus's 64-bit int), `TRUNC_<int>`, the
+    overloaded `TO_<type>` as the explicit conversion from the argument's
+    type, MIN/MAX of 2 to 32 inputs, MUX of 2 to 32, SHL/SHR/ROL/ROR on the
+    bit string of the operand's width (so SHR of an INT is logical, as in
+    nautilus), named arguments put in IEC order (`ir.FormalNames`);
+  - SR and RS, which TIA has only as LAD/FBD boxes, as a static STRUCT of
+    their slots (inputs persist across calls as an instance's do) and the
+    latch inline.
+  - An untyped manifest tag takes the type a program's VAR_EXTERNAL binds
+    it as, as the runtime does (it used to take its init's REAL).
+- **Known divergences, documented rather than refused:** where nautilus
+  faults the scan the CPU sets ENO FALSE and carries on. Each is a
+  `naut check --target siemens` (and deploy) **warning**, never silent
+  (`writer.Output.Warnings`): a MUX or shift at its use site
+  (`[siemens/divergence]`); REAL → integer conversions, common and seldom
+  provably in range, as ONE summary line per program
+  (`[siemens/conversion-range]`, naut-lead 11-23) whose sites `-v` lists:
+
+  | Construct | Warned unless | nautilus | S7-1500 |
+  |---|---|---|---|
+  | `MUX(K, IN0, …)` | K is a constant in range | K out of range faults the scan | MUX sets ENO FALSE, the scan carries on |
+  | `SHL`/`SHR`/`ROL`/`ROR` | the count N is unsigned or a constant | a negative N faults the scan | N is converted to TIA's unsigned count, beyond the width |
+  | `TRUNC`, `TRUNC_<int>` (summarized per program) | the argument is a constant in range | a value beyond the integer (or NaN) faults the scan | the conversion sets ENO FALSE, the scan carries on |
+  | `REAL_TO_<int>`, `TO_<int>` of a REAL (summarized per program) | the same | the same | the same |
+
+  Only the out-of-range case differs: the rounding is the same (REAL →
+  integer half to even in nautilus, as TIA documents CONVERT and ROUND;
+  TRUNC toward zero in both; TIA's side from its documentation, not yet
+  measured on a CPU). A REAL source is seldom provably in range, which is
+  why those are a per-program count, not a line each.
+
 - Temps have no start value in TIA. nautilus re-sets a temp to its init on
   every scan (#203), so the body starts by assigning each one.
 - Generated state lives in DB members (FB statics), never in temps, so the

@@ -94,6 +94,9 @@ Answers are never implied: each acting one has its own flag.
                       record cannot say)
   --yes               confirm without the prompt (what is printed is what
                       is answered)
+  -v                  list every site behind a summary warning (the
+                      program's REAL → integer conversions that can differ
+                      on the CPU)
 
 A first deploy to a CPU that already runs a program builds on that CPU's
 own TIA project: a new project built from the station spec cannot load
@@ -144,6 +147,7 @@ const siemensSourceDir = "naut-src"
 type siemensDeployOptions struct {
 	dir                   string
 	download, yes, dryRun bool
+	verbose               bool // -v: list the sites behind a summary warning
 	allowStop             bool
 	start, noStart        bool
 	reinit                []string
@@ -189,6 +193,7 @@ func parseSiemensDeployFlags(o *siemensDeployOptions, args []string, stderr io.W
 	fs.StringVar(&o.agentFlag, "agent", "", "tiad URL")
 	fs.BoolVar(&o.download, "download", false, "download to the CPU")
 	fs.BoolVar(&o.yes, "yes", false, "confirm the download")
+	fs.BoolVar(&o.verbose, "v", false, "list every site behind a summary warning")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "after the confirmation, ask TIA's first pre-download check (it reaches the CPU)")
 	fs.BoolVar(&o.allowStop, "allow-stop", false, "TIA may stop the CPU")
 	fs.BoolVar(&o.start, "start", false, "start the CPU after the load")
@@ -952,6 +957,9 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 		} else {
 			d.say("%s: siemens target: %s [%s]", d.where(x.Path), x.Message, x.Rule)
 		}
+	}
+	for _, l := range siemensWarningLines(out.Warnings, d.where, d.o.verbose) {
+		d.say("%s", l)
 	}
 	if len(problems)+len(diags) > 0 {
 		d.fail("%d problem(s): nothing sent to tiad", len(problems)+len(diags))

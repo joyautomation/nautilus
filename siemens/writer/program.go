@@ -2,9 +2,12 @@ package writer
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -16,6 +19,7 @@ type local struct {
 type progWriter struct {
 	w      *writer
 	path   string
+	libs   []string // the project's library sources (Program.Libs)
 	locals map[string]local
 	fb     []byte
 	// wide is set while printing integer arithmetic that nautilus
@@ -62,25 +66,22 @@ func sclType(t string) (string, string) {
 		return u, ""
 	}
 	if strings.HasPrefix(u, "STRING") || strings.HasPrefix(u, "WSTRING") {
-		return "", "STRING is not in the first subset (TIA's STRING holds at most 254 characters; a nautilus STRING has no such length)"
+		return "", gapMessage(gapString, "STRING", "TIA's STRING holds at most 254 characters; a nautilus STRING has no such length")
 	}
 	if u == "LTIME" {
-		return "", "LTIME is not in the first subset (nautilus's LTIME is milliseconds, TIA's nanoseconds)"
+		return "", gapMessage(gapTime, "LTIME", "nautilus's LTIME is milliseconds, TIA's nanoseconds")
 	}
 	if u == "DT" || u == "DATE_AND_TIME" || u == "LDT" || u == "DTL" {
-		return "", u + " is not in the first subset (which of DT, LDT and DTL it maps to is still to be decided)"
+		return "", gapMessage(gapTime, u, "which of DT, LDT and DTL it maps to is still to be decided")
 	}
 	if strings.HasPrefix(u, "ARRAY") {
-		return "", "arrays are not in the first subset"
+		return "", gapMessage(gapStructured, "arrays", "")
 	}
-	if u == "SR" || u == "RS" {
-		return "", u + " is not callable from SCL; write the set/reset logic (an inline form is planned)"
-	}
-	return "", fmt.Sprintf("type %s is not in the first subset (UDTs, enums and user function blocks come later)", t)
+	return "", gapMessage(gapStructured, "the type "+t, "UDTs, enums and user function blocks")
 }
 
-func (w *writer) program(path string, prog *st.Program) *progWriter {
-	pw := &progWriter{w: w, path: path, locals: map[string]local{}, statics: map[string]bool{}}
+func (w *writer) program(path string, libs []string, prog *st.Program) *progWriter {
+	pw := &progWriter{w: w, path: path, libs: libs, locals: map[string]local{}, statics: map[string]bool{}}
 	before := len(w.diags)
 
 	// nautilus's own lowering first: what nautilus cannot run is not
@@ -96,14 +97,22 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 		if le, ok := st.AsLowerError(err); ok {
 			line = le.Pos.Line
 		}
+		if pw.libraryMiss(err) {
+			// The writer lowers the program alone, without the project's
+			// library files (their TYPEs, FUNCTIONs, FUNCTION_BLOCKs and
+			// global constants), which nautilus compiles with it: what
+			// the program takes from there is the writer's gap.
+			pw.diag("siemens/library", line, fmt.Sprintf("the Siemens writer doesn't translate the project's library (its own types, functions, function blocks and constants) yet (#%d, #%d): %s", gapIssue[gapStructured], gapIssue[gapPOUs], err.Error()))
+			return nil
+		}
 		pw.diag("siemens/nautilus", line, "nautilus refuses this program: "+err.Error())
 		return nil
 	}
 	if len(prog.FBDecls) > 0 || len(prog.FuncDecls) > 0 {
-		pw.diag("siemens/user-pou", 1, "user FUNCTION and FUNCTION_BLOCK declarations are not in the first subset")
+		pw.gap("siemens/user-pou", 1, gapPOUs, "user FUNCTIONs and FUNCTION_BLOCKs", "")
 	}
 	if len(prog.TypeDecls) > 0 {
-		pw.diag("siemens/type", prog.TypeDecls[0].Pos.Line, "TYPE declarations (UDTs, enums) are not in the first subset")
+		pw.gap("siemens/type", prog.TypeDecls[0].Pos.Line, gapStructured, "TYPE declarations (UDTs, enums)", "")
 	}
 
 	var decls strings.Builder
@@ -116,17 +125,17 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 			continue
 		case "VAR", "VAR_TEMP", "VAR_INPUT", "VAR_OUTPUT", "VAR_IN_OUT":
 		default:
-			pw.diag("siemens/var", lineOf(vb), fmt.Sprintf("%s is not in the first subset", kind))
+			pw.gap("siemens/var", lineOf(vb), gapPOUs, kind, "")
 			continue
 		}
 		if vb.Constant {
-			pw.diag("siemens/var", lineOf(vb), "VAR CONSTANT is not in the first subset")
+			pw.gap("siemens/var", lineOf(vb), gapPOUs, "VAR CONSTANT", "")
 			continue
 		}
 		header := kind
 		if vb.Retain {
 			if kind != "VAR" {
-				pw.diag("siemens/var", lineOf(vb), "RETAIN is written only for VAR")
+				pw.gap("siemens/var", lineOf(vb), gapPOUs, kind+" RETAIN", "only VAR RETAIN is written")
 				continue
 			}
 			header = "VAR RETAIN"
@@ -135,9 +144,23 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 		for _, v := range vb.Variables {
 			u := strings.ToUpper(strings.TrimSpace(v.Datatype))
 			var typ string
+			if latch, ok := latches[u]; ok {
+				if kind != "VAR" {
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "a "+u+" instance in "+kind, "only a static (VAR) instance is written"))
+					continue
+				}
+				if v.Initial != nil {
+					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "an instance initializer", ""))
+					continue
+				}
+				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
+				pw.statics[strings.ToLower(v.Name)] = true
+				lines = append(lines, fmt.Sprintf("      %s : Struct\n%s      END_STRUCT;", v.Name, latch.members()))
+				continue
+			}
 			if inst, ok := instances[u]; ok {
 				if kind != "VAR" {
-					pw.diag("siemens/var", v.Pos.Line, fmt.Sprintf("%s: a %s instance must be a static (VAR), not in %s", v.Name, u, kind))
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "a "+u+" instance in "+kind, "only a static (VAR) instance is written"))
 					continue
 				}
 				typ = inst
@@ -156,7 +179,7 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 				// temp to its init on every scan (#203): the body starts
 				// with an assignment for each instead.
 				if _, ok := zero(u); !ok {
-					pw.diag("siemens/var", v.Pos.Line, fmt.Sprintf("%s: a %s temp is not in the first subset", v.Name, u))
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "a "+u+" temp", ""))
 					continue
 				}
 				pw.temps = append(pw.temps, v)
@@ -167,7 +190,7 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 			pw.statics[strings.ToLower(v.Name)] = isInst
 			if v.Initial != nil {
 				if _, isInst := instances[u]; isInst {
-					pw.diag("siemens/init", v.Pos.Line, fmt.Sprintf("%s: an instance initializer is not in the first subset", v.Name))
+					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapPOUs, "an instance initializer", ""))
 					continue
 				}
 				line += " := " + pw.expr(v.Initial, 0)
@@ -207,6 +230,60 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 	return pw
 }
 
+// libraryMiss reports a lowering error for a name the project's library
+// sources (Program.Libs) declare as a TYPE, FUNCTION, FUNCTION_BLOCK or
+// VAR_GLOBAL: the writer lowers the program without them. Any other
+// unknown name, a typo included, is nautilus's own refusal.
+func (pw *progWriter) libraryMiss(err error) bool {
+	m := libraryName.FindStringSubmatch(err.Error())
+	return m != nil && libraryDecls(pw.libs)[strings.ToLower(m[1])]
+}
+
+var libraryName = regexp.MustCompile(`(?:unknown type|unknown function|undeclared identifier) "([A-Za-z_][A-Za-z0-9_]*)"`)
+
+// libraryDecls is every name the library sources declare at the top
+// level, lower-cased. A ladder or FBD library is read through its
+// transpiler; a source that reads as none declares nothing.
+func libraryDecls(libs []string) map[string]bool {
+	out := map[string]bool{}
+	for _, src := range libs {
+		prog, err := st.Parse(src)
+		if err != nil {
+			prog = nil
+			if f, _, err := ld.TranspileWithLines(src, libs...); err == nil {
+				if s, _, err := fbd.TranspileWithLines(f); err == nil {
+					prog, _ = st.Parse(s)
+				}
+			}
+			if prog == nil {
+				if s, _, err := fbd.TranspileWithLines(src); err == nil {
+					prog, _ = st.Parse(s)
+				}
+			}
+		}
+		if prog == nil {
+			continue
+		}
+		for _, t := range prog.TypeDecls {
+			out[strings.ToLower(t.Name)] = true
+		}
+		for _, f := range prog.FuncDecls {
+			out[strings.ToLower(f.Name)] = true
+		}
+		for _, f := range prog.FBDecls {
+			out[strings.ToLower(f.Name)] = true
+		}
+		for _, vb := range append(prog.GlobalConsts, prog.VarBlocks...) {
+			if vb.Kind == "VAR_GLOBAL" {
+				for _, v := range vb.Variables {
+					out[strings.ToLower(v.Name)] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
 func lineOf(vb st.VarBlock) int {
 	if len(vb.Variables) > 0 {
 		return vb.Variables[0].Pos.Line
@@ -216,6 +293,25 @@ func lineOf(vb st.VarBlock) int {
 
 func (pw *progWriter) diag(rule string, line int, msg string) {
 	pw.w.diag(rule, pw.path, line, msg)
+}
+
+// diverges warns where the CPU can behave differently from nautilus, in
+// an edge case the writer documents rather than refuses: when cond holds,
+// nautilus faults the scan and the CPU carries on (Output.Warnings). The
+// callers leave out what is provably in range (a constant).
+func (pw *progWriter) diverges(line int, what, cond, onSiemens string) {
+	pw.divergesAs("siemens/divergence", line, what, cond, onSiemens)
+}
+
+// ConversionRangeRule tags the REAL → integer conversion warnings (TRUNC
+// included). They are common and seldom provably in range, so check and
+// the deploy summarize them per program and list the sites on request,
+// while a MUX or shift warning stands at its line.
+const ConversionRangeRule = "siemens/conversion-range"
+
+func (pw *progWriter) divergesAs(rule string, line int, what, cond, onSiemens string) {
+	pw.w.warnings = append(pw.w.warnings, Diag{Rule: rule, Path: pw.path, Line: line,
+		Message: fmt.Sprintf("%s can differ if %s: nautilus faults the scan; on Siemens %s and the scan carries on", what, cond, onSiemens)})
 }
 
 func indent(n int) string { return strings.Repeat("\t", n) }
@@ -286,6 +382,12 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		}
 		pw.emit(b, at, "%sEND_CASE;\n", in)
 	case *st.CallStmt:
+		if l, ok := pw.locals[strings.ToLower(s.Call.Name)]; ok && s.Call.Callee == nil {
+			if latch, ok := latches[l.typ]; ok {
+				pw.latch(b, s.Call, l, latch, in, at)
+				break
+			}
+		}
 		pw.emit(b, at, "%s%s;\n", in, pw.call(s.Call, true))
 	case *st.ExitStmt:
 		pw.emit(b, at, "%sEXIT;\n", in)
@@ -294,7 +396,7 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 	case *st.ReturnStmt:
 		pw.emit(b, at, "%sRETURN;\n", in)
 	default:
-		pw.diag("siemens/statement", lineAt(s), fmt.Sprintf("statement %T is not in the first subset", s))
+		pw.gap("siemens/statement", lineAt(s), gapOther, fmt.Sprintf("the statement %T", s), "")
 	}
 }
 
@@ -348,8 +450,21 @@ func (pw *progWriter) store(v st.Expression, tt string, line int) string {
 	vt := pw.typ(v)
 	switch {
 	case vt == tWide:
-		if !isInt(tt) || tt == "ULINT" {
-			pw.diag("siemens/int-width", line, fmt.Sprintf("integer arithmetic stored into a %s: convert it explicitly (…_TO_…)", orUnknown(tt)))
+		if s, ok := pw.narrowNot(v, tt); ok {
+			return s
+		}
+		if isBits(tt) {
+			pw.wide = true
+			s := pw.expr(v, 0)
+			pw.wide = false
+			if tt == "LWORD" {
+				return "LINT_TO_LWORD(" + s + ")"
+			}
+			u := unsignedOf(tt)
+			return u + "_TO_" + tt + "(" + wrap(s, u) + ")"
+		}
+		if !isInt(tt) || unsigned64(tt) {
+			pw.gap("siemens/int-width", line, gapOther, "integer arithmetic stored into a "+orUnknown(tt), "until then, convert it explicitly (…_TO_…)")
 			return ""
 		}
 		pw.wide = true
@@ -358,7 +473,7 @@ func (pw *progWriter) store(v st.Expression, tt string, line int) string {
 		return wrap(s, tt)
 	case isInt(vt) && isInt(tt) && vt != tt:
 		if vt == "ULINT" || tt == "ULINT" {
-			pw.diag("siemens/int-width", line, "a store between ULINT and another integer type is not in the first subset")
+			pw.gap("siemens/int-width", line, gapOther, "a store between ULINT and another integer type", "")
 			return ""
 		}
 		if holds(tt, vt) {
@@ -369,10 +484,15 @@ func (pw *progWriter) store(v st.Expression, tt string, line int) string {
 	return pw.expr(v, 0)
 }
 
-// toLINT widens an integer expression of type t to LINT.
+// toLINT widens an integer or bit string expression of type t to LINT;
+// a bit string by its unsigned value, as nautilus holds it.
 func toLINT(t, s string) string {
-	if t == "LINT" {
+	switch {
+	case t == "LINT":
 		return s
+	case isBits(t):
+		u := unsignedOf(t)
+		return u + "_TO_LINT(" + t + "_TO_" + u + "(" + s + "))"
 	}
 	return t + "_TO_LINT(" + s + ")"
 }

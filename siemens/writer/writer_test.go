@@ -24,18 +24,23 @@ var benchGlobals = []Global{
 	{Name: "Level", Type: "REAL", Init: "12.5", Retain: true},
 }
 
-// TestGolden writes the bench fixture and compares every generated file
-// with testdata/bench/golden/. The goldens encode what TIA's exported
-// sources look like as far as public knowledge goes; they are unverified
-// against a TIA compile until S2b, which corrects them from real exports.
-func TestGolden(t *testing.T) {
-	src, err := os.ReadFile("testdata/bench/Main.st")
+var coverageGlobals = []Global{
+	{Name: "Start", Type: "BOOL"},
+	{Name: "Reset", Type: "BOOL"},
+	{Name: "Running", Type: "BOOL"},
+}
+
+// golden writes testdata/<fixture>/Main.st with globals and one 100 ms
+// task, and compares every generated file with testdata/<fixture>/golden/.
+func golden(t *testing.T, fixture string, globals []Global) Output {
+	t.Helper()
+	src, err := os.ReadFile("testdata/" + fixture + "/Main.st")
 	if err != nil {
 		t.Fatal(err)
 	}
 	out, diags, err := Write(Input{
 		Programs: []Program{{Path: "Main.st", Source: string(src)}},
-		Globals:  benchGlobals,
+		Globals:  globals,
 		Tasks:    []Task{{Name: "main", Program: "Main", Interval: 100 * time.Millisecond}},
 		// The default the CLI passes: the FB "Main" would otherwise
 		// collide with TIA's own "Main" [OB1] (#789).
@@ -47,7 +52,7 @@ func TestGolden(t *testing.T) {
 	if len(diags) > 0 {
 		t.Fatalf("diagnostics: %v", diags)
 	}
-	dir := "testdata/bench/golden"
+	dir := "testdata/" + fixture + "/golden"
 	if *update {
 		os.RemoveAll(dir)
 		os.MkdirAll(dir, 0o755)
@@ -72,6 +77,13 @@ func TestGolden(t *testing.T) {
 			t.Errorf("%s differs from its golden (go test ./siemens/writer/ -update, then review the diff):\n%s", e.Name(), got[e.Name()])
 		}
 	}
+	return out
+}
+
+// TestGolden writes the bench fixture and compares every generated file
+// with testdata/bench/golden/, compiled 0/0 on TIA V21 (README).
+func TestGolden(t *testing.T) {
+	out := golden(t, "bench", benchGlobals)
 
 	if len(out.OBs) != 1 || out.OBs[0].Number != 30 || out.OBs[0].Cycle != 100*time.Millisecond {
 		t.Errorf("OBs: %+v", out.OBs)
@@ -97,7 +109,7 @@ func TestTaskRules(t *testing.T) {
 		{"no interval", []Task{{Name: "main", Program: "P"}}, "no interval"},
 		{"over 60 s", []Task{{Name: "main", Program: "P", Interval: 61 * time.Second}}, "60 s"},
 		{"sub-millisecond", []Task{{Name: "main", Program: "P", Interval: 1500 * time.Microsecond}}, "whole number"},
-		{"two tasks", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "P", Interval: 2 * time.Second}}, "2 tasks"},
+		{"two tasks", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "P", Interval: 2 * time.Second}}, "more than one task (2 here) yet (#1300)"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, diags, err := Write(Input{Programs: prog, Tasks: c.tasks})
@@ -118,33 +130,33 @@ func TestBlockNamesDoNotCollide(t *testing.T) {
 	}
 }
 
-// TestRefusals: what the first subset does not write is a diagnostic on
+// TestRefusals: what the writer does not translate is a diagnostic on
 // the line that wrote it, and no files at all.
 func TestRefusals(t *testing.T) {
 	cases := []struct {
 		name, decls, body, rule string
 		line                    int
 	}{
-		{"division by a variable", "a, b : INT;", "a := a / b;", "siemens/division", 3},
-		{"division by zero constant", "a : INT;", "a := a / 0;", "siemens/division", 3},
-		{"mod by a variable", "a, b : INT;", "a := a MOD b;", "siemens/division", 3},
 		{"string", "s : STRING;", "", "siemens/type", 2},
+		{"mod of reals", "r, q : REAL;", "r := r MOD q;", "siemens/division", 3},
+		{"an sr outside VAR", "", "", "siemens/var", 0},
+		{"overloaded conversion of a literal", "r : REAL;", "r := TO_REAL(5);", "siemens/conversion", 3},
+		{"min of 33", "a : INT;", "a := MIN(" + strings.Repeat("a, ", 32) + "a);", "siemens/call", 3},
+		{"mixed named and positional", "a : INT;", "a := LIMIT(0, IN := a, MX := 9);", "siemens/nautilus", 3},
+		{"shift of a literal", "w : WORD; n : INT;", "w := SHL(16#FF, n);", "siemens/function", 3},
+		{"bitwise of int and lword", "a : INT; w : LWORD;", "w := w AND a;", "siemens/int-width", 3},
+		{"byte access", "w : WORD; b : BYTE;", "b := w.%B0;", "siemens/partial", 3},
+		{"bitwise in an FB input", "t : TON; a, b : INT; q : BOOL;", "t(IN := q, PT := INT_TO_TIME(NOT a));", "siemens/int-width", 3},
 		{"array", "a : ARRAY[1..3] OF INT;", "", "siemens/type", 2},
-		{"sr", "f : SR;", "", "siemens/type", 2},
-		{"overloaded conversion", "a : INT; r : REAL;", "r := TO_REAL(a);", "siemens/conversion", 3},
 		{"unknown function (nautilus refuses first)", "a : INT;", "a := FOO(a);", "siemens/nautilus", 3},
 		{"unknown name (nautilus refuses first)", "a : INT;", "a := Nope;", "siemens/nautilus", 3},
-		{"truncated real", "r : REAL; l : LINT;", "l := TRUNC(r);", "siemens/function", 3},
 		{"ltime", "t : LTIME;", "", "siemens/type", 2},
 		{"time arithmetic", "a, b : TIME;", "a := a + b;", "siemens/time", 3},
-		{"bitwise and", "a, b : WORD;", "a := a AND b;", "siemens/operator", 3},
 		{"int arithmetic into an FB input", "t : TON; n : INT; b : BOOL;", "t(IN := b, PT := INT_TO_TIME(n + 1));", "siemens/int-width", 3},
 		{"int arithmetic as a CASE selector", "n : INT;", "CASE n + 1 OF 1: n := 0; END_CASE;", "siemens/int-width", 3},
 		{"int arithmetic stored into a REAL", "n : INT; r : REAL;", "r := n + 1;", "siemens/int-width", 3},
 		{"counter CV bound to an INT", "c : CTU; n : INT; b : BOOL;", "c(CU := b, PV := 5, CV => n);", "siemens/int-width", 3},
 		{"sqrt of an int", "n : INT; r : REAL;", "r := SQRT(n);", "siemens/function", 3},
-		{"zero divisor written 0.0e0", "r : REAL;", "r := r / 0.0e0;", "siemens/division", 3},
-		{"zero divisor written 16#0", "a : INT;", "a := a / 16#0;", "siemens/division", 3},
 		{"instance as an input", "", "", "siemens/var", 0},
 		{"positional instance args (nautilus refuses first)", "t : TON; b : BOOL;", "t(b, T#1s);", "siemens/nautilus", 3},
 		{"instance in temp", "", "", "siemens/nautilus", 0},
@@ -155,6 +167,10 @@ func TestRefusals(t *testing.T) {
 			src := "PROGRAM P\nVAR " + c.decls + " END_VAR\n" + c.body + "\nEND_PROGRAM\n"
 			if c.name == "instance in temp" {
 				src = "PROGRAM P\nVAR_TEMP t : TON; END_VAR\nEND_PROGRAM\n"
+				c.line = 2
+			}
+			if c.name == "an sr outside VAR" {
+				src = "PROGRAM P\nVAR_INPUT f : SR; END_VAR\nEND_PROGRAM\n"
 				c.line = 2
 			}
 			if c.name == "instance as an input" {
@@ -297,7 +313,7 @@ func TestSymbolAnswersOnlyForWhatExists(t *testing.T) {
 // names the ladder's own line, which differs from the line of the ST it
 // was lowered to.
 func TestLadderDiagnosticPointsAtTheLadderLine(t *testing.T) {
-	src := "PROGRAM L\nVAR\n    a : REAL;\n    b : REAL;\n    Run : BOOL;\n    Out : BOOL;\nEND_VAR\nLD\n  RUNG first\n    Run ( Out )\n\n  // a note above the rung\n  RUNG ratio\n    GT(DIV(a, b), 1.0) ( Run )\nEND_LD\nEND_PROGRAM\n"
+	src := "PROGRAM L\nVAR\n    a : REAL;\n    b : REAL;\n    Run : BOOL;\n    Out : BOOL;\nEND_VAR\nLD\n  RUNG first\n    Run ( Out )\n\n  // a note above the rung\n  RUNG ratio\n    GT(MOD(a, b), 1.0) ( Run )\nEND_LD\nEND_PROGRAM\n"
 	_, diags, err := Write(Input{Programs: []Program{{Path: "l.ld", Source: src}}})
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +324,7 @@ func TestLadderDiagnosticPointsAtTheLadderLine(t *testing.T) {
 	}
 	stLine := 0
 	for i, l := range strings.Split(stSrc, "\n") {
-		if strings.Contains(l, "/ b") || strings.Contains(l, "DIV(") {
+		if strings.Contains(l, "MOD b") || strings.Contains(l, "MOD(") {
 			stLine = i + 1
 		}
 	}
