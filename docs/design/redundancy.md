@@ -1873,8 +1873,12 @@ follow-ups. The plan and rulings are in #710 (naut-lead, 2026-11-23 and 2026-11-
   resign, so a late grant of a renewal sent before it never makes it lead again, even once the
   hold has ended early. A lost RESIGN falls back to the
   lease running out, no worse than before. The hold is not "may not lead" in a bad-retain
-  hand-back (S2c-3): `Elector.EndResignHold` ends it when the peer hands the lead back (wired in
-  d1d).
+  hand-back (S2c-3): a controller that says yes to its peer's hand-back ends its own hold
+  (`Elector.EndResignHoldFor`, d1d), so it leads again without waiting the two leases out:
+  only for an ask of a leadership after the one it resigned (a stale ask keeps the hold, with a
+  log line), and never before its resign's drain is proven (`Candidate.EndResignHold` refuses
+  then: `ResignDrained` relies on the hold to keep the resigner from campaigning in that window;
+  Fable on d1d found two leaders behind a stale ask without it).
 - **The drain (d1b).** RESIGN removes the lease-and-fence gap that lets a send which passed the
   gate just before it closed finish, so `Elector.Resign` runs the steps itself, in order: the
   gate shuts (`ResignAt`), the outputs are drained (§3.4, "The drain before a planned
@@ -1946,8 +1950,11 @@ follow-ups. The plan and rulings are in #710 (naut-lead, 2026-11-23 and 2026-11-
   loss, delay, duplication and replay, with the ledger ending a promise at a taken RESIGN, I3's
   resign case (no write under the resigned epoch after the resign), the "resign" oracle (no
   voter takes a RESIGN after receiving a later campaign or renewal of that boot) and the
-  "rejoin" oracle (a resigner leads again only after its peer led, its hold ran out, or it took
-  a fresh RESIGN back). Fable reviewed it on #1355.
+  "rejoin" oracle (a resigner leads again only after its peer led, its hold ran out, it took
+  a fresh RESIGN back, or its hold was ended early by a hand-back, the `EndHold` fault). The
+  hold is judged on the resigner's own clock and in its own boot: one whose clock runs fast
+  inside ρ, or that restarted, may lead again before two leases of the simulation's time (d1d).
+  Fable reviewed it on #1355.
   d1c: the switching state's rules with one mutation each (`runtime/switch_test.go`), the
   final-image acknowledgement (`TestWaitAckTakesOnlyTheFinalImage`), the parameter write's
   gate (`TestCallFencedGoesOnlyThroughAnOpenGate`, `TestISDUWriteGoesThroughTheWriteGate`), and

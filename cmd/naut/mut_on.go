@@ -76,6 +76,7 @@ import "os"
 //   - handback_long_deadline: the hand-back waits 2 s for the peer's answer, not a few round trips (#710 S2c-3);
 //   - handback_ineligible_peer: a peer that could not lead answers good (#710 S2c-3);
 //   - handback_peer_guard_off: a peer that handed back itself recently answers good (#710 S2c-3);
+//   - handback_keeps_resign_hold: a resigner asked to take the lead back keeps its resign hold (#710 d1d);
 //   - handback_empty_file_good: a peer's retain file with no stream position is good (#710 S2c-3);
 //   - handback_peer_file_unjudged: a peer's retain file older than the voters' floor is good (#710 S2c-3);
 //   - handback_taken_unalarmed: a takeover from the peer's hand-back raises no condition (#710 S2c-3);

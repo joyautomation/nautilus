@@ -147,7 +147,10 @@ type Candidate struct {
 	// lease while sends the lease let start may still be on the wire. 0
 	// when none.
 	drainKeep Instant
-	retryAt   Instant // a refused campaign retries no earlier
+	// resignedEpoch is the epoch c last resigned (ResignAt), 0 before:
+	// a hand-back from it or an earlier one ends no hold (EndResignHoldFor).
+	resignedEpoch uint64
+	retryAt       Instant // a refused campaign retries no earlier
 	// pending is the campaign in flight: no new campaign starts until a
 	// majority has answered it or a lease has passed (expire).
 	pending *round

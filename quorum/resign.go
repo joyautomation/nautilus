@@ -181,6 +181,7 @@ func (c *Candidate) resign(now Instant, hold time.Duration) *Request {
 		return nil
 	}
 	c.drainKeep = c.leaseEnd // until the drain is proven (ResignDrained)
+	c.resignedEpoch = c.epoch
 	c.leading, c.leaseEnd, c.reterm = false, now, false
 	if !mut("resign_keeps_rounds") {
 		// A late grant of a renewal sent before the resign matches no round,
@@ -270,8 +271,16 @@ func ResignDrained(now Instant, v *Voter, c *Candidate, r *Request) bool {
 // (#710 S2c-3), and the hold was only there not to fight a standby that
 // takes over. A back-off of any other cause (a lapse after the resign)
 // stays. It reports whether a hold was ended.
+//
+// Never while the resign's drain is unproven (drainKeep): ResignDrained
+// relies on the hold keeping c from campaigning in that window, or it
+// could free the promise its own voter gave c's new campaign (Fable on
+// #710 d1d: two leaders behind a stale hand-back ask).
 func (c *Candidate) EndResignHold(now Instant) bool {
 	if now >= c.resignHold || c.backoffUntil != c.resignHold {
+		return false
+	}
+	if c.drainKeep != 0 && now < c.drainKeep && !mut("hold_ends_in_drain") {
 		return false
 	}
 	c.backoffUntil, c.resignHold = now, 0
@@ -367,4 +376,21 @@ func (v *Voter) grantedAgain(name NodeID, nonce, epoch uint64) {
 		x.quiet = 0
 		v.resigned[name] = x
 	}
+}
+
+// EndResignHoldFor is EndResignHold for a peer that handed the lead back
+// from its leadership epoch: only a leadership after the one c resigned
+// (an ask of an earlier one is stale), as the voter side ends it only on a
+// fresh RESIGN (#710 d1d, Fable).
+func (c *Candidate) EndResignHoldFor(now Instant, epoch uint64) bool {
+	if epoch <= c.resignedEpoch && !mut("handback_any_epoch") {
+		return false
+	}
+	return c.EndResignHold(now)
+}
+
+// InResignHold reports whether c is in a resign hold at now, and the
+// epoch it resigned.
+func (c *Candidate) InResignHold(now Instant) (bool, uint64) {
+	return c.resignHold != 0 && now < c.resignHold && c.backoffUntil == c.resignHold, c.resignedEpoch
 }

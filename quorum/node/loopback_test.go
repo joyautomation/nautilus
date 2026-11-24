@@ -563,11 +563,19 @@ func (c *cluster) leader() quorum.NodeID {
 func (c *cluster) settledLeader(d time.Duration) quorum.NodeID {
 	c.t.Helper()
 	who := c.waitLeader(d)
-	c.waitFor("the witness to back the leader", d, func() bool {
+	end := time.Now().Add(d)
+	for {
 		ps := c.wit.w.Pairs()
-		return len(ps) == 1 && ps[0].GrantedTo == string(who) && c.leader() == who
-	})
-	return who
+		lead := c.leader()
+		if len(ps) == 1 && ps[0].GrantedTo == string(who) && lead == who {
+			return who
+		}
+		if time.Now().After(end) {
+			// Which of the three it was (CI run 45406566988, #710 d1d).
+			c.t.Fatalf("timed out after %v waiting for the witness to back the leader %s: the witness's pairs %+v, the gate's leader %q; a=%+v b=%+v", d, who, ps, lead, c.status("a"), c.status("b"))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (c *cluster) waitLeader(d time.Duration) quorum.NodeID {

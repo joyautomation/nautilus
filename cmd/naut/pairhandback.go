@@ -205,6 +205,22 @@ func (s *pairStream) serveHandBack(w http.ResponseWriter, r *http.Request) {
 	}
 	ans := s.judgeHandBack(ask)
 	if ans.Good {
+		if !mutNaut("handback_keeps_resign_hold") {
+			// A resign hold of this controller's (it handed the lead to the
+			// peer in a switchover) is not "the peer may not lead": the peer
+			// is handing the lead back from a leadership after the one this
+			// controller resigned, so campaign as soon as it does (#710 d1d,
+			// Elector.EndResignHoldFor). Before the offer is published.
+			e := s.m.q.Node()
+			if !e.EndResignHoldFor(ask.Epoch) {
+				if held, resigned := e.InResignHold(); held {
+					// Said yes, but the hold stays: the ask is of the
+					// leadership this controller resigned or an earlier one
+					// (stale), or its resign's drain is not yet proven.
+					slog.Info("redundancy: said yes to the peer's hand-back, but this controller's resign hold stays: the ask is not of a leadership after the one it resigned, or its drain is not proven yet", "askEpoch", ask.Epoch, "resignedEpoch", resigned)
+				}
+			}
+		}
 		s.mu.Lock()
 		s.offer = &handBackOffer{epoch: ask.Epoch, at: time.Now(), ans: ans}
 		s.mu.Unlock()
