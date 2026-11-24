@@ -154,6 +154,10 @@ func (r *Runtime) publishLead() {
 // switchover's standby side.
 var sameTickWait = 15 * time.Millisecond
 
+// flushStartedHook, when a test sets it, runs on the edge's tick right
+// after the flush started and before the tick waits for it (under leadMu).
+var flushStartedHook func()
+
 // waitStep waits at most d for a takeover step's result on ch, under
 // leadMu. Meanwhile the other loops' ticks answer "do not scan" at once
 // (edgeWait, gateEdge) instead of queueing on leadMu: none of them would
@@ -202,6 +206,17 @@ func (r *Runtime) flushReady(term uint64) bool {
 	if r.strm.ch == nil {
 		ch := make(chan flushResult, 1)
 		fn := *f
+		if !mutRuntime("flush_next_tick") && !mutRuntime("flush_wait_after_start") {
+			// The flags go up BEFORE the flush runs, not when the tick
+			// starts waiting: a save that comes up as the flush starts
+			// (one the flush itself causes, or the saver's tick) must find
+			// them, or it parks on leadMu and the flush's carry waits the
+			// whole wait behind it (CI on main after #1359: the window
+			// between the goroutine's start and the wait was not tiny on a
+			// loaded runner). waitStep takes them down.
+			r.edgeWait.Store(true)
+			r.flushWait.Store(true)
+		}
 		go func() {
 			hot, err := fn()
 			ch <- flushResult{hot, err}
@@ -209,6 +224,9 @@ func (r *Runtime) flushReady(term uint64) bool {
 		r.strm.ch, r.strm.chTerm, r.strm.since = ch, term, time.Now()
 		r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
 		started = true
+		if h := flushStartedHook; h != nil {
+			h() // a test's stand-in for the tick being descheduled here
+		}
 	}
 	var res flushResult
 	got := false
@@ -219,6 +237,11 @@ func (r *Runtime) flushReady(term uint64) bool {
 		if started && !mutRuntime("flush_next_tick") {
 			res, got = r.waitStep(r.strm.ch, min(sameTickWait, takeoverFlushWait))
 		}
+	}
+	if started {
+		// Done with this edge's wait (a result already in, or waited for).
+		r.edgeWait.Store(false)
+		r.flushWait.Store(false)
 	}
 	if got {
 		r.strm.ch, r.strm.done, r.strm.doneTerm = nil, true, r.strm.chTerm

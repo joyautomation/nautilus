@@ -609,6 +609,8 @@ var table = []mutation{
 	{"beginswitch_reads_snapshot", []string{"TestASwitchoverOfAnOldTermDuringATakeoverIsRefused"}},
 	{"carry_snapshot_any_wait", []string{"TestACarryDuringTheCatchUpWaitIsRefusedOnceLeading"}},
 	{"save_waits_on_edge", []string{"TestASaveDuringTheFlushWaitDoesNotHoldTheCarry"}},
+	{"flush_wait_after_start", []string{"TestASaveAskedAsTheFlushStartsIsNotParked"}},
+	{"abort_twice_fails", []string{"TestASecondAbortReportsTheReset"}},
 	{"resign_unchecked", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"final_sent_once_per_connection", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"ack_other_build", []string{"TestPairColdTakeoverOnAnotherBuild"}},
@@ -1060,6 +1062,8 @@ var rowPkgs = map[string][]string{
 	"beginswitch_reads_snapshot":        {"./runtime"},
 	"carry_snapshot_any_wait":           {"./runtime"},
 	"save_waits_on_edge":                {"./runtime"},
+	"flush_wait_after_start":            {"./runtime"},
+	"abort_twice_fails":                 {"./internal/fence"},
 	"resign_unchecked":                  {"./cmd/naut"},
 	"final_sent_once_per_connection":    {"./cmd/naut"},
 }
