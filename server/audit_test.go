@@ -572,6 +572,25 @@ func auditRows() []auditRow {
 			method: "POST", path: "/api/cluster/switchover", body: `{}`,
 			action: "redundancy.switchover", target: "the lead of b", user: "anonymous", source: "api", result: "refused",
 			check: wantReason("NAUTILUS_TOKEN")},
+		{name: "suspend failback", pattern: "POST /api/cluster/failback", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/failback", body: `{"suspend":true,"why":"servicing a"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.failback", target: "failback of b", user: "token", source: "api", result: "ok",
+			check: wantDetail("why", "servicing a")},
+		{name: "resume failback, refused", pattern: "POST /api/cluster/failback", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/failback", body: `{"suspend":false}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.failback", target: "failback of b", user: "token", source: "api", result: "refused",
+			check: wantReason("fake refused")},
+		{name: "failback without suspend", pattern: "POST /api/cluster/failback", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/failback", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.failback", target: "failback of b", user: "token", source: "api", result: "refused",
+			check: wantReason("want a body")},
+		{name: "failback, no credential configured", pattern: "POST /api/cluster/failback", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/failback", body: `{"suspend":true}`,
+			action: "redundancy.failback", target: "failback of b", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
 		{name: "vouch, the picture printed", pattern: "POST /api/cluster/vouch", server: pairServer("refused"),
 			method: "POST", path: "/api/cluster/vouch", body: `{}`,
 			header: map[string]string{"Authorization": "Bearer s3cret"},
@@ -1016,6 +1035,16 @@ func (f *fakePair) ReleaseHold(by string) error {
 	f.by = append(f.by, by)
 	if f.outcome == "refused" {
 		return runtime.ErrNotHolding
+	}
+	return nil
+}
+
+// Failback is the pair's failback suspend and resume (FailbackSetter):
+// "refused" answers as a standby that lost the lead.
+func (f *fakePair) Failback(suspend bool, by, why string) error {
+	f.by = append(f.by, by)
+	if f.outcome == "refused" {
+		return errors.New("fake refused")
 	}
 	return nil
 }

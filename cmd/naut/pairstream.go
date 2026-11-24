@@ -316,6 +316,31 @@ func (m *pairMember) startStream(rt *runtime.Runtime, budget int64, hotMaxAge ti
 	m.q.SetSwitchover(func(ctx context.Context, by string) (any, string, string) {
 		return s.switchover(ctx, by)
 	})
+	if f := m.failback; f != nil {
+		m.q.SetFailback(func(suspend bool, by, why string) error {
+			if !s.leadsNow() {
+				return errNotLeaderFailback
+			}
+			f.setSuspended(suspend, by, why)
+			// Durable on this leader before the answer (Fable on d2): a
+			// suspend held only in memory is lost to a restart before the
+			// next periodic save. The standby has it with the next state
+			// image: a failover before that image loses it.
+			if mutNaut("failback_suspend_not_saved") {
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), m.o.Lease)
+			defer cancel()
+			if err := rt.SaveRetained(ctx); err != nil {
+				state := "resumed"
+				if suspend {
+					state = "suspended"
+				}
+				return fmt.Errorf("failback is %s on this leader, but its retain store could not be written, so a restart of this leader would lose it (the standby gets it with the next state image): %w", state, err)
+			}
+			return nil
+		})
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.ctx = ctx
 	h := http.Handler(http.HandlerFunc(s.serve))
@@ -323,6 +348,9 @@ func (m *pairMember) startStream(rt *runtime.Runtime, budget int64, hotMaxAge ti
 	m.streamStop, m.streamDone = cancel, make(chan struct{})
 	go func() {
 		defer close(m.streamDone)
+		if f := m.failback; f != nil {
+			go f.run(ctx, s)
+		}
 		s.run(ctx)
 	}()
 	return s
@@ -562,6 +590,7 @@ func (s *pairStream) run(ctx context.Context) {
 		s.m.q.SetCondition("takeover-cold", cold)
 		s.m.q.SetCondition("retain-in-memory", mem)
 		s.m.q.SetCondition("takeover-hold", s.m.holdCondition())
+		s.m.q.SetCondition("failback", s.m.failback.condition(s.leadsNow()))
 	}
 }
 
@@ -1043,6 +1072,7 @@ func (s *pairStream) status() *leader.StreamStatus {
 	}
 	st.RetainInMemory = rtLead && s.rt.RetainOnlyInMemory()
 	st.TakeoverHold = s.m.holdStatus()
+	st.Failback = s.m.failback.status(s.leadsNow())
 	if lead {
 		st.Role, st.State = "leader", "no-standby"
 		st.Term, st.Seq, st.Bytes = s.sentTerm, s.sentSeq, s.bytes
@@ -1118,3 +1148,17 @@ func bytesTrim(b []byte) string {
 	}
 	return s
 }
+
+// leadTerm is this controller's leadership: the runtime's term, and
+// whether it leads in a leadership the elector still holds.
+func (s *pairStream) leadTerm() (uint64, bool) {
+	term, lead := s.rt.LeadingTerm()
+	return term, lead && s.leads(term)
+}
+
+// leadsNow is leadTerm's second answer.
+func (s *pairStream) leadsNow() bool { _, lead := s.leadTerm(); return lead }
+
+// errNotLeaderFailback: failback is suspended and resumed on the leader
+// (a standby forwards the command there).
+var errNotLeaderFailback = errors.New("this controller does not lead: failback is suspended and resumed on the leader")

@@ -105,11 +105,19 @@ Usage:
       leader resigns so the standby takes over hot at once (no waiting out
       the lease). Refused, saying why, unless the standby is current, may
       lead, and its inputs are live, and the leader holds no force and no
-      takeover hold. It checks that the standby's I/O is healthy, not yet
-      that it reaches every device the leader reaches. Writes to the
-      controllers are refused ("switching") for the moment it takes.
-      Journalled under your name. On a standby it is forwarded to the
-      leader.
+      takeover hold. The standby's I/O must be healthy and reach every
+      field driver the leader has connected (a driver the standby cannot
+      see, "waiting", is skipped); the refusal names the ones it does not.
+      Writes to the controllers are refused ("switching") for the moment
+      it takes. Run on the preferred controller of a pair with
+      redundancy.failback, it suspends failback. Journalled under your
+      name. On a standby it is forwarded to the leader.
+  naut redundancy [flags] failback suspend [<why>...]
+  naut redundancy [flags] failback resume
+      suspend or resume the pair's failback (redundancy.failback): while
+      suspended the pair stays on whichever controller leads. Resume also
+      ends the ping-pong stop (and its alarm). Journalled under your name.
+      On a standby it is forwarded to the leader.
 
 Flags:
   --url <url>         the controller's tag API (default $NAUTILUS_URL, else
@@ -128,7 +136,8 @@ Under an auth: block the commands need the redundancy permission
 (administrator by default). Without one they take only NAUTILUS_TOKEN.
 Every command but new-pair is written to the controller's audit journal
 (redundancy.commission, redundancy.recommission, redundancy.vouch,
-redundancy.clear-duplicate, redundancy.release-hold, redundancy.switchover),
+redundancy.clear-duplicate, redundancy.release-hold, redundancy.switchover,
+redundancy.failback),
 accepted or refused,
 with what was accepted.
 
@@ -387,6 +396,41 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 			return 1
 		}
 		return 0
+	case "failback":
+		if len(pos) < 2 || (pos[1] != "suspend" && pos[1] != "resume") || (pos[1] == "resume" && len(pos) != 2) {
+			fmt.Fprint(stderr, redundancyUsage)
+			return 2
+		}
+		body := map[string]any{"suspend": pos[1] == "suspend"}
+		if len(pos) > 2 {
+			body["why"] = strings.Join(pos[2:], " ")
+		}
+		code, b, err := do(http.MethodPost, "/api/cluster/failback", body)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *asJSON {
+			stdout.Write(b)
+		} else if code == http.StatusOK {
+			if pos[1] == "suspend" {
+				fmt.Fprintln(stdout, "failback suspended: the pair stays on whichever controller leads until naut redundancy failback resume")
+			} else {
+				fmt.Fprintln(stdout, "failback resumed: the pair fails back to the preferred controller once it has been ready for redundancy.failback.after")
+			}
+		} else {
+			var ans struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(b, &ans) == nil && ans.Error != "" {
+				fmt.Fprintf(stdout, "refused (%d): %s\n", code, ans.Error)
+			} else {
+				fmt.Fprintf(stdout, "refused (%d): %s\n", code, bytes.TrimSpace(b))
+			}
+		}
+		if code != http.StatusOK {
+			return 1
+		}
+		return 0
 	case "switchover":
 		if len(pos) != 1 {
 			fmt.Fprint(stderr, redundancyUsage)
@@ -546,6 +590,19 @@ func streamLine(s *leader.StreamStatus) string {
 	}
 	if s.RetainInMemory {
 		line += "; retained values only in memory: no retain save has succeeded since the takeover"
+	}
+	if f := s.Failback; f != nil {
+		switch {
+		case f.Suspended:
+			line += fmt.Sprintf("; FAILBACK to %s SUSPENDED (%s, by %s at %s)", f.Prefer, f.Why, f.By, time.UnixMilli(f.AtMs).UTC().Format(time.RFC3339))
+		case f.ReadyMs > 0:
+			line += fmt.Sprintf("; failback to %s in %s (ready for %s)", f.Prefer, ms(f.AfterMs-f.ReadyMs), ms(f.ReadyMs))
+		case f.NotReady != "":
+			line += fmt.Sprintf("; failback to %s waits: %s", f.Prefer, f.NotReady)
+		}
+		if f.Count > 0 {
+			line += fmt.Sprintf(" (ping-pong %d of %d)", f.Count, f.Max)
+		}
 	}
 	if h := s.TakeoverHold; h != nil && h.Holding {
 		line += fmt.Sprintf("; TAKEOVER HOLD: outputs held for %s until %s is TRUE or release-hold", ms(h.AgeMs), h.Release)

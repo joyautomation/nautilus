@@ -57,6 +57,11 @@ type switchAsk struct {
 type switchAnswer struct {
 	Good bool   `json:"good"`
 	Why  string `json:"why,omitempty"`
+	// Drivers is the standby's field drivers, for the leader's I/O
+	// comparison (#710 d2); Prefer its redundancy.failback.prefer ("" for
+	// none), which a failback's leader checks against its own.
+	Drivers []switchDriver `json:"drivers,omitempty"`
+	Prefer  string         `json:"prefer,omitempty"`
 }
 
 // switchReport is a switchover's report, the command's answer.
@@ -87,7 +92,10 @@ func msSince(t time.Time) float64 { return float64(time.Since(t).Microseconds())
 func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, string, string) {
 	start := time.Now()
 	rep := switchReport{From: string(s.m.o.Self), To: string(s.m.o.Peer)}
+	// handedOver: the lead goes to the standby (done, or past the resign).
+	handedOver := false
 	done := func(outcome, why string) (switchReport, string, string) {
+		handedOver = outcome == leader.SwitchDone || outcome == leader.SwitchFailover
 		rep.TotalMs = msSince(start)
 		lvl := slog.LevelInfo
 		if outcome != leader.SwitchDone {
@@ -108,30 +116,18 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 	}
 	rep.Epoch = term
 	lease := s.m.o.Lease
-	if s.hotMaxAge == 0 {
-		return refuse("redundancy.hot-max-age is 0, so every takeover is cold: a switchover could not hand over without a seam")
+	if why := s.switchRefusal(term, ""); why != "" {
+		return refuse(why)
 	}
-	if n := s.rt.Tags().ForceCount(); n > 0 {
-		return refuse(fmt.Sprintf("%d force(s) held: a takeover drops forces, so remove them first", n))
-	}
-	if s.rt.HoldStatus().Holding {
-		return refuse("a takeover hold holds the outputs: release it first (the program's release tag, or naut redundancy release-hold)")
-	}
-	if _, current := s.syncMark(term); !current && !mutNaut("switch_unready_target") {
-		return refuse("the standby is not current: it has not acknowledged the newest state images (see the state-stream condition in naut redundancy status)")
-	}
-	ans, err := s.askSwitch(term)
-	switch {
-	case err != nil:
-		return refuse("the standby did not answer whether it may take over: " + err.Error())
-	case !ans.Good && !mutNaut("switch_unready_target"):
-		return refuse("the standby may not take over: " + ans.Why)
+	if f := s.m.failback; f != nil && by == failbackBy && f.suspended() && !mutNaut("failback_ignores_suspend") {
+		// An operator's suspend that landed after the failback's look.
+		return refuse("failback was suspended")
 	}
 
 	// 2. Stop the scans.
 	t := time.Now()
 	bctx, cancel := context.WithTimeout(ctx, lease/4)
-	err = s.rt.BeginSwitch(bctx, term)
+	err := s.rt.BeginSwitch(bctx, term)
 	cancel()
 	if err != nil {
 		return refuse(err.Error())
@@ -154,6 +150,19 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 			return done(leader.SwitchAborted, why+": the switchover is off; this controller's gate closed meanwhile, so whether it still leads is the election's")
 		}
 		return done(leader.SwitchAborted, why+": the switchover is off, and this controller leads on in the same leadership, nothing lost")
+	}
+
+	// A manual switchover away from the preferred controller suspends
+	// failback (#710 d2), set before the final image so the image carries
+	// it to the controller that takes over.
+	if f := s.m.failback; f != nil {
+		undo := f.switchingAway(by)
+		go f.flush() // never a journal write while the scans are stopped
+		defer func() {
+			if !handedOver && !mutNaut("failback_abort_keeps_suspend") {
+				undo() // refused or aborted: it still leads, nothing moved away
+			}
+		}()
 	}
 
 	// 3. The final image, and its acknowledgement.
@@ -206,6 +215,90 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 		return done(leader.SwitchFailover, "no voter took the RESIGN: the standby takes over once the lease runs out, as after a failover")
 	}
 	return done(leader.SwitchDone, "")
+}
+
+// switchRefusal is why a switchover in term may not start now, "" when it
+// may: the d1 step-1 checks, which a failback reads as its "ready" too
+// (#710 d2). The standby is asked (switch-ask), and its field I/O compared
+// with this leader's. prefer, for a failback, is this controller's
+// redundancy.failback.prefer, which the standby's must match: one
+// manifest rolled out to one controller only would otherwise fail back
+// on every after (Fable on d2). A manual switchover passes "".
+func (s *pairStream) switchRefusal(term uint64, prefer string) string {
+	if s.hotMaxAge == 0 {
+		return "redundancy.hot-max-age is 0, so every takeover is cold: a switchover could not hand over without a seam"
+	}
+	if n := s.rt.Tags().ForceCount(); n > 0 {
+		return fmt.Sprintf("%d force(s) held: a takeover drops forces, so remove them first", n)
+	}
+	if s.rt.HoldStatus().Holding {
+		return "a takeover hold holds the outputs: release it first (the program's release tag, or naut redundancy release-hold)"
+	}
+	if _, current := s.syncMark(term); !current && !mutNaut("switch_unready_target") {
+		return "the standby is not current: it has not acknowledged the newest state images (see the state-stream condition in naut redundancy status)"
+	}
+	ans, err := s.askSwitch(term)
+	switch {
+	case err != nil:
+		return "the standby did not answer whether it may take over: " + err.Error()
+	case !ans.Good && !mutNaut("switch_unready_target"):
+		return "the standby may not take over: " + ans.Why
+	}
+	if prefer != "" && ans.Prefer != prefer && !mutNaut("failback_ignores_prefer_mismatch") {
+		return fmt.Sprintf("the standby's redundancy.failback.prefer is %q, this leader's %q: deploy the same manifest to both", ans.Prefer, prefer)
+	}
+	if bad := ioNotReached(s.m.ioRows(), ans.Drivers); len(bad) > 0 && !mutNaut("switch_ignores_io_reach") {
+		if ans.Drivers == nil {
+			return "the standby sent no field-driver status (an older build, or its drivers have not started), so it cannot be shown to reach " + strings.Join(bad, ", ")
+		}
+		return "the standby does not reach " + strings.Join(bad, ", ") + ", which this leader reaches"
+	}
+	return ""
+}
+
+// switchDriver is one field driver's state in a switch-ask answer: what
+// GET /api/drivers shows.
+type switchDriver struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+// ioNotReached is the field drivers this leader has connected that the
+// standby does not (design §3.2's comparison, #710 d2): only connections
+// the standby polls are compared, so a standby row "waiting" (a
+// no-session driver: EtherNet/IP, IO-Link, OptoMMP with a unit watchdog
+// can't be seen from the standby) is skipped.
+func ioNotReached(lead, standby []switchDriver) []string {
+	st := make(map[string]string, len(standby))
+	for _, d := range standby {
+		st[d.Kind+"\x00"+d.Name] = d.State
+	}
+	var bad []string
+	for _, d := range lead {
+		if d.State != "connected" {
+			continue
+		}
+		switch st[d.Kind+"\x00"+d.Name] {
+		case "connected", "waiting":
+		default:
+			bad = append(bad, d.Kind+" "+d.Name)
+		}
+	}
+	return bad
+}
+
+// ioRows is this controller's field drivers as switch-ask rows.
+func (m *pairMember) ioRows() []switchDriver {
+	f := m.ioStatus.Load()
+	if f == nil {
+		return nil
+	}
+	var out []switchDriver
+	for _, d := range (*f)() {
+		out = append(out, switchDriver{Kind: d.Kind, Name: d.Name, State: d.State})
+	}
+	return out
 }
 
 // askSwitch asks the standby whether it may take over now.
@@ -279,7 +372,11 @@ func (s *pairStream) judgeSwitch(ask switchAsk) switchAnswer {
 	if why := s.ioUnhealthy(); why != "" && !mutNaut("switch_ignores_standby_io") {
 		return switchAnswer{Why: "its I/O is not healthy: " + why}
 	}
-	return switchAnswer{Good: true}
+	ans := switchAnswer{Good: true, Drivers: s.m.ioRows()}
+	if f := s.m.failback; f != nil {
+		ans.Prefer = f.prefer
+	}
+	return ans
 }
 
 // ioUnhealthy says why this controller's field I/O is not healthy, "" when

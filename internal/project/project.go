@@ -531,6 +531,9 @@ type RedundancyConfig struct {
 	// TakeoverHold holds the new leader's outputs after a takeover until
 	// the program sets its release tag (#710 (b2), design §4.6). Pair only.
 	TakeoverHold *TakeoverHoldConfig `yaml:"takeover-hold"`
+	// Failback fails back to the preferred controller once it has been
+	// ready for a while (#710 d2, design §4.8). Pair only; off when absent.
+	Failback *FailbackConfig `yaml:"failback"`
 }
 
 // TakeoverHoldConfig is redundancy.takeover-hold.
@@ -705,6 +708,8 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.hot-max-age applies to a redundant pair (peers:): the oldest state image its takeover goes on from")
 		case r.TakeoverHold != nil:
 			return errors.New("redundancy.takeover-hold applies to a redundant pair (peers:): it holds the outputs after a takeover from the peer")
+		case r.Failback != nil:
+			return errors.New("redundancy.failback is for a redundant pair (peers:): there is no other controller to fail back to")
 		}
 		return nil
 	}
@@ -779,6 +784,9 @@ func checkRedundancy(r *RedundancyConfig) error {
 		return err
 	}
 	if err := checkTakeoverHoldConfig(r.TakeoverHold); err != nil {
+		return err
+	}
+	if err := checkFailbackConfig(r); err != nil {
 		return err
 	}
 	// A controller's path, judged the same wherever Load runs (naut check
@@ -1957,6 +1965,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if m.Redundancy != nil {
 		if err := checkTakeoverHold(m.Redundancy.TakeoverHold, m.Tags, drivers); err != nil {
 			return nil, err
+		}
+		if m.Redundancy.Failback != nil && m.Retain == nil {
+			// Its state (suspended, and by whom) lives in the retain store:
+			// without one, a takeover could not know an operator's suspend.
+			return nil, errors.New("redundancy.failback needs a retain: section: whether failback is suspended (and by whom) is kept in the retain store, so a takeover keeps an operator's suspend")
 		}
 	}
 	if m.Redundancy.Pair() && m.Sparkplug != nil {

@@ -270,6 +270,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 	if err := m.setupHold(rt, proj.Redundancy); err != nil { // as runProject does
 		t.Fatal(err)
 	}
+	m.setupFailback(rt, proj.Redundancy)
 	var eng *alarm.Engine
 	alarms, err := startAlarms(proj, rt)
 	if err != nil {

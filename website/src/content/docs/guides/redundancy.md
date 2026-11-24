@@ -828,10 +828,13 @@ run out, which is what a failover must do. In order:
 1. The command is refused, saying why, unless the standby is ready:
    it is current (it has acknowledged the newest state images, as
    `PEER_READY()` says), it may lead, and its I/O is healthy (no field
-   driver in error, degraded, offline or still connecting). The leader must hold
-   no force and no takeover hold. A switchover checks that the
-   standby's I/O is healthy, not yet that it reaches every device this
-   leader reaches.
+   driver in error, degraded, offline or still connecting), and it
+   reaches every field device this leader reaches: each driver
+   connected here must be connected there too. A driver the standby
+   cannot see without taking over (an EtherNet/IP or IO-Link connection
+   that only the leader opens, shown as `waiting`) is not compared. The
+   refusal names the drivers the standby does not reach. The leader must
+   hold no force and no takeover hold.
 2. Each task on the leader finishes the scan it is in, sends that
    scan's outputs, and stops. For that moment, writes from the HMI, the
    API or OPC UA, forces, substitutes, SFC commands, online edits and
@@ -878,6 +881,55 @@ alarm's level again, so a page may arrive twice, but is never lost.
 The command needs the redundancy permission, is journalled under your
 name (`redundancy.switchover`, with how long each step took), and a
 standby forwards it to the leader.
+
+#### Failback (opt-in)
+
+A pair runs on whichever controller leads: after a failover the lead
+stays with the standby that took over, even once the other controller
+is back. If one controller should lead whenever it can (the one wired
+to the panel, say), name it:
+
+```yaml
+redundancy:
+  failback:
+    prefer: a      # a name under peers:
+    after: 5m      # default 5m; at least 10 leases
+    max: 3         # default 3
+```
+
+When `a` has been ready to take over for `after` without a break, the
+other controller runs a planned switchover to it, hot, as above.
+"Ready" is everything a switchover checks (current, may lead, healthy
+I/O that reaches every device the leader reaches, no force, no takeover
+hold): any moment it is not ready starts the wait again. Both
+controllers must name the same `prefer`: a manifest deployed to one of
+them only is refused, saying so. Failback needs a `retain:` section,
+where its state is kept.
+
+- **A manual switchover away from `a` suspends failback.** Moving the
+  lead off the preferred controller on purpose (to service it) must not
+  be undone behind your back. `naut redundancy status` and
+  `/api/cluster` say who suspended it and when. Resume it with
+  `naut redundancy failback resume`; `naut redundancy failback suspend
+  [<why>]` suspends it by hand. Both need the redundancy permission, are
+  journalled (`redundancy.failback`), answer once the change is saved
+  to the leader's retain store (the standby gets it with the next state
+  image, a moment later), and a standby forwards them to the leader.
+- **Ping-pong stop.** If `a` fails over back to the other controller
+  within `after` of a failback, `max` times in a row, failback stops
+  itself: it is suspended, the system alarm `nautilus.failback-stopped`
+  is raised (it pages like any alarm), and it stays stopped until an
+  operator resumes it. A failback that holds for `after` resets the
+  count.
+- **Where its state lives.** The suspension and the count are kept in
+  the retain store and carried in the state stream, so they survive a
+  takeover and a restart. If a controller takes over cold on a retain
+  store it cannot read, it cannot know whether an operator suspended
+  failback, so it suspends it, with a warning, until resumed.
+- Every failback is journalled (`redundancy.failback`, with how long
+  `a` had been ready and the switchover's outcome); a switchover that
+  does not hand over is journalled as an error, and the wait starts
+  again.
 
 #### Commissioning a new pair
 

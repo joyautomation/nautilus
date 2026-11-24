@@ -1894,9 +1894,10 @@ follow-ups. The plan and rulings are in #710 (naut-lead, 2026-11-23 and 2026-11-
      `hot-max-age` is not 0; and the standby, asked (`<stream>/switch-ask`), says it may take
      over: it may lead (`MayLead`), is not in its hand-back guard, has applied this leadership's
      images, and its field I/O is healthy (no field driver in error, offline, connecting or
-     degraded; its drivers' inputs live). The check is that the standby's I/O is healthy, not
-     yet that it reaches every device the leader reaches: that comparison (§3.2's I/O-health
-     rule) comes with d2, before experimental is lifted. Vote protocol 9 needs no check: a frame
+     degraded; its drivers' inputs live). Since d2 the leader also compares (§3.2's I/O-health
+     rule, `ioNotReached`): every field driver connected on the leader must be connected on the
+     standby, whose switch-ask answer carries its driver rows; a standby row `waiting` (a
+     no-session driver the standby cannot see) is skipped. The refusal names the drivers. Vote protocol 9 needs no check: a frame
      of another version is refused outright, so a leader holding a lease has wire-9 voters.
   2. *Stop* (`runtime.BeginSwitch`). From here writes, forces, substitutes, SFC commands and
      online edits from outside the programs are refused with `ErrSwitching` (HTTP 503 with
@@ -1960,6 +1961,61 @@ follow-ups. The plan and rulings are in #710 (naut-lead, 2026-11-23 and 2026-11-
   gate (`TestCallFencedGoesOnlyThroughAnOpenGate`, `TestISDUWriteGoesThroughTheWriteGate`), and
   the command end to end on a real pair: hot and within a lease, refused, and aborted in the same
   leadership (`TestPairSwitchover*`).
+
+### 4.8 Failback (#710 d2)
+
+Opt-in: `redundancy.failback: {prefer, after, max}` (after default 5m, at least 10 leases, so
+a flapping link or box is not failed back into; max default 3; pair only; needs `retain:`).
+
+- **The loop** (`cmd/naut/pairfailback.go`) runs on every member and acts only on a leader
+  that is not `prefer`, every lease/4. Its "ready" is the switchover's step-1 refusal set
+  (`switchRefusal`, §4.7, including the I/O comparison), unchanged: one predicate for the
+  manual and the automatic path, plus one check for a failback only: the standby's
+  `failback.prefer` (in its switch-ask answer) must equal the leader's, so a manifest rolled out
+  to one controller does not fail back every `after`. Once ready has held for `after` without
+  a break (any refusal starts the clock again) the leader runs the d1 switchover itself (`by`
+  "failback"), which looks once more, after its own checks, that failback is not suspended. The
+  failback is journalled `redundancy.failback` with the readiness time and the switchover's
+  outcome and report; an outcome other than done is journalled as an error (the field's
+  evidence, should the lost-campaign bug bite unattended).
+- **Suspension.** A switchover that starts on `prefer` (an operator's: the loop never runs
+  there) suspends failback before the final image, so the image carries it to the controller
+  that takes over; a switchover that does not hand over (refused, aborted) puts it back, unless
+  an operator changed it meanwhile. `POST /api/cluster/failback {suspend, why}` (audited, the
+  redundancy permission, on the leader; `suspend` is required, so a bare POST is refused, not a
+  resume) suspends or resumes, and answers only once this leader's retain store holds it (a
+  failover in the moment before the next state image still loses it: the standby gets it with
+  that image); resume also ends the ping-pong stop and its count.
+- **Ping-pong stop.** The non-preferred controller remembers, on its own clock (in memory: a
+  restart forgets it), when it last failed back (done, or past the resign as a failover). If it takes the lead again within `after` of that, with failback not
+  suspended (a manual switchover away would have suspended it), the preferred controller failed
+  over back: the count goes up. At `max` failback suspends itself (`Stopped`), raising the
+  system alarm `nautilus.failback-stopped` until resumed. The preferred controller holding the
+  lead for `after` resets the count.
+- **State** (`retain.FailbackState`: suspended, by, why, at, stopped, count) is a retain section
+  the leader saves (`runtime.FailbackKeeper`), carried by `retain.Carry` in every image, so a
+  hot or cold takeover and a restart keep it. A load that cannot read the store (and no image to
+  carry it) hands the keeper an unknown state, which suspends failback with a warning rather
+  than read it as never set (ruling Q2: an operator's suspend must not be lost to a bad disk).
+  That includes a takeover whose store failed earlier on the same edge (a corrupt file the
+  standby's carry or the edge's I/O read moved aside, which the load then reads as empty):
+  `loadFailed` marks it unknown. This is conservative: a read that failed once on the edge and
+  then succeeded also suspends failback, as that leadership treats its whole store. Journal entries are queued under the failback's lock and
+  written after it (a journal write fsyncs; the lock is taken under the takeover's, the alarm
+  engine's and the saver's), and never while a switchover holds the scans stopped. Fable
+  reviewed it on #1364: one must-fix (that corrupt-file path), five should-fix, all taken; its
+  re-check found the fixes sound and one more should-fix (a journal write while the scans were
+  stopped), taken.
+- **Status.** `/api/cluster`'s stream block carries `failback` on the leader (prefer, after,
+  max, suspended/by/why/at, count, how long the preferred standby has been ready or why it is
+  not), and a warning line while suspended.
+- **Tests.** Loop rules on a fake pair and clock with one mutation each
+  (`cmd/naut/pairfailback_test.go`: the clock's reset, suspension, the ping-pong stop and its
+  reset, the manual switchover's suspend and undo, the unknown state); the runtime's keeper
+  hand-over (`TestAnUnreadableStoreHandsAnUnknownFailbackState`); `TestCarry` for the image;
+  and on the pair rig, the I/O comparison's refusal and a failback end to end (a manual
+  switchover away suspends, carried to the other controller; resumed, it fails back hot after
+  `after`, the counter unbroken). No bench: a failback is the d1c switchover, timed there.
 
 ## 5. Failure cases
 

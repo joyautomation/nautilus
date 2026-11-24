@@ -143,6 +143,29 @@ type StreamStatus struct {
 	// TakeoverHold is the leader's takeover hold (#710 (b2)), nil when the
 	// manifest sets none, and on a standby.
 	TakeoverHold *HoldStatus `json:"takeoverHold,omitempty"`
+	// Failback is the leader's failback (#710 d2), nil when the manifest
+	// sets none, and on a standby.
+	Failback *FailbackStatus `json:"failback,omitempty"`
+}
+
+// FailbackStatus is a leader's failback (redundancy.failback).
+type FailbackStatus struct {
+	Prefer  string `json:"prefer"`
+	AfterMs int64  `json:"afterMs"`
+	Max     int    `json:"max"`
+	// Suspended: no failback until resumed; Stopped by the ping-pong stop.
+	// By, Why and AtMs (Unix ms) say who, why and when.
+	Suspended bool   `json:"suspended,omitempty"`
+	Stopped   bool   `json:"stopped,omitempty"`
+	By        string `json:"by,omitempty"`
+	Why       string `json:"why,omitempty"`
+	AtMs      int64  `json:"atMs,omitempty"`
+	// Count is the ping-pong count (failbacks each followed by a failover).
+	Count int `json:"count,omitempty"`
+	// ReadyMs is how long the preferred standby has been ready (a
+	// failback runs at AfterMs); NotReady why it is not.
+	ReadyMs  int64  `json:"readyMs,omitempty"`
+	NotReady string `json:"notReady,omitempty"`
 }
 
 // HoldStatus is a leader's takeover hold (redundancy.takeover-hold).
@@ -783,3 +806,6 @@ func (e *Elector) send(method, path string, l *lease, want int) error {
 func mtime(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05.000000Z")
 }
+
+// ErrNoFailback: the manifest sets no redundancy.failback (#710 d2).
+var ErrNoFailback = errors.New("this pair has no failback: redundancy.failback is not set")

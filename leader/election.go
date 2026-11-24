@@ -57,11 +57,12 @@ type Quorum struct {
 	mu           sync.Mutex
 	unhealthy    string
 	warnings     []string
-	conds        map[string]string     // SetCondition, by key
-	logStatus    func() *LogStatus     // SetLogStatus
-	streamStatus func() *StreamStatus  // SetStreamStatus
-	writesCut    func() map[string]int // SetWritesCut
-	switchover   SwitchoverFunc        // SetSwitchover
+	conds        map[string]string                        // SetCondition, by key
+	logStatus    func() *LogStatus                        // SetLogStatus
+	streamStatus func() *StreamStatus                     // SetStreamStatus
+	writesCut    func() map[string]int                    // SetWritesCut
+	switchover   SwitchoverFunc                           // SetSwitchover
+	failback     func(suspend bool, by, why string) error // SetFailback
 }
 
 // The outcomes of Switchover.
@@ -82,6 +83,26 @@ func (q *Quorum) SetSwitchover(f SwitchoverFunc) {
 	q.mu.Lock()
 	q.switchover = f
 	q.mu.Unlock()
+}
+
+// SetFailback sets the pair's failback suspend and resume (#710 d2):
+// suspend true suspends, false resumes. by is the principal.
+func (q *Quorum) SetFailback(f func(suspend bool, by, why string) error) {
+	q.mu.Lock()
+	q.failback = f
+	q.mu.Unlock()
+}
+
+// Failback suspends or resumes the pair's failback, on the leader
+// (`naut redundancy failback suspend|resume`, POST /api/cluster/failback).
+func (q *Quorum) Failback(suspend bool, by, why string) error {
+	q.mu.Lock()
+	f := q.failback
+	q.mu.Unlock()
+	if f == nil {
+		return ErrNoFailback
+	}
+	return f(suspend, by, why)
 }
 
 // Switchover hands the lead to the standby in a planned switchover
