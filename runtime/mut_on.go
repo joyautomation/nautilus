@@ -93,6 +93,11 @@ import "os"
 //     switch_ignores_hold, abort_keeps_switching, resume_ends_switching,
 //     takeover_keeps_switching, final_keeps_round: a planned switchover's
 //     switching state (#710 d1c, switch.go).
+//   - flush_next_tick, catchup_next_tick, edge_wait_blocks_others,
+//     leading_term_locks, wait_keeps_lead_sample,
+//     beginswitch_reads_snapshot, carry_snapshot_any_wait,
+//     save_waits_on_edge: a takeover edge's
+//     same-tick wait for its steps (#710 d1e, stream.go).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutRuntime(name string) bool { return name == mutOn }

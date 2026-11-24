@@ -338,6 +338,15 @@ type Runtime struct {
 	imageSeq imageSeqs
 	// sw is a planned switchover's state (switch.go).
 	sw switchState
+	// edgeWait: a loop's tick on a takeover edge is waiting for a step
+	// it started (waitStep, under leadMu); other ticks do not queue.
+	edgeWait atomic.Bool
+	// flushWait: the edgeWait is for this edge's own flush (waitStep),
+	// whose carry may read the leadership snapshot (carry).
+	flushWait atomic.Bool
+	// leadSnap is ledTerm<<1 | leading, published under leadMu
+	// (publishLead) for LeadingTerm, which takes no lock.
+	leadSnap atomic.Uint64
 	// imgMu guards the round the state image is in (RequestImage,
 	// TakeImage): its number, its phase (0 first copies, 1 the re-copy of
 	// the faster tasks, 2 taken) and the task that copied last.

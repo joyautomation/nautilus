@@ -49,14 +49,18 @@ type failStore struct {
 	memStore
 	mu2        sync.Mutex
 	loadFails  bool
+	onLoad     func() // runs at each Load (inside a takeover: under leadMu)
 	saveFails  bool
 	savedAfter int
 }
 
 func (f *failStore) Load() (retain.State, error) {
 	f.mu2.Lock()
-	bad := f.loadFails
+	bad, hook := f.loadFails, f.onLoad
 	f.mu2.Unlock()
+	if hook != nil {
+		hook()
+	}
 	if bad {
 		return retain.State{}, errors.New("retain file unreadable")
 	}
