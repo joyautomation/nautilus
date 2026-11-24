@@ -3,13 +3,61 @@
 package project
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
+
+// Takeover hold defaults and bounds.
+const (
+	DefaultTakeoverHoldMax = 5 * time.Second
+	MaxTakeoverHoldMax     = time.Minute
+)
+
+// MaxOr is the hold's max, or its default.
+func (h *TakeoverHoldConfig) MaxOr() time.Duration {
+	if h == nil || h.Max == nil {
+		return DefaultTakeoverHoldMax
+	}
+	return time.Duration(*h.Max)
+}
+
+// checkTakeoverHoldConfig checks redundancy.takeover-hold's own fields;
+// its tags are checked against the manifest's (checkTakeoverHold).
+func checkTakeoverHoldConfig(h *TakeoverHoldConfig) error {
+	if h == nil {
+		return nil
+	}
+	if h.Release == "" {
+		return errors.New("redundancy.takeover-hold.release is required: the BOOL state tag the program sets TRUE when its outputs may go out")
+	}
+	if d := h.MaxOr(); d <= 0 || d > MaxTakeoverHoldMax {
+		return fmt.Errorf("redundancy.takeover-hold.max %s: want more than 0 and at most %s (the time to the hold's alarm)", d, MaxTakeoverHoldMax)
+	}
+	switch h.On {
+	case "", "cold", "always":
+	default:
+		return fmt.Errorf("redundancy.takeover-hold.on %q: want cold (the default: a cold takeover, or a hot one from a leader still holding) or always (every takeover)", h.On)
+	}
+	switch h.OnMax {
+	case "", "hold", "release":
+	default:
+		return fmt.Errorf("redundancy.takeover-hold.on-max %q: want hold (the default: keep holding, alarm raised) or release (release with the alarm raised)", h.OnMax)
+	}
+	for tag, v := range h.Safe {
+		switch v.(type) {
+		case bool, int, int64, uint64, float64:
+		default:
+			return fmt.Errorf("redundancy.takeover-hold.safe.%s: %v is not a BOOL or a number", tag, v)
+		}
+	}
+	return nil
+}
 
 // checkTakeoverHold checks redundancy.takeover-hold against the manifest's
 // tags and drivers (#710 (b2)): the release tag is a BOOL state tag no
