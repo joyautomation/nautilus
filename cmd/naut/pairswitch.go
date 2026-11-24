@@ -58,8 +58,10 @@ type switchAnswer struct {
 	Good bool   `json:"good"`
 	Why  string `json:"why,omitempty"`
 	// Drivers is the standby's field drivers, for the leader's I/O
-	// comparison (#710 d2).
+	// comparison (#710 d2); Prefer its redundancy.failback.prefer ("" for
+	// none), which a failback's leader checks against its own.
 	Drivers []switchDriver `json:"drivers,omitempty"`
+	Prefer  string         `json:"prefer,omitempty"`
 }
 
 // switchReport is a switchover's report, the command's answer.
@@ -114,8 +116,12 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 	}
 	rep.Epoch = term
 	lease := s.m.o.Lease
-	if why := s.switchRefusal(term); why != "" {
+	if why := s.switchRefusal(term, ""); why != "" {
 		return refuse(why)
+	}
+	if f := s.m.failback; f != nil && by == failbackBy && f.suspended() && !mutNaut("failback_ignores_suspend") {
+		// An operator's suspend that landed after the failback's look.
+		return refuse("failback was suspended")
 	}
 
 	// 2. Stop the scans.
@@ -151,8 +157,9 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 	// it to the controller that takes over.
 	if f := s.m.failback; f != nil {
 		undo := f.switchingAway(by)
+		f.flush()
 		defer func() {
-			if !handedOver {
+			if !handedOver && !mutNaut("failback_abort_keeps_suspend") {
 				undo() // refused or aborted: it still leads, nothing moved away
 			}
 		}()
@@ -213,8 +220,11 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 // switchRefusal is why a switchover in term may not start now, "" when it
 // may: the d1 step-1 checks, which a failback reads as its "ready" too
 // (#710 d2). The standby is asked (switch-ask), and its field I/O compared
-// with this leader's.
-func (s *pairStream) switchRefusal(term uint64) string {
+// with this leader's. prefer, for a failback, is this controller's
+// redundancy.failback.prefer, which the standby's must match: one
+// manifest rolled out to one controller only would otherwise fail back
+// on every after (Fable on d2). A manual switchover passes "".
+func (s *pairStream) switchRefusal(term uint64, prefer string) string {
 	if s.hotMaxAge == 0 {
 		return "redundancy.hot-max-age is 0, so every takeover is cold: a switchover could not hand over without a seam"
 	}
@@ -234,7 +244,13 @@ func (s *pairStream) switchRefusal(term uint64) string {
 	case !ans.Good && !mutNaut("switch_unready_target"):
 		return "the standby may not take over: " + ans.Why
 	}
+	if prefer != "" && ans.Prefer != prefer && !mutNaut("failback_ignores_prefer_mismatch") {
+		return fmt.Sprintf("the standby's redundancy.failback.prefer is %q, this leader's %q: deploy the same manifest to both", ans.Prefer, prefer)
+	}
 	if bad := ioNotReached(s.m.ioRows(), ans.Drivers); len(bad) > 0 && !mutNaut("switch_ignores_io_reach") {
+		if ans.Drivers == nil {
+			return "the standby sent no field-driver status (an older build, or its drivers have not started), so it cannot be shown to reach " + strings.Join(bad, ", ")
+		}
 		return "the standby does not reach " + strings.Join(bad, ", ") + ", which this leader reaches"
 	}
 	return ""
@@ -356,7 +372,11 @@ func (s *pairStream) judgeSwitch(ask switchAsk) switchAnswer {
 	if why := s.ioUnhealthy(); why != "" && !mutNaut("switch_ignores_standby_io") {
 		return switchAnswer{Why: "its I/O is not healthy: " + why}
 	}
-	return switchAnswer{Good: true, Drivers: s.m.ioRows()}
+	ans := switchAnswer{Good: true, Drivers: s.m.ioRows()}
+	if f := s.m.failback; f != nil {
+		ans.Prefer = f.prefer
+	}
+	return ans
 }
 
 // ioUnhealthy says why this controller's field I/O is not healthy, "" when

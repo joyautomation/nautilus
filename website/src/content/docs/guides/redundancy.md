@@ -901,8 +901,10 @@ When `a` has been ready to take over for `after` without a break, the
 other controller runs a planned switchover to it, hot, as above.
 "Ready" is everything a switchover checks (current, may lead, healthy
 I/O that reaches every device the leader reaches, no force, no takeover
-hold): any moment it is not ready starts the wait again. Failback needs
-a `retain:` section, where its state is kept.
+hold): any moment it is not ready starts the wait again. Both
+controllers must name the same `prefer`: a manifest deployed to one of
+them only is refused, saying so. Failback needs a `retain:` section,
+where its state is kept.
 
 - **A manual switchover away from `a` suspends failback.** Moving the
   lead off the preferred controller on purpose (to service it) must not
@@ -910,8 +912,8 @@ a `retain:` section, where its state is kept.
   `/api/cluster` say who suspended it and when. Resume it with
   `naut redundancy failback resume`; `naut redundancy failback suspend
   [<why>]` suspends it by hand. Both need the redundancy permission, are
-  journalled (`redundancy.failback`), and a standby forwards them to
-  the leader.
+  journalled (`redundancy.failback`), answer once the change is saved
+  to the retain store, and a standby forwards them to the leader.
 - **Ping-pong stop.** If `a` fails over back to the other controller
   within `after` of a failback, `max` times in a row, failback stops
   itself: it is suspended, the system alarm `nautilus.failback-stopped`

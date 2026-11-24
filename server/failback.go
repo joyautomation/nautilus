@@ -19,7 +19,8 @@ type FailbackSetter interface {
 
 // failbackBody is POST /api/cluster/failback's body.
 type failbackBody struct {
-	Suspend bool   `json:"suspend"`
+	// Suspend is required: a bare POST must not resume (Fable on d2).
+	Suspend *bool  `json:"suspend"`
 	Why     string `json:"why,omitempty"`
 }
 
@@ -33,8 +34,8 @@ func (s *Server) failbackTarget(r *http.Request, body []byte) auditTarget {
 		}
 	}
 	var b failbackBody
-	if json.NewDecoder(bytes.NewReader(body)).Decode(&b) == nil {
-		t.detail["suspend"] = b.Suspend
+	if json.NewDecoder(bytes.NewReader(body)).Decode(&b) == nil && b.Suspend != nil {
+		t.detail["suspend"] = *b.Suspend
 		if b.Why != "" {
 			t.detail["why"] = b.Why
 		}
@@ -57,11 +58,15 @@ func (s *Server) handleFailback(w http.ResponseWriter, r *http.Request) {
 	}
 	// The first JSON value, whatever follows, as the audit seam reads it.
 	var b failbackBody
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&b); err != nil && !errors.Is(err, io.EOF) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "want a body {\"suspend\": true|false, \"why\": \"...\"}: " + err.Error()})
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&b); err != nil || b.Suspend == nil {
+		msg := "want a body {\"suspend\": true|false, \"why\": \"...\"}"
+		if err != nil {
+			msg += ": " + err.Error()
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
 		return
 	}
-	if err := fs.Failback(b.Suspend, s.principalOf(r), b.Why); err != nil {
+	if err := fs.Failback(*b.Suspend, s.principalOf(r), b.Why); err != nil {
 		code := http.StatusConflict
 		if errors.Is(err, leader.ErrNoFailback) {
 			code = http.StatusNotFound
@@ -69,5 +74,5 @@ func (s *Server) handleFailback(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"suspended": b.Suspend})
+	writeJSON(w, http.StatusOK, map[string]any{"suspended": *b.Suspend})
 }

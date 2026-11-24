@@ -456,7 +456,15 @@ func (r *Runtime) applyRetainedFrom(st retain.State, full bool) error {
 	}
 	r.params.load(st.ParamBases, st.ParamEdits, st.ParamCommitted)
 	r.pushLoaded(st.Push)
-	r.failbackLoaded(st.Failback, true)
+	// A takeover whose store already failed this edge (a corrupt file the
+	// standby's carry or the edge's I/O read moved aside, so this load
+	// reads it empty) does not know the failback state either (Fable on
+	// d2): an image carried in later hands it over, known.
+	if full && r.strm.loadFailed.Load() && !mutRuntime("failback_unknown_as_known") {
+		r.failbackLoaded(nil, false)
+	} else {
+		r.failbackLoaded(st.Failback, true)
+	}
 	var errs []error
 	for name, v := range st.Tags {
 		if !allowed[name] {

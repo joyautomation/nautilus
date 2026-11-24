@@ -46,6 +46,12 @@ type pairFailback struct {
 	// controller hold, and since when.
 	seenTerm  uint64
 	leadSince time.Time
+	// pending are journal entries made under mu, written by flush after
+	// it is released: a journal write fsyncs, and mu is taken under the
+	// runtime's takeover lock, the alarm engine's and the saver's (Fable
+	// on d2). flushMu keeps them in order.
+	pending []audit.Entry
+	flushMu sync.Mutex
 }
 
 // setupFailback builds the failback from the manifest and registers it on
@@ -76,7 +82,10 @@ func (f *pairFailback) RetainedFailback() *retain.FailbackState {
 // lost to a bad disk (#710 d2 Q2).
 func (f *pairFailback) RestoreFailback(st *retain.FailbackState, known bool) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	defer func() {
+		f.mu.Unlock()
+		go f.flush() // never a journal write under the takeover's lock
+	}()
 	switch {
 	case !known:
 		f.st = retain.FailbackState{Suspended: true, By: "system", AtMs: f.now().UnixMilli(),
@@ -91,12 +100,9 @@ func (f *pairFailback) RestoreFailback(st *retain.FailbackState, known bool) {
 	f.readySince = time.Time{}
 }
 
-// record journals a failback event.
+// record queues a failback event for the journal, under f.mu; flush
+// writes it.
 func (f *pairFailback) record(event, user, why string, result string, extra ...any) {
-	j := f.m.journal.Load()
-	if j == nil {
-		return
-	}
 	detail := map[string]any{"event": event, "prefer": f.prefer}
 	if why != "" {
 		detail["why"] = why
@@ -104,11 +110,29 @@ func (f *pairFailback) record(event, user, why string, result string, extra ...a
 	for i := 0; i+1 < len(extra); i += 2 {
 		detail[extra[i].(string)] = extra[i+1]
 	}
-	_, _ = (*j).Record(audit.Entry{
+	f.pending = append(f.pending, audit.Entry{
 		User: user, Source: audit.SourceSystem,
 		Action: "redundancy.failback", Target: string(f.m.o.Self),
 		Detail: detail, Result: result,
 	})
+}
+
+// flush writes the queued events to the journal, in order. Never under
+// f.mu.
+func (f *pairFailback) flush() {
+	f.flushMu.Lock()
+	defer f.flushMu.Unlock()
+	f.mu.Lock()
+	p := f.pending
+	f.pending = nil
+	f.mu.Unlock()
+	j := f.m.journal.Load()
+	if j == nil {
+		return
+	}
+	for _, e := range p {
+		_, _ = (*j).Record(e)
+	}
 }
 
 // failbackPair is what the failback asks of its pair (pairStream; a fake
@@ -117,7 +141,7 @@ type failbackPair interface {
 	// leadTerm is this controller's leadership: the term, and whether it
 	// leads in it (runtime and elector both).
 	leadTerm() (uint64, bool)
-	switchRefusal(term uint64) string
+	switchRefusal(term uint64, prefer string) string
 	switchover(ctx context.Context, by string) (switchReport, string, string)
 }
 
@@ -144,6 +168,7 @@ func (f *pairFailback) run(ctx context.Context, s failbackPair) {
 // once the preferred controller has held, or time the preferred
 // standby's readiness and fail back to it.
 func (f *pairFailback) tick(ctx context.Context, s failbackPair) {
+	defer f.flush()
 	now := f.now()
 	term, lead := s.leadTerm()
 	if !lead {
@@ -164,6 +189,7 @@ func (f *pairFailback) tick(ctx context.Context, s failbackPair) {
 		// The preferred controller has held for after since it took the
 		// lead: the failbacks so far were not a ping-pong.
 		if f.st.Count > 0 && now.Sub(f.leadSince) >= f.after && !mutNaut("failback_count_never_resets") {
+			f.record("count-reset", "system", "the preferred controller held the lead for after", audit.ResultOK, "count", f.st.Count)
 			f.st.Count = 0
 		}
 		f.readySince, f.notReady = time.Time{}, ""
@@ -179,7 +205,7 @@ func (f *pairFailback) tick(ctx context.Context, s failbackPair) {
 
 	// The switchover's own checks, asked of the standby (outside the lock:
 	// it is a request).
-	why := s.switchRefusal(term)
+	why := s.switchRefusal(term, f.prefer)
 	f.mu.Lock()
 	if why != "" {
 		if !mutNaut("failback_ready_never_resets") {
@@ -202,7 +228,7 @@ func (f *pairFailback) tick(ctx context.Context, s failbackPair) {
 	f.mu.Unlock()
 
 	slog.Info("redundancy: failback: the preferred controller has been ready for "+readyFor.Round(time.Second).String()+"; switching over to it", "prefer", f.prefer)
-	rep, outcome, reason := s.switchover(ctx, "failback")
+	rep, outcome, reason := s.switchover(ctx, failbackBy)
 	result := audit.ResultOK
 	if outcome != leader.SwitchDone {
 		// Any other outcome is the field's evidence (Q5): the switchover
@@ -210,12 +236,33 @@ func (f *pairFailback) tick(ctx context.Context, s failbackPair) {
 		result = audit.ResultError
 		slog.Warn("redundancy: failback: the switchover did not hand over", "outcome", outcome, "why", reason)
 	}
+	f.mu.Lock()
 	f.record("switchover", "system", reason, result, "outcome", outcome, "readyMs", readyFor.Milliseconds(), "report", rep)
-	if outcome == leader.SwitchDone {
-		f.mu.Lock()
+	// The lead moved (done, or past the resign as a failover): a failover
+	// back within after counts (Fable on d2: a failback ending as a
+	// failover moved the lead too).
+	if outcome == leader.SwitchDone || outcome == leader.SwitchFailover && !mutNaut("failback_failover_not_counted") {
 		f.lastBack = f.now()
-		f.mu.Unlock()
 	}
+	f.mu.Unlock()
+}
+
+// stopped: the ping-pong stop holds failback suspended (its alarm).
+func (f *pairFailback) stopped() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.st.Suspended && f.st.Stopped
+}
+
+// failbackBy is the switchover's principal when failback runs it.
+const failbackBy = "failback"
+
+// suspended reports whether failback is suspended now (switchover's last
+// look before it stops the scans).
+func (f *pairFailback) suspended() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.st.Suspended
 }
 
 // countFailover runs when this (non-preferred) controller takes the lead:
@@ -256,10 +303,18 @@ func (f *pairFailback) switchingAway(by string) (undo func()) {
 	was := f.st
 	f.st.Suspended, f.st.Stopped, f.st.By, f.st.AtMs = true, false, by, f.now().UnixMilli()
 	f.st.Why = "manual switchover away from the preferred controller"
+	set := f.st
+	f.record("suspended", by, f.st.Why, audit.ResultOK)
 	return func() {
 		f.mu.Lock()
-		f.st = was
+		// Only what this switchover set: an operator's suspend or resume
+		// that landed meanwhile stands (Fable on d2).
+		if f.st == set || mutNaut("failback_undo_overwrites") {
+			f.st = was
+			f.record("suspend-undone", by, "the switchover did not hand over", audit.ResultOK)
+		}
 		f.mu.Unlock()
+		f.flush()
 	}
 }
 
@@ -333,13 +388,6 @@ func failbackAlarms(m *pairMember) []project.SystemAlarm {
 			Priority: alarm.High, Class: "system",
 			AckRequired: true, AutoClear: true,
 		},
-		Active: func() bool {
-			if !leading() {
-				return false
-			}
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			return f.st.Suspended && f.st.Stopped
-		},
+		Active: func() bool { return leading() && f.stopped() },
 	}}
 }

@@ -1970,18 +1970,23 @@ a flapping link or box is not failed back into; max default 3; pair only; needs 
 - **The loop** (`cmd/naut/pairfailback.go`) runs on every member and acts only on a leader
   that is not `prefer`, every lease/4. Its "ready" is the switchover's step-1 refusal set
   (`switchRefusal`, §4.7, including the I/O comparison), unchanged: one predicate for the
-  manual and the automatic path. Once it has held for `after` without a break (any refusal
-  starts the clock again) the leader runs the d1 switchover itself (`by` "failback"). The
+  manual and the automatic path, plus one check for a failback only: the standby's
+  `failback.prefer` (in its switch-ask answer) must equal the leader's, so a manifest rolled out
+  to one controller does not fail back every `after`. Once ready has held for `after` without
+  a break (any refusal starts the clock again) the leader runs the d1 switchover itself (`by`
+  "failback"), which looks once more, after its own checks, that failback is not suspended. The
   failback is journalled `redundancy.failback` with the readiness time and the switchover's
   outcome and report; an outcome other than done is journalled as an error (the field's
   evidence, should the lost-campaign bug bite unattended).
 - **Suspension.** A switchover that starts on `prefer` (an operator's: the loop never runs
   there) suspends failback before the final image, so the image carries it to the controller
-  that takes over; a switchover that does not hand over (refused, aborted) puts it back.
-  `POST /api/cluster/failback {suspend, why}` (audited, the redundancy permission, on the
-  leader) suspends or resumes; resume also ends the ping-pong stop and its count.
-- **Ping-pong stop.** The non-preferred controller remembers, on its own clock, when it last
-  failed back (done). If it takes the lead again within `after` of that, with failback not
+  that takes over; a switchover that does not hand over (refused, aborted) puts it back, unless
+  an operator changed it meanwhile. `POST /api/cluster/failback {suspend, why}` (audited, the
+  redundancy permission, on the leader; `suspend` is required, so a bare POST is refused, not a
+  resume) suspends or resumes, and answers only once the retain store holds it; resume also
+  ends the ping-pong stop and its count.
+- **Ping-pong stop.** The non-preferred controller remembers, on its own clock (in memory: a
+  restart forgets it), when it last failed back (done, or past the resign as a failover). If it takes the lead again within `after` of that, with failback not
   suspended (a manual switchover away would have suspended it), the preferred controller failed
   over back: the count goes up. At `max` failback suspends itself (`Stopped`), raising the
   system alarm `nautilus.failback-stopped` until resumed. The preferred controller holding the
@@ -1991,6 +1996,12 @@ a flapping link or box is not failed back into; max default 3; pair only; needs 
   hot or cold takeover and a restart keep it. A load that cannot read the store (and no image to
   carry it) hands the keeper an unknown state, which suspends failback with a warning rather
   than read it as never set (ruling Q2: an operator's suspend must not be lost to a bad disk).
+  That includes a takeover whose store failed earlier on the same edge (a corrupt file the
+  standby's carry or the edge's I/O read moved aside, which the load then reads as empty):
+  `loadFailed` marks it unknown. Journal entries are queued under the failback's lock and
+  written after it (a journal write fsyncs; the lock is taken under the takeover's, the alarm
+  engine's and the saver's). Fable reviewed it on #1364: one must-fix (that corrupt-file path),
+  five should-fix, all taken.
 - **Status.** `/api/cluster`'s stream block carries `failback` on the leader (prefer, after,
   max, suspended/by/why/at, count, how long the preferred standby has been ready or why it is
   not), and a warning line while suspended.

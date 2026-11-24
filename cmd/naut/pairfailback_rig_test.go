@@ -71,8 +71,20 @@ func TestPairFailbackIsHotAndAManualSwitchoverSuspends(t *testing.T) {
 		r.switchReady(t, "b")
 		r.waitNewLeader(t, "a", 20*time.Second)
 	}
-	// a leads: a manual switchover away from it suspends failback.
+	// a leads. A manual switchover away from it that aborts (no final
+	// acknowledgement) leaves failback on (failback_abort_keeps_suspend).
 	r.set(t, "a", "Mode", 5)
+	r.switchReady(t, "a")
+	r.nodes["a"].m.stream.finalAckHold.Store(true)
+	code, ans := r.switchover(t, "a")
+	r.nodes["a"].m.stream.finalAckHold.Store(false)
+	if ans.Outcome != "aborted" {
+		t.Fatalf("held switchover: %d %+v, want aborted", code, ans)
+	}
+	if f := r.streamStatus("a").Failback; f == nil || f.Suspended {
+		t.Fatalf("a's failback after an aborted switchover: %+v, want on", f)
+	}
+	// One that hands over suspends it.
 	r.switchReady(t, "a")
 	if code, ans := r.readySwitchover(t, "a"); code != http.StatusOK || ans.Outcome != "done" {
 		t.Fatalf("switchover: %d %+v", code, ans)
@@ -120,5 +132,51 @@ func TestPairFailbackIsHotAndAManualSwitchoverSuspends(t *testing.T) {
 	}
 	if f := r.streamStatus("a").Failback; f == nil || f.Suspended {
 		t.Fatalf("a's failback after the failback: %+v, want on", f)
+	}
+}
+
+// A suspend is in the leader's retain file when the command answers, not
+// only at the next periodic save (Fable on d2); a bare POST is refused,
+// not read as a resume. failback_suspend_not_saved turns it red.
+func TestPairFailbackSuspendIsSavedBeforeTheAnswer(t *testing.T) {
+	r := newFailbackRig(t)
+	lead := r.leader()
+	if code, b := r.authed(lead, http.MethodPost, "/api/cluster/failback", `{}`); code != http.StatusBadRequest {
+		t.Fatalf("a POST without suspend: %d %s, want 400", code, b)
+	}
+	r.failback(t, lead, true)
+	st := readRetain(t, r.retainFile(lead))
+	if st.Failback == nil || !st.Failback.Suspended {
+		t.Fatalf("the leader's retain file after the answer holds %+v, want the suspend", st.Failback)
+	}
+}
+
+// A failback's leader refuses a standby whose manifest prefers another
+// controller (or sets no failback): one manifest rolled out to one
+// controller only. failback_ignores_prefer_mismatch turns it red.
+func TestPairFailbackRefusesAStandbyThatPrefersOtherwise(t *testing.T) {
+	testPairAPIToken = "api-secret"
+	t.Cleanup(func() { testPairAPIToken = "" })
+	after := project.Duration(5 * time.Second)
+	r := newHotPairRig(t, func(n string, p *project.Project) {
+		if n == "b" { // only b has failback
+			p.Redundancy.Failback = &project.FailbackConfig{Prefer: "a", After: &after}
+		}
+	})
+	if r.leader() == "a" {
+		r.switchReady(t, "a")
+		if code, ans := r.readySwitchover(t, "a"); code != http.StatusOK || ans.Outcome != "done" {
+			t.Fatalf("switchover: %d %+v", code, ans)
+		}
+		r.waitNewLeader(t, "b", 5*time.Second)
+	}
+	r.switchReady(t, "b")
+	pairWait(t, "b's failback to wait on the prefer mismatch", 10*time.Second, func() bool {
+		f := r.streamStatus("b").Failback
+		return f != nil && strings.Contains(f.NotReady, "failback.prefer")
+	})
+	time.Sleep(6 * time.Second) // past after
+	if got := r.leader(); got != "b" {
+		t.Fatalf("failed back to %s, whose manifest sets no failback", got)
 	}
 }

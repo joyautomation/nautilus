@@ -22,8 +22,8 @@ type fakeFailbackPair struct {
 	switches int
 }
 
-func (p *fakeFailbackPair) leadTerm() (uint64, bool)    { return p.term, p.lead }
-func (p *fakeFailbackPair) switchRefusal(uint64) string { return p.notReady }
+func (p *fakeFailbackPair) leadTerm() (uint64, bool)            { return p.term, p.lead }
+func (p *fakeFailbackPair) switchRefusal(uint64, string) string { return p.notReady }
 func (p *fakeFailbackPair) switchover(context.Context, string) (switchReport, string, string) {
 	p.switches++
 	if p.outcome == "" {
@@ -121,6 +121,9 @@ func TestFailbackPingPongStops(t *testing.T) {
 	if !st.Suspended || !st.Stopped || st.Count != 3 || !strings.Contains(st.Why, "3 failbacks") {
 		t.Fatalf("after 3 ping-pongs: %+v, want suspended and stopped at 3", st)
 	}
+	if !f.stopped() {
+		t.Fatal("the ping-pong stop's alarm is not up")
+	}
 	runFailback(f, clock, p, 30*time.Second)
 	if p.switches != 3 {
 		t.Fatalf("failed back again after the stop (%d)", p.switches)
@@ -217,5 +220,34 @@ func TestIONotReached(t *testing.T) {
 	}
 	if bad := ioNotReached(lead[:1], nil); len(bad) != 1 {
 		t.Fatalf("a standby with no drivers: %v, want pump1 not reached", bad)
+	}
+}
+
+// The undo of a switchover that did not hand over puts back only what it
+// set: an operator's suspend that landed meanwhile stands (Fable on d2).
+// failback_undo_overwrites turns it red.
+func TestFailbackUndoKeepsAnOperatorsSuspend(t *testing.T) {
+	f, _ := newTestFailback("a")
+	undo := f.switchingAway("user:op")
+	f.setSuspended(true, "user:other", "servicing a")
+	undo()
+	if !f.st.Suspended || f.st.By != "user:other" {
+		t.Fatalf("state %+v after the undo, want user:other's suspend", f.st)
+	}
+}
+
+// A failback that passed the resign but ended as a failover moved the
+// lead too: a failover back within after counts (Fable on d2).
+// failback_failover_not_counted turns it red.
+func TestFailbackCountsAFailbackThatEndedAsAFailover(t *testing.T) {
+	f, clock := newTestFailback("b")
+	p := &fakeFailbackPair{term: 7, lead: true, outcome: leader.SwitchFailover}
+	runFailback(f, clock, p, 12*time.Second)
+	p.lead = false
+	runFailback(f, clock, p, 2*time.Second)
+	p.term, p.lead = 9, true
+	runFailback(f, clock, p, time.Second)
+	if f.st.Count != 1 {
+		t.Fatalf("count %d after a failback that ended as a failover and a failover back, want 1", f.st.Count)
 	}
 }

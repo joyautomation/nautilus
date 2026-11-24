@@ -56,3 +56,22 @@ func TestAnUnreadableStoreHandsAnUnknownFailbackState(t *testing.T) {
 		t.Fatalf("keeper after an unreadable store: loads %d known %v, want an unknown state", k.loads, k.known)
 	}
 }
+
+// A takeover whose store already failed on this edge (a corrupt file the
+// standby's carry moved aside: the load itself then reads an empty file
+// without error) hands the keeper an unknown state, not "never set"
+// (Fable on d2). failback_unknown_as_known turns it red.
+func TestATakeoverAfterTheStoreFailedHandsAnUnknownFailbackState(t *testing.T) {
+	store := &fakeStore{} // reads empty, as after the file was moved aside
+	rt := newRetained(t, store, &flag{lead: true})
+	k := &fakeFailbackKeeper{}
+	rt.SetFailback(k)
+	rt.strm.storeBad.Store(true) // the carry's read failed first
+	rt.Scan()                    // the takeover
+	if !rt.RetainLoadFailed() {
+		t.Fatal("the takeover did not count the store as failed")
+	}
+	if k.loads == 0 || k.known {
+		t.Fatalf("keeper after a takeover on a failed store: loads %d known %v, want an unknown state", k.loads, k.known)
+	}
+}

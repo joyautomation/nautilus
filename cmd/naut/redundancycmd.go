@@ -594,7 +594,7 @@ func streamLine(s *leader.StreamStatus) string {
 	if f := s.Failback; f != nil {
 		switch {
 		case f.Suspended:
-			line += fmt.Sprintf("; FAILBACK to %s SUSPENDED (%s, by %s)", f.Prefer, f.Why, f.By)
+			line += fmt.Sprintf("; FAILBACK to %s SUSPENDED (%s, by %s at %s)", f.Prefer, f.Why, f.By, time.UnixMilli(f.AtMs).UTC().Format(time.RFC3339))
 		case f.ReadyMs > 0:
 			line += fmt.Sprintf("; failback to %s in %s (ready for %s)", f.Prefer, ms(f.AfterMs-f.ReadyMs), ms(f.ReadyMs))
 		case f.NotReady != "":

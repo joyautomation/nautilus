@@ -322,6 +322,21 @@ func (m *pairMember) startStream(rt *runtime.Runtime, budget int64, hotMaxAge ti
 				return errNotLeaderFailback
 			}
 			f.setSuspended(suspend, by, why)
+			// Durable before the answer (Fable on d2): a suspend held only
+			// in memory is lost if this leader fails before its next save.
+			// The standby has it with the next image.
+			if mutNaut("failback_suspend_not_saved") {
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), m.o.Lease)
+			defer cancel()
+			if err := rt.SaveRetained(ctx); err != nil {
+				state := "resumed"
+				if suspend {
+					state = "suspended"
+				}
+				return fmt.Errorf("failback is %s on this leader, but the retain store could not be written, so a failover now would lose it: %w", state, err)
+			}
 			return nil
 		})
 	}
