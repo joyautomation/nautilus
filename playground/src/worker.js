@@ -41,8 +41,10 @@ self.nautilusHMIPack = () =>
 // asked for: nautilus.app() in naut.wasm calls this. It gets a copy of the
 // project's files (the builder reads files, not the parsed project), so a
 // build never stalls the scan loop in this thread. It stays up after a
-// build, so the next one starts warm; if it can't be fetched the build
-// fails with that message and the next ask tries again.
+// build, so the next one starts warm. If it can't be fetched, or stalls, the
+// build fails with that message; the screen shows it until Restart (which asks
+// afresh, with a new worker).
+const HMI_TIMEOUT_MS = 180000; // a slow link's two downloads, then the build
 let hmiWorker = null;
 let hmiSeq = 0;
 const hmiWaiting = new Map();
@@ -76,8 +78,11 @@ function hmiStart() {
 self.nautilusHMIBuild = (root, opts) =>
 	new Promise((resolve, reject) => {
 		const id = ++hmiSeq;
-		hmiWaiting.set(id, { resolve, reject });
-		hmiStart().postMessage({ id, root, files: mem.api.snapshot(root), opts });
+		const timer = setTimeout(() => hmiStop('the screen builder did not answer in ' + HMI_TIMEOUT_MS / 1000 + ' s (a stalled download?). Check the connection and press Restart.'), HMI_TIMEOUT_MS);
+		const settle = (fn) => (v) => (clearTimeout(timer), fn(v));
+		hmiWaiting.set(id, { resolve: settle(resolve), reject: settle(reject) });
+		// the bytes, not text: a screen's images and fonts must arrive as they are
+		hmiStart().postMessage({ id, root, files: mem.api.snapshotBytes(root), opts });
 	});
 
 self.onNautilusReady = () => {

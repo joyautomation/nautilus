@@ -124,10 +124,17 @@ func buildScreen(root string, rq hmiRequest) (hmiResult, error) {
 	ok = js.FuncOf(func(_ js.Value, a []js.Value) any {
 		defer release()
 		v := a[0]
+		if v.Type() != js.TypeObject {
+			ch <- outcome{err: &hmiErrors{[]string{"the screen builder answered nothing"}}}
+			return nil
+		}
 		if !v.Get("ok").Bool() {
 			var msgs []string
 			m := v.Get("messages")
-			for i := 0; i < m.Length(); i++ {
+			if m.Type() != js.TypeObject {
+				msgs = []string{"the screen builder failed"}
+			}
+			for i := 0; m.Type() == js.TypeObject && i < m.Length(); i++ {
 				msgs = append(msgs, m.Index(i).String())
 			}
 			ch <- outcome{err: &hmiErrors{msgs}}
@@ -153,8 +160,10 @@ func buildScreen(root string, rq hmiRequest) (hmiResult, error) {
 	fail = js.FuncOf(func(_ js.Value, a []js.Value) any {
 		defer release()
 		msg := "the screen builder failed"
-		if len(a) > 0 {
+		if len(a) > 0 && a[0].Type() == js.TypeObject {
 			msg = a[0].Call("toString").String()
+		} else if len(a) > 0 && a[0].Type() == js.TypeString {
+			msg = a[0].String()
 		}
 		ch <- outcome{err: &hmiErrors{[]string{msg}}}
 		return nil

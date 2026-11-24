@@ -12,6 +12,8 @@ import { existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const tmp = mkdtempSync(join(tmpdir(), 'hmi-module-'));
@@ -72,4 +74,17 @@ test('a broken app answers its messages', () => {
 	});
 	assert.equal(r.ok, false, JSON.stringify(r));
 	assert.ok(r.messages.length > 0 && r.messages.every((m) => typeof m === 'string'), JSON.stringify(r));
+});
+
+test("the project is handed to the builder as bytes: a non-UTF-8 file arrives unchanged", () => {
+	// memfs.js is a classic script that defines self.createMemFS
+	const sandbox = { TextEncoder, TextDecoder, Uint8Array, Map, Set, Date, Object };
+	sandbox.self = sandbox;
+	runInNewContext(readFileSync(join(repo, 'playground/src/memfs.js'), 'utf8'), sandbox);
+	const mem = sandbox.createMemFS({ log: () => {} });
+	const bytes = new Uint8Array([0xff, 0xfe, 0x00, 0x89, 0x50, 0x4e, 0x47]); // not valid UTF-8 (a PNG's start)
+	mem.api.writeFile('/project/hmi/static/logo.png', bytes);
+	const got = mem.api.snapshotBytes('/project')['hmi/static/logo.png'];
+	assert.deepEqual([...got], [...bytes]);
+	assert.notDeepEqual([...new TextEncoder().encode(mem.api.snapshot('/project')['hmi/static/logo.png'])], [...bytes], 'the text snapshot is lossy: that is why the builder gets bytes');
 });

@@ -5,7 +5,7 @@
 // downloads the 2 MB module, and a build never stalls the scan loop, which
 // runs in worker.js's thread.
 //
-// worker.js -> here  {id, root, files: {relativePath: text}, opts}
+// worker.js -> here  {id, root, files: {relativePath: Uint8Array}, opts}
 // here -> worker.js  {id, ok: true, files, pages, ms} | {id, ok: false, messages}
 //                    {event: 'ready', timing}   the module is compiled and running
 //                    {event: 'fatal', error}    it could not be fetched or started
@@ -62,7 +62,10 @@ self.onNautilusHMIReady = () => {
 		({ instance: inst } = await WebAssembly.instantiate(bytes, go.importObject));
 	}
 	T.instantiated = performance.now();
-	go.run(inst).then(() => markFailed(new Error('naut-hmi.wasm exited')));
+	go.run(inst).then(() => {
+		markFailed(new Error('naut-hmi.wasm exited'));
+		postMessage({ event: 'fatal', error: 'naut-hmi.wasm exited' }); // worker.js drops this worker
+	});
 	await ready;
 	postMessage({ event: 'ready', timing: T });
 })().catch((e) => {
@@ -70,13 +73,19 @@ self.onNautilusHMIReady = () => {
 	postMessage({ event: 'fatal', error: String((e && e.message) || e) });
 });
 
-onmessage = async (e) => {
-	const { id, root, files, opts } = e.data;
+// One build at a time: each rewrites the project's files and the working directory,
+// so a build started while another runs (Restart) waits its turn.
+let turn = Promise.resolve();
+onmessage = (e) => {
+	turn = turn.then(() => build(e.data));
+};
+
+async function build({ id, root, files, opts }) {
 	try {
 		await ready;
 		mem.api.remove(root);
 		mem.api.mkdirp(root);
-		for (const [p, text] of Object.entries(files)) mem.api.writeFile(root + '/' + p, text);
+		for (const [p, bytes] of Object.entries(files)) mem.api.writeFile(root + '/' + p, bytes);
 		self.process.chdir(root);
 		const r = await self.nautilusHMI.build(root, opts);
 		if (!r.ok) return postMessage({ id, ok: false, messages: r.messages });
@@ -85,4 +94,4 @@ onmessage = async (e) => {
 	} catch (err) {
 		postMessage({ id, ok: false, messages: [String((err && err.message) || err)] });
 	}
-};
+}
