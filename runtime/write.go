@@ -76,6 +76,9 @@ func (t *Tags) readOnlyLocked(path string) error {
 	if ok && tv.owned {
 		return fmt.Errorf("tag %s is set by the runtime from the substitute table: %w", key, ErrReadOnly)
 	}
+	if ok && tv.releases {
+		return fmt.Errorf("tag %s releases the takeover hold: only the program sets it: %w", key, ErrReadOnly)
+	}
 	return nil
 }
 

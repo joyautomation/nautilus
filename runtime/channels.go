@@ -102,6 +102,9 @@ type commHub struct {
 	// transport that splits one write into requests checks before each
 	// (fence.Check).
 	send nio.SendGate
+	// held, when set, is the takeover hold (hold.go): a write posted or
+	// due while it holds is refused, as one the gate refuses.
+	held func() bool
 
 	stop     chan struct{}
 	stopped  bool            // under mu: a post after close is refused
@@ -123,6 +126,7 @@ type commReq struct {
 	ticket   int64
 	lead     uint64 // the leadership that posted it (commHub.leadership)
 	write    bool
+	held     bool // posted while the takeover hold held (commHub.held)
 	variable string
 	val      ir.Value
 	elem     string
@@ -172,6 +176,14 @@ func (h *commHub) setGate(gate func() bool, term func() uint64) {
 func (h *commHub) setSendGate(g nio.SendGate) {
 	if h != nil {
 		h.send = g
+	}
+}
+
+// setHeld installs the takeover hold's look (see held). Call before the
+// first post.
+func (h *commHub) setHeld(held func() bool) {
+	if h != nil {
+		h.held = held
 	}
 }
 
@@ -263,6 +275,12 @@ func (h *commHub) serve(w *commWorker) {
 func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
 	var deadline time.Time
 	if req.write {
+		// A write the program posted while the takeover hold held is not
+		// sent, even when the hold has released by now (hold.go).
+		heldAtPost := req.held && !mutRuntime("hold_channel_held_at_post")
+		if (heldAtPost || h.held != nil && h.held()) && !mutRuntime("hold_channel_writes") {
+			return ir.CommResult{Status: ir.CommLost}
+		}
 		if h.send != nil {
 			// A pair (design §3.4): gate, budget and term in ONE read, so
 			// they cannot straddle a renewal or a lease lost and won back.
@@ -337,7 +355,7 @@ func (h *commHub) post(channel string, write bool, variable string, v ir.Value, 
 	}
 	ticket := h.next.Add(1)
 	select {
-	case w.q <- commReq{ticket: ticket, lead: h.leadership(), write: write, variable: variable, val: v, elem: elem}:
+	case w.q <- commReq{ticket: ticket, lead: h.leadership(), write: write, held: write && h.held != nil && h.held(), variable: variable, val: v, elem: elem}:
 		h.inflight[ticket] = struct{}{}
 		return ticket, ir.CommOK
 	default:

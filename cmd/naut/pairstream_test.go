@@ -647,7 +647,8 @@ func TestPairStatusShowsWritesCut(t *testing.T) {
 // The leader sends each standby the newest image format both read (#710
 // S2): format 1, with no tags, to one that names none (a build before S2,
 // mid rolling update, which reads only 1 and must still carry its retained
-// values); format 2, with the carried tags, to one that names 2.
+// values); format 2, with the carried tags, to one that names 2 and not 3;
+// format 3, with the takeover hold too (#710 (b2)), to one of this build.
 func TestPairStreamSendsEachStandbyAFormatItReads(t *testing.T) {
 	r := newStreamRig(t, nil)
 	lead := r.leader()
@@ -684,8 +685,11 @@ func TestPairStreamSendsEachStandbyAFormatItReads(t *testing.T) {
 	if img := first(""); img.Format != 1 || img.TagsLayout != "" || len(img.Retain) == 0 {
 		t.Errorf("no formats named: format %d, tags layout %q, %d retain bytes; want format 1 with the retain section", img.Format, img.TagsLayout, len(img.Retain))
 	}
-	if img := first(streamFormats()); img.Format != 2 || img.TagsLayout == "" || img.Tags.Len() == 0 {
-		t.Errorf("formats %q: format %d, tags layout %q, %d store tags; want format 2 with the tags (Mode)", streamFormats(), img.Format, img.TagsLayout, img.Tags.Len())
+	if img := first("1,2"); img.Format != 2 || img.TagsLayout == "" || img.Tags.Len() == 0 {
+		t.Errorf("formats 1,2: format %d, tags layout %q, %d store tags; want format 2 with the tags (Mode)", img.Format, img.TagsLayout, img.Tags.Len())
+	}
+	if img := first(streamFormats()); img.Format != 3 || img.TagsLayout == "" || img.Tags.Len() == 0 {
+		t.Errorf("formats %q: format %d, tags layout %q, %d store tags; want format 3 with the tags (Mode)", streamFormats(), img.Format, img.TagsLayout, img.Tags.Len())
 	}
 }
 

@@ -136,3 +136,9 @@ func platformNotices(m Manifest) []string {
 	}
 	return out
 }
+
+func checkTakeoverHold(*TakeoverHoldConfig, []TagConfig, []nio.NamedDriver) error { return nil }
+
+// The playground runs no pair: redundancy.takeover-hold is checked by the
+// controller's build only (takeoverhold.go).
+func checkTakeoverHoldConfig(*TakeoverHoldConfig) error { return nil }

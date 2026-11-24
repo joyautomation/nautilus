@@ -115,6 +115,8 @@ type pairMember struct {
 	restart     chan struct{}
 	restartOnce sync.Once
 	journal     atomic.Pointer[audit.Recorder]
+	// hold is the takeover hold (pairhold.go), nil without one.
+	hold *pairHold
 }
 
 // swapHandler serves the handler it is given later, 503 before.

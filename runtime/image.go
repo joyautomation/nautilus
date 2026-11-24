@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
 )
@@ -54,6 +55,11 @@ type Image struct {
 	// task's TaskImage.Tags, copied at the end of its scan with its frame.
 	TagsNowMs int64
 	Tags      TagValues
+	// Holding says the leader's takeover hold held when the image was
+	// taken, HoldAge for how long (#710 (b2)): a hot takeover from it
+	// inherits the hold, age and all. Format 3 on.
+	Holding bool
+	HoldAge time.Duration
 }
 
 // TaskImage is one task's program frame. Experimental, like Image.
@@ -334,6 +340,8 @@ func (r *Runtime) TakeImage(img *Image) bool {
 func (r *Runtime) takeTags(img *Image, progs []namedProgram) {
 	img.Format, img.TagsLayout, img.TagsNowMs = imageFormat, "", 0
 	img.Tags.reset()
+	age := r.holdAge()
+	img.Holding, img.HoldAge = age >= 0, max(age, 0)
 	if r.carried == nil {
 		return
 	}

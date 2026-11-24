@@ -44,6 +44,11 @@ type HotImage struct {
 	// Cold, when set, says why this image cannot go hot.
 	Cold string
 
+	// holding: the leader's takeover hold held at the image, holdAge for
+	// how long (on the leader's clock, when it took the image).
+	holding bool
+	holdAge time.Duration
+
 	arrived time.Time // on the runtime's clock, monotonic in production
 	refMs   int64     // the latest leader time in the image (Shadow.refMs)
 	tasks   map[string]hotTask

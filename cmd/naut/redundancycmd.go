@@ -93,6 +93,12 @@ Usage:
       answer, and together they must hear one process named <name>, else
       nothing is cleared. It clears each member, and checks again a lease
       later: a mark that comes back means a copy still runs.
+  naut redundancy [flags] release-hold
+      release the takeover hold (redundancy.takeover-hold) on the leader:
+      the program's outputs go out on its next scan, before its release
+      tag said they may. For a program that cannot release by itself (a
+      hold at its max). Journalled under your name. On a standby it is
+      forwarded to the leader.
 
 Flags:
   --url <url>         the controller's tag API (default $NAUTILUS_URL, else
@@ -111,7 +117,8 @@ Under an auth: block the commands need the redundancy permission
 (administrator by default). Without one they take only NAUTILUS_TOKEN.
 Every command but new-pair is written to the controller's audit journal
 (redundancy.commission, redundancy.recommission, redundancy.vouch,
-redundancy.clear-duplicate), accepted or refused, with what was accepted.
+redundancy.clear-duplicate, redundancy.release-hold), accepted or refused,
+with what was accepted.
 
 Exit status: 0 done; 1 refused, incomplete or failed; 2 usage.
 `
@@ -341,6 +348,33 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 			return 1
 		}
 		return 0
+	case "release-hold":
+		if len(pos) != 1 {
+			fmt.Fprint(stderr, redundancyUsage)
+			return 2
+		}
+		code, b, err := do(http.MethodPost, "/api/cluster/release-hold", map[string]any{})
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *asJSON {
+			stdout.Write(b)
+		} else if code == http.StatusOK {
+			fmt.Fprintln(stdout, "takeover hold released: the program's outputs go out on its next scan")
+		} else {
+			var ans struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(b, &ans) == nil && ans.Error != "" {
+				fmt.Fprintf(stdout, "refused (%d): %s\n", code, ans.Error)
+			} else {
+				fmt.Fprintf(stdout, "refused (%d): %s\n", code, bytes.TrimSpace(b))
+			}
+		}
+		if code != http.StatusOK {
+			return 1
+		}
+		return 0
 	case "clear-duplicate":
 		if len(pos) != 2 {
 			fmt.Fprint(stderr, redundancyUsage)
@@ -482,6 +516,15 @@ func streamLine(s *leader.StreamStatus) string {
 	}
 	if s.RetainInMemory {
 		line += "; retained values only in memory: no retain save has succeeded since the takeover"
+	}
+	if h := s.TakeoverHold; h != nil && h.Holding {
+		line += fmt.Sprintf("; TAKEOVER HOLD: outputs held for %s until %s is TRUE or release-hold", ms(h.AgeMs), h.Release)
+		if h.AtMax {
+			line += fmt.Sprintf(", past its max %s", ms(h.MaxMs))
+		}
+		if len(h.Undelivered) > 0 {
+			line += ", safe values not delivered: " + strings.Join(h.Undelivered, ", ")
+		}
 	}
 	return line
 }

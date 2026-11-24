@@ -462,6 +462,7 @@ func (s *pairStream) run(ctx context.Context) {
 		cold, mem := s.takeoverConditions()
 		s.m.q.SetCondition("takeover-cold", cold)
 		s.m.q.SetCondition("retain-in-memory", mem)
+		s.m.q.SetCondition("takeover-hold", s.m.holdCondition())
 	}
 }
 
@@ -942,6 +943,7 @@ func (s *pairStream) status() *leader.StreamStatus {
 		}
 	}
 	st.RetainInMemory = rtLead && s.rt.RetainOnlyInMemory()
+	st.TakeoverHold = s.m.holdStatus()
 	if lead {
 		st.Role, st.State = "leader", "no-standby"
 		st.Term, st.Seq, st.Bytes = s.sentTerm, s.sentSeq, s.bytes

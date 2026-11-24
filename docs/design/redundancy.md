@@ -1757,6 +1757,38 @@ measured rather than assumed.
 
 The test plan defines exactly how it is measured (§4 there).
 
+### 4.6 The takeover hold (#710 (b2))
+
+`redundancy.takeover-hold` (opt-in) holds a new leader's outputs after a takeover until the
+program sets its release tag. Rulings (naut-lead, 2026-11-23): at `max` the hold **stays held**,
+with an alarm repeated every `max`; only the program's release tag or the audited
+`naut redundancy release-hold` releases it. Releasing at `max` is the explicit per-hold opt-in
+`on-max: release`. `max` defaults to 5 s, at most 1 min.
+
+- **Where it sits.** In the runtime, not in the write gate. A closed gate is a standby: it stops
+  keep-alives, and the `safe:` values must go out through the same drivers. The gate stays the
+  leader's; the hold is a second condition on what the scan sends.
+- **What it stops.** The main scan's output push (the only `WriteOutputs` call) is skipped and
+  `outSent` stays false, so the release's push is the whole set (#600/#606). A channel `WRITE`
+  posted while it holds, or due while it holds, is refused (`ERROR`). At its start the drivers
+  that re-send on their own forget what they sent (`io.OutputsForgetter`: Modbus, EtherNet/IP),
+  as they already do on a term move. PROFINET is refused under a pair (§3.4). Alarm notifiers
+  are **not** stopped: alarms describe the process, and during a hold its inputs are live.
+- **Safe values.** `io.SafeWriter` writes them on their own and reports per tag whether each
+  landed (Modbus: a write the device confirmed). The runtime writes them on the hold's first scan
+  and again whenever the driver asks for its outputs. One not delivered within 2 s raises an
+  alarm. Load refuses `safe:` on a driver without it.
+- **When it starts.** On a takeover (`TakeoverKnower`), never a start: cold, or every takeover
+  with `on: always`, or a hot takeover from an image whose leader was holding (image format 3
+  carries the hold's age; an inherited hold keeps it). The release tag is set FALSE at the start.
+- **The release tag.** A BOOL state tag, not retained, bound to no driver (Load). The tag store
+  refuses every write and force on it from outside the program.
+- **Fable round 1** (folded): the pair's hold alarms read only the hold's own lock and the
+  elector's gate, never `leadMu` (they run under the alarm engine's lock, which a takeover takes
+  under `leadMu`); hold events reach the journal from a goroutine of their own, in order; a push
+  that raced a hold's start is forgotten at once; a hot takeover from a holding leader holds
+  whatever the coordinator calls it; `on-max: release` keeps its alarm raised a while after.
+
 ## 5. Failure cases
 
 | Down | Result |

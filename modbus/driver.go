@@ -317,6 +317,9 @@ type source struct {
 	// times it was tried (see wroteOK). Touched only by the source loop,
 	// under mu.
 	stuck map[string]*stuckWrite
+	// safe is the takeover hold's safe values (WriteSafe, hold.go) this
+	// source's device has not yet confirmed, under mu.
+	safe map[string]any
 
 	// outputs are this source's writable binding names, so WriteOutputs
 	// can queue a source's share of a snapshot under one hold of mu.
@@ -2003,6 +2006,7 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, work map[string]any, na
 		s.mu.Lock()
 		s.writeAnsweredLocked()
 		tries := s.landedLocked(names)
+		s.safeLandedLocked(names, work)
 		s.mu.Unlock()
 		if tries > 0 {
 			d.log.Info("modbus: write delivered after it did not run", "source", s.cfg.ID, "tags", names, "attempts", tries)

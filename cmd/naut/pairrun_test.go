@@ -223,6 +223,10 @@ func startPairNodeWith(t *testing.T, files fstest.MapFS, env map[string]string, 
 // pairProject (the state stream's, #710 S1b).
 var testPairFiles func(a, b, w string) fstest.MapFS
 
+// testPairAPIToken, when set, is each member's NAUTILUS_TOKEN (its tag API's
+// credential), for a test of the operator commands.
+var testPairAPIToken string
+
 // testWantCheckout makes a harness member keep the I/O checkout in the log, as
 // runProject does for a project that turned it on.
 var testWantCheckout bool
@@ -261,6 +265,9 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 	}
 	rt, err := runtime.New(proj.Runtime)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.setupHold(rt, proj.Redundancy); err != nil { // as runProject does
 		t.Fatal(err)
 	}
 	var eng *alarm.Engine

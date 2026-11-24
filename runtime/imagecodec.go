@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"math"
+	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
 )
 
-// The wire form of an Image (EncodeImage, DecodeImage), version 2:
+// The wire form of an Image (EncodeImage, DecodeImage), version 3:
 //
 //	"nsi" format
 //	uvarint term, uvarint seq, str build, bytes retain
@@ -18,6 +20,7 @@ import (
 //	  uvarint leaves, then per leaf: kind byte, payload
 //	  (format 2) str source, tags
 //	(format 2) str tagsLayout, varint tagsNowMs, tags
+//	(format 3) uvarint hold: 0 none, else the takeover hold's age in ms + 1
 //	uint32 CRC-32C (Castagnoli) of everything before it, little endian
 //
 // tags is a uvarint count, then per tag a uvarint place in the carried set
@@ -25,6 +28,8 @@ import (
 // without the parts marked format 2 (#710 S1b): a leader sends it to a
 // standby that does not ask for 2, so a pair mid rolling update still
 // carries its retained values; such an image is never taken over hot.
+// Format 2 is format 3 without the hold (#710 (b2)): a hot takeover needs
+// the same build anyway, so a format 2 image inherits no hold.
 //
 // A str or bytes is a uvarint length and the bytes. A leaf's payload by
 // kind: BOOL one byte (0 or 1); an integer a varint and a str (an
@@ -35,12 +40,12 @@ import (
 // The checksum is end to end, over what the leader encoded: peer TLS
 // already protects the link, so a mismatch means a bug or a torn buffer,
 // and the standby asks for a full image again.
-const imageFormat = 2
+const imageFormat = 3
 
 // ImageFormats are the wire formats this build reads, oldest first; a
 // standby names them when it asks for the stream, and the leader sends
 // the newest one both read (ImageFormatFor).
-var ImageFormats = []byte{1, imageFormat}
+var ImageFormats = []byte{1, 2, imageFormat}
 
 // ImageFormatFor is the format a leader of this build sends a standby that
 // reads formats (as its stream request names them): the newest both read,
@@ -137,6 +142,14 @@ func EncodeImageFormat(dst []byte, img *Image, format byte) ([]byte, error) {
 		dst = appendStr(dst, img.TagsLayout)
 		dst = binary.AppendVarint(dst, img.TagsNowMs)
 		dst = appendTags(dst, &img.Tags)
+	}
+	if format >= 3 {
+		// The takeover hold: 0 for none, else its age in ms plus one.
+		var hold uint64
+		if img.Holding {
+			hold = uint64(img.HoldAge.Milliseconds()) + 1
+		}
+		dst = binary.AppendUvarint(dst, hold)
 	}
 	if n := len(dst) - start + 4; n > MaxImageBytes && !mutRuntime("image_size_unbounded") {
 		return dst[:start], &ImageTooBigError{What: "the image", Bytes: n, Limit: MaxImageBytes}
@@ -257,6 +270,7 @@ func DecodeImage(b []byte, img *Image) error {
 	img.Format = format
 	img.TagsLayout, img.TagsNowMs = "", 0
 	img.Tags.reset()
+	img.Holding, img.HoldAge = false, 0
 	img.Term = d.uvarint()
 	img.Seq = d.uvarint()
 	img.Build = d.str()
@@ -316,6 +330,15 @@ func DecodeImage(b []byte, img *Image) error {
 		img.TagsLayout = d.str()
 		img.TagsNowMs = d.varint()
 		d.tags(&img.Tags)
+	}
+	if format >= 3 {
+		if hold := d.uvarint(); d.err == nil && hold > 0 {
+			if hold-1 > uint64(math.MaxInt64/time.Millisecond) {
+				d.fail("a hold age of %d ms", hold-1)
+			} else {
+				img.Holding, img.HoldAge = true, time.Duration(hold-1)*time.Millisecond
+			}
+		}
 	}
 	if d.err == nil && len(d.b) != 0 {
 		d.fail("%d bytes after the last task", len(d.b))

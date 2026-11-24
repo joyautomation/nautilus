@@ -115,6 +115,9 @@ func newPairRigPlain(t *testing.T, pmod func(n string, p *project.Project), dmod
 	}
 	for _, n := range []string{"a", "b"} {
 		r.env[n] = map[string]string{"NAUTILUS_NODE": n, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
+		if testPairAPIToken != "" {
+			r.env[n]["NAUTILUS_TOKEN"] = testPairAPIToken
+		}
 	}
 	r.nodes["a"] = r.start("a", lnA, apiA)
 	r.nodes["b"] = r.start("b", lnB, apiB)
