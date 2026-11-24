@@ -35,6 +35,10 @@ type Program struct {
 	// swap and a rollback keep it, as Logix's S:FS does across an online
 	// edit: the state carried over is not a start.
 	ran bool
+	// tookOver, tookOverHot: the next scan is this program's first after
+	// a takeover (a hot one): TAKEOVER_SCAN() and HOT_TAKEOVER() for that
+	// scan only (#710 (b)). A swap (an online edit, a deploy) clears them.
+	tookOver, tookOverHot bool
 
 	// bootSource is what Compile was first given — the program the deployed
 	// binary embeds. A running source that differs is an online edit in
@@ -205,6 +209,7 @@ func (p *Program) Swap(src string) error {
 		p.carryIdx = p.carry.idxOf(*written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
 		p.ran = false
+		p.tookOver, p.tookOverHot = false, false
 		p.mu.Unlock()
 		return nil
 	}
@@ -247,8 +252,12 @@ func (p *Program) Run(tags *Tags) error {
 	}
 	p.view.snapshot(p.exts)
 	p.view.firstScan = !p.ran
+	p.view.latchRed(p.tookOver, p.tookOverHot)
 	err := ir.Run(p.prog, p.frame, p.view)
 	p.ran = true
+	if !mutRuntime("takeover_flag_kept") {
+		p.tookOver, p.tookOverHot = false, false
+	}
 	p.view.commit()
 	if p.img.want.Load() {
 		p.captureLocked(tags)
@@ -285,6 +294,7 @@ func (p *Program) SwapWarm(src string) (SwapReport, error) {
 		p.written.Store(written)
 		p.carryIdx = p.carry.idxOf(*written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
+		p.tookOver, p.tookOverHot = false, false // an online edit's first scan is not a takeover's
 		p.mu.Unlock()
 		return SwapReport{Hash: sourceHash(src), Resets: resets}, nil
 	}
@@ -308,6 +318,7 @@ func (p *Program) Rollback() (SwapReport, error) {
 	p.carryIdx = p.carry.idxOf(p.writtenKeys())
 	p.prevSource, p.prevProg, p.prevFrame = "", nil, nil
 	p.compiledAt, p.scans, p.lastErr = time.Now(), 0, ""
+	p.tookOver, p.tookOverHot = false, false
 	return SwapReport{Hash: sourceHash(p.source)}, nil
 }
 
@@ -348,10 +359,19 @@ func sourceHash(src string) string {
 	return hex.EncodeToString(sum[:6])
 }
 
+// markTakeover makes the program's next scan its first after a takeover
+// (hot or not): TAKEOVER_SCAN(), and HOT_TAKEOVER() for a hot one.
+func (p *Program) markTakeover(hot bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tookOver, p.tookOverHot = true, hot
+}
+
 // ResetFrame discards retained state — call on a redundancy takeover so the
 // program warm-starts against live field values. A reset frame is a start:
-// the next scan's FIRST_SCAN() is TRUE, on every takeover, also by a box
-// that led before (#710).
+// the next scan's FIRST_SCAN() is TRUE, on every cold takeover, also by a
+// box that led before (#710). A hot takeover keeps the state going and
+// FIRST_SCAN() FALSE (hot_install.go).
 func (p *Program) ResetFrame() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

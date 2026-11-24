@@ -190,7 +190,8 @@ func TestPairHotTakeover(t *testing.T) {
 // A takeover on an image of another build is cold (#710 S2b): status, a
 // warning and the journal say why, Mode (an operator's, not retained)
 // reverts to its initial value, and the warning stays until a standby
-// follows the new leader again (naut-lead's ruling), then clears.
+// follows the new leader again (naut-lead's ruling), then clears. The
+// leader's PEER_READY() is FALSE all along.
 func TestPairColdTakeoverOnAnotherBuild(t *testing.T) {
 	r := newHotPairRig(t, nil)
 	lead := r.leader()
@@ -209,6 +210,15 @@ func TestPairColdTakeoverOnAnotherBuild(t *testing.T) {
 	r.inSync(t, stand)
 	r.set(t, lead, "Mode", 5)
 	r.shadowed(t, lead)
+	// A standby on another build acknowledges nothing: a takeover would
+	// be cold, so the leader's PEER_READY() stays FALSE (#710 (b);
+	// ack_other_build turns it red), also right after it reconnects with
+	// the ack its earlier boot made (ack_kept_across_reconnect).
+	for end := time.Now().Add(1500 * time.Millisecond); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
+		if r.nodes[lead].rt.PeerReady() {
+			t.Fatal("PEER_READY TRUE with a standby on another build")
+		}
+	}
 	r.nodes[lead].crash()
 	if got := r.leader(); got != stand {
 		t.Fatalf("after the kill: leader %q, want %s", got, stand)

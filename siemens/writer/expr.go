@@ -271,6 +271,16 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		return ""
 	}
 	name := strings.ToUpper(c.Name)
+	// The nautilus system functions read a nautilus pair's state (#710
+	// (b)). A CPU this writes for runs no nautilus pair: never a takeover,
+	// no peer, no hold. (An S7-1500R/H's own redundancy status is in its
+	// system diagnostics, which nautilus does not map.)
+	if ir.IsSystemFunction(name) && len(c.Args) == 0 && len(c.NamedArgs) == 0 {
+		if name == "TAKEOVERS" {
+			return "0"
+		}
+		return "FALSE"
+	}
 
 	if l, ok := pw.locals[strings.ToLower(c.Name)]; ok {
 		if pw.w.userFB(l.typ) != nil {

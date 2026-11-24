@@ -543,6 +543,12 @@ func (w *stWriter) typeOf(e st.Expression) string {
 		if isFirstScan(name, "") {
 			return "BOOL"
 		}
+		if ir.IsSystemFunction(name) {
+			if name == "TAKEOVERS" {
+				return "DINT"
+			}
+			return "BOOL"
+		}
 		return ""
 	}
 	return w.elementary(w.rawType(e))

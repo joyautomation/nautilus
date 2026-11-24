@@ -326,6 +326,17 @@ func (r *Runtime) takeover() {
 		r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
 		hot = r.hotTakeover(h, why, had)
 	}
+	// TAKEOVER_SCAN() and HOT_TAKEOVER() for each program's next scan, and
+	// TAKEOVERS(), when this leadership took over from the peer rather
+	// than started (#710 (b)): the coordinator knows which.
+	defer func() {
+		if tk, ok := r.coord.(TakeoverKnower); ok && tk.IsTakeover() && !mutRuntime("takeover_unmarked") {
+			r.tags.red.takeovers.Add(1)
+			for _, np := range r.namedPrograms() {
+				np.prog.markTakeover(hot)
+			}
+		}
+	}()
 	if !hot {
 		r.prog.ResetFrame()
 		for _, tr := range r.tasks {

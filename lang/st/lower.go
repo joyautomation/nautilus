@@ -95,6 +95,22 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	// file so peer FBs and the outer program can reference them by name
 	// during type resolution. The defs are pointers, so populating their
 	// slot tables in the next phase is observed by all earlier references.
+	// A nautilus system function's name is not a POU's (#710 (b)): a call
+	// would bind to the POU, and the program would read its own answer
+	// for the runtime's.
+	if prog.Name != "" && ir.IsSystemFunction(prog.Name) {
+		return nil, systemNameErr("PROGRAM", prog.Name)
+	}
+	for _, fbDecl := range prog.FBDecls {
+		if ir.IsSystemFunction(fbDecl.Name) {
+			return nil, errAt(fbDecl.Pos, systemNameErr("FUNCTION_BLOCK", fbDecl.Name))
+		}
+	}
+	for _, fd := range prog.FuncDecls {
+		if ir.IsSystemFunction(fd.Name) {
+			return nil, errAt(fd.Pos, systemNameErr("FUNCTION", fd.Name))
+		}
+	}
 	inFile := map[string]*ir.FBDef{}
 	for _, fbDecl := range prog.FBDecls {
 		if _, prev, dup := ir.Lookup(inFile, fbDecl.Name); dup {
@@ -575,6 +591,11 @@ func (l *lowerer) hiddenFunc(name string) (string, bool) {
 		return def.Name, true
 	}
 	return "", false
+}
+
+// systemNameErr refuses a POU named as a nautilus system function.
+func systemNameErr(what, name string) error {
+	return fmt.Errorf("%s %q has the name of a nautilus system function (%s()): rename it", what, name, strings.ToUpper(name))
 }
 
 // dupErr is the duplicate-declaration error. When the two declarations

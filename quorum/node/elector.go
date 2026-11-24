@@ -464,6 +464,10 @@ type Elector struct {
 	// handBackUntil: a hand-back's hold (handback.go), no renewal and no
 	// campaign before it, the gate closed.
 	handBackUntil quorum.Instant
+	// peerLeaseSeen: this boot's voter has seen the peer hold a lease;
+	// tookOver: the last leadership acquired is a takeover (IsTakeover).
+	peerLeaseSeen bool
+	tookOver      atomic.Bool
 
 	gate    atomic.Pointer[gateState]
 	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
@@ -785,6 +789,12 @@ func (e *Elector) SendGate() (bool, time.Duration, uint64) {
 // the runtime resumes.
 func (e *Elector) Term() uint64 { return e.gate.Load().epoch }
 
+// IsTakeover reports whether the leadership this controller acquired
+// last is a takeover from its peer: any but this boot's first, and that
+// one too when its voter had seen the peer hold a lease before (#710 (b),
+// runtime.TakeoverKnower). FALSE before any.
+func (e *Elector) IsTakeover() bool { return e.tookOver.Load() }
+
 // Decided is closed once this controller leads, or has seen the peer
 // leading.
 func (e *Elector) Decided() <-chan struct{} { return e.decided }
@@ -994,9 +1004,17 @@ func (e *Elector) after(now quorum.Instant) {
 		e.event(out)
 	}
 	e.publish(now)
+	if from, until := e.v.LeaderSeen(); from == e.o.Peer && now < until {
+		e.peerLeaseSeen = true
+	}
 	if t := e.c.Term(); e.c.Leading(now) && t != e.epoch {
 		e.epoch = t
 		e.acquired++
+		// A takeover, not a start, unless this is the boot's first
+		// leadership and it never saw the peer hold a lease (#710 (b)):
+		// a whole-pair power-up starts, a standby that followed a live
+		// leader takes over.
+		e.tookOver.Store(e.acquired > 1 || e.peerLeaseSeen || mut("every_acquisition_a_takeover"))
 		e.log.Info("redundancy: this controller leads", "term", t)
 	}
 	if from, until := e.v.LeaderSeen(); e.c.Leading(now) || (from == e.o.Peer && now < until) {

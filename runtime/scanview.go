@@ -61,6 +61,9 @@ type scanView struct {
 	alias map[string]string
 	// firstScan answers ir.ScanInfo for the scan in progress (Program.Run).
 	firstScan bool
+	// The ir.RedundancyInfo answers for the scan in progress (redstate.go).
+	takeoverScan, hotTakeover, peerReady, hold bool
+	takeovers                                  int64
 }
 
 func newScanView(store *Tags) *scanView {

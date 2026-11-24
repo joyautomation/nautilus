@@ -17,8 +17,8 @@ import (
 
 // hotTakeover decides a pair's takeover and, when it goes hot, installs
 // the candidate: by value into fresh frames of the programs running now,
-// timers moved to this clock, host handles forgotten, FIRST_SCAN TRUE as
-// on any takeover; then its tags over the retain load. It reports either
+// timers moved to this clock, host handles forgotten, FIRST_SCAN FALSE
+// (the state goes on); then its tags over the retain load. It reports either
 // way. why is the flush's reason when it handed over no candidate, had
 // whether the standby held an image all the same (a failed or late
 // flush): a refused image is warned of, a plain start is not. Called
@@ -161,9 +161,10 @@ func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 			continue // only under hot_partial_tasks: this one keeps its frame
 		}
 		p.frame = frames[i]
-		if !mutRuntime("hot_keeps_first_scan_false") {
-			p.ran = false // FIRST_SCAN() TRUE, as on every takeover, until #710 S2 (b)
-		}
+		// The old leader's state goes on: this is no start, so the next
+		// scan's FIRST_SCAN() is FALSE, also on a standby that never led
+		// (#710 (b)); HOT_TAKEOVER() says what happened.
+		p.ran = !mutRuntime("hot_first_scan_true")
 		// A frame copy made before the install is of the old frame: never
 		// this leadership's to send (as ResetFrame).
 		p.img.mu.Lock()
