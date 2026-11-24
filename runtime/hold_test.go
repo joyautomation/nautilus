@@ -243,6 +243,7 @@ func (r *holdRig) held(t *testing.T) bool {
 }
 
 // next is the next hold event of kind, failing on any other in between.
+// Events reach on from a goroutine of their own: it waits a little.
 func (r *holdRig) next(t *testing.T, kind HoldEventKind) HoldEvent {
 	t.Helper()
 	select {
@@ -251,7 +252,7 @@ func (r *holdRig) next(t *testing.T, kind HoldEventKind) HoldEvent {
 			t.Fatalf("hold event %+v, want %s", ev, kind)
 		}
 		return ev
-	default:
+	case <-time.After(2 * time.Second):
 		t.Fatalf("no hold event, want %s", kind)
 		return HoldEvent{}
 	}
@@ -262,7 +263,7 @@ func (r *holdRig) none(t *testing.T) {
 	select {
 	case ev := <-r.events:
 		t.Fatalf("hold event %+v, want none", ev)
-	default:
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 
@@ -434,7 +435,9 @@ func TestTakeoverHoldStaysHeldAtMax(t *testing.T) {
 }
 
 // on-max: release is the opt-in fail-open: at max the alarm, then the
-// release, by "max", on that scan.
+// release, by "max", on that scan; the status keeps the alarm raised a
+// while, so the alarm engine sees it. hold_release_at_max_ignored turns it
+// red.
 func TestTakeoverHoldReleasesAtMaxWhenOptedIn(t *testing.T) {
 	cfg := holdCfg
 	cfg.ReleaseAtMax = true
@@ -451,6 +454,14 @@ func TestTakeoverHoldReleasesAtMaxWhenOptedIn(t *testing.T) {
 	}
 	if p := r.sd.lastPush(); len(p) != 2 {
 		t.Fatalf("pushed %v at the release, want every output", p)
+	}
+	// The alarm must see it (a polled level): raised for a while after.
+	if st := r.stby.HoldStatus(); st.Holding || !st.ReleasedAtMax {
+		t.Fatalf("status %+v right after the release at max, want released and its alarm raised", st)
+	}
+	r.scan(11 * time.Second)
+	if st := r.stby.HoldStatus(); st.ReleasedAtMax {
+		t.Fatal("the release-at-max alarm is still raised 11 s on")
 	}
 }
 
@@ -610,5 +621,177 @@ func TestTakeoverHoldRefusesChannelWrites(t *testing.T) {
 	tk, _ = h.PostWrite("peer", "x", ir.BoolVal(true), "")
 	if res := wait(tk); res.Status != 0 || ch.count() != 1 {
 		t.Fatalf("a write after the release: status %d, %d sent; want 0, 1", res.Status, ch.count())
+	}
+}
+
+// HoldStatus never waits for leadMu: the pair's alarms read it under the
+// alarm engine's lock, which a takeover takes under leadMu (Fable M1).
+func TestTakeoverHoldStatusTakesNoLeadMu(t *testing.T) {
+	cfg := holdCfg
+	r := newHoldRig(t, &cfg)
+	r.stby.leadMu.Lock()
+	defer r.stby.leadMu.Unlock()
+	done := make(chan struct{})
+	go func() { r.stby.HoldStatus(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("HoldStatus waits for leadMu")
+	}
+}
+
+// A re-send of the safe values (the driver asked) starts its own 2 s wait:
+// no alarm the moment it is sent again late in a hold (Fable S3). A driver
+// swapped in during the hold gets them on the next scan (S4).
+// hold_replace_unsafe turns it red.
+func TestTakeoverHoldSafeResendAndReplace(t *testing.T) {
+	cfg := holdCfg
+	cfg.Max = time.Minute
+	r := newHoldRig(t, &cfg)
+	r.sd.deliver = true
+	r.maxAge = 0
+	r.stream(t, nil)
+	r.takeOver(t)
+	r.next(t, HoldStarted)
+	r.scan(3 * time.Second)
+	r.sd.deliver = false // the next write does not land at once
+	r.sd.wanted.Store(true)
+	r.scan(100 * time.Millisecond)
+	r.none(t)
+	if st := r.stby.HoldStatus(); st.SafeAlarm {
+		t.Fatal("the safe alarm raised the moment a late re-send went out")
+	}
+	r.scan(2 * time.Second)
+	r.next(t, HoldSafeUndelivered)
+	r.sd.land()
+	r.scan(100 * time.Millisecond)
+	r.next(t, HoldSafeDelivered)
+
+	_, before, _ := r.sd.counts()
+	r.stby.holdDriverReplaced()
+	r.scan(100 * time.Millisecond)
+	if _, after, _ := r.sd.counts(); after != before+1 {
+		t.Fatalf("safe writes %d after a driver swap, want %d", after, before+1)
+	}
+}
+
+// A push that raced a hold's start (a task's gate took over between the
+// scan's look and its push) is forgotten at once (Fable N1).
+func TestTakeoverHoldForgetsARacedPush(t *testing.T) {
+	cfg := holdCfg
+	r := newHoldRig(t, &cfg)
+	r.stby.outSent.Store(true)
+	r.stby.holdAfterPush()
+	if _, _, f := r.sd.counts(); f != 0 || !r.stby.outSent.Load() {
+		t.Fatal("forgot with no hold holding")
+	}
+	r.stby.tags.red.hold.Store(true)
+	r.stby.holdAfterPush()
+	if _, _, f := r.sd.counts(); f != 1 || r.stby.outSent.Load() {
+		t.Fatalf("forgets %d, outSent %v after a raced push; want 1, false", f, r.stby.outSent.Load())
+	}
+}
+
+// The hold survives a same-term resume (no takeover: nothing restarts), and
+// a step-down then a lease won in a new term is a new takeover: a new hold.
+func TestTakeoverHoldAcrossAResumeAndANewTerm(t *testing.T) {
+	cfg := holdCfg
+	cfg.Max = time.Minute
+	r := newHoldRig(t, &cfg)
+	r.sd.deliver = true
+	r.maxAge = 0
+	r.stream(t, nil)
+	r.takeOver(t)
+	r.next(t, HoldStarted)
+	r.scan(time.Second)
+	r.coord.lead.Store(false)
+	r.scan(100 * time.Millisecond)
+	r.coord.lead.Store(true) // the same term: a resume
+	r.scan(100 * time.Millisecond)
+	r.scan(100 * time.Millisecond)
+	r.none(t)
+	if st := r.stby.HoldStatus(); !st.Holding || st.Age < time.Second || !r.held(t) {
+		t.Fatalf("after a resume: %+v, held %v; want the same hold going on", st, r.held(t))
+	}
+	if pushes, _, _ := r.sd.counts(); pushes != 0 {
+		t.Fatal("pushed across a resume while held")
+	}
+	r.coord.lead.Store(false)
+	r.scan(100 * time.Millisecond)
+	r.coord.term.Store(5)
+	r.coord.lead.Store(true)
+	// The takeover's flush runs on its own goroutine: real time, as takeOver.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		r.scan(100 * time.Millisecond)
+		if term, lead := r.stby.LeadingTerm(); lead && term == 5 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no takeover in term 5")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if ev := r.next(t, HoldStarted); ev.Age != 0 {
+		t.Fatalf("a new term's hold %+v, want a new one", ev)
+	}
+}
+
+// A hot takeover from a holding leader holds even when the coordinator
+// does not call it a takeover (Fable N5): a hold the program has not
+// released is never dropped.
+func TestTakeoverHoldInheritedWhateverTheCoordinatorSays(t *testing.T) {
+	cfg := holdCfg
+	r := newHoldRig(t, &cfg)
+	r.coord.takeover.Store(false)
+	r.stream(t, func(img *Image) { img.Holding, img.HoldAge = true, time.Second })
+	if rep := r.takeOver(t); !rep.Hot {
+		t.Fatalf("cold (%s); the test needs hot", rep.Reason)
+	}
+	if !r.held(t) {
+		t.Fatal("a holding leader's hold dropped: the coordinator called it a start")
+	}
+}
+
+// blockChannel answers a READ only when let go, and records the writes
+// that reach it.
+type blockChannel struct {
+	recChannel
+	gate chan struct{}
+}
+
+func (c *blockChannel) Read(ctx context.Context, v string, s ir.Value, e string) (ir.Value, error) {
+	<-c.gate
+	return ir.Value{}, nil
+}
+
+// A WRITE posted while the hold holds is refused even when it comes due
+// after the release (it waited behind a READ): the program computed it
+// held. hold_channel_writes turns it red.
+func TestTakeoverHoldRefusesAWritePostedHeld(t *testing.T) {
+	ch := &blockChannel{gate: make(chan struct{})}
+	h := newCommHub([]Channel{{Name: "peer", Channel: ch}})
+	defer h.close()
+	var held atomic.Bool
+	held.Store(true)
+	h.setHeld(held.Load)
+	rd, _ := h.PostRead("peer", "x", ir.BoolVal(false), "")
+	wr, _ := h.PostWrite("peer", "x", ir.BoolVal(true), "")
+	held.Store(false)
+	close(ch.gate)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		_, rdone := h.Poll(rd)
+		res, wdone := h.Poll(wr)
+		if rdone && wdone {
+			if res.Status != ir.CommLost || ch.count() != 0 {
+				t.Fatalf("a write posted held, due released: status %d, %d sent; want lost, none", res.Status, ch.count())
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the requests never finished")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

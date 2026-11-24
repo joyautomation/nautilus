@@ -1606,6 +1606,7 @@ func (r *Runtime) scanAt(due time.Time) {
 				r.outGen.Store(gen)
 				r.outSent.Store(true)
 				r.deliverPush(out)
+				r.holdAfterPush()
 			}
 		}
 	}

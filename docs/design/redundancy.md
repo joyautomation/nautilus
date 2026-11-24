@@ -1783,6 +1783,11 @@ with an alarm repeated every `max`; only the program's release tag or the audite
   carries the hold's age; an inherited hold keeps it). The release tag is set FALSE at the start.
 - **The release tag.** A BOOL state tag, not retained, bound to no driver (Load). The tag store
   refuses every write and force on it from outside the program.
+- **Fable round 1** (folded): the pair's hold alarms read only the hold's own lock and the
+  elector's gate, never `leadMu` (they run under the alarm engine's lock, which a takeover takes
+  under `leadMu`); hold events reach the journal from a goroutine of their own, in order; a push
+  that raced a hold's start is forgotten at once; a hot takeover from a holding leader holds
+  whatever the coordinator calls it; `on-max: release` keeps its alarm raised a while after.
 
 ## 5. Failure cases
 

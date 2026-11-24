@@ -51,7 +51,7 @@ func checkTakeoverHoldConfig(h *TakeoverHoldConfig) error {
 	}
 	for tag, v := range h.Safe {
 		switch v.(type) {
-		case bool, int, int64, uint64, float64:
+		case bool, int, int64, float64:
 		default:
 			return fmt.Errorf("redundancy.takeover-hold.safe.%s: %v is not a BOOL or a number", tag, v)
 		}

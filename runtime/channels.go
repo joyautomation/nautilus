@@ -277,7 +277,8 @@ func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
 	if req.write {
 		// A write the program posted while the takeover hold held is not
 		// sent, even when the hold has released by now (hold.go).
-		if (req.held || h.held != nil && h.held()) && !mutRuntime("hold_channel_writes") {
+		heldAtPost := req.held && !mutRuntime("hold_channel_held_at_post")
+		if (heldAtPost || h.held != nil && h.held()) && !mutRuntime("hold_channel_writes") {
 			return ir.CommResult{Status: ir.CommLost}
 		}
 		if h.send != nil {

@@ -299,7 +299,7 @@ func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, string
 		return 0, "", fmt.Errorf("tag %s is set by the runtime from the substitute table and cannot be forced: %w", root, ErrReadOnly)
 	}
 	if tv.releases {
-		return 0, "", fmt.Errorf("tag %s releases the takeover hold and cannot be forced (an operator releases with `naut redundancy release-hold`): %w", root, ErrReadOnly)
+		return 0, "", fmt.Errorf("tag %s releases the takeover hold: only the program sets it: %w", root, ErrReadOnly)
 	}
 	fs := t.forces[root]
 	base := tv.v

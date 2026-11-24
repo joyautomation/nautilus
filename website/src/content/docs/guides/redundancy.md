@@ -757,9 +757,11 @@ While the hold holds:
   they sent before, so no keep-alive re-sends an old value. The field
   keeps the old leader's last values, or does what its comm-loss
   setting says.
-- The `safe:` values are the one exception. Each is written once when
-  the hold starts. If one has not reached its device after 2 seconds,
-  the hold raises an alarm. Only Modbus writes safe values for now;
+- The `safe:` values are the one exception. They are written when the
+  hold starts, and again whenever the driver asks for its outputs (after
+  a reconnect, or a driver swapped in); a Modbus `rewrite:` keep-alive
+  re-asserts its safe value. If one has not reached its device 2 seconds
+  after it was written, the hold raises an alarm. Only Modbus writes safe values for now;
   `naut check` refuses a `safe:` value on another driver.
 - Alarms keep evaluating and paging: outputs are what the hold stops.
 
@@ -775,13 +777,15 @@ setpoint, retained, bound to a driver, or not a BOOL.
 after a hot takeover from a leader that was still holding. With `on:
 always` it holds after every takeover. It never holds on a start: a
 controller that restarts with its peer away starts as usual, and
-`FIRST_SCAN()` covers its start-up code. A hold passed on by a hot
+`FIRST_SCAN()` covers its start-up code. That includes a controller
+restarted in the middle of a hold: its restart is a start, and does not
+hold. A hold passed on by a hot
 takeover keeps its age, so moving the lead does not restart its alarm
 time.
 
 **At max.** When the hold has held for `max`, it raises an alarm and
-**stays held**. It repeats the alarm in the journal every `max` after
-that. Nobody controls the outputs in that time, so act on it: fix what
+**stays held**. The alarm stays raised until the hold ends, and the
+journal gets a reminder every further `max`. Nobody controls the outputs in that time, so act on it: fix what
 keeps the program from releasing, or release by hand:
 
 ```sh

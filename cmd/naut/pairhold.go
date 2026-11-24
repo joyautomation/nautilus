@@ -136,15 +136,22 @@ func holdAlarms(m *pairMember) []project.SystemAlarm {
 		return nil
 	}
 	h := m.hold
-	leading := func() bool { _, lead := h.rt.LeadingTerm(); return lead }
+	// Never the runtime's LeadingTerm here: Active runs under the alarm
+	// engine's lock, which a takeover takes under leadMu (Fable M1). The
+	// elector's gate is a lock-free read, and HoldStatus takes only the
+	// hold's own lock.
+	leading := m.q.IsLeader
 	return []project.SystemAlarm{{
 		Def: alarm.Def{
 			ID: HoldMaxAlarmID, Tag: "__nautilus.takeover-hold-max",
-			Name:     "Takeover hold past its max: the outputs are still held and nobody controls them (the program's release tag, or naut redundancy release-hold)",
+			Name:     "Takeover hold reached its max: the program did not release the outputs in time (still held unless on-max: release; the program's release tag, or naut redundancy release-hold)",
 			Priority: alarm.Critical, Class: "system",
 			AckRequired: true, AutoClear: true,
 		},
-		Active: func() bool { return leading() && h.rt.HoldStatus().AtMax },
+		Active: func() bool {
+			st := h.rt.HoldStatus()
+			return leading() && (st.AtMax || st.ReleasedAtMax)
+		},
 	}, {
 		Def: alarm.Def{
 			ID: HoldSafeAlarmID, Tag: "__nautilus.takeover-hold-safe",

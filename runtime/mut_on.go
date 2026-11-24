@@ -85,6 +85,9 @@ import "os"
 //   - hold_release_tag_writable: a write or a force from outside the program may set the release tag (#710 (b2)).
 //   - hold_channel_writes: a channel WRITE goes out while the hold holds (#710 (b2)).
 //   - hold_not_imaged: a holding leader's image says it is not holding (#710 (b2)).
+//   - hold_release_at_max_ignored: on-max: release never releases at max (#710 (b2), Fable).
+//   - hold_replace_unsafe: a driver swapped in during a hold never gets the safe values (#710 (b2), Fable).
+//   - hold_channel_held_at_post: a channel WRITE posted while held goes out when it comes due after the release (#710 (b2), Fable).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutRuntime(name string) bool { return name == mutOn }

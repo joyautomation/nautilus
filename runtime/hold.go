@@ -103,6 +103,9 @@ type HoldStatus struct {
 	// one has not been for SafeAckWait.
 	Undelivered []string
 	SafeAlarm   bool
+	// ReleasedAtMax: on-max: release released the hold at its max, within
+	// the last max (at least 10 s): its alarm is still raised.
+	ReleasedAtMax bool
 }
 
 // SafeAckWait is how long a safe value may take to reach its device before
@@ -123,9 +126,21 @@ type holdState struct {
 	// The safe values' delivery, touched by the main scan (under mainMu)
 	// and read for status under mu.
 	safeDue     bool      // the next held scan writes them
-	safeSentAt  time.Time // when they were first written in this hold
+	safeSentAt  time.Time // when they were last written
 	safeAlarm   bool
 	undelivered []string
+
+	// releasedAtMax is when on-max: release released the hold: its alarm
+	// stays raised a while after (HoldStatus.ReleasedAtMax), so the alarm
+	// engine sees it (Fable S1). Zero otherwise.
+	releasedAtMax time.Time
+
+	// The events, in order, for on: handed over by a goroutine of their
+	// own, so a slow journal never stalls a takeover (under leadMu) or a
+	// scan (Fable S2).
+	qmu      sync.Mutex
+	queue    []HoldEvent
+	draining bool
 }
 
 // SetTakeoverHold configures the hold and the function its events go to
@@ -192,9 +207,12 @@ func (r *Runtime) holdOnTakeover(hot bool, inherit time.Duration) {
 	now := r.now(time.Now())
 	h.holding, h.inherited, h.atMax = false, false, false
 	h.safeDue, h.safeSentAt, h.safeAlarm, h.undelivered = false, time.Time{}, false, nil
+	h.releasedAtMax = time.Time{}
 	takeover := r.isTakeover()
-	inherited := takeover && hot && inherit >= 0 && !mutRuntime("hold_not_inherited")
-	start := takeover && (!hot || cfg.Always || inherited)
+	// A hot takeover from a holding leader holds, whatever the coordinator
+	// calls it: never drop a hold the program has not released (Fable N5).
+	inherited := hot && inherit >= 0 && !mutRuntime("hold_not_inherited")
+	start := inherited || takeover && (!hot || cfg.Always)
 	if mutRuntime("hold_never_starts") {
 		start = false
 	}
@@ -216,7 +234,6 @@ func (r *Runtime) holdOnTakeover(hot bool, inherit time.Duration) {
 		_ = r.tags.WriteGlobal(cfg.Release, ir.BoolVal(false))
 	}
 	ev := HoldEvent{Kind: HoldStarted, Inherited: inherited, Age: now.Sub(h.since)}
-	on := h.on
 	h.mu.Unlock()
 	// Nothing this replica sent in an earlier leadership is re-sent while
 	// the hold holds.
@@ -225,9 +242,37 @@ func (r *Runtime) holdOnTakeover(hot bool, inherit time.Duration) {
 	}
 	slog.Warn("runtime: takeover hold: outputs held until the program sets its release tag",
 		"release", cfg.Release, "inherited", inherited, "max", cfg.Max)
-	if on != nil {
-		on(ev)
+	r.holdEmit(ev)
+}
+
+// holdEmit hands events to on, in order, from a goroutine of its own.
+func (r *Runtime) holdEmit(evs ...HoldEvent) {
+	h := &r.hold
+	if h.on == nil || len(evs) == 0 {
+		return
 	}
+	h.qmu.Lock()
+	h.queue = append(h.queue, evs...)
+	if h.draining {
+		h.qmu.Unlock()
+		return
+	}
+	h.draining = true
+	h.qmu.Unlock()
+	go func() {
+		for {
+			h.qmu.Lock()
+			if len(h.queue) == 0 {
+				h.draining = false
+				h.qmu.Unlock()
+				return
+			}
+			ev := h.queue[0]
+			h.queue = h.queue[1:]
+			h.qmu.Unlock()
+			h.on(ev)
+		}
+	}()
 }
 
 // holdScan is the main scan's look at the hold, after the logic and
@@ -260,14 +305,14 @@ func (r *Runtime) holdScan() bool {
 			h.lastRemind = now
 			evs = append(evs, HoldEvent{Kind: HoldReminder, Inherited: h.inherited, Age: age})
 		}
-		if cfg.ReleaseAtMax {
+		if cfg.ReleaseAtMax && !mutRuntime("hold_release_at_max_ignored") {
 			rel = true
 			evs = append(evs, r.releaseLocked(HoldByMax, now))
+			h.releasedAtMax = now
 		}
 	}
 	safeDue := h.safeDue && !rel
 	h.safeDue = false
-	on := h.on
 	h.mu.Unlock()
 
 	if !rel {
@@ -282,10 +327,8 @@ func (r *Runtime) holdScan() bool {
 		case HoldSafeUndelivered:
 			slog.Error("runtime: takeover hold: safe values not delivered", "outputs", ev.Undelivered)
 		}
-		if on != nil {
-			on(ev)
-		}
 	}
+	r.holdEmit(evs...)
 	return !rel
 }
 
@@ -321,7 +364,9 @@ func (r *Runtime) holdSafe(now time.Time, due bool) []HoldEvent {
 	slices.Sort(und)
 	var evs []HoldEvent
 	h.mu.Lock()
-	if due && h.safeSentAt.IsZero() {
+	if due {
+		// Each write starts its own wait: a re-send (the driver asked)
+		// is not late by the time since the first (Fable S3).
 		h.safeSentAt = now
 	}
 	h.undelivered = und
@@ -361,21 +406,24 @@ func (r *Runtime) ReleaseHold(by string) error {
 		return ErrNotHolding
 	}
 	ev := r.releaseLocked(by, r.now(time.Now()))
-	on := h.on
 	h.mu.Unlock()
 	slog.Warn("runtime: takeover hold released by an operator; every output goes out on the next scan", "by", by, "age", ev.Age)
-	if on != nil {
-		on(ev)
-	}
+	r.holdEmit(ev)
 	return nil
 }
 
-// HoldStatus is the hold as it stands.
+// HoldStatus is the hold as it stands. It takes no lock but the hold's
+// own, never leadMu: the pair's system alarms read it from the alarm
+// engine's evaluation, under the engine's lock, which a takeover (under
+// leadMu) takes too (Fable M1).
 func (r *Runtime) HoldStatus() HoldStatus {
 	h := &r.hold
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	st := HoldStatus{Configured: h.cfg != nil, Holding: h.holding, Inherited: h.inherited, AtMax: h.atMax}
+	if !h.releasedAtMax.IsZero() && h.cfg != nil {
+		st.ReleasedAtMax = r.now(time.Now()).Sub(h.releasedAtMax) < max(h.cfg.Max, 10*time.Second)
+	}
 	if h.holding {
 		st.Age = r.now(time.Now()).Sub(h.since)
 		st.Undelivered = slices.Clone(h.undelivered)
@@ -394,6 +442,31 @@ func (r *Runtime) holdAge() time.Duration {
 		return -1
 	}
 	return r.now(time.Now()).Sub(h.since)
+}
+
+// holdDriverReplaced: a driver swapped in while the hold holds gets the
+// safe values on the next scan (it holds none of them; Fable S4).
+func (r *Runtime) holdDriverReplaced() {
+	h := &r.hold
+	h.mu.Lock()
+	if h.holding && h.cfg != nil && len(h.cfg.Safe) > 0 && !mutRuntime("hold_replace_unsafe") {
+		h.safeDue = true
+	}
+	h.mu.Unlock()
+}
+
+// holdAfterPush closes the window between the scan's look at the hold and
+// its push: a takeover (another task's gate) that started a hold in
+// between must not leave the push it raced in place, where a driver's
+// keep-alive would re-assert it for the whole hold (Fable N1).
+func (r *Runtime) holdAfterPush() {
+	if !r.tags.red.hold.Load() {
+		return
+	}
+	if f, ok := r.driver.(nio.OutputsForgetter); ok {
+		f.ForgetOutputs()
+	}
+	r.outSent.Store(false)
 }
 
 func sortedKeys(v nio.Values) []string {
