@@ -140,7 +140,10 @@ type Voter struct {
 	// leadSeq: per name, the boot nonce and highest Seq of the campaigns
 	// and renewals this voter heard from it, as they arrive (resign.go: a
 	// RESIGN below it is of an earlier leadership). In memory only.
-	leadSeq map[NodeID][2]uint64
+	leadSeq map[NodeID][]bootSeq
+	// resignTook: the last Handle took a RESIGN afresh (ResignTook);
+	// resignAnswered: it answered one as taken (resign_dup_acts only).
+	resignTook, resignAnswered bool
 
 	// pushedTo, pushedNonce: the promise RelayChanged last reported.
 	pushedTo    NodeID
@@ -1097,8 +1100,11 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 	// A RESIGN, and a renewal of a leadership that resigned here, come
 	// before the renewal is seen: a renewal in flight when the RESIGN left
 	// must not make the standby wait a lease (#710 d1).
+	v.resignTook, v.resignAnswered = false, false
 	if r.Resign {
-		return v.handleResign(now, r, refuse)
+		p, rs := v.handleResign(now, r, refuse)
+		v.resignAnswered = len(rs) == 1 && rs[0].Granted
+		return p, rs
 	}
 	v.noteLeadSeq(r)
 	if v.resignedRenewal(r) {
@@ -1154,9 +1160,7 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 		v.dirty++
 		v.need = v.dirty
 	}
-	if !r.Renewal {
-		v.grantedAgain(r.From, r.Nonce)
-	}
+	v.grantedAgain(r.From, r.Nonce, r.Epoch)
 	if r.Term != v.st.Promised || r.From != v.st.GrantedTo || v.st.Lease != v.lease || (r.Nonce != v.st.GrantNonce && !mut("grant_nonce_unwritten")) {
 		// Past the restart wait every promise made under a longer lease
 		// has run out, so the state now records this voter's own. The

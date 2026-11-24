@@ -1815,7 +1815,11 @@ image, the command and the bench. The plan and rulings are in #710 (naut-lead, 2
   voter took the RESIGN), and refuses
   renewals of that leadership for good (one in flight when the RESIGN left). It keeps the
   RESIGN's mark as the leader's, so the takeover is judged hot on the final image. A duplicate
-  is answered as taken and changes nothing; anything else is refused and changes nothing.
+  is answered as taken and changes nothing (nor does its controller act on it: an old copy must
+  not make a controller that just resigned campaign); anything else is refused and changes
+  nothing. The Seq gate carries the safety: a voter that heard a later campaign or renewal of
+  the boot refuses an older RESIGN. One that heard nothing of a later leadership may take it,
+  which is safe (no promise of its rests on that leadership) and costs a needless campaign.
   Nothing is written to disk: a restarted voter grants nothing until its promises ran out.
 - **The resigner's own voter** does the same for relays to its own boot: the standby's voter
   granted its renewals and relayed that promise, which would refuse the standby's campaign there
@@ -1828,13 +1832,17 @@ image, the command and the bench. The plan and rulings are in #710 (naut-lead, 2
   hold has ended early. A lost RESIGN falls back to the
   lease running out, no worse than before. The hold is not "may not lead" in a bad-retain
   hand-back (S2c-3): `Elector.EndResignHold` ends it when the peer hands the lead back (wired in
-  d1c).
+  d1c). `Elector.resign` stays unexported until d1b: RESIGN removes the lease-and-fence gap that
+  lets a send which passed the gate just before finish, so its caller must have drained every
+  output path first, and d1b's exported form takes the drain's proof.
 - **Tests.** Unit rules with one mutation each (`quorum/resign_test.go`); four switchovers back
   and forth on real elections over HTTP, each within lease/4 and with the order checked
   (`TestLoopbackAResignHandsTheLeadOverAtOnce`); in the simulator, the `Resign` fault under link
   loss, delay, duplication and replay, with the ledger ending a promise at a taken RESIGN, I3's
-  resign case (no write under the resigned epoch after the resign) and the "resign" oracle (a
-  voter takes a RESIGN only for the boot's latest leadership).
+  resign case (no write under the resigned epoch after the resign), the "resign" oracle (no
+  voter takes a RESIGN after receiving a later campaign or renewal of that boot) and the
+  "rejoin" oracle (a resigner leads again only after its peer led, its hold ran out, or it took
+  a fresh RESIGN back). Fable reviewed it on #1355.
 
 ## 5. Failure cases
 

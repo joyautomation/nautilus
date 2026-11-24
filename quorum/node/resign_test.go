@@ -10,16 +10,22 @@ import (
 
 // A planned switchover's RESIGN on real elections over HTTP (#710 d1a),
 // four times, back and forth. Each time:
+//
 //   - the witness takes the RESIGN before the peer's voter is sent it, so
 //     the standby's first campaign after it is granted by the witness;
+//
 //   - the standby campaigns at once when its voter takes the RESIGN, not
 //     at its next look;
+//
 //   - it leads within lease/4, not after the old leader's lease;
+//
 //   - a switchover back is not held up by the new standby's own resign
 //     hold.
 //
-// resign_peer_first, resign_waits_for_look and resign_keeps_own_hold
-// turn it red.
+//   - each RESIGN leaves with the resigner's gate already shut.
+//
+// resign_peer_first, resign_waits_for_look, resign_keeps_own_hold and
+// resign_publish_after_send turn it red.
 func TestLoopbackAResignHandsTheLeadOverAtOnce(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
@@ -45,7 +51,7 @@ func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) {
 	mark := len(c.votes)
 	c.mu.Unlock()
 	start := time.Now()
-	rep := c.elector(who).Resign(context.Background(), 41, true)
+	rep := c.elector(who).resign(context.Background(), 41, true)
 	if !rep.Resigned || !rep.Witness || !rep.Peer {
 		t.Fatalf("%s's resign: %+v\n%s", who, rep, c.voteTrail(who, c.leases(1)))
 	}
@@ -76,6 +82,9 @@ func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) {
 		t.Fatalf("%s's RESIGN sent to the witness at %d, to %s at %d", who, toWit, peer, toPeer)
 	}
 	w, p := votes[toWit], votes[toPeer]
+	if w.gateOpen || p.gateOpen {
+		t.Fatalf("a RESIGN left with %s's gate open (to the witness: %v, to %s: %v)", who, w.gateOpen, peer, p.gateOpen)
+	}
 	if !(w.done && w.at.Add(w.took).Before(p.at)) {
 		t.Fatalf("the RESIGN went to %s before the witness had answered its own (witness sent %v, answered after %v; peer sent %v)",
 			peer, w.at.Sub(start), w.took, p.at.Sub(start))

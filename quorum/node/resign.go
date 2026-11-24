@@ -26,7 +26,7 @@ type ResignReport struct {
 	WitnessErr, PeerErr string
 }
 
-// Resign gives up this controller's leadership: in one step under mu its
+// resign gives up this controller's leadership: in one step under mu its
 // candidate stops leading and its own voter drops its promise, and the
 // gate closes; only then does the RESIGN leave. It goes to the witness
 // first and to the peer's voter after the witness's answer (or its
@@ -34,14 +34,19 @@ type ResignReport struct {
 // RESIGN, and a campaign that reached the witness before the witness's
 // RESIGN would be refused, its retry a look away. seq and current are
 // the standby's acknowledgement of the final image, the mark the RESIGN
-// carries. The caller must have closed the drivers' sends first (d1c):
-// from here there is no going back. A controller that does not lead
-// resigns nothing.
-func (e *Elector) Resign(ctx context.Context, seq uint64, current bool) ResignReport {
+// carries. A controller that does not lead resigns nothing.
+//
+// Unexported until #710 d1b: RESIGN removes the lease-and-fence gap that
+// lets a send that passed the gate just before finish, so a caller must
+// first have drained every output path (package fence). d1b gives the
+// exported form a drained token to prove it.
+func (e *Elector) resign(ctx context.Context, seq uint64, current bool) ResignReport {
 	e.mu.Lock()
 	now := e.now()
 	r := quorum.ResignAt(now, e.v, e.c, seq, current)
-	e.publish(now)
+	if !mut("resign_publish_after_send") {
+		e.publish(now) // the gate is shut before the first RESIGN leaves
+	}
 	e.mu.Unlock()
 	if r == nil {
 		return ResignReport{}

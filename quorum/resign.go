@@ -57,11 +57,15 @@ func (v *Voter) handleResign(now Instant, r Request, refuse []Reply) (*Persist, 
 		return nil, refuse // its own candidate resigns in process (ResignAt)
 	}
 	if x, ok := v.resigned[r.From]; ok && x.nonce == r.Nonce && x.epoch == r.Epoch {
-		return nil, []Reply{v.reply(now, r, true)} // a duplicate: taken already
+		// A duplicate: answered as taken, so its sender stops resending,
+		// but nothing is done again (ResignTook stays false): an old copy
+		// must not make this controller campaign again (Fable, #1355).
+		return nil, []Reply{v.reply(now, r, true)}
 	}
 	if !v.resignMatches(now, r) {
 		return nil, refuse
 	}
+	v.resignTook = true
 	v.promiseUntil = 0
 	if v.renewalFrom == r.From && !mut("resign_keeps_renewal_seen") {
 		v.renewalFrom, v.renewalUntil = "", 0
@@ -79,10 +83,10 @@ func (v *Voter) handleResign(now Instant, r Request, refuse []Reply) (*Persist, 
 // running promise backs: the same name and boot, and that leadership's
 // epoch as this voter knows it (ledEpoch).
 func (v *Voter) resignMatches(now Instant, r Request) bool {
-	if now >= v.promiseUntil || v.st.GrantedTo != r.From || v.grantNonce != r.Nonce {
+	if (now >= v.promiseUntil && !mut("resign_after_promise")) || v.st.GrantedTo != r.From || v.grantNonce != r.Nonce {
 		return false
 	}
-	if x, ok := v.leadSeq[r.From]; ok && x[0] == r.Nonce && x[1] > r.Seq && !mut("resign_ignores_seq") {
+	if seq := v.leadSeqOf(r.From, r.Nonce); seq > r.Seq && !mut("resign_ignores_seq") {
 		// The boot sent a campaign or a renewal after this RESIGN: it is
 		// of an earlier leadership, though the epoch this voter knows may
 		// not show it yet (a later leadership's first renewal, still
@@ -102,8 +106,12 @@ func (v *Voter) resignMatches(now Instant, r Request) bool {
 // is higher (a boot's epochs only rise). Both, since a voter that
 // started after the leader's campaign (a standby restarted under a live
 // leader, an upgrade) has granted its renewals but holds no record of
-// its campaign. A RESIGN of an earlier leadership of the same boot is
-// then refused. 0 when it knows none.
+// its campaign. A RESIGN of an earlier leadership of the same boot that
+// this voter has seen followed by a later one is refused; one whose later
+// leadership this voter has heard nothing of may be taken, which is safe
+// (no promise of its rests on that later leadership) and costs the
+// standby a needless campaign. The Seq gate carries the safety. 0 when
+// it knows none.
 func (v *Voter) ledEpoch(name NodeID, nonce uint64) uint64 {
 	var e uint64
 	for _, rec := range v.st.Epochs {
@@ -124,8 +132,21 @@ func (v *Voter) keepFinalMark(r Request) {
 	if v.syncMarks == nil {
 		v.syncMarks, v.syncMarkFrom = map[NodeID]Mark{}, map[NodeID][2]uint64{}
 	}
+	if mut("resign_mark_dropped") {
+		return
+	}
 	v.syncMarks[r.From] = markOf(r)
 	v.syncMarkFrom[r.From] = [2]uint64{r.Nonce, r.Seq}
+}
+
+// ResignTook reports, once, whether the last request Handle answered was
+// a RESIGN this voter took afresh (it dropped a running promise), not a
+// duplicate's or a refusal's answer. Only then does a standby whose voter
+// it is campaign at once (Elector.serveVote).
+func (v *Voter) ResignTook() bool {
+	t := v.resignTook || (mut("resign_dup_acts") && v.resignAnswered)
+	v.resignTook, v.resignAnswered = false, false
+	return t
 }
 
 // resignedRenewal reports whether r renews a leadership that resigned
@@ -185,6 +206,9 @@ func (c *Candidate) resign(now Instant, hold time.Duration) *Request {
 // RESIGN to send to the other voters, or nil when c does not lead.
 func ResignAt(now Instant, v *Voter, c *Candidate, seq uint64, current bool) *Request {
 	if v == nil || c == nil || c.cfg.Self != v.self {
+		return nil
+	}
+	if !c.Leading(now) {
 		return nil
 	}
 	c.SetMark(seq, current)
@@ -255,25 +279,54 @@ func (v *Voter) noteResigned(now Instant, name NodeID, nonce, epoch uint64) {
 }
 
 // noteLeadSeq notes r's Seq when it is a campaign or a renewal (not a
-// probe, not a RESIGN), before anything decides on it: a RESIGN that
-// arrives after a later request of the same boot is of an earlier
-// leadership (resignMatches).
+// probe, not a RESIGN), before anything decides on it, per boot of its
+// name: a RESIGN that arrives after a later request of the same boot is
+// of an earlier leadership (resignMatches). Another boot of the name (a
+// restart, a clone) keeps its own slot; a name keeps its last few boots.
 func (v *Voter) noteLeadSeq(r Request) {
 	if r.Term == 0 || r.Nonce == 0 {
 		return
 	}
 	if v.leadSeq == nil {
-		v.leadSeq = map[NodeID][2]uint64{}
+		v.leadSeq = map[NodeID][]bootSeq{}
 	}
-	if x, ok := v.leadSeq[r.From]; !ok || x[0] != r.Nonce || r.Seq > x[1] {
-		v.leadSeq[r.From] = [2]uint64{r.Nonce, r.Seq}
+	bs := v.leadSeq[r.From]
+	for i := range bs {
+		if bs[i].nonce == r.Nonce {
+			bs[i].seq = max(bs[i].seq, r.Seq)
+			return
+		}
 	}
+	if len(bs) >= maxLeadSeqBoots {
+		bs = bs[1:]
+	}
+	v.leadSeq[r.From] = append(bs, bootSeq{nonce: r.Nonce, seq: r.Seq})
+}
+
+// maxLeadSeqBoots bounds the boots per name noteLeadSeq keeps: a name's
+// live boots are one, two with a clone; older ones only age out.
+const maxLeadSeqBoots = 4
+
+// bootSeq is a boot's highest campaign or renewal Seq heard.
+type bootSeq struct{ nonce, seq uint64 }
+
+// leadSeqOf is the highest campaign or renewal Seq heard from the boot
+// (name, nonce), 0 when none.
+func (v *Voter) leadSeqOf(name NodeID, nonce uint64) uint64 {
+	for _, b := range v.leadSeq[name] {
+		if b.nonce == nonce {
+			return b.seq
+		}
+	}
+	return 0
 }
 
 // grantedAgain ends the relay quiet of a resigned boot this voter grants
-// a campaign again (resignQuiet).
-func (v *Voter) grantedAgain(name NodeID, nonce uint64) {
-	if x, ok := v.resigned[name]; ok && x.nonce == nonce && !mut("resign_quiet_outlives_grant") {
+// again, for a later leadership than the one it resigned (epoch: the
+// request's own, 0 for a campaign, whose term is above it anyway)
+// (resignQuiet).
+func (v *Voter) grantedAgain(name NodeID, nonce, epoch uint64) {
+	if x, ok := v.resigned[name]; ok && x.nonce == nonce && (epoch == 0 || epoch > x.epoch) && !mut("resign_quiet_outlives_grant") {
 		x.quiet = 0
 		v.resigned[name] = x
 	}

@@ -118,6 +118,9 @@ type ResignTaken struct {
 	Voter        Addr
 	Name         quorum.NodeID
 	Nonce, Epoch uint64
+	// HeardLater: the voter had received a campaign or renewal of that
+	// boot sent after the RESIGN (a higher Seq) before it took it.
+	HeardLater bool
 }
 
 // AdoptRec is one adoption (durable) or proposal (made) by a controller.
@@ -635,10 +638,13 @@ func Check(r *Record, c Checks) []Violation {
 	for _, v := range r.checkHot() {
 		add(v)
 	}
-	for _, v := range r.checkI3(gates) {
+	for _, v := range r.checkI3() {
 		add(v)
 	}
 	for _, v := range r.checkResign() {
+		add(v)
+	}
+	for _, v := range r.checkRejoin() {
 		add(v)
 	}
 	if c.HealAt > 0 {
@@ -1032,7 +1038,7 @@ func (r *Record) checkHot() []Violation {
 // epoch from its resign on. (The sim's writes are its scans', instant and
 // judged on the candidate alone; the rest of I3, a send's deadline and
 // its drain, is the drivers' and package fence's, tested there.)
-func (r *Record) checkI3(_ []Interval) []Violation {
+func (r *Record) checkI3() []Violation {
 	var vs []Violation
 	for _, rs := range r.Resigns {
 		for _, w := range r.Writes {
@@ -1045,19 +1051,43 @@ func (r *Record) checkI3(_ []Interval) []Violation {
 	return vs
 }
 
-// Resign: a voter drops a promise on a RESIGN only for the resigning
-// boot's latest leadership: no leadership of that name above the
-// RESIGN's epoch had started before the voter took it (a late or replayed
-// RESIGN of an earlier leadership of the same boot must not end a later
-// one's promise) (#710 d1).
+// Resign: a voter drops a promise on a RESIGN only when it had received
+// nothing later from that boot: no campaign or renewal sent after the
+// RESIGN (a higher Seq). Such a frame may start or renew a later
+// leadership the promise now backs; a RESIGN of an earlier one must not
+// end it. (A voter that heard nothing of a later leadership may take it:
+// no promise of its rests on that leadership.) (#710 d1, Fable on #1355)
 func (r *Record) checkResign() []Violation {
 	var vs []Violation
 	for _, rt := range r.ResignsTaken {
+		if rt.HeardLater {
+			vs = append(vs, Violation{"resign", rt.At, fmt.Sprintf("%v took %s's RESIGN of epoch %d after a later campaign or renewal of that boot", rt.Voter, rt.Name, rt.Epoch)})
+		}
+	}
+	return vs
+}
+
+// Rejoin: a controller that resigned leads again only after its peer led,
+// or its hold ran out (two leases), or its own voter took a fresh RESIGN
+// from the peer (a switchover back). An old copy of a RESIGN must not make
+// it campaign at once (#710 d1, Fable on #1355).
+func (r *Record) checkRejoin() []Violation {
+	var vs []Violation
+	for _, rs := range r.Resigns {
 		for _, ls := range r.LeadStarts {
-			if nodeIDs[ls.Node] == rt.Name && ls.Epoch > rt.Epoch && ls.At <= rt.At {
-				vs = append(vs, Violation{"resign", rt.At, fmt.Sprintf("%v took %s's RESIGN of epoch %d after %v led epoch %d", rt.Voter, rt.Name, rt.Epoch, ls.Node, ls.Epoch)})
-				break
+			if ls.At <= rs.At {
+				continue
 			}
+			if ls.Node != rs.Node {
+				break // the peer led first
+			}
+			ok := ls.At >= rs.At+2*r.lease || slices.ContainsFunc(r.ResignsTaken, func(rt ResignTaken) bool {
+				return rt.Voter == rs.Node && rt.Name != nodeIDs[rs.Node] && rt.At > rs.At && rt.At <= ls.At
+			})
+			if !ok {
+				vs = append(vs, Violation{"rejoin", ls.At, fmt.Sprintf("%v led again %v after resigning, with no peer leadership, hold over or fresh RESIGN between", rs.Node, ls.At-rs.At)})
+			}
+			break
 		}
 	}
 	return vs

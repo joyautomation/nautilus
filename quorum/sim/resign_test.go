@@ -126,10 +126,12 @@ func TestSimResignUnderLinkFaults(t *testing.T) {
 
 // A RESIGN of an earlier leadership of the same boot, arriving in the
 // next: A's RESIGN to the witness is held up on the link (the witness
-// never took it, so B takes over by the lease), B then resigns (A leads
+// never took it; B's voter does, and B wins on the two controllers'
+// voters), B then resigns (A leads
 // again, same boot, a higher epoch), and A's old RESIGN reaches the
 // witness only then. The witness must refuse it: its promise backs A's
-// new leadership ("resign"). (A copy of a RESIGN the witness already took
+// new leadership: it has heard A's later campaign or renewals ("resign").
+// (A copy of a RESIGN the witness already took
 // is answered as a duplicate and changes nothing.) Two rules refuse it
 // here, the epoch and the Seq gate (A campaigned and renewed after it), so
 // no single mutation turns it red; each has its unit test.
@@ -157,4 +159,27 @@ func lastEpochOf(rec *Record, a Addr) uint64 {
 		}
 	}
 	return e
+}
+
+// An old copy of a RESIGN must not make a controller that just resigned
+// campaign again (Fable on #1355): A hands the lead to B, B hands it back
+// with B→A cut (so A's voter never takes B's RESIGN), and A's first
+// RESIGN reaches B's voter again 20 ms after B resigned. That copy is a
+// duplicate: B's voter answers it as taken but B does nothing, so B leads
+// again only after its hold or once A led ("rejoin"). resign_dup_acts
+// turns it red.
+func TestSimAnOldResignCopyDoesNotWakeTheResigner(t *testing.T) {
+	const lease = 2 * sec
+	t1, t2 := 12*sec, 18*sec
+	for seed := uint64(1); seed <= 20; seed++ {
+		extra := []Fault{
+			{Kind: Replay, From: A, To: B, At: t1, For: 300 * ms, Value: int64(t2 - t1 + 20*ms)},
+			{Kind: Cut, From: B, To: A, At: t2 - 5*ms, For: 4 * lease},
+		}
+		rec := Run(resignRun(seed, []time.Duration{t1, t2}, extra, t2+6*lease))
+		clean(t, rec, Checks{MaxTakeovers: -1})
+		if len(rec.Resigns) != 2 || rec.Resigns[1].Node != B {
+			t.Fatalf("seed %d: resigns %+v, want A then B", seed, rec.Resigns)
+		}
+	}
 }

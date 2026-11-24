@@ -340,6 +340,9 @@ type pendingGrant struct {
 
 // World is one run in progress.
 type World struct {
+	// leadHeard: per voter and boot, the highest campaign or renewal Seq
+	// it received (the resign oracle's ground truth, #710 d1).
+	leadHeard map[heardKey]uint64
 	// clearPlan is the operator's clear command's check, made once for
 	// all the Clear faults at one instant (the real command checks once
 	// and sends every member the same plan).
@@ -380,7 +383,7 @@ type World struct {
 
 func newWorld(o Options) *World {
 	o.defaults()
-	w := &World{o: o, net: rand.New(rand.NewPCG(o.Seed, 0x6e6574)), probeNet: rand.New(rand.NewPCG(o.Seed, 0x70726f6265)), fromSpareDone: map[int]bool{}, tookAddress: map[Addr]bool{}}
+	w := &World{o: o, net: rand.New(rand.NewPCG(o.Seed, 0x6e6574)), probeNet: rand.New(rand.NewPCG(o.Seed, 0x70726f6265)), fromSpareDone: map[int]bool{}, tookAddress: map[Addr]bool{}, leadHeard: map[heardKey]uint64{}}
 	for a := Addr(0); a < nNodes; a++ {
 		w.nodes[a] = &node{
 			addr:  a,
@@ -1077,6 +1080,12 @@ func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request)
 		w.handleResign(n, from, now, r)
 		return
 	}
+	if r.Term != 0 && r.Nonce != 0 && !n.voter.FencedRequest(r) {
+		// Ground truth for the resign oracle: the highest campaign or
+		// renewal Seq this voter received from the boot.
+		k := heardKey{n.addr, r.From, r.Nonce}
+		w.leadHeard[k] = max(w.leadHeard[k], r.Seq)
+	}
 	before := n.voter.RelayRefused()
 	dups, _ := n.voter.Duplicates()
 	p, replies := n.voter.Handle(now, r)
@@ -1279,6 +1288,13 @@ func (w *World) pause(n *node, on bool) {
 
 // --- a planned switchover (#710 d1) --------------------------------------
 
+// heardKey is a voter and a boot of a name.
+type heardKey struct {
+	voter Addr
+	name  quorum.NodeID
+	nonce uint64
+}
+
 // resign is the operator's switchover on n: if it leads, it resigns and
 // sends the RESIGN to the witness; the peer's copy waits for the
 // witness's answer, or lease/8 (resignToPeer).
@@ -1318,12 +1334,14 @@ func (w *World) resignToPeer(n *node) {
 // voter took its peer's RESIGN looks at once, its own resign hold over
 // (Elector.serveVote).
 func (w *World) handleResign(n *node, from Addr, now quorum.Instant, r quorum.Request) {
+	key := heardKey{n.addr, r.From, r.Nonce}
+	heardAbove := w.leadHeard[key] > r.Seq
 	_, to0, until0 := n.voter.PromiseUntil()
 	p, replies := n.voter.Handle(now, r)
 	_, _, until1 := n.voter.PromiseUntil()
-	took := len(replies) == 1 && replies[0].Granted
+	took := n.voter.ResignTook()
 	if took && to0 == r.From && now < until0 && until1 == 0 {
-		w.rec.ResignsTaken = append(w.rec.ResignsTaken, ResignTaken{At: w.now, Voter: n.addr, Name: r.From, Nonce: r.Nonce, Epoch: r.Epoch})
+		w.rec.ResignsTaken = append(w.rec.ResignsTaken, ResignTaken{At: w.now, Voter: n.addr, Name: r.From, Nonce: r.Nonce, Epoch: r.Epoch, HeardLater: heardAbove})
 		w.tracef("%v takes %s's RESIGN of epoch %d", n.addr, r.From, r.Epoch)
 	}
 	if took && n.cand != nil && from != n.addr {

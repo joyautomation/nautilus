@@ -382,3 +382,22 @@ func TestTheRelayQuietEndsWhenTheBootIsGrantedAgain(t *testing.T) {
 		t.Fatal("a relay of a new promise to A, after this voter granted A again, was ignored")
 	}
 }
+
+// A RESIGN that arrives after the voter's promise to that boot ran out is
+// refused: there is nothing of that leadership to drop, and taking it
+// would keep a stale mark and quiet relays for nothing.
+// resign_after_promise turns it red.
+func TestAResignAfterThePromiseRanOutIsRefused(t *testing.T) {
+	v := ready("W")
+	now := at(lease)
+	if !grant(t, v, now, Request{From: "A", Term: 5, Nonce: 0xA, ID: 1, Seq: 1}) {
+		t.Fatal("A's campaign refused")
+	}
+	late := now.Add(lease + time.Millisecond)
+	if rv(t, v, late, Request{From: "A", Term: 5, Nonce: 0xA, ID: 2, Seq: 2, Resign: true, Epoch: 5, MarkSeq: 9}).Granted {
+		t.Fatal("a RESIGN taken after the promise ran out")
+	}
+	if v.ResignTook() {
+		t.Fatal("the voter says it took a RESIGN it refused")
+	}
+}

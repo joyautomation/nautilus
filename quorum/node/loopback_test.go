@@ -91,8 +91,10 @@ type sentVote struct {
 	// took and its error (nil: an answer of any status). For steady()'s
 	// report when a lease lapses (#1120).
 	done bool
-	took time.Duration
-	err  error
+	// gateOpen: a RESIGN left while its sender's gate was open (#710 d1).
+	gateOpen bool
+	took     time.Duration
+	err      error
 	// verdict is what the answer said (voteVerdict): granted, or why not.
 	// Answered in time says nothing of which voter refused a lapsing
 	// leader, or why (#1329).
@@ -368,7 +370,13 @@ func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
 		if q.UnmarshalBinary(b) == nil {
 			f.c.mu.Lock()
 			sent = len(f.c.votes)
-			f.c.votes = append(f.c.votes, sentVote{from: f.from, to: to, at: time.Now(), req: q})
+			sv := sentVote{from: f.from, to: to, at: time.Now(), req: q}
+			if q.Resign {
+				if e := f.c.elector(f.from); e != nil {
+					sv.gateOpen = e.IsLeader() // read without c.mu's help: the gate is an atomic
+				}
+			}
+			f.c.votes = append(f.c.votes, sv)
 			f.c.mu.Unlock()
 		}
 	}
