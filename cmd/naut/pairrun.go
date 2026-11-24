@@ -270,7 +270,8 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		mux.Handle(p, &m.logH)
 	}
 	mux.Handle(streamPath(o.Cluster), &m.streamH)
-	mux.Handle(ackPath(o.Cluster), &m.streamH) // the standby's in-sync acknowledgement (pairack.go)
+	mux.Handle(ackPath(o.Cluster), &m.streamH)      // the standby's in-sync acknowledgement (pairack.go)
+	mux.Handle(handBackPath(o.Cluster), &m.streamH) // the peer's bad-retain hand-back question (pairhandback.go)
 	h, err := node.Guard(o.Token, spareSilent(q.Node().Spare, mux))
 	if err != nil {
 		q.Node().Close()

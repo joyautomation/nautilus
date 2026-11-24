@@ -107,6 +107,11 @@ func (r *Runtime) ioReset() {
 	r.iok.passed, r.iok.done, r.iok.edge, r.iok.loadErr = false, nil, nil, false
 }
 
+// iokRead reports whether this edge's ioReady has made its read of the
+// store (or needed none): its outcome is in edge and loadErr. Under
+// leadMu.
+func (r *Runtime) iokRead() bool { return r.iok.passed || r.iok.done != nil }
+
 // loadStore is the retain store's state: what this edge's ioReady already
 // read, else a fresh load. Under leadMu (takeover).
 func (r *Runtime) loadStore() (retain.State, error) {

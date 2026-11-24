@@ -461,6 +461,9 @@ type Elector struct {
 	yieldedAt time.Time      // the last yield (at most one per yieldEvery)
 	yieldHold bool           // no renewal until the lease is seen over (a yield)
 	yieldDue  quorum.Instant // when it was due to end (the yield_until_due mutation)
+	// handBackUntil: a hand-back's hold (handback.go), no renewal and no
+	// campaign before it, the gate closed.
+	handBackUntil quorum.Instant
 
 	gate    atomic.Pointer[gateState]
 	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
@@ -909,7 +912,7 @@ func (e *Elector) look() time.Duration {
 	e.unhealthy = !healthy
 	e.maybeYield(now, ls, hasLog)
 	may := e.mayCampaign(now) && (e.c.Leading(now) || !e.logHold(now, ls, hasLog))
-	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && may)
+	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && !e.handingBack(now) && may)
 	p, msgs, probe := e.a.Tick(now)
 	peer := false // the probe goes to the peer's voter too
 	if probe == nil {
@@ -1020,7 +1023,7 @@ func (e *Elector) publish(now quorum.Instant) {
 	}
 	if e.c.Leading(now) {
 		g.epoch, g.end = max(g.epoch, e.c.Term()), e.c.LeaseEnd()
-		g.open = (!e.released && !e.unhealthy) || mut("gate_ignores_health")
+		g.open = (!e.released && !e.unhealthy && !e.handingBack(now)) || mut("gate_ignores_health")
 		if e.spare.Load() {
 			g.open = false
 		}

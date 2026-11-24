@@ -14,58 +14,61 @@ import (
 // quorum.Mutations too, whose init refuses an unknown one, and each has a
 // row in tools/quorum-mutants.
 var mutations = []string{
-	"gate_on_tick",                  // the gate is judged on the elector's look, not when it is read
-	"peer_host_trusted",             // the peer listener answers a trusted Host without the peer token
-	"persisted_before_write",        // a write is reported durable before it is on disk
-	"state_in_place",                // the state file is rewritten in place, so a crash tears it
-	"nonce_fixed",                   // the boot nonce is the same at every start
-	"lease_unchecked",               // a voter grants a request whose lease outlives its own promise
-	"witness_rebuilds_silently",     // the witness draws a new incarnation over a state file it can't read
-	"controller_lease_unchecked",    // a controller's voter grants a request whose lease outlives its own promise
-	"reply_relay_dropped",           // a controller's voter never hears the promise a reply relays (#1029 layer 2)
-	"controller_write_ignored",      // a controller's failed state write is reported durable
-	"witness_write_ignored",         // the witness's failed state write is reported durable
-	"gate_ignores_health",           // the gate stays open for unhealthy scans or after Release
-	"controller_unlocked",           // a controller's state file isn't locked to one process
-	"witness_unlocked",              // the witness's state directory isn't locked to one process
-	"no_term_cap",                   // the witness takes a vote that jumps the terms
-	"controller_no_term_cap",        // a controller's voter takes a vote that jumps the terms
-	"hello_unbound",                 // the client-token MAC binds no names or direction: a reflected question passes
-	"term_cap_narrow",               // the term-jump cap is 2^20: an isolated controller crosses it in about 50 days and is refused for good
-	"state_owner_unchecked",         // a controller starts over a state file another member (or another pair) wrote
-	"config_differs_campaigns",      // a controller campaigns while its peer's hello names another configuration of the pair
-	"hello_duplicate_unseen",        // two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing
-	"hello_retry_slow",              // a hello with no verified answer is tried again only a whole interval later (#1120)
-	"hello_not_asked_again",         // a peer's restart or a link coming up asks for no hello: the backed-off retry waits (#1120)
-	"hello_asks_unspaced",           // asks for a hello send one after another: a storm with a flapping link or two processes behind one name (#1120 review)
-	"box_unchecked",                 // a controller votes from a state file written on another box (a cloned disk, #1029)
-	"box_wait_skipped",              // a controller whose box can't be read yet votes on the stored identity (#1034 review)
-	"campaign_ignores_sync",         // an unsynced standby campaigns over a synced peer that may (#710 3b-4b)
-	"unsynced_leader_keeps_lead",    // an unsynced, stuck leader never yields to a synced peer (#710 3b-4b)
-	"yield_undamped",                // a leader yields again within yieldEvery (#710 3b-4b)
-	"yield_ignores_may",             // a leader yields to a peer that may not campaign (#710 3b-4b)
-	"yield_ignores_can_sync",        // a leader yields to a synced peer that can't sync the others (#1053 review)
-	"yield_to_marked_peer",          // a leader yields to a peer its own voter has marked a confirmed duplicate (#1029 3c)
-	"spare_flag_after_silence",      // node: a copy goes silent as a spare before its flag is durable (#1029 3c-2)
-	"spare_answers_votes",           // node: a spare still answers the peer's votes, adopts and hellos (#1029 3c-2)
-	"spare_still_looks",             // node: a spare still looks, probes and hellos its peer (#1029 3c-2)
-	"peer_dial_lingers",             // node: a peer connection closes with a FIN, its unsent frames retransmitted after the process is gone (#1133 review)
-	"spare_forgotten_on_box_change", // node: a spare's flag is read after the box check, which loses it on a copy's box (#1029 3c-2)
-	"newer_state_moved_aside",       // node: a state file of a newer format is moved aside as lost, not refused (#1029 3c-2)
-	"clear_partial_check",           // the clear goes ahead with a member that did not answer its check phase (#1029 3c-3a)
-	"clear_done_ignores_clear",      // the clear reports done though a member missed the clear phase (#1135 re-check)
-	"clear_rerun_refused",           // a clear that missed a member can't be run again once no member marks (#1135 re-check)
-	"clear_ignores_keep",            // a member clears though it hears a boot other than the one the check kept (#1135 review)
-	"clear_without_keep",            // a clear goes ahead when its check heard no boot of the name to keep (#1135 ruling)
-	"clear_retires_marked_only",     // a member that marks nothing retires no boot on the clear (#1135 ruling)
-	"done_ignores_held",             // the clear reports done though the held controller is still held at the re-check (#1144 re-check)
-	"clear_ignores_held",            // the clear's check counts a held controller with no member marking it as nothing to clear (#1144 review)
-	"clear_gen_ignores_holds",       // the clear's generation is 1, not above every member's and every hold's (#1029 3c-3b)
-	"recheck_marks_only",            // the re-check reports a copy only when a member marks it again, not when the members together hear two (#1135 review)
-	"may_ignores_mark",              // a controller a voter marks a duplicate still says it may campaign (#1029 3c)
-	"mark_alarm_from_cause",         // the confirmed alarm follows the last duplicate's cause, which a later count in one Handle overwrites, and is paced (#1113 review)
-	"vouch_refusal_blocks",          // a vouch the log refuses refuses the re-commission (#1053 review)
-	"yield_until_due",               // a yield ends at the lease's due end, though a late grant moved it (#710 3b-4b)
+	"handback_keeps_renewing",        // a controller that handed the lead back keeps renewing and campaigning (#710 S2c-3)
+	"handback_guard_volatile",        // a hand-back's time is not written to the voter state, so a restart forgets it (#710 S2c-3)
+	"handback_guard_kept_on_failure", // a hand-back whose write failed keeps its time in memory, arming the guard (#710 S2c-3, Fable S3)
+	"gate_on_tick",                   // the gate is judged on the elector's look, not when it is read
+	"peer_host_trusted",              // the peer listener answers a trusted Host without the peer token
+	"persisted_before_write",         // a write is reported durable before it is on disk
+	"state_in_place",                 // the state file is rewritten in place, so a crash tears it
+	"nonce_fixed",                    // the boot nonce is the same at every start
+	"lease_unchecked",                // a voter grants a request whose lease outlives its own promise
+	"witness_rebuilds_silently",      // the witness draws a new incarnation over a state file it can't read
+	"controller_lease_unchecked",     // a controller's voter grants a request whose lease outlives its own promise
+	"reply_relay_dropped",            // a controller's voter never hears the promise a reply relays (#1029 layer 2)
+	"controller_write_ignored",       // a controller's failed state write is reported durable
+	"witness_write_ignored",          // the witness's failed state write is reported durable
+	"gate_ignores_health",            // the gate stays open for unhealthy scans or after Release
+	"controller_unlocked",            // a controller's state file isn't locked to one process
+	"witness_unlocked",               // the witness's state directory isn't locked to one process
+	"no_term_cap",                    // the witness takes a vote that jumps the terms
+	"controller_no_term_cap",         // a controller's voter takes a vote that jumps the terms
+	"hello_unbound",                  // the client-token MAC binds no names or direction: a reflected question passes
+	"term_cap_narrow",                // the term-jump cap is 2^20: an isolated controller crosses it in about 50 days and is refused for good
+	"state_owner_unchecked",          // a controller starts over a state file another member (or another pair) wrote
+	"config_differs_campaigns",       // a controller campaigns while its peer's hello names another configuration of the pair
+	"hello_duplicate_unseen",         // two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing
+	"hello_retry_slow",               // a hello with no verified answer is tried again only a whole interval later (#1120)
+	"hello_not_asked_again",          // a peer's restart or a link coming up asks for no hello: the backed-off retry waits (#1120)
+	"hello_asks_unspaced",            // asks for a hello send one after another: a storm with a flapping link or two processes behind one name (#1120 review)
+	"box_unchecked",                  // a controller votes from a state file written on another box (a cloned disk, #1029)
+	"box_wait_skipped",               // a controller whose box can't be read yet votes on the stored identity (#1034 review)
+	"campaign_ignores_sync",          // an unsynced standby campaigns over a synced peer that may (#710 3b-4b)
+	"unsynced_leader_keeps_lead",     // an unsynced, stuck leader never yields to a synced peer (#710 3b-4b)
+	"yield_undamped",                 // a leader yields again within yieldEvery (#710 3b-4b)
+	"yield_ignores_may",              // a leader yields to a peer that may not campaign (#710 3b-4b)
+	"yield_ignores_can_sync",         // a leader yields to a synced peer that can't sync the others (#1053 review)
+	"yield_to_marked_peer",           // a leader yields to a peer its own voter has marked a confirmed duplicate (#1029 3c)
+	"spare_flag_after_silence",       // node: a copy goes silent as a spare before its flag is durable (#1029 3c-2)
+	"spare_answers_votes",            // node: a spare still answers the peer's votes, adopts and hellos (#1029 3c-2)
+	"spare_still_looks",              // node: a spare still looks, probes and hellos its peer (#1029 3c-2)
+	"peer_dial_lingers",              // node: a peer connection closes with a FIN, its unsent frames retransmitted after the process is gone (#1133 review)
+	"spare_forgotten_on_box_change",  // node: a spare's flag is read after the box check, which loses it on a copy's box (#1029 3c-2)
+	"newer_state_moved_aside",        // node: a state file of a newer format is moved aside as lost, not refused (#1029 3c-2)
+	"clear_partial_check",            // the clear goes ahead with a member that did not answer its check phase (#1029 3c-3a)
+	"clear_done_ignores_clear",       // the clear reports done though a member missed the clear phase (#1135 re-check)
+	"clear_rerun_refused",            // a clear that missed a member can't be run again once no member marks (#1135 re-check)
+	"clear_ignores_keep",             // a member clears though it hears a boot other than the one the check kept (#1135 review)
+	"clear_without_keep",             // a clear goes ahead when its check heard no boot of the name to keep (#1135 ruling)
+	"clear_retires_marked_only",      // a member that marks nothing retires no boot on the clear (#1135 ruling)
+	"done_ignores_held",              // the clear reports done though the held controller is still held at the re-check (#1144 re-check)
+	"clear_ignores_held",             // the clear's check counts a held controller with no member marking it as nothing to clear (#1144 review)
+	"clear_gen_ignores_holds",        // the clear's generation is 1, not above every member's and every hold's (#1029 3c-3b)
+	"recheck_marks_only",             // the re-check reports a copy only when a member marks it again, not when the members together hear two (#1135 review)
+	"may_ignores_mark",               // a controller a voter marks a duplicate still says it may campaign (#1029 3c)
+	"mark_alarm_from_cause",          // the confirmed alarm follows the last duplicate's cause, which a later count in one Handle overwrites, and is paced (#1113 review)
+	"vouch_refusal_blocks",           // a vouch the log refuses refuses the re-commission (#1053 review)
+	"yield_until_due",                // a yield ends at the lease's due end, though a late grant moved it (#710 3b-4b)
 	// #1029 3c-3c: commissioning and the spare's way back.
 	"commission_unchecked",           // node: commission goes ahead on a pair a member says was commissioned or used terms
 	"recommission_local_floor_only",  // node: recommission's floor is checked against this controller's terms only, not the peer's and the witness's

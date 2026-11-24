@@ -125,6 +125,12 @@ type pairStream struct {
 	// existed: its condition, until a standby follows a hot-capable
 	// stream again (an image of the newest format sent).
 	coldWhy string
+	// offer is the peer's hand-back this controller said yes to, until
+	// its takeover takes it; handBackWhy the leader's condition after a
+	// takeover that took the lead from a hand-back, cleared as coldWhy
+	// (#710 S2c-3, pairhandback.go).
+	offer       *handBackOffer
+	handBackWhy string
 	// lastReport is the newest takeover report taken (they come on their
 	// own goroutines: an older one is dropped).
 	lastReport time.Time
@@ -260,6 +266,8 @@ func (m *pairMember) startStream(rt *runtime.Runtime, budget int64, hotMaxAge ti
 	m.stream = s
 	rt.SetTakeoverFlush(s.takeoverFlush)
 	rt.SetTakeoverReport(s.tookOver)
+	rt.SetHandBack(s.handBack)
+	s.suspectEmptyFile()
 	m.q.SetStreamStatus(s.status)
 	m.q.Node().SetSyncMark(s.syncMark)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -289,6 +297,10 @@ func (s *pairStream) leads(term uint64) bool {
 func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == ackPath(s.m.o.Cluster) {
 		s.serveAck(w, r)
+		return
+	}
+	if r.URL.Path == handBackPath(s.m.o.Cluster) {
+		s.serveHandBack(w, r)
 		return
 	}
 	term, lead := s.rt.LeadingTerm()
@@ -397,6 +409,7 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 			sentHere = true
 			if format >= runtime.ImageFormats[len(runtime.ImageFormats)-1] && !mutNaut("hot_cold_condition_never_clears") {
 				s.coldWhy = "" // a standby follows a stream it could take over hot from
+				s.handBackWhy = ""
 			}
 		} else {
 			s.tooBig, s.tooBigAt = tb.Bytes, time.Now()
@@ -460,10 +473,13 @@ func (s *pairStream) takeoverConditions() (cold, mem string) {
 		return "", ""
 	}
 	s.mu.Lock()
-	why := s.coldWhy
+	why, hb := s.coldWhy, s.handBackWhy
 	s.mu.Unlock()
 	if why != "" {
 		cold = "the last takeover was cold although the standby held a state image (" + why + "): timers, counters, SFC steps and state tags restarted, retained values kept. This clears once a standby follows this leader's state stream again"
+	}
+	if hb != "" {
+		cold = strings.TrimSpace(hb + " " + cold)
 	}
 	if s.rt.RetainOnlyInMemory() {
 		mem = "this leader's retain store could not be read at its takeover, and no save has succeeded since: its retained values (the state image's) are only in memory, and a power cycle or restart loses them. Check the disk the retain file is on"
@@ -854,6 +870,7 @@ func (s *pairStream) takeoverFlush() (*runtime.HotImage, error) {
 // journalled, and a cold one with an image a condition until a standby
 // follows again.
 func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
+	from := s.handBackTaken(rep.Term)
 	s.mu.Lock()
 	if rep.At.Before(s.lastReport) {
 		s.mu.Unlock()
@@ -861,9 +878,12 @@ func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
 	}
 	s.lastReport = rep.At
 	s.flushTook = false // the edge is taken
-	s.coldWhy = ""
+	s.coldWhy, s.handBackWhy = "", ""
 	if !rep.Hot && rep.Image {
 		s.coldWhy = rep.Reason
+	}
+	if from != nil && !mutNaut("handback_taken_unalarmed") {
+		s.handBackWhy = s.handBackWarning(from)
 	}
 	s.mu.Unlock()
 	j := s.m.journal.Load()
@@ -879,6 +899,16 @@ func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
 	}
 	if rep.Hot && rep.OldestFrameAge >= 0 {
 		detail["oldestFrameAgeMs"] = rep.OldestFrameAge.Milliseconds()
+	}
+	if rep.NoHandBack != "" {
+		detail["noHandBack"] = rep.NoHandBack
+	}
+	if from != nil {
+		detail["handBackFrom"] = string(s.m.o.Peer)
+		detail["fileTerm"], detail["fileSeq"] = from.ans.Term, from.ans.Seq
+		if from.ans.AtMs != 0 {
+			detail["fileAgeMs"] = time.Since(time.UnixMilli(from.ans.AtMs)).Milliseconds()
+		}
 	}
 	if rep.RetainFromImage {
 		detail["retainFromImage"] = true

@@ -73,6 +73,13 @@ import "os"
 //   - current_without_fresh_send: a standby in step with the last image sent stays current however long ago it was sent (#710 S2c-1);
 //   - interval_across_reconnect: the send-to-send time is measured across a reconnect's gap (#710 S2c-1);
 //   - hot_cold_condition_never_clears: the cold-takeover warning stays after a standby follows again (#710 S2b);
+//   - handback_long_deadline: the hand-back waits 2 s for the peer's answer, not a few round trips (#710 S2c-3);
+//   - handback_ineligible_peer: a peer that could not lead answers good (#710 S2c-3);
+//   - handback_peer_guard_off: a peer that handed back itself recently answers good (#710 S2c-3);
+//   - handback_empty_file_good: a peer's retain file with no stream position is good (#710 S2c-3);
+//   - handback_peer_file_unjudged: a peer's retain file older than the voters' floor is good (#710 S2c-3);
+//   - handback_taken_unalarmed: a takeover from the peer's hand-back raises no condition (#710 S2c-3);
+//   - handback_restart_empty_trusted: a restart after a hand-back trusts the emptied retain file (#710 S2c-3, Fable M1);
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutNaut(name string) bool { return name == mutOn }

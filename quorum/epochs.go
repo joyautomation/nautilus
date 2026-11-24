@@ -55,9 +55,14 @@ func (v *Voter) recordsFrom() uint64 {
 // above epoch e: what a hot takeover needs of a voter (HotCheck.Verdict).
 func Covers(from, e uint64) bool { return from != 0 && from <= e+1 }
 
-// recordGrant records a campaign's grant of term to name in the state the
-// grant writes. It reports whether the state changed.
-func (v *Voter) recordGrant(name NodeID, term uint64) bool {
+// recordGrant records a campaign's grant of term to name, a boot of it
+// with nonce, in the state the grant writes. It reports whether the state
+// changed. A grant to another boot of the name than the record's moves
+// the record's epoch into Prior first: Prior is then the highest epoch
+// this voter granted any EARLIER boot, which a reply to the boot asking
+// reports as its own record (recs), so a campaign's own grant never hides
+// the asker's leadership in a boot before (#710 S2c-3).
+func (v *Voter) recordGrant(name NodeID, term, nonce uint64) bool {
 	if mut("grant_keeps_record") {
 		return false
 	}
@@ -72,15 +77,20 @@ func (v *Voter) recordGrant(name NodeID, term uint64) bool {
 		changed = true
 	}
 	i := slices.IndexFunc(v.st.Epochs, func(r EpochRecord) bool { return r.Name == name })
-	switch {
-	case i >= 0 && v.st.Epochs[i].Epoch >= term:
-		return changed
-	case i >= 0:
+	if i >= 0 {
+		r := v.st.Epochs[i]
+		if r.Nonce != nonce && !mut("prior_boot_overwritten") {
+			r.Prior, r.Nonce = max(r.Prior, r.Epoch), nonce
+		}
+		r.Epoch = max(r.Epoch, term)
+		if r == v.st.Epochs[i] {
+			return changed
+		}
 		v.st.Epochs = slices.Clone(v.st.Epochs)
-		v.st.Epochs[i].Epoch = term
+		v.st.Epochs[i] = r
 		return true
 	}
-	es := append(slices.Clone(v.st.Epochs), EpochRecord{Name: name, Epoch: term})
+	es := append(slices.Clone(v.st.Epochs), EpochRecord{Name: name, Epoch: term, Nonce: nonce})
 	if len(es) > maxEpochRecords {
 		// A name too many: forget the lowest record, and with it the claim
 		// to know every grant up to it.
@@ -140,13 +150,32 @@ func (v *Voter) EpochOf(name NodeID) uint64 {
 	return 0
 }
 
-// recs are the records a reply to asker carries: asker's own, and the
-// other name with the highest record or a mark (a pair's peer).
-func (v *Voter) recs(asker NodeID) Recs {
+// epochBefore is the highest epoch this voter granted name in a campaign
+// of a boot other than nonce's: the asker's own record in a reply (recs).
+// With mut prior_boot_overwritten it is every boot's, as before #710
+// S2c-3, the asker's own campaign included.
+func (v *Voter) epochBefore(name NodeID, nonce uint64) uint64 {
+	for _, r := range v.st.Epochs {
+		if r.Name != name {
+			continue
+		}
+		if r.Nonce == nonce && nonce != 0 && !mut("own_record_after_grant") {
+			return r.Prior
+		}
+		return r.Epoch
+	}
+	return 0
+}
+
+// recs are the records a reply to asker (the boot with nonce) carries:
+// asker's own, of its EARLIER boots only (epochBefore), and the other name
+// with the highest record or a mark (a pair's peer), of every boot.
+func (v *Voter) recs(asker NodeID, nonce uint64) Recs {
 	var rs Recs
 	rec := func(name NodeID) Rec { return Rec{Name: name, Epoch: v.EpochOf(name), Mark: v.syncMarks[name]} }
 	if asker != "" {
 		rs[0] = rec(asker)
+		rs[0].Epoch = v.epochBefore(asker, nonce)
 	}
 	// In name order, so a tie goes the same way every time (the
 	// simulator replays runs).

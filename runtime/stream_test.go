@@ -54,7 +54,7 @@ func TestCarryRetainedTakesOnlyNewerImages(t *testing.T) {
 	if _, err := rt.CarryRetained(ctx, img, 5, 4); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := store.snapshot(); st.Tags["SP"] != 9.0 || *st.Stream != (retain.StreamPos{Term: 5, Seq: 4}) {
+	if st, _ := store.snapshot(); st.Tags["SP"] != 9.0 || st.Stream.Term != 5 || st.Stream.Seq != 4 || st.Stream.At.IsZero() {
 		t.Fatalf("after a newer image: SP %v at %+v, want 9 at (5, 4)", st.Tags["SP"], st.Stream)
 	}
 	if _, err := rt.CarryRetained(ctx, []byte(`{"tags":{"SP":10}}`), 6, 1); err != nil {

@@ -531,6 +531,33 @@ cycle before that loses them. Check the disk the retain file is on. A
 takeover over an unreadable file that cannot go hot takes nothing from
 the image: it runs on initial values and holds its stream, as above.
 
+**A controller whose own file is unreadable hands the lead back.**
+Before a cold takeover runs on initial values because the controller's
+own retain file cannot be read, it asks its peer once whether the
+peer's file is good, and waits a quarter lease at most (250 ms at the
+longest). A peer that is down refuses at once. The peer's file is good
+when it reads, holds a place in the state stream at or after the newest
+leadership the voters know of, the peer could lead now, and the peer has
+not handed back itself. Then the controller hands the lead back: it
+stops renewing and campaigning for 3 leases, and the peer takes over on
+its own file. At a 500 ms lease the peer ran about 1 s after the first
+election: about 2 leases, since a peer that has just lost its own lease
+first backs off. The new leader warns that it runs on its own file,
+with that file's place and age, until a standby follows it again. A
+value changed on the other controller after that file's last image is
+not in it. Without a good answer, the controller takes over on initial
+values as above, and its journal entry says why there was no hand-back
+(`noHandBack`). If the peer said yes but has not taken the lead within
+the 3 leases, the controller campaigns again and runs on initial
+values; it was elected again about 3.3 leases after its first election.
+A controller hands back at most once a minute, or once in 20 leases if
+that is longer. This is kept in its voter state, so a crash loop goes
+from A to B to A and stops there. The wait is on the wall clock: a
+hand-back time in the future (the clock went back) is ignored, and a
+clock that jumps forward may end the wait early. A box with no
+battery-backed clock that boots at a fixed date therefore forgets the
+hand-back at each power cycle: give it a clock (NTP before naut starts).
+
 **The lease and the takeover time.** The default lease is 1 s. From
 the fault to the new leader, on loopback with peer TLS (100 runs a row):
 

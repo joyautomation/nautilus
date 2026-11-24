@@ -99,6 +99,10 @@ type State struct {
 type StreamPos struct {
 	Term uint64 `json:"term"`
 	Seq  uint64 `json:"seq,omitempty"`
+	// At is when a standby carried the image into the file (#710
+	// S2c-3: a hand-back says how old the file it leads on is). Zero in a
+	// leader's own save, and in a file from before it.
+	At time.Time `json:"at,omitzero"`
 }
 
 // Before reports whether p comes before (term, seq) in the stream's

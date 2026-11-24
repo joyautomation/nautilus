@@ -77,6 +77,10 @@ type streamSide struct {
 	loadFailed, storeBad atomic.Bool
 
 	carryOnce atomic.Pointer[chan *carryReq]
+
+	// hb is the edge's bad-retain hand-back (handback.go). Under leadMu
+	// but for its hook.
+	hb handBackState
 }
 
 // flushResult is what a takeover flush returned.
@@ -274,7 +278,7 @@ func (r *Runtime) carry(req *carryReq) error {
 		return fmt.Errorf("the image's retain section: %w", err)
 	}
 	st := retain.Carry(own, lead)
-	st.Stream = &retain.StreamPos{Term: req.term, Seq: req.seq}
+	st.Stream = &retain.StreamPos{Term: req.term, Seq: req.seq, At: time.Now().UTC().Truncate(time.Millisecond)}
 	start := time.Now()
 	err = r.retainStore.Save(st)
 	req.took = time.Since(start)

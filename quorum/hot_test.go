@@ -53,8 +53,10 @@ func TestHotVerdict(t *testing.T) {
 		{"a tie: not current wins", check(won("A", 3, 5, cur(40), 9), won("W", 1, 5, past(40), 9)), ColdNotCurrent},
 		// A's own campaign at 7 never led: its record is no leadership.
 		{"own lost campaign recorded", check(won("A", 3, 5, cur(40), 9), won("W", 1, 5, cur(40), 7)), ""},
-		// A record of A at 6, a term this boot never campaigned in: an earlier boot led.
-		{"an earlier boot led", check(won("A", 3, 5, cur(40), 9), won("W", 1, 5, cur(40), 6)), ColdOwnLeadership},
+		// A record of A at 6 from an earlier boot (#710 S2c-3: a reply's
+		// own-name record is of earlier boots): a campaign that never led,
+		// since the image is of this boot, from a later leadership.
+		{"an earlier boot's lost campaign", check(won("A", 3, 5, cur(40), 9), won("W", 1, 5, cur(40), 6)), ""},
 	} {
 		hot, why := c.h.Verdict(5, 40)
 		if hot != (c.want == "") || why != c.want {

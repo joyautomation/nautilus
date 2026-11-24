@@ -29,7 +29,13 @@ func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 	if t, ok := r.coord.(Termed); ok && rep.Term == 0 {
 		rep.Term = t.Term()
 	}
-	defer func() { r.noteTakeover(rep) }()
+	nohb := r.handBackWhy() // the edge's: why its lead was not handed back
+	defer func() {
+		if !rep.Hot {
+			rep.NoHandBack = nohb
+		}
+		r.noteTakeover(rep)
+	}()
 	cold := func(reason string) bool {
 		rep.Reason = reason
 		slog.Warn("runtime: cold takeover: frames reset, timers and counters start over", "reason", reason)
@@ -40,18 +46,13 @@ func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 			rep.Image = had
 			return cold(why)
 		}
-		rep.Reason = "no state image: the standby followed no leader"
+		rep.Reason = hotColdOf(nil, "")
 		slog.Info("runtime: cold takeover with no state image")
 		return false
 	}
 	rep.Image, rep.ImageAge = true, h.Age
-	switch {
-	case h.Cold != "":
-		return cold(h.Cold)
-	case h.MaxAge <= 0 && !mutRuntime("hot_no_age_check"):
-		return cold("redundancy.hot-max-age is 0: every takeover is cold")
-	case h.Age > h.MaxAge && !mutRuntime("hot_no_age_check"):
-		return cold(fmt.Sprintf("the image was %s old at the election, over hot-max-age %s", h.Age.Round(time.Millisecond), h.MaxAge))
+	if c := hotColdOf(h, why); c != "" {
+		return cold(c)
 	}
 	// This controller's own store could not be read (#710 S2 Q3): a hot
 	// takeover's retained values come from the image, which is the newer
@@ -217,6 +218,9 @@ func (r *Runtime) hotPrecheck(h *HotImage, lead retain.State) string {
 		if run != t.source && !mutRuntime("hot_source_unchecked") {
 			return "task " + np.name + " runs another source than the image's (an online edit not streamed yet?)"
 		}
+		if !swaps && np.prog.layout() != t.layout {
+			return "task " + np.name + " runs a program of another layout than the image's"
+		}
 		if swaps {
 			// It must compile here to the image's layout, or the swap
 			// (or the install after it) would fail once the image's
@@ -231,6 +235,13 @@ func (r *Runtime) hotPrecheck(h *HotImage, lead retain.State) string {
 		}
 	}
 	return ""
+}
+
+// layout is the running program's layout.
+func (p *Program) layout() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.prog.Layout()
 }
 
 // layoutOf is the layout src compiles to in this program's context.

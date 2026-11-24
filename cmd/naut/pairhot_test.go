@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -263,6 +264,11 @@ func TestPairHotTakeoverOverAnUnreadableRetainFile(t *testing.T) {
 	}
 	os.Chmod(dirs[stand], 0o500)
 	t.Cleanup(func() { os.Chmod(dirs[stand], 0o700) })
+	// A hot takeover needs no file, so it never asks for a hand-back
+	// (#710 S2c-3; handback_when_hot turns it red).
+	var asked atomic.Bool
+	setTestHandBackAsk(func(*pairStream) { asked.Store(true) })
+	t.Cleanup(func() { setTestHandBackAsk(nil) })
 	r.nodes[lead].crash()
 	if got := r.leader(); got != stand {
 		t.Fatalf("after the kill: leader %q, want %s", got, stand)
@@ -276,6 +282,9 @@ func TestPairHotTakeoverOverAnUnreadableRetainFile(t *testing.T) {
 	}
 	if got := r.get(stand, "SP"); got != "41.5" {
 		t.Errorf("SP on the new leader = %s, want the image's 41.5", got)
+	}
+	if asked.Load() {
+		t.Error("a hot takeover asked for a hand-back")
 	}
 	pairWait(t, "the in-memory warning", 5*time.Second, func() bool { return r.hasWarning(stand, "only in memory") })
 	time.Sleep(3 * time.Second) // a save tick or more, every one failing
