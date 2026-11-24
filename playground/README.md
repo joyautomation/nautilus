@@ -9,6 +9,9 @@ copies `dist/` to `/playground/engine/`, and `docs.yml` builds and deploys
 both.
 
     ./scripts/build.sh          # -> dist/: naut.wasm, naut-hmi.wasm, wasm_exec.js, worker.js, hmi-worker.js, memfs.js, client.js, sw.js, app/, hmi/
+    # naut-hmi.wasm (cmd/naut-wasm-hmi: esbuild + Svelte, the screen builder) is
+    # a second module in a worker of its own (src/hmi-worker.js), fetched only
+    # when a screen is first asked for; naut.wasm carries none of it.
     python3 -m http.server -d .. 8765   # then open /playground/dev/test.html
     node --test playground/app/live.browser.test.mjs   # after build.sh: examples reach "nautilus: live" in headless Chrome
 
