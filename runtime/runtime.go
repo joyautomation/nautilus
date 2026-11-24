@@ -1602,6 +1602,7 @@ func (r *Runtime) scanAt(due time.Time) {
 				// A failed write leaves the driver holding who-knows-what:
 				// retry the whole set next scan rather than trusting the stamp.
 				r.outSent.Store(false)
+				r.holdAfterPush() // a child of a composite may have taken it
 			} else {
 				r.outGen.Store(gen)
 				r.outSent.Store(true)

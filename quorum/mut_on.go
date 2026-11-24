@@ -519,6 +519,7 @@ var Mutations = []string{
 	"hold_release_at_max_ignored",       // runtime: on-max: release never releases at max (#710 (b2), Fable)
 	"hold_replace_unsafe",               // runtime: a driver swapped in during a hold never gets the safe values (#710 (b2), Fable)
 	"hold_channel_held_at_post",         // runtime: a channel WRITE posted while held goes out when it comes due after the release (#710 (b2), Fable)
+	"hold_safe_wait_restarts",           // runtime: every safe re-send restarts the 2 s wait, so retries keep the alarm down (#710 (b2), Fable re-check)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

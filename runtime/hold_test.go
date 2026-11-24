@@ -795,3 +795,25 @@ func TestTakeoverHoldRefusesAWritePostedHeld(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// A value that never lands raises its alarm about 2 s after it was first
+// written, even while the driver asks for its outputs every second (a
+// stuck write's retry): a re-send while it waits keeps the clock (Fable
+// re-check). hold_safe_wait_restarts turns it red.
+func TestTakeoverHoldSafeAlarmDespiteRetries(t *testing.T) {
+	cfg := holdCfg
+	cfg.Max = time.Minute
+	r := newHoldRig(t, &cfg)
+	r.maxAge = 0
+	r.stream(t, nil)
+	r.takeOver(t)
+	r.next(t, HoldStarted)
+	for range 3 {
+		r.sd.wanted.Store(true)
+		r.scan(time.Second)
+	}
+	if st := r.stby.HoldStatus(); !st.SafeAlarm {
+		t.Fatalf("status %+v 3 s into retries every second, want the safe alarm", st)
+	}
+	r.next(t, HoldSafeUndelivered)
+}

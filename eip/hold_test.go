@@ -5,7 +5,7 @@ import "testing"
 // ForgetOutputs (#710 (b2), the takeover hold) drops what the driver wrote
 // and queued, and moves its term, so nothing from an earlier leadership
 // goes out while the hold holds.
-func TestForgetOutputsDropsAnEarlierLeadership(t *testing.T) {
+func TestHoldForgetOutputsDropsAnEarlierLeadership(t *testing.T) {
 	d, err := New("127.0.0.1", testManifest())
 	if err != nil {
 		t.Fatal(err)

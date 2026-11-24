@@ -355,6 +355,14 @@ func (r *Runtime) holdSafe(now time.Time, due bool) []HoldEvent {
 	if r.asker != nil && r.asker.OutputsWanted() {
 		due = true
 	}
+	// A write starts the 2 s wait afresh only when nothing was waiting
+	// before it (the first, or a re-send after all had landed: Fable S3).
+	// A re-send while a value is still undelivered keeps the running
+	// clock: a driver that asks every second (a stuck write's retry) must
+	// not keep the alarm from ever raising (Fable re-check).
+	h.mu.Lock()
+	fresh := h.safeSentAt.IsZero() || len(h.undelivered) == 0 || mutRuntime("hold_safe_wait_restarts")
+	h.mu.Unlock()
 	if due {
 		if err := sw.WriteSafe(h.cfg.Safe); err != nil {
 			slog.Error("runtime: takeover hold: writing safe values", "error", err)
@@ -364,9 +372,7 @@ func (r *Runtime) holdSafe(now time.Time, due bool) []HoldEvent {
 	slices.Sort(und)
 	var evs []HoldEvent
 	h.mu.Lock()
-	if due {
-		// Each write starts its own wait: a re-send (the driver asked)
-		// is not late by the time since the first (Fable S3).
+	if due && fresh {
 		h.safeSentAt = now
 	}
 	h.undelivered = und
