@@ -136,8 +136,25 @@ func newObserver(t *testing.T, addr, id string, filters ...string) *observer {
 			t.Fatalf("observer subscribe %s: %v", f, tok.Error())
 		}
 	}
+	o.settle(t)
 	t.Cleanup(func() { o.cli.Disconnect(50) })
 	return o
+}
+
+// settle returns once the broker has finished serving the observer's
+// subscriptions, retained messages included. mochi answers a SUBSCRIBE with
+// its SUBACK first and only then scans the retained messages for a wildcard
+// filter, and that scan reads each topic's retainPath without the lock that
+// RetainMessage writes it under (mochi v2.7.9 topics.go): a retained publish
+// from another client while the scan runs is a data race inside the broker
+// (#1120, TestMqttStopPublishesStateDeath). A client's packets are handled
+// one after another, so the SUBACK of a second, non-wildcard subscription
+// (whose scan is a locked lookup) proves the first scan is over.
+func (o *observer) settle(t *testing.T) {
+	t.Helper()
+	if tok := o.cli.Subscribe("settle/observer", 1, nil); !tok.WaitTimeout(5*time.Second) || tok.Error() != nil {
+		t.Fatalf("observer settle: %v", tok.Error())
+	}
 }
 
 // wait blocks until a recorded message satisfies pred, or the deadline passes.
@@ -1650,5 +1667,32 @@ func TestReadInputsIntoMatchesReadInputs(t *testing.T) {
 	}
 	if !reflect.DeepEqual(map[string]any(got), map[string]any(want)) {
 		t.Error("repeated ReadInputsInto calls diverged from the snapshot")
+	}
+}
+
+// An observer that returns before the broker has scanned its retained
+// messages leaves that scan running against the next retained publish: a
+// data race in mochi that -race reports. A broker holding many retained
+// topics makes the scan long enough to hit it every time; newObserver's
+// settle is what ends it. Red under -race with settle taken out.
+func TestObserverReturnsAfterItsRetainedScan(t *testing.T) {
+	_, addr := startBroker(t, "")
+	seeder := newObserver(t, addr, "seeder")
+	var last mqtt.Token
+	for i := 0; i < 8000; i++ {
+		last = seeder.cli.Publish(fmt.Sprintf("spBv1.0/STATE/seed%05d", i), 1, true, []byte("x"))
+	}
+	if !last.WaitTimeout(30*time.Second) || last.Error() != nil {
+		t.Fatalf("seed: %v", last.Error())
+	}
+	pub := newObserver(t, addr, "pub-scan")
+	for round := 0; round < 12; round++ {
+		o := newObserver(t, addr, fmt.Sprintf("obs-scan-%d", round), "spBv1.0/STATE/#")
+		// retained publishes to topics the scan is reading
+		for i := 0; i < 200; i++ {
+			pub.cli.Publish(fmt.Sprintf("spBv1.0/STATE/seed%05d", (i*97+round*13)%8000), 0, true, []byte("y"))
+		}
+		pub.cli.Publish("spBv1.0/STATE/done", 1, true, []byte("y")).Wait()
+		o.cli.Disconnect(10)
 	}
 }

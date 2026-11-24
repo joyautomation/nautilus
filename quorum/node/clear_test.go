@@ -251,6 +251,19 @@ func TestTheRecheckReportsACopyHeardAfterTheClear(t *testing.T) {
 		}
 		return len(c.status("b").Marked) == 0
 	})
+	// The frame goes in the middle of the wait before the re-check (a lease
+	// after the clear), not at once: a boot counts as live for a lease and D
+	// before the re-check asks, so a frame heard right after b's clear is
+	// only D (a quarter lease) from going stale when the clear's other
+	// members, or this goroutine, stall (a flake on a loaded runner, #1120);
+	// in the middle it has half a lease to spare before the re-check and
+	// more than that after it.
+	time.Sleep(c.lease / 2)
+	select {
+	case <-done:
+		t.Fatalf("the command ended before the test could act: %v, %+v", err, rep)
+	default:
+	}
 	// One frame from a new boot of a, at b only: no mark (that takes two
 	// interleaved), but two boots live across the members.
 	e := c.elector("b")
