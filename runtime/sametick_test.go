@@ -234,7 +234,10 @@ func TestACarryDuringTheCatchUpWaitIsRefusedOnceLeading(t *testing.T) {
 	runWith(t, rt)
 	coord.term.Store(6)
 	coord.lead.Store(true)
-	for deadline := time.Now().Add(5 * time.Second); !rt.edgeWait.Load(); time.Sleep(time.Millisecond) {
+	// The catch-up's wait, not the flush's: edgeWait is up for both, and a
+	// carry during the flush's own wait rightly reads the snapshot (CI on
+	// #1360: the poll caught the flush's wait).
+	for deadline := time.Now().Add(5 * time.Second); !rt.edgeWait.Load() || rt.flushWait.Load(); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the takeover edge never waited for its catch-up")
 		}
