@@ -491,6 +491,7 @@ var Mutations = []string{
 	"hot_first_scan_true",               // runtime: a hot takeover makes FIRST_SCAN() TRUE (#710 (b))
 	"takeover_unmarked",                 // runtime: a takeover sets no TAKEOVER_SCAN()/HOT_TAKEOVER() and counts nothing (#710 (b))
 	"takeover_flag_kept",                // runtime: TAKEOVER_SCAN()/HOT_TAKEOVER() stay TRUE past the first scan (#710 (b))
+	"takeover_flag_survives_step_down",  // runtime: a takeover flag a program never scanned after survives a step-down into a same-term resume (#710 (b))
 	"peer_ready_never_set",              // runtime: PEER_READY() never takes what the pair sets (#710 (b))
 	"ack_other_build",                   // naut: a standby acknowledges an image of another build (#710 (b))
 	"ack_kept_across_reconnect",         // naut: a leader keeps an acknowledgement across a new stream connection (#710 (b))

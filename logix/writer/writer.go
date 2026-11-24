@@ -62,6 +62,10 @@ import (
 // Options shape the project around the program. Every field has a default
 // that produces a buildable project for the DemoLine fixture.
 type Options struct {
+	// Warn, when set, takes the writer's warnings: what it writes on
+	// purpose but differently from nautilus, for the CLI to print. Never a
+	// refusal (those are Diags).
+	Warn func(string)
 	// Controller is the Logix controller (project) name. Default: the
 	// nautilus PROGRAM name.
 	Controller string
@@ -358,6 +362,8 @@ type lowered struct {
 	model *ld.Model
 	opts  Options
 	diags []Diag
+	// pairWarned: the pair-state warning went out (PairStateWarning).
+	pairWarned bool
 
 	vars     map[string]ld.VarDecl // by lower-cased name
 	ctrlTags []tagDef

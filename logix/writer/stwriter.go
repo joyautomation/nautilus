@@ -562,7 +562,9 @@ func (w *stWriter) callExpr(c *st.CallExpr) string {
 		// A nautilus pair's state (#710 (b)): a Logix controller runs no
 		// nautilus pair, so never a takeover, no peer, no hold, 0
 		// takeovers. (A Logix redundancy system's own status is in its
-		// redundancy module, which nautilus does not map.)
+		// redundancy module, which nautilus does not map.) Logic gated on
+		// it is dead code here: a warning says so.
+		w.lw.pairStateUsed()
 		return "0"
 	case stFuncs[name]:
 		return name + "(" + strings.Join(args, ", ") + ")"

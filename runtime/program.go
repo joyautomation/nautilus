@@ -367,6 +367,13 @@ func (p *Program) markTakeover(hot bool) {
 	p.tookOver, p.tookOverHot = true, hot
 }
 
+// clearTakeover forgets a takeover the program has not scanned after.
+func (p *Program) clearTakeover() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tookOver, p.tookOverHot = false, false
+}
+
 // ResetFrame discards retained state — call on a redundancy takeover so the
 // program warm-starts against live field values. A reset frame is a start:
 // the next scan's FIRST_SCAN() is TRUE, on every cold takeover, also by a

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -102,5 +103,39 @@ func TestPeerReadyAndAnEditAfterATakeover(t *testing.T) {
 	r.stby.Scan()
 	if ts, _, _, _, _ := redCounts(t, r.stby); ts != before {
 		t.Fatalf("TAKEOVER_SCAN on the first scan after an online edit: %d, want %d", ts, before)
+	}
+}
+
+// A ladder program named as a system function is refused like an ST one:
+// every language lowers through the ST lowering, where the check is.
+func TestALadderProgramNamedAsASystemFunctionIsRefused(t *testing.T) {
+	src := "PROGRAM Takeovers\nVAR_EXTERNAL Run : BOOL; Out : REAL; END_VAR\nLD\n  RUNG r\n    Run ( Out )\nEND_LD\nEND_PROGRAM\n"
+	_, err := New(Options{Program: src, Tags: []TagDef{State("Run", true), State("Out", false)}})
+	if err == nil || !strings.Contains(err.Error(), "nautilus system function") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A takeover a program never scanned after is spent when the controller
+// steps down: the resume in the same term is no takeover (Sonnet, #1350).
+// takeover_flag_survives_step_down turns it red.
+func TestATakeoverFlagDoesNotSurviveAStepDown(t *testing.T) {
+	r := newHotRig(t, redMain, redMain)
+	r.coord.takeover.Store(true)
+	r.stream(t, 3)
+	r.takeOver(t)
+	before, _, _, _, _ := redCounts(t, r.stby)
+	// A slow task's program, marked but not scanned yet (as markTakeover
+	// leaves it), when the lease goes.
+	r.stby.TaskProgram(MainTaskName).markTakeover(false)
+	r.coord.lead.Store(false)
+	r.stby.Scan() // steps down
+	r.coord.lead.Store(true)
+	r.stby.Scan() // resumes in term 4
+	if _, lead := r.stby.LeadingTerm(); !lead {
+		t.Fatal("not leading after the resume")
+	}
+	if ts, _, _, _, _ := redCounts(t, r.stby); ts != before {
+		t.Fatalf("TAKEOVER_SCAN on a same-term resume: count %d, want %d", ts, before)
 	}
 }

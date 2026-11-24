@@ -200,6 +200,13 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		if r.leading {
 			// Stepping down: forces belong to the active controller only.
 			r.dropForces("lost leadership")
+			// A takeover a program never scanned after is spent: a resume
+			// in the same term is no takeover (Sonnet, #1350).
+			if !mutRuntime("takeover_flag_survives_step_down") {
+				for _, np := range r.namedPrograms() {
+					np.prog.clearTakeover()
+				}
+			}
 		}
 		r.leading = false
 		r.unfresh()

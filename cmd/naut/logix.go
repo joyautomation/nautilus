@@ -673,6 +673,7 @@ func runLogixWrite(args []string) int {
 	if w := writer.LocalModuleWarning(opts.ProcessorType); w != "" && opts.Hardware == nil {
 		fmt.Fprintln(os.Stderr, "naut logix write: warning:", w)
 	}
+	opts.Warn = func(w string) { fmt.Fprintln(os.Stderr, "naut logix write: warning:", w) }
 	doc, diags, err := writer.WriteProgram(path, string(raw), opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)

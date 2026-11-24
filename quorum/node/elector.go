@@ -1003,10 +1003,12 @@ func (e *Elector) after(now quorum.Instant) {
 		}
 		e.event(out)
 	}
-	e.publish(now)
 	if from, until := e.v.LeaderSeen(); from == e.o.Peer && now < until {
 		e.peerLeaseSeen = true
 	}
+	// A new leadership's bookkeeping comes BEFORE publish opens the gate:
+	// the runtime reads IsTakeover in the takeover the open gate starts
+	// (Sonnet, #1350).
 	if t := e.c.Term(); e.c.Leading(now) && t != e.epoch {
 		e.epoch = t
 		e.acquired++
@@ -1017,6 +1019,7 @@ func (e *Elector) after(now quorum.Instant) {
 		e.tookOver.Store(e.acquired > 1 || e.peerLeaseSeen || mut("every_acquisition_a_takeover"))
 		e.log.Info("redundancy: this controller leads", "term", t)
 	}
+	e.publish(now)
 	if from, until := e.v.LeaderSeen(); e.c.Leading(now) || (from == e.o.Peer && now < until) {
 		e.once.Do(func() { close(e.decided) })
 	}

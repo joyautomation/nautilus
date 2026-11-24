@@ -74,6 +74,7 @@ import "os"
 //   - takeover_unmarked: a takeover sets no TAKEOVER_SCAN()/HOT_TAKEOVER() and counts nothing (#710 (b)).
 //   - takeover_flag_kept: TAKEOVER_SCAN()/HOT_TAKEOVER() stay TRUE past the first scan (#710 (b)).
 //   - peer_ready_never_set: PEER_READY() never takes what the pair sets (#710 (b)).
+//   - takeover_flag_survives_step_down: a takeover flag a program never scanned after survives a step-down (#710 (b)).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutRuntime(name string) bool { return name == mutOn }
