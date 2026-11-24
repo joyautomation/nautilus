@@ -256,3 +256,30 @@ func TestSocketAbortAndCloseReset(t *testing.T) {
 		ln.Close()
 	}
 }
+
+// A second Abort of a connection already reset reports it reset: a fenced
+// write's send-deadline timer and its failure path both abort, and the one
+// that comes second must not read "nothing reset" (CI on main after #1359:
+// TestOPCUAFencedWriteResetsItsSession waited for a reset the timer had
+// already made). abort_twice_fails turns it red.
+func TestASecondAbortReportsTheReset(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	done := peerRead(t, ln)
+	var s Socket
+	c, err := (&net.Dialer{Control: s.Control}).Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Abort() {
+		t.Fatal("the first Abort reports it did nothing")
+	}
+	<-done
+	c.Close() // the transport tears the failed connection down
+	if !s.Abort() {
+		t.Fatal("a second Abort of the reset (and closed) connection reports nothing reset")
+	}
+}

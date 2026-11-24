@@ -234,7 +234,10 @@ func TestACarryDuringTheCatchUpWaitIsRefusedOnceLeading(t *testing.T) {
 	runWith(t, rt)
 	coord.term.Store(6)
 	coord.lead.Store(true)
-	for deadline := time.Now().Add(5 * time.Second); !rt.edgeWait.Load(); time.Sleep(time.Millisecond) {
+	// The catch-up's wait, not the flush's: edgeWait is up for both, and a
+	// carry during the flush's own wait rightly reads the snapshot (CI on
+	// #1360: the poll caught the flush's wait).
+	for deadline := time.Now().Add(5 * time.Second); !rt.edgeWait.Load() || rt.flushWait.Load(); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("the takeover edge never waited for its catch-up")
 		}
@@ -280,6 +283,42 @@ func TestASaveDuringTheFlushWaitDoesNotHoldTheCarry(t *testing.T) {
 	case d := <-took:
 		if d > 150*time.Millisecond {
 			t.Fatalf("the carry waited %s behind a save parked on the lock the edge held", d)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no takeover flush")
+	}
+}
+
+// A save that comes up as the flush starts (here the flush asks for one
+// itself and waits for the answer) finds the edge's flags already up: the
+// edge raises them before the flush runs, not when its tick starts to wait
+// (CI on main after #1359: in that window a save parked on leadMu and held
+// the carry for the whole wait). flush_wait_after_start turns it red.
+func TestASaveAskedAsTheFlushStartsIsNotParked(t *testing.T) {
+	wideWait(t)
+	// The edge's tick is descheduled between starting the flush and its
+	// wait, as on a loaded runner: the flush's save comes up in between.
+	flushStartedHook = func() { time.Sleep(50 * time.Millisecond) }
+	t.Cleanup(func() { flushStartedHook = nil })
+	store := &fakeStore{state: retain.State{Tags: map[string]any{"SP": 1.0}, Stream: &retain.StreamPos{Term: 5, Seq: 3}}}
+	coord := &keepTerm{}
+	rt := newRetained(t, store, coord)
+	took := make(chan time.Duration, 1)
+	rt.SetTakeoverFlush(func() (*HotImage, error) {
+		t0 := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = rt.SaveRetained(ctx) // refused (not leading yet), or parked on leadMu
+		took <- time.Since(t0)
+		return nil, nil
+	})
+	runWith(t, rt)
+	coord.term.Store(6)
+	coord.lead.Store(true)
+	select {
+	case d := <-took:
+		if d > 150*time.Millisecond {
+			t.Fatalf("a save asked as the flush started took %s: it parked on the lock the edge held", d)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("no takeover flush")
