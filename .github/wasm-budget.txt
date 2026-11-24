@@ -10,12 +10,11 @@
 # after the net/http client, TLS and HTTP/2 leave it (#1239 C3): 6,666,979 local.
 # v0.22.0 was 7.27 MB; the target was that plus ~5%, and this is under it.
 # after the screen builder (esbuild, Svelte) became its own module, naut-hmi.wasm,
-# fetched only when a screen is first asked for (#1239 HMI split): naut.wasm
-# 6,769,640 -> 4,692,713 local, and naut-hmi.wasm 3,825,166 local (it carries
+# fetched only when a screen is first asked for (#1354): naut.wasm
+# 6,769,640 -> 4,692,713 in CI, and naut-hmi.wasm 3,825,162 in CI (it carries
 # its own Go runtime and standard library, so the two sum to more than one
-# module did). Each limit is the local size plus ~1.5% until CI's numbers
-# replace them (CI reads ~0.5% above a local build, +1%).
+# module did). Each limit is the CI number + 1%.
 #
 # One line per module: <target under ./cmd> <bytes>.
-naut-wasm 4765000
-naut-wasm-hmi 3885000
+naut-wasm 4739640
+naut-wasm-hmi 3863413
