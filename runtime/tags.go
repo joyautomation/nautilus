@@ -160,6 +160,9 @@ type tagVal struct {
 	// to it from anyone else is refused (Tags.Write, Force) or dropped (a
 	// program's), as a write to a forced tag is. See substitute_expiry.go.
 	owned bool
+	// releases: the takeover hold's release tag (hold.go). The program
+	// writes it; a write or a force from anyone else is refused.
+	releases bool
 	// held: an output seeded at its type's zero (no init:) that nothing has
 	// written yet. The logic and every reader see the zero; readMany, the
 	// driver push, leaves it out until the first write. See Tags.hold.

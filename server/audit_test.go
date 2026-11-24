@@ -541,6 +541,19 @@ func auditRows() []auditRow {
 			header: map[string]string{"Authorization": "Bearer s3cret"},
 			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "ok",
 			check: wantDetail("acceptLoss", "0123456789")},
+		{name: "release the takeover hold", pattern: "POST /api/cluster/release-hold", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/release-hold", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.release-hold", target: "takeover hold on b", user: "token", source: "api", result: "ok"},
+		{name: "release the takeover hold, none holds", pattern: "POST /api/cluster/release-hold", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/release-hold", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.release-hold", target: "takeover hold on b", user: "token", source: "api", result: "refused",
+			check: wantReason("no takeover hold")},
+		{name: "release the takeover hold, no credential configured", pattern: "POST /api/cluster/release-hold", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/release-hold", body: `{}`,
+			action: "redundancy.release-hold", target: "takeover hold on b", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
 		{name: "vouch, the picture printed", pattern: "POST /api/cluster/vouch", server: pairServer("refused"),
 			method: "POST", path: "/api/cluster/vouch", body: `{}`,
 			header: map[string]string{"Authorization": "Bearer s3cret"},
@@ -977,6 +990,16 @@ type fakePair struct {
 
 func (f *fakePair) Status() leader.Status {
 	return leader.Status{Mode: "quorum", Pod: "b", Leader: "b", IsLeader: true, Marked: []string{"a"}}
+}
+
+// ReleaseHold is the takeover hold's release (HoldReleaser): "refused"
+// answers that none holds.
+func (f *fakePair) ReleaseHold(by string) error {
+	f.by = append(f.by, by)
+	if f.outcome == "refused" {
+		return runtime.ErrNotHolding
+	}
+	return nil
 }
 
 func (f *fakePair) ClearDuplicate(_ context.Context, name, by string) (any, string, string) {

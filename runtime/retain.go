@@ -324,11 +324,18 @@ func (r *Runtime) takeover() {
 	// by value, timers moved to this clock, and its tags over the retain
 	// load. Otherwise it is cold, as below.
 	hot := false
+	inherit := time.Duration(-1) // the hold a hot takeover inherits (hold.go)
 	if r.strm.flush.Load() != nil {
 		h, why, had := r.strm.hot, r.strm.hotWhy, r.strm.hadImage
 		r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
+		if h != nil && h.holding {
+			inherit = h.holdAge + h.Age
+		}
 		hot = r.hotTakeover(h, why, had)
 	}
+	// The takeover hold (#710 (b2)): started, inherited or ended here,
+	// before the first scan latches TAKEOVER_HOLD().
+	r.holdOnTakeover(hot, inherit)
 	// TAKEOVER_SCAN() and HOT_TAKEOVER() for each program's next scan, and
 	// TAKEOVERS(), when this leadership took over from the peer rather
 	// than started (#710 (b)): the coordinator knows which.

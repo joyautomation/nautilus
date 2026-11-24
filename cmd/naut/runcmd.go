@@ -332,6 +332,13 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		fmt.Fprintln(os.Stderr, "naut run: compile:", err)
 		return 1
 	}
+	if pair != nil {
+		// The takeover hold (#710 (b2)): set before the first scan.
+		if err := pair.setupHold(rt, proj.Redundancy); err != nil {
+			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
+			return 1
+		}
+	}
 	// The write gate needs live scans, with redundancy or without (#621,
 	// #625). Set before gate.Run below.
 	gate := gateOnLiveScans(proj, el, rt, localGateLease)
@@ -945,6 +952,7 @@ func systemAlarms(proj *project.Project, pair *pairMember, srv *atomic.Pointer[s
 	if pair != nil && !mutNaut("witness_lease_no_alarm") {
 		sys = append(sys, witnessLeaseAlarm(pair))
 	}
+	sys = append(sys, holdAlarms(pair)...)
 	return sys
 }
 

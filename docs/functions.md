@@ -588,7 +588,7 @@ keeps it.
 | `HOT_TAKEOVER` | `HOT_TAKEOVER()` | BOOL | TRUE for the whole of the first scan after a hot takeover, one that went on from the peer's state image. `FIRST_SCAN()` is FALSE there: the state goes on |
 | `PEER_READY` | `PEER_READY()` | BOOL | On the leader: TRUE while a takeover by its standby would go hot. The standby is current, on this build and these programs, and no force is held (a takeover drops forces). FALSE on a standby. It is advisory: the pair refreshes it every 50 ms, and the voters learn it from the leader's next renewals, up to a quarter lease later, so a takeover just after it turns TRUE may still be cold |
 | `TAKEOVERS` | `TAKEOVERS()` | DINT | How many takeovers this controller made since it started |
-| `TAKEOVER_HOLD` | `TAKEOVER_HOLD()` | BOOL | Reserved for the takeover hold; FALSE until it ships |
+| `TAKEOVER_HOLD` | `TAKEOVER_HOLD()` | BOOL | TRUE while the [takeover hold](/guides/redundancy/#the-takeover-hold) holds this leader's outputs: nothing goes to the field until the program sets its release tag. FALSE without `redundancy.takeover-hold`. Gate integrators and one-shots on it: they run while the field does not follow |
 
 A takeover's first scan is the place for logic that must notice the change
 of controller, for example resetting a sequence's watchdog or logging the

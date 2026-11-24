@@ -75,6 +75,16 @@ import "os"
 //   - takeover_flag_kept: TAKEOVER_SCAN()/HOT_TAKEOVER() stay TRUE past the first scan (#710 (b)).
 //   - peer_ready_never_set: PEER_READY() never takes what the pair sets (#710 (b)).
 //   - takeover_flag_survives_step_down: a takeover flag a program never scanned after survives a step-down (#710 (b)).
+//   - hold_never_starts: a takeover never starts the takeover hold (#710 (b2)).
+//   - hold_release_tag_kept: a hold's start leaves a carried TRUE in its release tag (#710 (b2)).
+//   - hold_drivers_remember: a hold's start does not make the drivers forget what they sent (#710 (b2)).
+//   - hold_safe_unsent: a hold never writes its safe values (#710 (b2)).
+//   - hold_not_inherited: a hot takeover from a holding leader does not inherit its hold (#710 (b2)).
+//   - hold_age_restarts: an inherited hold's age starts over at the takeover (#710 (b2)).
+//   - hold_no_max: a hold never reaches its max (no alarm) (#710 (b2)).
+//   - hold_release_tag_writable: a write or a force from outside the program may set the release tag (#710 (b2)).
+//   - hold_channel_writes: a channel WRITE goes out while the hold holds (#710 (b2)).
+//   - hold_not_imaged: a holding leader's image says it is not holding (#710 (b2)).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutRuntime(name string) bool { return name == mutOn }

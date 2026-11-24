@@ -528,6 +528,44 @@ type RedundancyConfig struct {
 	// crash, a kill and an isolation of the leader; 0 makes every takeover
 	// cold. Pair only.
 	HotMaxAge *Duration `yaml:"hot-max-age"`
+	// TakeoverHold holds the new leader's outputs after a takeover until
+	// the program sets its release tag (#710 (b2), design §4.6). Pair only.
+	TakeoverHold *TakeoverHoldConfig `yaml:"takeover-hold"`
+}
+
+// TakeoverHoldConfig is redundancy.takeover-hold.
+type TakeoverHoldConfig struct {
+	// Release is the BOOL state tag the program sets TRUE to release the
+	// hold. Required. The hold sets it FALSE when it starts; only the
+	// program may write it.
+	Release string `yaml:"release"`
+	// Max is how long the hold holds before it raises its alarm (default
+	// 5s, at most 1m).
+	Max *Duration `yaml:"max"`
+	// On is when the hold holds: cold (the default) on a cold takeover, and
+	// on a hot one from a leader that was holding; always on every
+	// takeover.
+	On string `yaml:"on"`
+	// OnMax is what happens at max: hold (the default) keeps holding with
+	// the alarm raised until the program or an operator releases; release
+	// releases with the alarm raised.
+	OnMax string `yaml:"on-max"`
+	// Safe are values written to output tags when the hold starts, by tag.
+	Safe map[string]any `yaml:"safe"`
+}
+
+// Takeover hold defaults and bounds.
+const (
+	DefaultTakeoverHoldMax = 5 * time.Second
+	MaxTakeoverHoldMax     = time.Minute
+)
+
+// MaxOr is the hold's max, or its default.
+func (h *TakeoverHoldConfig) MaxOr() time.Duration {
+	if h == nil || h.Max == nil {
+		return DefaultTakeoverHoldMax
+	}
+	return time.Duration(*h.Max)
 }
 
 // HotMaxAgeOr is redundancy.hot-max-age, or def when the manifest sets
@@ -537,6 +575,38 @@ func (r *RedundancyConfig) HotMaxAgeOr(def time.Duration) time.Duration {
 		return def
 	}
 	return time.Duration(*r.HotMaxAge)
+}
+
+// checkTakeoverHoldConfig checks redundancy.takeover-hold's own fields;
+// its tags are checked against the manifest's (checkTakeoverHold).
+func checkTakeoverHoldConfig(h *TakeoverHoldConfig) error {
+	if h == nil {
+		return nil
+	}
+	if h.Release == "" {
+		return errors.New("redundancy.takeover-hold.release is required: the BOOL state tag the program sets TRUE when its outputs may go out")
+	}
+	if d := h.MaxOr(); d <= 0 || d > MaxTakeoverHoldMax {
+		return fmt.Errorf("redundancy.takeover-hold.max %s: want more than 0 and at most %s (the time to the hold's alarm)", d, MaxTakeoverHoldMax)
+	}
+	switch h.On {
+	case "", "cold", "always":
+	default:
+		return fmt.Errorf("redundancy.takeover-hold.on %q: want cold (the default: a cold takeover, or a hot one from a leader still holding) or always (every takeover)", h.On)
+	}
+	switch h.OnMax {
+	case "", "hold", "release":
+	default:
+		return fmt.Errorf("redundancy.takeover-hold.on-max %q: want hold (the default: keep holding, alarm raised) or release (release with the alarm raised)", h.OnMax)
+	}
+	for tag, v := range h.Safe {
+		switch v.(type) {
+		case bool, int, int64, uint64, float64:
+		default:
+			return fmt.Errorf("redundancy.takeover-hold.safe.%s: %v is not a BOOL or a number", tag, v)
+		}
+	}
+	return nil
 }
 
 // FloatingIPConfig is redundancy.floating-ip. The process needs
@@ -679,6 +749,8 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.stream-budget applies to a redundant pair (peers:): the bytes a second its leader streams its state to the standby at")
 		case r.HotMaxAge != nil:
 			return errors.New("redundancy.hot-max-age applies to a redundant pair (peers:): the oldest state image its takeover goes on from")
+		case r.TakeoverHold != nil:
+			return errors.New("redundancy.takeover-hold applies to a redundant pair (peers:): it holds the outputs after a takeover from the peer")
 		}
 		return nil
 	}
@@ -750,6 +822,9 @@ func checkRedundancy(r *RedundancyConfig) error {
 		return fmt.Errorf("redundancy.hot-max-age %s: want 0 (every takeover cold) or more", time.Duration(*r.HotMaxAge))
 	}
 	if err := checkPublicURLs(r.PublicURLs); err != nil {
+		return err
+	}
+	if err := checkTakeoverHoldConfig(r.TakeoverHold); err != nil {
 		return err
 	}
 	// A controller's path, judged the same wherever Load runs (naut check
@@ -1924,6 +1999,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	}
 	if err := checkRedundancy(m.Redundancy); err != nil {
 		return nil, err
+	}
+	if m.Redundancy != nil {
+		if err := checkTakeoverHold(m.Redundancy.TakeoverHold, m.Tags, drivers); err != nil {
+			return nil, err
+		}
 	}
 	if m.Redundancy.Pair() && m.Sparkplug != nil {
 		// #798: both controllers would publish as the same edge node.

@@ -163,6 +163,8 @@ var actionClass = map[string]string{
 	// A person's word for the operator-intent log, which may accept losing
 	// what other copies hold (#1029 3c-3c-2a).
 	"redundancy.vouch": strict,
+	// Outputs to the field before the program released them (#710 (b2)).
+	"redundancy.release-hold": strict,
 }
 
 const (

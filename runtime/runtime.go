@@ -414,6 +414,8 @@ type Runtime struct {
 	// strm is a pair's state stream: the takeover flush and the standby's
 	// carries (stream.go).
 	strm streamSide
+	// hold is a pair's takeover hold (hold.go, #710 (b2)).
+	hold holdState
 
 	// live is what Liveness reads: Run's loops' scan edges and lifecycle.
 	live liveness
@@ -1574,7 +1576,12 @@ func (r *Runtime) scanAt(due time.Time) {
 	// to a standby that is now writing, and its stale outputs must not land
 	// after the new leader's (#621). Not sent means not held: the next push
 	// is the whole set.
+	//
+	// While a pair's takeover hold holds (hold.go), nothing is pushed: not
+	// sent means not held, so the release's push is the whole set.
 	if r.driver != nil && len(r.outputs) > 0 && r.coord != nil && !r.coord.IsLeader() {
+		r.outSent.Store(false)
+	} else if r.holdScan() {
 		r.outSent.Store(false)
 	} else if r.driver != nil && len(r.outputs) > 0 {
 		gen := r.tags.outputGeneration()

@@ -392,7 +392,9 @@ is a start: `FIRST_SCAN()` is TRUE on the new leader's first scan, so `IF
 FIRST_SCAN()` start-up code runs again. A hot one is not: the state goes
 on, and `FIRST_SCAN()` stays FALSE. The program can tell what happened
 from [`TAKEOVER_SCAN()`, `HOT_TAKEOVER()`, `PEER_READY()` and
-`TAKEOVERS()`](/reference/functions/#redundancy). A pair without
+`TAKEOVERS()`](/reference/functions/#redundancy), and can hold its
+outputs after a takeover until it is ready ([the takeover
+hold](#the-takeover-hold), below). A pair without
 `experimental: true` is refused, and `naut run` says so at every start.
 Live I/O applies are refused on a pair.
 :::
@@ -726,6 +728,81 @@ to start its answer. A leader that takes a request and never answers
 gives the client a `502 leader unavailable` after 2 minutes; the request is
 not sent again, because the leader may have applied it. A live stream
 is not cut: the deadline covers only the start of the answer.
+
+#### The takeover hold
+
+After a cold takeover the program starts over. Its first scans may
+compute outputs it is not ready to send: a sequence that has not found
+its step yet, a PID with no history. The takeover hold keeps the new
+leader's outputs from the field until the program says they may go.
+
+```yaml
+redundancy:
+  # ...
+  takeover-hold:
+    release: OutputsReady   # a BOOL state tag; the program sets it TRUE
+    max: 5s                 # alarm time; default 5s, at most 1m
+    on: cold                # cold (default) or always
+    on-max: hold            # hold (default) or release
+    safe:                   # optional: written when the hold starts
+      Pump1Run: false
+```
+
+While the hold holds:
+
+- The program scans as usual. Inputs are live, and `TAKEOVER_HOLD()` is
+  TRUE.
+- Nothing goes to the field. No output is pushed to any driver, a
+  `WRITE` is refused (it reports `ERROR`), and the drivers forget what
+  they sent before, so no keep-alive re-sends an old value. The field
+  keeps the old leader's last values, or does what its comm-loss
+  setting says.
+- The `safe:` values are the one exception. Each is written once when
+  the hold starts. If one has not reached its device after 2 seconds,
+  the hold raises an alarm. Only Modbus writes safe values for now;
+  `naut check` refuses a `safe:` value on another driver.
+- Alarms keep evaluating and paging: outputs are what the hold stops.
+
+The program releases the hold by setting its release tag TRUE. Its
+outputs go out on that same scan, every one of them. The hold sets the
+release tag FALSE when it starts, so a TRUE carried from the old leader
+does not release it at once. Only the program may set the release tag:
+a write from the HMI, the API or OPC UA, and a force, are refused.
+`naut check` refuses a release tag that is an input, an output, a
+setpoint, retained, bound to a driver, or not a BOOL.
+
+**When it holds.** With `on: cold` it holds after a cold takeover, and
+after a hot takeover from a leader that was still holding. With `on:
+always` it holds after every takeover. It never holds on a start: a
+controller that restarts with its peer away starts as usual, and
+`FIRST_SCAN()` covers its start-up code. A hold passed on by a hot
+takeover keeps its age, so moving the lead does not restart its alarm
+time.
+
+**At max.** When the hold has held for `max`, it raises an alarm and
+**stays held**. It repeats the alarm in the journal every `max` after
+that. Nobody controls the outputs in that time, so act on it: fix what
+keeps the program from releasing, or release by hand:
+
+```sh
+naut redundancy release-hold
+```
+
+The command needs the redundancy permission. It is journalled under
+your name (`redundancy.release-hold`), and a standby forwards it to the
+leader. `on-max: release` makes the hold release by itself at `max`
+instead, with the alarm. That trades a program that is not ready for
+outputs that are not stuck: choose it only when sending the program's
+outputs is safer than holding them.
+
+**Write the logic for it.** The logic scans while nothing goes out, so
+it moves on without the field following: integrators wind up and
+one-shots fire. Gate them on `TAKEOVER_HOLD()`. The hold is on
+`GET /api/cluster` (`stream.takeoverHold`), in `naut redundancy status`,
+a warning while it holds, and in the journal
+(`redundancy.takeover-hold`: start, max, release and who released). The
+alarms at max and for a safe value not delivered are system alarms,
+raised when the project has an `alarms:` section.
 
 #### Commissioning a new pair
 

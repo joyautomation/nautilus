@@ -136,3 +136,5 @@ func platformNotices(m Manifest) []string {
 	}
 	return out
 }
+
+func checkTakeoverHold(*TakeoverHoldConfig, []TagConfig, []nio.NamedDriver) error { return nil }

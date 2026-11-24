@@ -140,6 +140,25 @@ type StreamStatus struct {
 	// could not read, and holds its retained values only in memory until
 	// a save succeeds (a power cycle now loses them).
 	RetainInMemory bool `json:"retainInMemory,omitempty"`
+	// TakeoverHold is the leader's takeover hold (#710 (b2)), nil when the
+	// manifest sets none, and on a standby.
+	TakeoverHold *HoldStatus `json:"takeoverHold,omitempty"`
+}
+
+// HoldStatus is a leader's takeover hold (redundancy.takeover-hold).
+type HoldStatus struct {
+	// Release is the tag the program sets TRUE to release; MaxMs the
+	// time to the hold's alarm.
+	Release string `json:"release"`
+	MaxMs   int64  `json:"maxMs"`
+	// Holding: the outputs are held now (nothing goes to the field), for
+	// AgeMs; Inherited from the previous leader; AtMax past MaxMs.
+	Holding   bool  `json:"holding"`
+	Inherited bool  `json:"inherited,omitempty"`
+	AtMax     bool  `json:"atMax,omitempty"`
+	AgeMs     int64 `json:"ageMs,omitempty"`
+	// Undelivered names the safe values not yet at their devices.
+	Undelivered []string `json:"undelivered,omitempty"`
 }
 
 // LogStatus is a pair's operator-intent log as one controller sees it.
