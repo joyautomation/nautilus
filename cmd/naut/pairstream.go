@@ -124,6 +124,9 @@ type pairStream struct {
 	// finalAckHold, in tests, keeps a switchover from hearing its final
 	// image acknowledged (it aborts).
 	finalAckHold atomic.Bool
+	// beforeResign, in tests, runs just before a switchover's last look
+	// at the switching state and the leadership.
+	beforeResign atomic.Pointer[func()]
 	// coldWhy is why this leader's takeover was cold although an image
 	// existed: its condition, until a standby follows a hot-capable
 	// stream again (an image of the newest format sent).

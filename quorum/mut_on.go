@@ -564,6 +564,7 @@ var Mutations = []string{
 	"switch_ignores_standby_io",         // naut: a switchover goes to a standby whose field I/O is not healthy (#710 d1c)
 	"abort_keeps_final",                 // naut: an aborted switchover's final image stays, so the stream sends nothing more (#710 d1c)
 	"final_sent_once_per_connection",    // naut: a stream connection sends one final image per leadership, so a switchover after an aborted one never sends its own (#710 d1c bench)
+	"resign_unchecked",                  // naut: a switchover resigns although its switching state or leadership ended meanwhile (#710 d1c, Fable re-check)
 	"final_waits_interval",              // naut: a final image waits out the stream's interval when its wake came first (#710 d1c bench)
 }
 

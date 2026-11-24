@@ -118,7 +118,7 @@ func (s *pairStream) takeAck(term uint64, ack streamAck, now time.Time) (bool, s
 	if f := s.final.Load(); f != nil && f.term == term {
 		finalSeq = f.seq
 	}
-	if n := len(a.sends); (n == 0 || ack.Seq > a.sends[n-1].seq) && ack.Seq != finalSeq {
+	if n := len(a.sends); (n == 0 || ack.Seq > a.sends[n-1].seq) && (finalSeq == 0 || ack.Seq != finalSeq) {
 		return false, fmt.Sprintf("an acknowledgement of image %d, above the last this leader sent", ack.Seq)
 	}
 	if ack.Seq > a.acked {

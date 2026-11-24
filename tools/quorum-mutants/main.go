@@ -601,6 +601,7 @@ var table = []mutation{
 	{"switch_ignores_standby_io", []string{"TestPairSwitchoverRefusedForAStandbyWithBadIO"}},
 	{"abort_keeps_final", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"final_waits_interval", []string{"TestAFinalImageWaitingIsSentAtOnce"}},
+	{"resign_unchecked", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"final_sent_once_per_connection", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"ack_other_build", []string{"TestPairColdTakeoverOnAnotherBuild"}},
 	{"ack_kept_across_reconnect", []string{"TestPairColdTakeoverOnAnotherBuild"}},
@@ -1043,6 +1044,7 @@ var rowPkgs = map[string][]string{
 	"switch_ignores_standby_io":         {"./cmd/naut"},
 	"abort_keeps_final":                 {"./cmd/naut"},
 	"final_waits_interval":              {"./cmd/naut"},
+	"resign_unchecked":                  {"./cmd/naut"},
 	"final_sent_once_per_connection":    {"./cmd/naut"},
 }
 

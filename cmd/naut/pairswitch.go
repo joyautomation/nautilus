@@ -178,7 +178,10 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 	// client that goes away must not cut the drain short. Only while the
 	// scans are still stopped in this leadership: the final image is then
 	// still the whole state (Fable M1).
-	if s.rt.Switching() != term || !s.leads(term) {
+	if f := s.beforeResign.Load(); f != nil {
+		(*f)()
+	}
+	if (s.rt.Switching() != term || !s.leads(term)) && !mutNaut("resign_unchecked") {
 		return abort("the switching state or the leadership ended before the resign")
 	}
 	resigning = true
@@ -187,6 +190,11 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 	rep.ResignMs = msSince(t)
 	rep.Witness, rep.Peer, rep.WitnessErr, rep.PeerErr = rr.Witness, rr.Peer, rr.WitnessErr, rr.PeerErr
 	s.final.Store(nil)
+	// The gate is shut for this leadership for good: nothing scans or
+	// writes here until a new one, so the switching state may end now
+	// (a standby's API then answers "standby", not "switching"; the next
+	// leadership's takeover clears it too).
+	s.rt.EndSwitch()
 	switch {
 	case !rr.Resigned:
 		return done(leader.SwitchFailover, "this controller stopped leading during the switchover (its lease ran out): the standby takes over as after a failover")

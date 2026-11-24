@@ -200,6 +200,22 @@ func TestPairSwitchoverAbortsWithoutTheFinalAck(t *testing.T) {
 		t.Fatalf("capture while switching: %d after %s, want captureSwitching at once", got, time.Since(t0).Round(time.Millisecond))
 	}
 
+	// The switching state ended before the resign (here an abort's
+	// EndSwitch; in the field a new leadership's takeover): the last look
+	// before the resign aborts rather than resigning a leadership whose
+	// scans run (Fable M1, re-check).
+	r.switchReady(t, lead)
+	ended := func() { r.nodes[lead].rt.EndSwitch() }
+	st.beforeResign.Store(&ended)
+	code, ans = r.switchover(t, lead)
+	st.beforeResign.Store(nil)
+	if code != http.StatusConflict || ans.Outcome != "aborted" || !strings.Contains(ans.Error, "ended before the resign") {
+		t.Fatalf("a switchover whose switching state ended before the resign: %d %q %q, want aborted", code, ans.Outcome, ans.Error)
+	}
+	if got := r.leader(); got != lead {
+		t.Fatalf("the lead moved to %s", got)
+	}
+
 	// A switchover after the abort, in the same leadership, goes through:
 	// the aborted one's final image does not stop the next one's (the
 	// bench: every switchover after an abort aborted).

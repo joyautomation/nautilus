@@ -85,7 +85,7 @@ import "os"
 //   - ack_kept_across_reconnect: a leader keeps an acknowledgement across a new stream connection (#710 (b));
 //   - final_image_unsent, capture_ignores_switching, final_ack_any_seq, switch_unready_target,
 //     switch_ignores_standby_io, abort_keeps_final, final_waits_interval,
-//     final_sent_once_per_connection: a planned switchover's stream and checks (#710 d1c, pairswitch.go);
+//     final_sent_once_per_connection, resign_unchecked: a planned switchover's stream and checks (#710 d1c, pairswitch.go);
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutNaut(name string) bool { return name == mutOn }
