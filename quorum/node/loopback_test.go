@@ -36,11 +36,14 @@ var errCut = errors.New("link cut by the test")
 
 // cluster is one pair and its witness.
 type cluster struct {
-	t    *testing.T
-	pair string
-	mu   sync.Mutex
-	cut  map[[2]quorum.NodeID]bool // [from, to]
-	mute map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
+	// began is when the cluster was made: a failure prints every vote
+	// since (#710 d1d).
+	began time.Time
+	t     *testing.T
+	pair  string
+	mu    sync.Mutex
+	cut   map[[2]quorum.NodeID]bool // [from, to]
+	mute  map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
 	// noAdopt: every Adopt to or from it is lost (the rest goes through).
 	noAdopt map[quorum.NodeID]bool
 	// noHello: its hellos to the peer are lost (the rest goes through).
@@ -135,7 +138,7 @@ func newCluster(t *testing.T) *cluster {
 // newClusterHere is newCluster without t.Parallel: a measurement that
 // times one cluster at a time.
 func newClusterHere(t *testing.T) *cluster {
-	c := &cluster{t: t, pair: NewClusterID(), lease: loopLease, cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
+	c := &cluster{t: t, began: time.Now(), pair: NewClusterID(), lease: loopLease, cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
 		byHP: map[string]quorum.NodeID{}, noHello: map[quorum.NodeID]bool{}, hellos: map[quorum.NodeID]int{}, real: map[string]string{}, ctl: map[quorum.NodeID]*member{},
 		tok:  map[quorum.NodeID]string{"a": testToken, "b": testToken, WitnessID: testToken},
 		ctok: map[quorum.NodeID]string{"a": "client", "b": "client"}, led: map[uint64]quorum.NodeID{},
@@ -155,12 +158,15 @@ func newClusterHere(t *testing.T) *cluster {
 	}
 	t.Cleanup(c.shutdown)
 	// Any failure, not only steady()'s, says what each controller's votes
-	// did in its last two leases: a /dup or a wait that timed out on a
-	// stalled process shows as a gap in the sends (#1120).
+	// did, with every voter's answer: a /dup or a wait that timed out on a
+	// stalled process shows as a gap in the sends (#1120). The whole test's,
+	// not its last leases: a switchover's lost campaign came seconds before
+	// the wait that timed out on it (#710 d1d). Only on a failure: a
+	// passing run prints nothing.
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, id := range []quorum.NodeID{"a", "b"} {
-				t.Logf("%s", c.voteTrail(id, leases(2)))
+				t.Logf("%s", c.voteTrail(id, time.Since(c.began)))
 			}
 		}
 	})
@@ -687,7 +693,11 @@ func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
 		default:
 			s.pending++
 		}
-		fmt.Fprintf(&detail, "\n  -%v to %s term %d renewal=%v %s", now.Sub(v.at).Round(time.Millisecond), v.to, v.req.Term, v.req.Renewal, out)
+		kind := fmt.Sprintf("renewal=%v", v.req.Renewal)
+		if v.req.Resign {
+			kind = fmt.Sprintf("RESIGN epoch %d seq %d gateOpen=%v", v.req.Epoch, v.req.Seq, v.gateOpen)
+		}
+		fmt.Fprintf(&detail, "\n  -%v to %s term %d %s %s", now.Sub(v.at).Round(time.Millisecond), v.to, v.req.Term, kind, out)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "votes %s sent in the last %v:", id, span)
