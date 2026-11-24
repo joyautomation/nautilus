@@ -1,3 +1,5 @@
+//go:build !js
+
 package runtime
 
 import "sync/atomic"
@@ -38,6 +40,45 @@ func (r *Runtime) Takeovers() int64 { return r.tags.red.takeovers.Load() }
 // A coordinator without it never takes over: every acquisition is a start.
 type TakeoverKnower interface {
 	IsTakeover() bool
+}
+
+// markTakeovers is takeover()'s note of a takeover from the peer (the
+// coordinator says which): TAKEOVER_SCAN() and HOT_TAKEOVER() for each
+// program's next scan, and one more TAKEOVERS(). Under leadMu.
+func (r *Runtime) markTakeovers(hot bool) {
+	if tk, ok := r.coord.(TakeoverKnower); ok && tk.IsTakeover() && !mutRuntime("takeover_unmarked") {
+		r.tags.red.takeovers.Add(1)
+		for _, np := range r.namedPrograms() {
+			np.prog.markTakeover(hot)
+		}
+	}
+}
+
+// clearTakeovers spends a takeover the programs never scanned after: a
+// step-down makes the resume in the same term no takeover (Sonnet,
+// #1350). Under leadMu.
+func (r *Runtime) clearTakeovers() {
+	if mutRuntime("takeover_flag_survives_step_down") {
+		return
+	}
+	for _, np := range r.namedPrograms() {
+		np.prog.clearTakeover()
+	}
+}
+
+// markTakeover makes the program's next scan its first after a takeover
+// (hot or not): TAKEOVER_SCAN(), and HOT_TAKEOVER() for a hot one.
+func (p *Program) markTakeover(hot bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tookOver, p.tookOverHot = true, hot
+}
+
+// clearTakeover forgets a takeover the program has not scanned after.
+func (p *Program) clearTakeover() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tookOver, p.tookOverHot = false, false
 }
 
 // latchRed is the scan's view of the redundancy state: the runtime-wide

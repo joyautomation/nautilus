@@ -565,12 +565,40 @@ clamp to the string instead of faulting.
 
 | Name | Signature | Result | Behavior |
 | --- | --- | --- | --- |
-| `FIRST_SCAN` | `FIRST_SCAN()` | BOOL | TRUE for the whole of the program's first scan after it starts or is downloaded, or after a redundant pair's takeover (which resets the program's state), FALSE from the second scan on. An online edit keeps the program's state, so it is not a start, and neither is a rollback or a leadership resumed in the same term |
+| `FIRST_SCAN` | `FIRST_SCAN()` | BOOL | TRUE for the whole of the program's first scan after it starts or is downloaded, or after a redundant pair's cold takeover (which resets the program's state), FALSE from the second scan on. A hot takeover keeps the state going, so it is not a start; nor is an online edit, a rollback or a leadership resumed in the same term |
 
 `FIRST_SCAN()` is how a program seeds state from the world once: a ladder
 function contact `FIRST_SCAN() { next := Clock.SECOND }`, or
 `IF FIRST_SCAN() THEN … END_IF;` in ST. Each task's program has its own
 first scan. On a Logix controller it is the status flag `S:FS`.
+
+### Redundancy
+
+These are nautilus system functions: they read the state of a [redundant
+pair](/guides/redundancy/). Each answer is latched at the start of the scan
+and holds for the whole of it, separately for each task's program. Outside a
+pair, every flag is FALSE and the count 0. A program, function, function
+block or tag may not be named as one of them; `naut check` says which name
+to change. `FIRST_SCAN` is not reserved: a project that declares its own
+keeps it.
+
+| Name | Signature | Result | Behavior |
+| --- | --- | --- | --- |
+| `TAKEOVER_SCAN` | `TAKEOVER_SCAN()` | BOOL | TRUE for the whole of the first scan after this controller took the lead over from its peer, hot or cold. FALSE on a start, a whole pair's power-up included (its first leadership, before it saw its peer lead) |
+| `HOT_TAKEOVER` | `HOT_TAKEOVER()` | BOOL | TRUE for the whole of the first scan after a hot takeover, one that went on from the peer's state image. `FIRST_SCAN()` is FALSE there: the state goes on |
+| `PEER_READY` | `PEER_READY()` | BOOL | On the leader: TRUE while a takeover by its standby would go hot. The standby is current, on this build and these programs, and no force is held (a takeover drops forces). FALSE on a standby. It is advisory: the pair refreshes it every 50 ms, and the voters learn it from the leader's next renewals, up to a quarter lease later, so a takeover just after it turns TRUE may still be cold |
+| `TAKEOVERS` | `TAKEOVERS()` | DINT | How many takeovers this controller made since it started |
+| `TAKEOVER_HOLD` | `TAKEOVER_HOLD()` | BOOL | Reserved for the takeover hold; FALSE until it ships |
+
+A takeover's first scan is the place for logic that must notice the change
+of controller, for example resetting a sequence's watchdog or logging the
+event. `IF TAKEOVER_SCAN() AND NOT HOT_TAKEOVER() THEN … END_IF;` runs only
+after a cold takeover, where state restarted. On Logix and Siemens targets
+these functions are constants (FALSE, and 0 for `TAKEOVERS()`): a
+controller there runs no nautilus pair, and its own redundancy status is in
+the vendor's diagnostics, which nautilus does not map. Logic gated on them
+is dead code there, so `naut logix write`, `naut logix deploy` and the
+Siemens writer warn once per project when a program uses one.
 
 ## Type conversions
 
