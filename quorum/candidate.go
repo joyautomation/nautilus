@@ -140,6 +140,7 @@ type Candidate struct {
 
 	nextLook     Instant
 	backoffUntil Instant // the candidate sends nothing before this
+	resignHold   Instant // the back-off a resign set (EndResignHold), 0 when none
 	retryAt      Instant // a refused campaign retries no earlier
 	// pending is the campaign in flight: no new campaign starts until a
 	// majority has answered it or a lease has passed (expire).
