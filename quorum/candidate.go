@@ -141,7 +141,13 @@ type Candidate struct {
 	nextLook     Instant
 	backoffUntil Instant // the candidate sends nothing before this
 	resignHold   Instant // the back-off a resign set (EndResignHold), 0 when none
-	retryAt      Instant // a refused campaign retries no earlier
+	// drainKeep is the lease end a resign cut short (ResignAt), until the
+	// outputs' drain is proven (ResignDrained): until then the candidate
+	// does not yield, so its own voter keeps the promise that backed the
+	// lease while sends the lease let start may still be on the wire. 0
+	// when none.
+	drainKeep Instant
+	retryAt   Instant // a refused campaign retries no earlier
 	// pending is the campaign in flight: no new campaign starts until a
 	// majority has answered it or a lease has passed (expire).
 	pending *round
@@ -291,6 +297,9 @@ func (c *Candidate) yield(now Instant) bool {
 	c.expire(now)
 	if c.Leading(now) {
 		return false
+	}
+	if now < c.drainKeep && !mut("resign_frees_own_before_drain") {
+		return false // resigned, its outputs not yet drained (ResignAt)
 	}
 	for _, rd := range c.rounds {
 		if rd.campaign && len(rd.replies) < 2 {

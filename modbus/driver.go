@@ -1879,12 +1879,14 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	// that write and every one after it, and the flush returns, so a drop
 	// is logged at most once per flush.
 	send := func(bi, ri, ci int) (context.Context, context.CancelFunc, bool) {
-		deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+		deadline, _, ok, done := fence.Begin(d.look, time.Now()) // the budget counts from before the read
 		if !ok || !fence.Started(deadline, time.Now()) {
+			done()
 			drop(rest(bi, ri, ci), "the write gate closed, or the send's budget ran out")
 			return nil, nil, false
 		}
 		if d.reopens.Load() != gen && !mut("old_term_kept") {
+			done()
 			// A reopen since this flush read its generation (a lease lost
 			// and won again, seen now or by another look): none of the
 			// rest is sent. It is dropped, not just left: the queue may
@@ -1897,7 +1899,9 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 		}
 		wctx, cancel := fence.Context(ctx, deadline)
 		wctx = fence.WithDevice(wctx, d.CutName(s.cfg.ID))
-		return wctx, cancel, true
+		// The caller's cancel, after the request has returned (answered,
+		// failed, or its socket reset), ends the send for a drain.
+		return wctx, func() { cancel(); done() }, true
 	}
 
 	// bit:N writables read-modify-write their register one at a time — the

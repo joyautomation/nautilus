@@ -32,6 +32,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/joyautomation/nautilus/internal/fence"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/sparkplug"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
@@ -40,6 +41,9 @@ import (
 const (
 	connectTimeout = 30 * time.Second
 	tokenTimeout   = 10 * time.Second
+	// tokenLeak bounds how long a timed-out publish is still counted as in
+	// flight (pahoPub.publishEnded): well past paho's 30 s queue timeout.
+	tokenLeak = 2 * time.Minute
 	// rebirthStagger spaces the connect-time rebirth requests so 60 sites
 	// don't all birth into the broker at once (design §8.6).
 	rebirthStagger = 50 * time.Millisecond
@@ -82,11 +86,39 @@ func legacyStateTopic(hostID string) string { return "STATE/" + hostID }
 type pahoPub struct{ cli mqtt.Client }
 
 func (p *pahoPub) publish(topic string, qos byte, retain bool, payload []byte) error {
+	return p.publishEnded(topic, qos, retain, payload, func() {})
+}
+
+// publishEnded is publish that calls ended once the message has left or
+// failed for good (paho's token completed), which for a publish that timed
+// out is later than the return: it may still sit in paho's queue and go
+// out then (a drain waits for it, fence.Enter).
+//
+// paho completes a queued message's token when it is written, fails, or
+// waits out paho's own 30 s queue timeout; a QoS 0 publish that raced a
+// disconnect is returned neither queued nor completed (paho v1.5.1
+// Publish). That one never leaves, so after tokenLeak a token still open is
+// taken as ended, or every later drain would wait on it for good.
+func (p *pahoPub) publishEnded(topic string, qos byte, retain bool, payload []byte, ended func()) error {
 	tok := p.cli.Publish(topic, qos, retain, payload)
 	if !tok.WaitTimeout(tokenTimeout) {
+		go func() {
+			select {
+			case <-tok.Done():
+			case <-time.After(tokenLeak):
+			}
+			ended()
+		}()
 		return fmt.Errorf("host: publish %s timed out", topic)
 	}
+	ended()
 	return tok.Error()
+}
+
+// endedPublisher is a publisher that says when a message has really left
+// (pahoPub.publishEnded).
+type endedPublisher interface {
+	publishEnded(topic string, qos byte, retain bool, payload []byte, ended func()) error
 }
 
 // publisher returns the live publisher, or nil while disconnected.
@@ -608,7 +640,19 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 	if p == nil {
 		return fmt.Errorf("host: not connected")
 	}
-	if !d.commandsAllowed() {
+	// Counted for a planned switchover's drain from before the gate is
+	// read until the command has left (fence.Enter, #710 d1b).
+	var done func()
+	early := !mut("host_enter_after_gate")
+	if early {
+		done = fence.Enter()
+	}
+	allowed := d.commandsAllowed()
+	if !early {
+		done = fence.Enter()
+	}
+	if !allowed {
+		done()
 		return fmt.Errorf("host: commands not allowed now (primary=%v, leader=%v, or the write gate is closed)",
 			d.cfg.Primary, d.isLeader())
 	}
@@ -618,8 +662,13 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 		Metrics:   metrics,
 	}.Encode()
 	if err != nil {
+		done()
 		return fmt.Errorf("host: encode command for %s: %w", topic, err)
 	}
+	if ep, ok := p.(endedPublisher); ok {
+		return ep.publishEnded(topic, 0, false, body, done)
+	}
+	defer done()
 	return p.publish(topic, 0, false, body)
 }
 

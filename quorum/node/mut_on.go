@@ -19,6 +19,8 @@ var mutations = []string{
 	"resign_publish_after_send",      // a resigning leader's gate is published shut only after its RESIGN left (#710 d1, Fable)
 	"resign_keeps_own_hold",          // a controller whose voter took its peer's RESIGN keeps its own resign hold, so a switchover back waits it out (#710 d1)
 	"resign_waits_for_look",          // a standby whose voter took its peer's RESIGN campaigns at its next look, not at once (#710 d1)
+	"resign_before_drain",            // a resigning leader's RESIGN leaves before the outputs' drain ends (#710 d1b)
+	"resign_despite_drain_error",     // a RESIGN leaves after a drain that did not finish (#710 d1b)
 	"handback_keeps_renewing",        // a controller that handed the lead back keeps renewing and campaigning (#710 S2c-3)
 	"handback_guard_volatile",        // a hand-back's time is not written to the voter state, so a restart forgets it (#710 S2c-3)
 	"handback_guard_kept_on_failure", // a hand-back whose write failed keeps its time in memory, arming the guard (#710 S2c-3, Fable S3)

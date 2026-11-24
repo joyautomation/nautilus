@@ -1325,19 +1325,23 @@ func (d *Driver) goOn(term uint64) error {
 // budget and marked fenced, so the transport resets its socket if the
 // request is still unanswered at that deadline.
 func (d *Driver) send(ctx context.Context, term uint64) (context.Context, context.CancelFunc, error) {
-	deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+	deadline, _, ok, done := fence.Begin(d.look, time.Now()) // the budget counts from before the read
 	if !ok || !fence.Started(deadline, time.Now()) {
+		done()
 		return nil, nil, errGateClosed
 	}
 	d.wmu.Lock()
 	newTerm := d.term != term
 	d.wmu.Unlock()
 	if newTerm {
+		done()
 		return nil, nil, errNewTerm
 	}
 	sctx, cancel := fence.Context(ctx, deadline)
 	sctx = fence.WithDevice(sctx, d.CutDriver("ethernet-ip"))
-	return sctx, cancel, nil
+	// The caller's cancel, after the request has returned (answered,
+	// failed, or its socket reset), ends the send for a drain.
+	return sctx, func() { cancel(); done() }, nil
 }
 
 // flushWrites pushes pending writes to the controller, in tag-name order.

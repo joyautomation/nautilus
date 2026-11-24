@@ -274,6 +274,8 @@ func (h *commHub) serve(w *commWorker) {
 // was stamped before the gate was read, and it is still the same after.
 func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
 	var deadline time.Time
+	done := func() {}
+	defer func() { done() }() // after the write has returned: ended for a drain
 	if req.write {
 		// A write the program posted while the takeover hold held is not
 		// sent, even when the hold has released by now (hold.go).
@@ -284,7 +286,8 @@ func (h *commHub) do(w *commWorker, req commReq) ir.CommResult {
 		if h.send != nil {
 			// A pair (design §3.4): gate, budget and term in ONE read, so
 			// they cannot straddle a renewal or a lease lost and won back.
-			dl, term, ok := fence.Begin(h.send, time.Now())
+			dl, term, ok, end := fence.Begin(h.send, time.Now())
+			done = end
 			if !ok || !fence.Started(dl, time.Now()) {
 				return ir.CommResult{Status: ir.CommLost}
 			}

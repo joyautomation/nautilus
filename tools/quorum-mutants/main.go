@@ -573,6 +573,15 @@ var table = []mutation{
 	{"resign_peer_first", []string{"TestLoopbackAResignHandsTheLeadOverAtOnce"}},
 	{"resign_waits_for_look", []string{"TestLoopbackAResignHandsTheLeadOverAtOnce"}},
 	{"resign_keeps_own_hold", []string{"TestLoopbackAResignHandsTheLeadOverAtOnce"}},
+	// #710 d1b: the outputs' drain before a RESIGN.
+	{"resign_before_drain", []string{"TestLoopbackAResignHandsTheLeadOverAtOnce"}},
+	{"resign_despite_drain_error", []string{"TestLoopbackAnUnfinishedDrainSendsNoResign"}},
+	{"resign_frees_own_before_drain", []string{"TestTheOwnVoterKeepsItsPromiseUntilTheDrain"}},
+	{"enter_after_read", []string{"TestDrainWaitsForASendThatReadTheGateOpenJustBeforeItClosed"}},
+	{"drain_no_wait", []string{"TestDrainWaitsForASendThatReadTheGateOpenJustBeforeItClosed", "TestDrainSettlesAfterTheLastSend", "TestDrainUnprovenWhenASendNeverEnds"}},
+	{"drain_no_reset", []string{"TestDrainResetsAHungSend", "TestDuringADrainLateSendsAreCutShort", "TestOptoMMPWriteIsCountedAndCutShortByTheDrain", "TestADrainCutsAHungCommandShort"}},
+	{"drain_no_settle", []string{"TestDrainSettlesAfterTheLastSend"}},
+	{"host_enter_after_gate", []string{"TestHostCommandReadingTheGateOpenHoldsTheDrain"}},
 	{"ack_other_build", []string{"TestPairColdTakeoverOnAnotherBuild"}},
 	{"ack_kept_across_reconnect", []string{"TestPairColdTakeoverOnAnotherBuild"}},
 	{"spend_failure_keeps_alone", []string{"TestASpendThatCantBeWrittenIsSpentInMemoryAndRetried"}},
@@ -990,6 +999,13 @@ var rowPkgs = map[string][]string{
 	"fragments_unchecked":               {"./runtime", "./eip/cip", "./eip"},
 	"old_term_kept":                     {"./modbus", "./optommp", "./sparkplug/host", "./opcua"},
 	"set_retried":                       {"./snmp"},
+	"resign_before_drain":               {"./quorum/node"},
+	"resign_despite_drain_error":        {"./quorum/node"},
+	"enter_after_read":                  {"./internal/fence"},
+	"drain_no_wait":                     {"./internal/fence"},
+	"drain_no_reset":                    {"./internal/fence", "./optommp", "./hw"},
+	"drain_no_settle":                   {"./internal/fence"},
+	"host_enter_after_gate":             {"./sparkplug/host"},
 }
 
 // args are the go test arguments for m.

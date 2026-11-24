@@ -180,6 +180,7 @@ func (c *Candidate) resign(now Instant, hold time.Duration) *Request {
 	if !c.Leading(now) {
 		return nil
 	}
+	c.drainKeep = c.leaseEnd // until the drain is proven (ResignDrained)
 	c.leading, c.leaseEnd, c.reterm = false, now, false
 	if !mut("resign_keeps_rounds") {
 		// A late grant of a renewal sent before the resign matches no round,
@@ -199,11 +200,16 @@ func (c *Candidate) resign(now Instant, hold time.Duration) *Request {
 		Epoch: c.epoch, MarkSeq: c.markSeq, MarkCurrent: c.markCurrent, Resign: true}
 }
 
-// ResignAt resigns c's leadership and drops its own voter v's promise to
-// it, in one call, as YieldTo does: nothing runs in between, so the
-// dropped promise never backs a lease. The mark is the standby's
-// acknowledgement of the final image (seq, current). It returns the
-// RESIGN to send to the other voters, or nil when c does not lead.
+// ResignAt resigns c's leadership: c stops leading (its gate shuts) and
+// drops its open rounds, and holds off campaigning. Its own voter v KEEPS
+// its promise to c, and c does not yield it, until ResignDrained: sends
+// the lease let start may still be on the wire (#710 d1b), and with that
+// promise freed the standby could lead beside them (its own voter and
+// this one, when its voter heard none of c's renewals). The mark is the
+// standby's acknowledgement of the final image (seq, current). It returns
+// the RESIGN to send to the other voters once the drain is proven, or nil
+// when c does not lead. Without ResignDrained the promise runs out where
+// the lease would have: a failover.
 func ResignAt(now Instant, v *Voter, c *Candidate, seq uint64, current bool) *Request {
 	if v == nil || c == nil || c.cfg.Self != v.self {
 		return nil
@@ -216,6 +222,22 @@ func ResignAt(now Instant, v *Voter, c *Candidate, seq uint64, current bool) *Re
 	if r == nil {
 		return nil
 	}
+	if mut("resign_frees_own_before_drain") {
+		ResignDrained(now, v, c, r)
+	}
+	return r
+}
+
+// ResignDrained is the second half of a resign, once the outputs' drain is
+// proven and before the RESIGN r leaves: c's own voter v drops its
+// promise to c, and the promises it heard relayed to c's boot, as the
+// RESIGN makes every voter do, in one call, as YieldTo does: nothing runs
+// in between, so the dropped promise never backs a lease.
+func ResignDrained(now Instant, v *Voter, c *Candidate, r *Request) {
+	if v == nil || c == nil || r == nil || c.cfg.Self != v.self {
+		return
+	}
+	c.drainKeep = 0
 	if v.st.GrantedTo == v.self {
 		// The standby's higher campaign would make it yield too (YieldTo):
 		// dropped here, it never refuses that campaign in between.
@@ -229,7 +251,6 @@ func ResignAt(now Instant, v *Voter, c *Candidate, seq uint64, current bool) *Re
 		// ignored for the quiet, as at every other voter.
 		v.dropResigned(now, v.self, r.Nonce, r.Epoch)
 	}
-	return r
 }
 
 // EndResignHold ends the hold a resign started, at now, so this candidate
