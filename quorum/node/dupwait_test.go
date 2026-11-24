@@ -42,7 +42,7 @@ func TestAClearWaitsOutASlowDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h, _ := Guard(c.tok[WitnessID], w.Handler())
+	h, _ := Guard(c.tok[WitnessID], c.handler(WitnessID, w.Handler()))
 	ctx, cancel := context.WithCancel(context.Background())
 	c.wit.w, c.wit.cancel, c.wit.ran = w, cancel, make(chan struct{})
 	go func() { w.Run(ctx); close(c.wit.ran) }()

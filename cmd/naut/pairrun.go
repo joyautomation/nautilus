@@ -25,6 +25,7 @@ import (
 	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/internal/fence"
+	"github.com/joyautomation/nautilus/internal/peertls"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
@@ -107,6 +108,10 @@ type pairMember struct {
 	// it succeeds: the log is read-only under this leader (node.LogState).
 	stuckTerm atomic.Uint64
 	box       func() string // this box's fingerprint (BoxFunc), nil without
+	// peerTLS is the pair's peer TLS (#710 per-box keys), nil when off;
+	// pins journals and conditions its events.
+	peerTLS *peertls.Peer
+	pins    *pinLog
 	// witnessLease: the witness refuses this controller's lease
 	// (WitnessLeaseCondition), for the system alarm.
 	witnessLease atomic.Bool
@@ -146,8 +151,11 @@ type pairDeps struct {
 	// links (hostBox): an error refuses the start, "" means not readable
 	// yet. dial, when set, opens the peer connections (tests cut links
 	// with it).
-	box  func(links []string) (string, error)
-	dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	box func(links []string) (string, error)
+	// keyBox is the box the peer key is bound to (hostKeyBox when nil, #710
+	// per-box keys): an error holds the handshakes, an unknown Box too.
+	keyBox func(links []string) (peertls.Box, error)
+	dial   func(ctx context.Context, network, addr string) (net.Conn, error)
 	// creds, when set, is this controller's credentials, read at every
 	// hello (pairCredentials, #708).
 	creds func() node.Credentials
@@ -234,9 +242,25 @@ func linkMAC(addr string) (string, bool) {
 // checkout ("" for a built controller), which the state directory must not
 // be inside. The election's Run is the caller's.
 func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps) (*pairMember, error) {
-	o, listenAddr, srvTLS, err := pairOptions(r, apiAddr, dir, d.getenv)
+	o, listenAddr, pto, err := pairOptions(r, apiAddr, dir, d.getenv)
 	if err != nil {
 		return nil, err
+	}
+	var pt *peertls.Peer
+	var srvTLS *tls.Config
+	pins := newPinLog("redundancy")
+	if pto != nil {
+		keyBox, links := d.keyBox, []string{o.PeerAddr, o.WitnessAddr}
+		if keyBox == nil {
+			keyBox = hostKeyBox
+		}
+		pto.Box = func() (peertls.Box, error) { return keyBox(links) }
+		pto.OnEvent = pins.event
+		if pt, err = peertls.New(*pto); err != nil {
+			return nil, err
+		}
+		o.TLS = peerWrap(pt, map[string]string{node.DialAddr(o.PeerAddr): string(o.Peer), node.DialAddr(o.WitnessAddr): peertls.Witness})
+		srvTLS = pt.Server()
 	}
 	// What an operator edits to move the peer port: the override, else
 	// this controller's peers: entry.
@@ -257,7 +281,7 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o750); err != nil {
 		return nil, fmt.Errorf("state directory: %w", err)
 	}
-	m := &pairMember{peers: r.Peers, box: boxFn, getenv: d.getenv, restart: make(chan struct{})}
+	m := &pairMember{peers: r.Peers, box: boxFn, getenv: d.getenv, restart: make(chan struct{}), peerTLS: pt, pins: pins}
 	o.OnEvent = m.onEvent // events start with the election's Run, after m.q is set
 	// The election first: it locks the state file, so a second process of
 	// this controller stops here, before it binds anything.
@@ -266,6 +290,16 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		return nil, err
 	}
 	m.q, m.o = q, o
+	if pt != nil {
+		q.SetPeerKeys(func() *leader.PeerKeys { return peerKeys(pt) })
+		pins.attachConditions(q.SetCondition, func() bool {
+			p := pt.Pinned("")
+			return p[string(o.Peer)] != "" && p[peertls.Witness] != ""
+		})
+		// A dropped pin (naut redundancy unpin, #710 2b) ends that member's
+		// kept connections, so the next call meets its new key.
+		pt.OnChange(func(string, string) { m.closeIdle() })
+	}
 	if srvTLS == nil {
 		// Loud at every start, and standing on /api/cluster (#710).
 		slog.Warn("redundancy: " + peerTLSOff)
@@ -278,11 +312,20 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	for _, p := range []string{"/api/oplog", "/api/oplog/", "/api/quorum"} {
 		mux.Handle(p, &m.logH)
 	}
-	mux.Handle(streamPath(o.Cluster), &m.streamH)
-	mux.Handle(ackPath(o.Cluster), &m.streamH)       // the standby's in-sync acknowledgement (pairack.go)
-	mux.Handle(handBackPath(o.Cluster), &m.streamH)  // the peer's bad-retain hand-back question (pairhandback.go)
-	mux.Handle(switchAskPath(o.Cluster), &m.streamH) // the leader's switchover question (pairswitch.go)
-	h, err := node.Guard(o.Token, spareSilent(q.Node().Spare, mux))
+	// The state stream and its questions name no sender: they come from
+	// the peer, by its certificate (#710 per-box keys).
+	fromPeer := peerOnly(o.Cluster, string(o.Peer), &m.streamH)
+	mux.Handle(streamPath(o.Cluster), fromPeer)
+	mux.Handle(ackPath(o.Cluster), fromPeer)       // the standby's in-sync acknowledgement (pairack.go)
+	mux.Handle(handBackPath(o.Cluster), fromPeer)  // the peer's bad-retain hand-back question (pairhandback.go)
+	mux.Handle(switchAskPath(o.Cluster), fromPeer) // the leader's switchover question (pairswitch.go)
+	var served http.Handler = spareSilent(q.Node().Spare, mux)
+	if pt != nil {
+		// Every request: the caller's key against its current pin, a
+		// first contact pinned, the verified member in the request.
+		served = pt.Bind(served, node.WithPeer)
+	}
+	h, err := node.Guard(o.Token, served)
 	if err != nil {
 		q.Node().Close()
 		return nil, err
@@ -324,6 +367,30 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		go m.bindLater(d.listen, listenAddr, listenKey, srvTLS, every)
 	}
 	return m, nil
+}
+
+// peerOnly serves h to the peer only: the member its TLS certificate
+// names (node.SenderOK), for the requests that name no sender.
+func peerOnly(cluster, peer string, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !node.SenderOK(r, cluster, peer, "stream_sender_unbound") {
+			http.Error(w, "not this pair's peer", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// closeIdle closes the kept peer connections: the votes', the state
+// stream's and the operator-intent log's.
+func (m *pairMember) closeIdle() {
+	m.q.Node().CloseIdle()
+	if s := m.stream; s != nil {
+		s.client.CloseIdleConnections()
+	}
+	if l := m.log; l != nil {
+		l.CloseIdle()
+	}
 }
 
 // serve serves the peer listener on ln, with peer TLS when srvTLS is set.
@@ -399,8 +466,9 @@ func loopbackSurprise(configured string, bound net.Addr, key string) string {
 }
 
 // pairOptions resolves a member's elector options, the address its peer
-// listener binds and the TLS it serves there (nil: peer TLS off).
-func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(string) string) (node.Options, string, *tls.Config, error) {
+// listener binds and its peer TLS's options (nil: peer TLS off), all but
+// the box and the events, which newPairMember gives.
+func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(string) string) (node.Options, string, *peertls.Options, error) {
 	var o node.Options
 	self := strings.ToLower(strings.TrimSpace(getenv("NAUTILUS_NODE")))
 	switch self {
@@ -447,13 +515,19 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 		// port on its host: the two need not match (#710 demo finding 1).
 		SelfAPI: apiOn(r.Peers[self], apiAddr),
 	}
-	pt, err := buildPeerTLS(token, peerTLSIsOff(r.PeerTLS), "redundancy.peer-tls: off")
-	if err != nil {
-		return o, "", nil, err
-	}
-	var srv *tls.Config
-	if pt != nil {
-		o.TLS, srv = pt.Client, pt.Server
+	var pto *peertls.Options
+	if !peerTLSIsOff(r.PeerTLS) {
+		if len(token) < peertls.MinToken && !mutNaut("peer_tls_short_token") {
+			return o, "", nil, shortTokenErr(len(token), "redundancy.peer-tls: off")
+		}
+		// Each box's own key, its certificate naming it, the others'
+		// keys pinned at first contact (#710 per-box keys). A
+		// controller's listener takes calls from its peer only: the
+		// witness never calls.
+		pto = &peertls.Options{Token: token, Cluster: cluster, Self: self,
+			KeyFile:  filepath.Join(stateDir, peerKeyFile),
+			PinsFile: func(string) string { return filepath.Join(stateDir, peerPinsFile) },
+			Accept:   func(c, n string) bool { return c == cluster && n == peer }}
 	}
 	// The address peers: names, not every interface: a peer port reachable
 	// from networks that don't need it (a VPN, a second NIC) is exposure
@@ -473,7 +547,7 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 		}
 		listen = v
 	}
-	return o, listen, srv, nil
+	return o, listen, pto, nil
 }
 
 // checkAPIReachable refuses a tag API bound to loopback only while this
@@ -869,6 +943,11 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 			return sl.Lapse(e, now) || (al != nil && al.Lapse(e, now))
 		},
 		Token: m.o.Token, TLS: m.o.TLS, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
+		// Replication from the member its certificate names, at its own
+		// URL (#710 per-box keys).
+		Sender: func(r *http.Request, name, from string) bool {
+			return node.SenderOK(r, m.o.Cluster, name, "log_sender_unbound") && from == map[string]string{"a": a, "b": b}[name]
+		},
 		// A copy superseded by another history (#1029 3c-3c-2a): the
 		// runtime ends the old history's substitutes at once, leading or
 		// not (driveLog repeats it).
@@ -1103,6 +1182,7 @@ func (m *pairMember) RestartRequested() <-chan struct{} { return m.restart }
 func (m *pairMember) SetJournal(j audit.Recorder) {
 	if j != nil {
 		m.journal.Store(&j)
+		m.pins.attachJournal(j) // the peer key events so far, then each one
 	}
 }
 

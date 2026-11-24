@@ -60,6 +60,7 @@ type Quorum struct {
 	conds        map[string]string                        // SetCondition, by key
 	logStatus    func() *LogStatus                        // SetLogStatus
 	streamStatus func() *StreamStatus                     // SetStreamStatus
+	peerKeys     func() *PeerKeys                         // SetPeerKeys
 	writesCut    func() map[string]int                    // SetWritesCut
 	switchover   SwitchoverFunc                           // SetSwitchover
 	failback     func(suspend bool, by, why string) error // SetFailback
@@ -130,6 +131,14 @@ func (q *Quorum) SetWritesCut(f func() map[string]int) {
 func (q *Quorum) SetStreamStatus(f func() *StreamStatus) {
 	q.mu.Lock()
 	q.streamStatus = f
+	q.mu.Unlock()
+}
+
+// SetPeerKeys adds the pair's peer TLS keys to Status (its PeerKeys
+// block). f is called outside the Quorum's lock.
+func (q *Quorum) SetPeerKeys(f func() *PeerKeys) {
+	q.mu.Lock()
+	q.peerKeys = f
 	q.mu.Unlock()
 }
 
@@ -210,8 +219,11 @@ func (q *Quorum) Release()                 { q.n.Release() }
 func (q *Quorum) Status() Status {
 	st := quorumStatus(q.n.Status())
 	q.mu.Lock()
-	ls, ss, wc := q.logStatus, q.streamStatus, q.writesCut
+	ls, ss, wc, pk := q.logStatus, q.streamStatus, q.writesCut, q.peerKeys
 	q.mu.Unlock()
+	if pk != nil {
+		st.PeerKeys = pk()
+	}
 	if wc != nil {
 		st.WritesCut = wc()
 	}

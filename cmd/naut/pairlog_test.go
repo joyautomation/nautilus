@@ -451,7 +451,7 @@ func TestPairLogRoutesAreNotOnTheTagAPI(t *testing.T) {
 		if code, body, _ := r.call("a", "GET", p, ""); code != http.StatusNotFound {
 			t.Errorf("tag API GET %s: %d %s, want 404", p, code, body)
 		}
-		resp, err := peerClient(t, testPeerToken).Get("https://" + r.peer["a"] + p)
+		resp, err := r.peerHTTPAs("b", "a").Get("https://" + r.peer["a"] + p)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -461,7 +461,7 @@ func TestPairLogRoutesAreNotOnTheTagAPI(t *testing.T) {
 		}
 		req, _ := http.NewRequest("GET", "https://"+r.peer["a"]+p, nil)
 		req.Header.Set(node.TokenHeader, testPeerToken)
-		resp, err = peerClient(t, testPeerToken).Do(req)
+		resp, err = r.peerHTTPAs("b", "a").Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}

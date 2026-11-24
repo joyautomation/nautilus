@@ -578,7 +578,8 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 	}
 	proj := loadPair(t, pairProject("127.0.0.1:9450", "127.0.0.2:9450", "127.0.0.3:9460"))
 	var ln net.Listener
-	el, pair, err := electorWith(proj, "127.0.0.1:8080", "", pairDeps{getenv: pairEnv(pairGoodEnv(t)), listen: func(string) (net.Listener, error) {
+	env := pairGoodEnv(t)
+	el, pair, err := electorWith(proj, "127.0.0.1:8080", "", pairDeps{getenv: pairEnv(env), listen: func(string) (net.Listener, error) {
 		var err error
 		ln, err = net.Listen("tcp", "127.0.0.1:0")
 		return ln, err
@@ -618,7 +619,7 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "HTTP request to an HTTPS server") {
 		t.Errorf("plain HTTP to the peer port got %d %q, want TLS (peer TLS is on by default)", resp.StatusCode, b)
 	}
-	resp, err = peerClient(t, testPeerToken).Get("https://" + ln.Addr().String() + "/quorum/v1/x/hello")
+	resp, err = memberClient(t, testPeerToken, env["NAUTILUS_CLUSTER"], "b", "a").Get("https://" + ln.Addr().String() + "/quorum/v1/x/hello")
 	if err != nil {
 		t.Fatalf("the peer listener does not answer TLS: %v", err)
 	}
@@ -767,6 +768,18 @@ func TestPairClonedMemberNeverLeadsTwice(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cloneDir, pairStateFile), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Its peer key too, as a whole-disk clone carries it (#710 per-box
+	// keys): on the same box (a second process, or a clone whose box
+	// reads the same) the key passes, and the duplicate marks are what
+	// stop it. A clone on other hardware makes a new key, which the
+	// others refuse (TestPairATokenHolderFirstLocksOutTheRealMemberLoudly).
+	k, err := os.ReadFile(filepath.Join(r.env["a"]["STATE_DIRECTORY"], peerKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cloneDir, peerKeyFile), k, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	env := maps.Clone(r.env["a"])
 	env["STATE_DIRECTORY"] = cloneDir
 	clone := startPairNode(t, r.files, env, r.lns[2])
@@ -845,31 +858,12 @@ func TestPairAPIOnLoopbackRefused(t *testing.T) {
 	}
 }
 
-// peerClient is an HTTP client with the pair's peer TLS for token, as a
-// member's calls have: the tests that call a peer port directly use it,
-// with https.
-func peerClient(t *testing.T, token string) *http.Client {
-	t.Helper()
-	pt, err := buildPeerTLS(token, false, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &http.Client{Transport: &http.Transport{TLSClientConfig: pt.Client}}
-}
-
-// peerScheme and peerHTTP are how the rig's own calls reach a peer port.
+// peerScheme is how the rig's own calls reach a peer port.
 func (r *pairRig) peerScheme() string {
 	if r.plain {
 		return "http://"
 	}
 	return "https://"
-}
-
-func (r *pairRig) peerHTTP() *http.Client {
-	if r.plain {
-		return http.DefaultClient
-	}
-	return peerClient(r.t, r.token)
 }
 
 // testPeerToken is a pair's peer token in these tests: long enough for

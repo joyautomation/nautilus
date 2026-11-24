@@ -235,6 +235,12 @@ func (e *Elector) serveDup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not running", http.StatusServiceUnavailable)
 		return
 	}
+	// Only the peer asks (its operator's check, clear or fence): bound to
+	// its certificate (#710 per-box keys).
+	if !SenderOK(r, e.o.Cluster, string(e.o.Peer), "sender_unbound_dup") {
+		http.Error(w, "not this pair's peer", http.StatusForbidden)
+		return
+	}
 	q, err := readDupOp(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -357,6 +363,13 @@ func (w *Witness) serveDup(rw http.ResponseWriter, r *http.Request) {
 	}
 	if members := r.Header.Get(MembersHeader); members != p.members {
 		http.Error(rw, "not this cluster's members", http.StatusForbidden)
+		return
+	}
+	// A controller of this cluster, by its certificate (#710 per-box
+	// keys): one witness token serves every cluster, so a member of
+	// another must not reach this one's marks.
+	if !witnessSenderOK(r, name, p.members, "witness_sender_unbound_dup") {
+		http.Error(rw, "not a member of this cluster", http.StatusForbidden)
 		return
 	}
 	if q.Op == "state" {

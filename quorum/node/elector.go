@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	crand "crypto/rand"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -105,10 +104,11 @@ type Options struct {
 	// Dial, when set, opens the peer connections (default: net.Dialer).
 	// Tests cut links with it.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
-	// TLS, when set, is the pair's peer TLS client configuration
-	// (internal/peertls, #710): every peer call is then https. Nil: plain
-	// HTTP (redundancy.peer-tls: off, and tests).
-	TLS *tls.Config
+	// TLS, when set, is the pair's peer TLS client side (internal/peertls,
+	// #710): every peer call is then https, each checked as the member at
+	// the address it dials. Nil: plain HTTP (redundancy.peer-tls: off, and
+	// tests).
+	TLS TLSWrap
 	// Log defaults to slog.Default.
 	Log *slog.Logger
 	// OnEvent, when set, gets every Event, in order, from one goroutine.
@@ -1244,12 +1244,35 @@ func (e *Elector) noteLink(url string, err error) {
 	case faultPeerTLS:
 		tlsMsg = who + " speaks TLS on its peer port and this controller plain HTTP (redundancy.peer-tls: off here): run one peer TLS setting on both controllers and the witness"
 	case faultForeignKey:
-		idMsg = who + "'s TLS key is not this pair's: it holds another NAUTILUS_PEER_TOKEN, or something else answers at " + hostOf(e.baseOf(voter)) + ". Give the two controllers and the witness the same token"
+		idMsg = who + "'s TLS certificate is not this pair's: it holds another NAUTILUS_PEER_TOKEN, or something else answers at " + hostOf(e.baseOf(voter)) + ". Give the two controllers and the witness the same token"
+		var pin interface{ PinMismatch() bool }
+		if errors.As(err, &pin) && pin.PinMismatch() {
+			// Its key is the pair's, but not the one pinned for it here
+			// (#710 per-box keys): the refusal says both fingerprints.
+			idMsg = who + " was refused: " + identityText(err)
+		}
 	case faultKeyRefused:
-		idMsg = who + " refused this controller's TLS key: it holds another NAUTILUS_PEER_TOKEN. Give the two controllers and the witness the same token"
+		idMsg = who + " refused this controller's TLS key: it holds another NAUTILUS_PEER_TOKEN, or it has another key pinned for " + string(e.o.Self) + " (this box was replaced, its state directory lost, or its key remade). If this box really changed, run `naut redundancy unpin " + string(e.o.Self) + "` on the other controller, the surviving one; " + who + "'s journal names both fingerprints"
+		var se *statusError
+		if errors.As(err, &se) && se.body != "" {
+			idMsg += ". It says: " + se.said()
+		}
 	}
 	e.linkState(EventPeerTLS, voter, tlsMsg)
 	e.linkState(EventPeerIdentity, voter, idMsg)
+}
+
+// identityText is a peer TLS refusal's own text, without the transport's
+// wrapping.
+func identityText(err error) string {
+	var id interface {
+		error
+		PeerIdentity() bool
+	}
+	if errors.As(err, &id) {
+		return id.Error()
+	}
+	return err.Error()
 }
 
 // hostOf is a base URL's host:port.
@@ -1426,7 +1449,7 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad frame", http.StatusBadRequest)
 		return
 	}
-	if req.From != e.o.Peer {
+	if req.From != e.o.Peer || !SenderOK(r, e.o.Cluster, string(req.From), "sender_unbound_vote") {
 		http.Error(w, "not this pair's peer", http.StatusForbidden)
 		return
 	}
@@ -1686,7 +1709,7 @@ func (e *Elector) serveAdopt(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad frame", http.StatusBadRequest)
 		return
 	}
-	if m.From != e.o.Peer {
+	if m.From != e.o.Peer || !SenderOK(r, e.o.Cluster, string(m.From), "sender_unbound_adopt") {
 		http.Error(w, "not this pair's peer", http.StatusForbidden)
 		return
 	}
@@ -1715,7 +1738,7 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "challenge", http.StatusBadRequest)
 		return
 	}
-	if quorum.NodeID(r.URL.Query().Get("from")) != e.o.Peer {
+	if from := r.URL.Query().Get("from"); quorum.NodeID(from) != e.o.Peer || !SenderOK(r, e.o.Cluster, from, "sender_unbound_hello") {
 		http.Error(w, "not this pair's peer", http.StatusForbidden)
 		return
 	}

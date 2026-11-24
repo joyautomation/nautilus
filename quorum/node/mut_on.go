@@ -38,6 +38,12 @@ var mutations = []string{
 	"witness_write_ignored",          // the witness's failed state write is reported durable
 	"gate_ignores_health",            // the gate stays open for unhealthy scans or after Release
 	"controller_unlocked",            // a controller's state file isn't locked to one process
+	"sender_unbound_vote",            // a controller's voter takes a vote naming another member than its certificate (#710 per-box keys)
+	"sender_unbound_adopt",           // a controller takes an adopt naming another member than its certificate (#710 per-box keys)
+	"sender_unbound_hello",           // a controller answers a hello naming another member than its certificate (#710 per-box keys)
+	"sender_unbound_dup",             // a controller takes a check, clear or fence from another member than its peer (#710 per-box keys)
+	"witness_sender_unbound_vote",    // the witness takes a vote naming another member, or cluster, than its certificate (#710 per-box keys)
+	"witness_sender_unbound_dup",     // the witness takes a check, clear or fence from outside the cluster (#710 per-box keys)
 	"witness_unlocked",               // the witness's state directory isn't locked to one process
 	"no_term_cap",                    // the witness takes a vote that jumps the terms
 	"controller_no_term_cap",         // a controller's voter takes a vote that jumps the terms

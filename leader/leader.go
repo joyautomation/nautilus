@@ -76,6 +76,22 @@ type Status struct {
 	// §3.4): the write's outcome is unknown, so a device on this list is
 	// too slow for the pair's send budget.
 	WritesCut map[string]int `json:"writesCut,omitempty"`
+	// PeerKeys are a redundant pair member's peer TLS keys (#710 per-box
+	// keys): its own, and the ones it pinned for the other members. Nil
+	// elsewhere, and with peer TLS off.
+	PeerKeys *PeerKeys `json:"peerKeys,omitempty"`
+}
+
+// PeerKeys are a pair member's peer TLS key fingerprints (SHA256:..., as
+// ssh shows one): an operator compares them on the boxes themselves.
+type PeerKeys struct {
+	// Self is this box's own key ("" while it can't be made: Error says
+	// why, such as a link that doesn't resolve yet).
+	Self  string `json:"self"`
+	Error string `json:"error,omitempty"`
+	// Pinned is each other member's pinned key, by name (the peer's a or
+	// b, and witness); a member not pinned yet is absent.
+	Pinned map[string]string `json:"pinned"`
 }
 
 // StreamStatus is a pair's state stream (#710 S1b, design §4.1) as one

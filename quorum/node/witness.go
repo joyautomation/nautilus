@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -407,6 +408,14 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	members := r.Header.Get(MembersHeader)
+	if !SenderOK(r, name, string(req.From), "witness_sender_unbound_vote") {
+		// The vote names another member, or another cluster, than the
+		// sender's certificate (#710 per-box keys): a pinned a must never
+		// vote as b, nor in a cluster it is not a member of.
+		w.log.Error("witness: refused a vote whose sender is not the member its certificate names", "cluster", name, "from", req.From)
+		http.Error(rw, "the vote's sender is not the member this connection's certificate names", http.StatusForbidden)
+		return
+	}
 	if !validMembers(members) || (members != memberPair(req.From, members)) {
 		w.log.Error("witness: refused a vote from outside the pair", "cluster", name, "from", req.From, "members", members)
 		http.Error(rw, "not a member of this pair", http.StatusForbidden)
@@ -478,6 +487,17 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		}
 		p.mu.Unlock()
 	})
+}
+
+// witnessSenderOK reports whether a request to the witness about cluster,
+// whose members are members, comes from one of them by its certificate
+// (SenderOK for a request that names no sender).
+func witnessSenderOK(r *http.Request, cluster, members, mutation string) bool {
+	if r.TLS == nil || mut(mutation) {
+		return true
+	}
+	c, n, ok := VerifiedPeer(r)
+	return ok && c == cluster && slices.Contains(strings.Split(members, ","), n)
 }
 
 // memberPair returns members when from is one of its two names, else "".

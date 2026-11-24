@@ -234,7 +234,10 @@ func (s *pairStream) serveHandBack(w http.ResponseWriter, r *http.Request) {
 // judgeHandBack answers the question.
 func (s *pairStream) judgeHandBack(ask handBackAsk) handBackAnswer {
 	e := s.m.q.Node()
-	if _, lead := s.rt.LeadingTerm(); lead || s.m.q.IsLeader() {
+	if s.m.q.IsLeader() {
+		return handBackAnswer{Why: "this controller leads"}
+	}
+	if !s.awaitStandDown() {
 		return handBackAnswer{Why: "this controller leads"}
 	}
 	if why := e.MayLead(); why != "" && !mutNaut("handback_ineligible_peer") {
@@ -259,6 +262,31 @@ func (s *pairStream) judgeHandBack(ask handBackAsk) handBackAnswer {
 		ans.AtMs = pos.At.UnixMilli()
 	}
 	return ans
+}
+
+// standDownWait bounds how long a hand-back's judge waits for this
+// controller's runtime to stand down once its elector no longer leads.
+func (s *pairStream) standDownWait() time.Duration {
+	return min(s.m.o.Lease/8, 100*time.Millisecond)
+}
+
+// awaitStandDown reports whether this controller's runtime no longer
+// leads, waiting a moment for it: after a resign (or a lost lease) the
+// elector stops leading at once, and the runtime takes the stand-down
+// edge at its next tick. The peer asks for a hand-back as soon as it
+// takes over, which can be inside that tick, and a refusal there would be
+// for good (it asks once). The wait stays inside the asker's deadline.
+func (s *pairStream) awaitStandDown() bool {
+	_, lead := s.rt.LeadingTerm()
+	if mutNaut("handback_no_standdown_wait") {
+		return !lead
+	}
+	until := time.Now().Add(s.standDownWait())
+	for lead && time.Now().Before(until) && !s.m.q.IsLeader() {
+		time.Sleep(2 * time.Millisecond)
+		_, lead = s.rt.LeadingTerm()
+	}
+	return !lead && !s.m.q.IsLeader()
 }
 
 // handBackTaken is, on a takeover in term, the hand-back it comes from:
