@@ -96,6 +96,28 @@ type Record struct {
 
 	ends     []time.Duration // promise end of each Grant, global; built once by Check
 	released []release
+
+	// Resigns are the planned switchovers that resigned a leadership;
+	// ResignsTaken the RESIGNs a voter took, dropping its running
+	// promise (a duplicate's answer is not one) (#710 d1).
+	Resigns      []ResignRec
+	ResignsTaken []ResignTaken
+}
+
+// ResignRec is a controller resigning its leadership of Epoch at At.
+type ResignRec struct {
+	At    time.Duration
+	Node  Addr
+	Epoch uint64
+}
+
+// ResignTaken is Voter dropping its promise to the boot (Name, Nonce) on
+// that boot's RESIGN of Epoch, at At.
+type ResignTaken struct {
+	At           time.Duration
+	Voter        Addr
+	Name         quorum.NodeID
+	Nonce, Epoch uint64
 }
 
 // AdoptRec is one adoption (durable) or proposal (made) by a controller.
@@ -475,6 +497,11 @@ func (r *Record) promiseEnd(i int) time.Duration {
 					r.ends[j] = min(r.ends[j], rl.at)
 				}
 			}
+			for _, rt := range r.ResignsTaken { // a taken RESIGN ends that boot's promise (#710 d1)
+				if rt.Voter == g.Voter && rt.Name == g.ToID && rt.Nonce == g.Nonce && g.Start <= rt.At {
+					r.ends[j] = min(r.ends[j], rt.At)
+				}
+			}
 		}
 	}
 	return r.ends[i]
@@ -606,6 +633,12 @@ func Check(r *Record, c Checks) []Violation {
 		add(v)
 	}
 	for _, v := range r.checkHot() {
+		add(v)
+	}
+	for _, v := range r.checkI3(gates) {
+		add(v)
+	}
+	for _, v := range r.checkResign() {
 		add(v)
 	}
 	if c.HealAt > 0 {
@@ -988,6 +1021,42 @@ func (r *Record) checkHot() []Violation {
 		for _, l := range r.LeadStarts {
 			if l.Epoch > h.Image && l.Epoch < h.Epoch {
 				vs = append(vs, Violation{"hot", h.At, fmt.Sprintf("%v went on hot from an image of epoch %d into %d, over %v's lead in epoch %d at %v", h.Node, h.Image, h.Epoch, l.Node, l.Epoch, l.At)})
+			}
+		}
+	}
+	return vs
+}
+
+// I3 (test plan: no write leaves through a closed gate), its resign case
+// (#710 d1): a controller that resigned writes nothing under the resigned
+// epoch from its resign on. (The sim's writes are its scans', instant and
+// judged on the candidate alone; the rest of I3, a send's deadline and
+// its drain, is the drivers' and package fence's, tested there.)
+func (r *Record) checkI3(_ []Interval) []Violation {
+	var vs []Violation
+	for _, rs := range r.Resigns {
+		for _, w := range r.Writes {
+			if w.From == rs.Node && w.Term == rs.Epoch && w.At >= rs.At {
+				vs = append(vs, Violation{"I3", w.At, fmt.Sprintf("%v wrote epoch %d after resigning it at %v", w.From, w.Term, rs.At)})
+				break
+			}
+		}
+	}
+	return vs
+}
+
+// Resign: a voter drops a promise on a RESIGN only for the resigning
+// boot's latest leadership: no leadership of that name above the
+// RESIGN's epoch had started before the voter took it (a late or replayed
+// RESIGN of an earlier leadership of the same boot must not end a later
+// one's promise) (#710 d1).
+func (r *Record) checkResign() []Violation {
+	var vs []Violation
+	for _, rt := range r.ResignsTaken {
+		for _, ls := range r.LeadStarts {
+			if nodeIDs[ls.Node] == rt.Name && ls.Epoch > rt.Epoch && ls.At <= rt.At {
+				vs = append(vs, Violation{"resign", rt.At, fmt.Sprintf("%v took %s's RESIGN of epoch %d after %v led epoch %d", rt.Voter, rt.Name, rt.Epoch, ls.Node, ls.Epoch)})
+				break
 			}
 		}
 	}

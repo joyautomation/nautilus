@@ -55,6 +55,14 @@ type Request struct {
 	Epoch       uint64
 	MarkSeq     uint64
 	MarkCurrent bool
+	// Resign is a planned switchover's RESIGN (#710 d1): the leader's
+	// boot (Nonce) gives up the leadership of Epoch, which it no longer
+	// holds (Candidate.Resign). Its mark (MarkSeq, MarkCurrent) is the
+	// standby's acknowledgement of the leader's final image, and its Seq
+	// is above every renewal that boot sent. A voter that takes it drops
+	// its promise to that boot at once, so the standby need not wait the
+	// lease out (Voter.handleResign).
+	Resign bool
 }
 
 // Fences are a voter's fences on the pair's names (Voter.Fence), as its
@@ -316,10 +324,11 @@ type Adopt struct {
 // VoterBoot (#1029 3c), version 5 a reply's HeldBy (#1029 3c-2), version 6
 // a reply's ClearGen (#1029 3c-3b), version 7 a request's and a reply's
 // Gen and a reply's Fence (#1029 3c-3c-1b), version 8 a request's Epoch
-// and mark and a reply's RecordsFrom and Recs (#710 S2c): a pair
-// that mixes releases across one can't vote, and says so
-// (redundancy.version-mismatch) rather than failing in silence.
-const WireVersion = 8
+// and mark and a reply's RecordsFrom and Recs (#710 S2c), version 9 a
+// request's Resign (#710 d1): a pair that mixes releases across one
+// can't vote, and says so (redundancy.version-mismatch) rather than
+// failing in silence.
+const WireVersion = 9
 
 // FrameVersion returns the version byte a frame carries (0 when empty).
 func FrameVersion(b []byte) byte {
@@ -374,6 +383,7 @@ func (r Request) MarshalBinary() ([]byte, error) {
 	b = binary.BigEndian.AppendUint64(b, r.Epoch)
 	b = binary.BigEndian.AppendUint64(b, r.MarkSeq)
 	b = append(b, boolByte(r.MarkCurrent))
+	b = append(b, boolByte(r.Resign))
 	return sealCRC(b), nil
 }
 
@@ -528,6 +538,7 @@ func (r *Request) UnmarshalBinary(b []byte) error {
 	v.Fences = rd.fences()
 	v.Uncommissioned = rd.boolean()
 	v.Epoch, v.MarkSeq, v.MarkCurrent = rd.u64(), rd.u64(), rd.boolean()
+	v.Resign = rd.boolean()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}

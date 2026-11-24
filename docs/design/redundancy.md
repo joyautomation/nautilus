@@ -389,7 +389,7 @@ redundancy:
       probe at once (`Voter.RelayChanged`), so the witness hears a new promise within a one-way
       delay rather than a look.
     - **Wire:** vote protocol version 2 (`quorum.WireVersion`; 3 since step 1, 4 since 3c-1, 5
-      since 3c-2, 6 since 3c-3b, 7 since 3c-3c-1b, 8 since #710 S2c-1, §4.2). A frame of another version
+      since 3c-2, 6 since 3c-3b, 7 since 3c-3c-1b, 8 since #710 S2c-1, §4.2, 9 since #710 d1, §4.7). A frame of another version
       is refused whole. A pair or witness that mixes releases across it can't vote, and says
       so (`redundancy.version-mismatch`, either side, and on the witness's log) rather than
       failing to elect in silence. A release before version 2 answers a new frame with 400
@@ -1788,6 +1788,53 @@ with an alarm repeated every `max`; only the program's release tag or the audite
   under `leadMu`); hold events reach the journal from a goroutine of their own, in order; a push
   that raced a hold's start is forgotten at once; a hot takeover from a holding leader holds
   whatever the coordinator calls it; `on-max: release` keeps its alarm raised a while after.
+
+### 4.7 Planned switchover (#710 d1)
+
+`naut redundancy switchover` hands the lead to a ready standby faster than a failover, hot and
+bumpless. Without help a planned handover is no faster than a failover: the standby waits out
+the voters' promises to the old leader. Three PRs: d1a the vote protocol's RESIGN (this
+section), d1b the drain of every output path, d1c the runtime's switching state, the final
+image, the command and the bench. The plan and rulings are in #710 (naut-lead, 2026-11-23).
+
+- **RESIGN** (vote protocol 9: a request's `Resign` flag, with its epoch, boot nonce, a Seq
+  above every renewal, and the standby's acknowledgement of the final image as its mark). The
+  leader first stops leading, in one call with its own voter's promise to it
+  (`quorum.ResignAt`, as `YieldTo`), its gate closes, and only then does RESIGN leave. It goes
+  to the **witness first**, and to the peer's voter on the witness's answer (or lease/8): the
+  standby campaigns as soon as its own voter takes it, and a campaign that reached the witness
+  before the witness's RESIGN would be refused, its retry a look away.
+- **A voter takes it** only from the boot it promised, for the epoch it knows that boot leads
+  in (its record of the boot's campaign, or the epoch of the boot's last renewal it granted: a
+  standby that started after the leader's campaign holds no record of it), while the promise
+  runs, and never after a campaign or renewal of that boot with a higher Seq (a later
+  leadership whose first renewal here still waits on its write has not moved the epoch it knows)
+  (`Voter.handleResign`). It drops the promise, the renewals it saw from that boot
+  (`LeaderSeen`), and the promises it heard relayed to that boot; it ignores new relays to that
+  boot for a lease and a quarter, or until it grants that boot again (one made before another
+  voter took the RESIGN), and refuses
+  renewals of that leadership for good (one in flight when the RESIGN left). It keeps the
+  RESIGN's mark as the leader's, so the takeover is judged hot on the final image. A duplicate
+  is answered as taken and changes nothing; anything else is refused and changes nothing.
+  Nothing is written to disk: a restarted voter grants nothing until its promises ran out.
+- **The resigner's own voter** does the same for relays to its own boot: the standby's voter
+  granted its renewals and relayed that promise, which would refuse the standby's campaign there
+  (`heardRefuses` rule (b)).
+- **The standby** campaigns at once when its voter takes its peer's RESIGN (its next look moves
+  to now), and its own resign hold, if any, ends: the peer is handing the lead back.
+- **The old leader** holds off campaigning for two leases (`quorum.ResignHold`). If the standby
+  never wins, it leads again after that, cold, in a new epoch. Its open rounds go with the
+  resign, so a late grant of a renewal sent before it never makes it lead again, even once the
+  hold has ended early. A lost RESIGN falls back to the
+  lease running out, no worse than before. The hold is not "may not lead" in a bad-retain
+  hand-back (S2c-3): `Elector.EndResignHold` ends it when the peer hands the lead back (wired in
+  d1c).
+- **Tests.** Unit rules with one mutation each (`quorum/resign_test.go`); four switchovers back
+  and forth on real elections over HTTP, each within lease/4 and with the order checked
+  (`TestLoopbackAResignHandsTheLeadOverAtOnce`); in the simulator, the `Resign` fault under link
+  loss, delay, duplication and replay, with the ledger ending a promise at a taken RESIGN, I3's
+  resign case (no write under the resigned epoch after the resign) and the "resign" oracle (a
+  voter takes a RESIGN only for the boot's latest leadership).
 
 ## 5. Failure cases
 

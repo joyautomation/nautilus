@@ -9,7 +9,7 @@ import (
 )
 
 func TestMessageRoundTrip(t *testing.T) {
-	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond, Dup: "A", DupLeft: 900 * time.Millisecond}, Seq: 1 << 40, Gen: 1<<33 + 5, Fences: Fences{{Name: "B", Fence: 9}}, Uncommissioned: true, Epoch: 5, MarkSeq: 1<<41 + 3, MarkCurrent: true}
+	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond, Dup: "A", DupLeft: 900 * time.Millisecond}, Seq: 1 << 40, Gen: 1<<33 + 5, Fences: Fences{{Name: "B", Fence: 9}}, Uncommissioned: true, Epoch: 5, MarkSeq: 1<<41 + 3, MarkCurrent: true, Resign: true}
 	b, _ := rq.MarshalBinary()
 	var got Request
 	if err := got.UnmarshalBinary(b); err != nil || got != rq {
@@ -57,9 +57,11 @@ func TestMessageCorruptionRefused(t *testing.T) {
 	}
 	// An unknown version with a good CRC is ErrVersion.
 	v := append([]byte(nil), b[:len(b)-4]...)
-	v[0] = 9
-	if err := r.UnmarshalBinary(sealCRC(v)); !errors.Is(err, ErrVersion) {
-		t.Fatalf("version 9: %v", err)
+	for _, ver := range []byte{WireVersion - 1, WireVersion + 1} {
+		v[0] = ver
+		if err := r.UnmarshalBinary(sealCRC(v)); !errors.Is(err, ErrVersion) {
+			t.Fatalf("version %d: %v", ver, err)
+		}
 	}
 }
 

@@ -134,6 +134,13 @@ type Voter struct {
 	// the renewal each came from (setMark).
 	syncMarks    map[NodeID]Mark
 	syncMarkFrom map[NodeID][2]uint64
+	// resigned: per name, the last leadership that resigned here (a
+	// planned switchover's RESIGN, resign.go), in memory only.
+	resigned map[NodeID]resignRec
+	// leadSeq: per name, the boot nonce and highest Seq of the campaigns
+	// and renewals this voter heard from it, as they arrive (resign.go: a
+	// RESIGN below it is of an earlier leadership). In memory only.
+	leadSeq map[NodeID][2]uint64
 
 	// pushedTo, pushedNonce: the promise RelayChanged last reported.
 	pushedTo    NodeID
@@ -831,6 +838,9 @@ func (v *Voter) Hear(now Instant, by NodeID, boot uint64, p Relay) {
 	if mut("relay_ignored") || by == v.self || p.To == "" || p.Nonce == 0 || p.Left <= 0 {
 		return
 	}
+	if v.resignedRelay(now, p.To, p.Nonce) {
+		return // a promise to a boot that resigned here, made before it did (#710 d1)
+	}
 	left := min(p.Left, max(v.lease, v.st.Lease)) // no promise runs longer than a lease
 	if mut("dup_mark_from_relay") {
 		v.relaySeq++ // above any real Seq: every relay counts as a new frame
@@ -1018,7 +1028,7 @@ func (v *Voter) releaseSelf(now Instant, r Request) bool {
 // controller, after Candidate.Observe. The witness has no candidate and
 // never yields.
 func YieldTo(now Instant, v *Voter, c *Candidate, r Request) bool {
-	if mut("no_yield") || v == nil || c == nil || r.From != c.cfg.Peer || c.cfg.Self != v.self || v.FencedRequest(r) || !v.wouldYield(now, r) {
+	if mut("no_yield") || v == nil || c == nil || r.Resign || r.From != c.cfg.Peer || c.cfg.Self != v.self || v.FencedRequest(r) || !v.wouldYield(now, r) {
 		return false
 	}
 	if v.wouldRefuseName(now, r) && !mut("yield_before_refusal") {
@@ -1084,6 +1094,16 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 		// to it (#1133 review).
 		refuse[0].HeldBy = v.HeldBy(now, r.From, r.Nonce)
 	}
+	// A RESIGN, and a renewal of a leadership that resigned here, come
+	// before the renewal is seen: a renewal in flight when the RESIGN left
+	// must not make the standby wait a lease (#710 d1).
+	if r.Resign {
+		return v.handleResign(now, r, refuse)
+	}
+	v.noteLeadSeq(r)
+	if v.resignedRenewal(r) {
+		return nil, refuse
+	}
 	if r.Renewal && r.From != v.self && now.Add(v.lease) > v.renewalUntil {
 		v.renewalFrom, v.renewalUntil = r.From, now.Add(v.lease)
 	}
@@ -1133,6 +1153,9 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 	if !r.Renewal && v.recordGrant(r.From, r.Term, r.Nonce) {
 		v.dirty++
 		v.need = v.dirty
+	}
+	if !r.Renewal {
+		v.grantedAgain(r.From, r.Nonce)
 	}
 	if r.Term != v.st.Promised || r.From != v.st.GrantedTo || v.st.Lease != v.lease || (r.Nonce != v.st.GrantNonce && !mut("grant_nonce_unwritten")) {
 		// Past the restart wait every promise made under a longer lease

@@ -1472,6 +1472,15 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 		quorum.YieldTo(now, e.v, e.c, req)
 	}
 	p, replies := e.v.Handle(now, req)
+	if req.Resign && len(replies) == 1 && replies[0].Granted && !mut("resign_waits_for_look") {
+		e.c.LookNow(now) // the peer resigned: campaign at this very poke (#710 d1)
+		if !mut("resign_keeps_own_hold") {
+			// A switchover back: this controller's own resign hold was
+			// there not to fight a peer taking over; the peer now hands
+			// the lead back.
+			e.c.EndResignHold(now)
+		}
+	}
 	var push *quorum.Request
 	if e.v.RelayChanged(now) {
 		push = e.c.PushProbe(now) // the witness hears this new promise now, not at the next look
