@@ -1477,10 +1477,11 @@ time, so before RESIGN leaves, every such send must have ended (`fence.Drain`):
 | The takeover hold's safe values (#710 (b2)) | queued as commands, so drained as the driver's writes |
 | Sparkplug host NCMD/DCMD | counted before `commandsAllowed` reads the gate; a publish whose wait timed out stays counted until paho's token completes, since it may still leave from paho's queue |
 | Sparkplug edge, PROFINET device, PLCnext | refused at load under `redundancy:` (#798, #787 step 6, #832): nothing to drain. A path that lifts its refusal must count its sends first |
-| Alarm notifiers | not drained (naut-lead, 2026-11-24): a page is not a field output, and a send runs to a mail or chat server's timeout, which would break the switchover's bound. Across a switchover a page may be sent twice, never lost: escalation carries across a takeover (#715 PR 1, `TestTakeoverResendLabel`, `TestTermChangeNoDuplicate`) |
+| Alarm notifiers | not drained (naut-lead, 2026-11-24): a page is not a field output, and a send runs to a mail or chat server's timeout, which would break the switchover's bound. Across a switchover a page may be sent twice, never lost: escalation carries across a takeover (#715 PR 1, `TestTakeoverResendLabel`, `TestTermChangeNoDuplicate`; switchover-shaped, a page leaving as the gate shuts: `TestSwitchoverPageSentTwiceNeverLost`) |
 | Sparkplug host NCMD Node Control/Rebirth | not counted: any host may ask for a rebirth (Sparkplug 3.0 §5), and it commands no field device |
 | SNMP, and a send whose gate has no lease (`budget < 0`) | counted, but bounded only by their own timeouts (a UDP datagram has no socket to reset): a slow one makes the drain unproven, and the switchover a failover |
-| OPC UA server writes, HTTP API writes, IO-Link ISDU parameter writes (an operator's, through the API) | inbound commands, not scan outputs; refused on a standby as before. d1c's switching state refuses them on the leader too |
+| OPC UA server writes, HTTP API writes | inbound commands, not scan outputs; refused on a standby as before. d1c's switching state refuses them on the leader too (`ErrSwitching`) |
+| IO-Link ISDU parameter writes (an operator's, through the API) | a write to the device, so it goes through the master driver's write gate (d1c: `opcua.Driver.CallFenced`, counted by `fence.Begin` like a write): refused on a standby by the driver as well as the API, drained before a RESIGN, and refused while switching. Reads stay ungated |
 
 ## 4. The state stream and hot takeover
 
@@ -1828,9 +1829,10 @@ with an alarm repeated every `max`; only the program's release tag or the audite
 
 `naut redundancy switchover` hands the lead to a ready standby faster than a failover, hot and
 bumpless. Without help a planned handover is no faster than a failover: the standby waits out
-the voters' promises to the old leader. Three PRs: d1a the vote protocol's RESIGN (this
+the voters' promises to the old leader. Four PRs: d1a the vote protocol's RESIGN (this
 section), d1b the drain of every output path, d1c the runtime's switching state, the final
-image, the command and the bench. The plan and rulings are in #710 (naut-lead, 2026-11-23).
+image, the command and the bench, d1d the hand-back's end of the resign hold and the simulator's
+follow-ups. The plan and rulings are in #710 (naut-lead, 2026-11-23 and 2026-11-24).
 
 - **RESIGN** (vote protocol 9: a request's `Resign` flag, with its epoch, boot nonce, a Seq
   above every renewal, and the standby's acknowledgement of the final image as its mark). The
@@ -1872,7 +1874,7 @@ image, the command and the bench. The plan and rulings are in #710 (naut-lead, 2
   hold has ended early. A lost RESIGN falls back to the
   lease running out, no worse than before. The hold is not "may not lead" in a bad-retain
   hand-back (S2c-3): `Elector.EndResignHold` ends it when the peer hands the lead back (wired in
-  d1c).
+  d1d).
 - **The drain (d1b).** RESIGN removes the lease-and-fence gap that lets a send which passed the
   gate just before it closed finish, so `Elector.Resign` runs the steps itself, in order: the
   gate shuts (`ResignAt`), the outputs are drained (§3.4, "The drain before a planned
@@ -1880,6 +1882,46 @@ image, the command and the bench. The plan and rulings are in #710 (naut-lead, 2
   drain is handed in (`leader.Quorum.Resign` hands it `fence.Drain`); a drain that does not
   finish within half a lease sends no RESIGN, and the switchover becomes a failover. Alarm pages
   are not drained: across a switchover a page may be sent twice, never lost.
+- **The command (d1c, `cmd/naut/pairswitch.go`).** `naut redundancy switchover` (POST
+  `/api/cluster/switchover`, audited `redundancy.switchover`, the redundancy permission; a
+  standby forwards it to the leader) runs, in order:
+  1. *Refuse*, saying why, unless this controller leads; its standby is current by the
+     acknowledgement rule (PEER_READY's predicate); no force is held; no takeover hold holds;
+     `hot-max-age` is not 0; and the standby, asked (`<stream>/switch-ask`), says it may take
+     over: it may lead (`MayLead`), is not in its hand-back guard, has applied this leadership's
+     images, and its field I/O is healthy (no field driver in error, offline, connecting or
+     degraded; its drivers' inputs live). The check is that the standby's I/O is healthy, not
+     yet that it reaches every device the leader reaches: that comparison (§3.2's I/O-health
+     rule) comes with d2, before experimental is lifted. Vote protocol 9 needs no check: a frame
+     of another version is refused outright, so a leader holding a lease has wire-9 voters.
+  2. *Stop* (`runtime.BeginSwitch`). From here writes, forces, substitutes, SFC commands and
+     online edits from outside the programs are refused with `ErrSwitching` (HTTP 503 with
+     Retry-After, OPC UA `BadInvalidState`). Store changes are checked under the store's lock
+     and frame changes under their program's lock, the locks the final image copies under, so a
+     change either is in the final image or is refused. Each task finishes the scan it is in, its logic and
+     its output push, then scans no more: its loop keeps ticking, so liveness sees it alive and
+     its lease is renewed. The wait is bounded by lease/4. A gate that closes for a tick and
+     reopens in the same term (a late renewal) does not end the switching state: the scans stay
+     stopped, and the switchover goes on. It ends at an abort (`EndSwitch`) or at this
+     controller's next leadership's takeover.
+  3. *Final image* (`runtime.FinalImage`): one off-scan copy of every task's frame and the tags,
+     as the last completed scans left them, numbered after every streamed image. The stream
+     sends it at once (a wake cuts its interval short; the open round of end-of-scan copies is
+     closed first, so no image is numbered after it) and the leader waits, at most lease/4, for
+     the standby's acknowledgement of exactly that image. **S1b restated:** images come only
+     from the end of a scan while the gate is open, except this one, which is still taken and
+     sent before the gate shuts.
+  4. *Resign* (`leader.Quorum.Resign`, above), with the final image's seq as the mark, on a
+     context the client's going away cannot cut, and only if the switching state and the
+     leadership still hold (else an abort).
+
+  **The point of no return is the call to Resign**, not the first RESIGN: `ResignAt` shuts the
+  gate before anything else. Before the call, a refusal or a timeout ends the switching state
+  (`EndSwitch`) and this controller leads on in the same leadership, nothing lost (outcome
+  `aborted`, HTTP 409). After it, this controller has stopped leading whatever comes back: a
+  drain that does not finish sends no RESIGN and the lease runs out (outcome `failover`, HTTP
+  502). The old leader stands down and follows its peer as any standby does. The report gives
+  each step's time.
 - **Tests.** Unit rules with one mutation each (`quorum/resign_test.go`); four switchovers back
   and forth on real elections over HTTP, each within lease/4 and with the order checked
   (`TestLoopbackAResignHandsTheLeadOverAtOnce`); in the simulator, the `Resign` fault under link
@@ -1888,6 +1930,11 @@ image, the command and the bench. The plan and rulings are in #710 (naut-lead, 2
   voter takes a RESIGN after receiving a later campaign or renewal of that boot) and the
   "rejoin" oracle (a resigner leads again only after its peer led, its hold ran out, or it took
   a fresh RESIGN back). Fable reviewed it on #1355.
+  d1c: the switching state's rules with one mutation each (`runtime/switch_test.go`), the
+  final-image acknowledgement (`TestWaitAckTakesOnlyTheFinalImage`), the parameter write's
+  gate (`TestCallFencedGoesOnlyThroughAnOpenGate`, `TestISDUWriteGoesThroughTheWriteGate`), and
+  the command end to end on a real pair: hot and within a lease, refused, and aborted in the same
+  leadership (`TestPairSwitchover*`).
 
 ## 5. Failure cases
 

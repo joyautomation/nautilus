@@ -58,9 +58,13 @@ type Tags struct {
 	comm *commHub
 	// red is a pair's redundancy state the system functions read
 	// (redstate.go); all zero outside a pair.
-	red  redState
-	mu   sync.RWMutex
-	vals map[string]*tagVal
+	red redState
+	// switching: a planned switchover is under way (switch.go): writes,
+	// forces and substitutes from outside the programs are refused
+	// (ErrSwitching). Set under mu, read under it.
+	switching atomic.Bool
+	mu        sync.RWMutex
+	vals      map[string]*tagVal
 	// fold maps ir.NameKey(name) to the spelling a tag was created under.
 	// Tag names are IEC identifiers, so they are case-insensitive (#197):
 	// a lookup that misses vals exactly falls back here, and a write in

@@ -100,6 +100,8 @@ var actionPerm = map[string]string{
 	// Releasing the takeover hold sends the program's outputs to the
 	// field before the program said it may (#710 (b2)).
 	"redundancy.release-hold": PermRedundancy,
+	// A planned switchover moves the lead to the standby (#710 d1c).
+	"redundancy.switchover": PermRedundancy,
 }
 
 // presentedToken is the credential a request carries, in either

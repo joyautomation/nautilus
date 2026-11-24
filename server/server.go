@@ -2323,6 +2323,9 @@ func (s *Server) frontDoor(w http.ResponseWriter, req writeTagRequest, whole boo
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, runtime.ErrForced):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, runtime.ErrSwitching):
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	case whole && errors.Is(err, ir.ErrTypeMismatch):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 	default:

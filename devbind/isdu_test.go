@@ -491,3 +491,38 @@ func TestISDUByteStringMethods(t *testing.T) {
 		t.Errorf("the wrong answer shape: %v", err)
 	}
 }
+
+// fencedFake is a fakeCaller whose master can also call through the
+// write gate (opcua.Driver.CallFenced): it records which way each call
+// went.
+type fencedFake struct {
+	fakeCaller
+	fenced, plain int
+}
+
+func (f *fencedFake) Call(ctx context.Context, object, method opcua.NodeRef, args ...*ua.Variant) ([]*ua.Variant, error) {
+	f.plain++
+	return f.fakeCaller.Call(ctx, object, method, args...)
+}
+
+func (f *fencedFake) CallFenced(ctx context.Context, object, method opcua.NodeRef, args ...*ua.Variant) ([]*ua.Variant, error) {
+	f.fenced++
+	return f.fakeCaller.Call(ctx, object, method, args...)
+}
+
+// #710 d1c: a parameter write goes through the master's write gate (a
+// standby's is refused, a switchover's drain waits for it); a read does
+// not (a standby may read).
+func TestISDUWriteGoesThroughTheWriteGate(t *testing.T) {
+	ps := isduPorts(t, "sick-sig300", nil)
+	ps.take(sickVals(levelVendor, levelDevice))
+	c := &fencedFake{fakeCaller: fakeCaller{answer: func(string, []*ua.Variant) ([]*ua.Variant, error) {
+		return variants(t, uint16(0), int32(0)), nil
+	}}}
+	if _, err := ps.isduWrite(context.Background(), c, "LEVEL1", "V_Setpoint", uint64(500)); err != nil {
+		t.Fatal(err)
+	}
+	if c.fenced != 1 || c.plain != 0 {
+		t.Fatalf("the write: %d fenced, %d plain calls; want it through the gate", c.fenced, c.plain)
+	}
+}

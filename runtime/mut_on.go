@@ -89,6 +89,10 @@ import "os"
 //   - hold_replace_unsafe: a driver swapped in during a hold never gets the safe values (#710 (b2), Fable).
 //   - hold_channel_held_at_post: a channel WRITE posted while held goes out when it comes due after the release (#710 (b2), Fable).
 //   - hold_safe_wait_restarts: every safe re-send restarts the 2 s wait, so retries keep the alarm down (#710 (b2), Fable re-check).
+//   - switch_writes_allowed, switch_scans_on, switch_no_wait, switch_ignores_forces,
+//     switch_ignores_hold, abort_keeps_switching, resume_ends_switching,
+//     takeover_keeps_switching, final_keeps_round: a planned switchover's
+//     switching state (#710 d1c, switch.go).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutRuntime(name string) bool { return name == mutOn }

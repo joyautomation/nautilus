@@ -62,6 +62,10 @@ type ackState struct {
 	interval time.Duration
 	acked    uint64
 	ackedAt  time.Time
+	// want is the image a switchover waits for the acknowledgement of
+	// (waitAck), and got closes when that exact image is acknowledged.
+	want uint64
+	got  chan struct{}
 }
 
 const ackSends = 16
@@ -108,13 +112,52 @@ func (s *pairStream) takeAck(term uint64, ack streamAck, now time.Time) (bool, s
 	if ack.Epoch != term && !mutNaut("ack_old_epoch_counts") {
 		return false, fmt.Sprintf("an acknowledgement of epoch %d; this leader leads in %d", ack.Epoch, term)
 	}
-	if n := len(a.sends); n == 0 || ack.Seq > a.sends[n-1].seq {
+	// A switchover's final image may be acknowledged before its send loop
+	// noted it sent (Fable nit): the standby has it, so it counts.
+	finalSeq := uint64(0)
+	if f := s.final.Load(); f != nil && f.term == term {
+		finalSeq = f.seq
+	}
+	if n := len(a.sends); (n == 0 || ack.Seq > a.sends[n-1].seq) && (finalSeq == 0 || ack.Seq != finalSeq) {
 		return false, fmt.Sprintf("an acknowledgement of image %d, above the last this leader sent", ack.Seq)
 	}
 	if ack.Seq > a.acked {
 		a.acked, a.ackedAt = ack.Seq, now
 	}
+	if a.got != nil && !s.finalAckHold.Load() && (ack.Seq == a.want || mutNaut("final_ack_any_seq")) {
+		close(a.got)
+		a.got = nil
+	}
 	return true, ""
+}
+
+// waitAck waits until the standby acknowledges exactly image seq of epoch
+// (a switchover's final image), or ctx ends: the image it took over from
+// is then that one, whole.
+func (s *pairStream) waitAck(ctx context.Context, epoch, seq uint64) error {
+	s.markMu.Lock()
+	a := &s.acks
+	a.reset(epoch)
+	if a.acked == seq {
+		s.markMu.Unlock()
+		return nil
+	}
+	got := make(chan struct{})
+	a.want, a.got = seq, got
+	s.markMu.Unlock()
+	defer func() {
+		s.markMu.Lock()
+		if a.got == got {
+			a.got, a.want = nil, 0
+		}
+		s.markMu.Unlock()
+	}()
+	select {
+	case <-got:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // syncMark is the standby's in-sync mark in epoch, for the election

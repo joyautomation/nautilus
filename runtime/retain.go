@@ -188,6 +188,14 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		// the gate close for (lost and regained between two scans): another
 		// replica may have led meanwhile.
 		r.unfresh() // until this leadership's first read
+		if !mutRuntime("takeover_keeps_switching") {
+			// A switchover of an earlier leadership is over (its resign
+			// stood this controller down). Not at the stand-down itself: a
+			// gate that closes for a tick and reopens in the same term (a
+			// late renewal) resumes the switchover, scans still stopped
+			// (Fable M1).
+			r.switchEnded()
+		}
 		r.takeover()
 		r.ioReset()
 		r.flushReset()
@@ -197,6 +205,9 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 			r.ledTerm = termed.Term()
 		}
 	case !lead:
+		if mutRuntime("resume_ends_switching") {
+			r.switchEnded()
+		}
 		if r.leading {
 			// Stepping down: forces belong to the active controller only.
 			r.dropForces("lost leadership")
