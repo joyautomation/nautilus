@@ -36,6 +36,55 @@ self.nautilusHMIPack = () =>
 		return r.arrayBuffer();
 	}).then((b) => new Uint8Array(b));
 
+// The screen builder (cmd/naut-wasm-hmi, naut-hmi.wasm) is a second module in
+// a Worker of its own (hmi-worker.js), started the first time a screen is
+// asked for: nautilus.app() in naut.wasm calls this. It gets a copy of the
+// project's files (the builder reads files, not the parsed project), so a
+// build never stalls the scan loop in this thread. It stays up after a
+// build, so the next one starts warm. If it can't be fetched, or stalls, the
+// build fails with that message; the screen shows it until Restart (which asks
+// afresh, with a new worker).
+const HMI_TIMEOUT_MS = 180000; // a slow link's two downloads, then the build
+let hmiWorker = null;
+let hmiSeq = 0;
+const hmiWaiting = new Map();
+function hmiStop(message) {
+	if (hmiWorker) hmiWorker.terminate();
+	hmiWorker = null;
+	for (const { reject } of hmiWaiting.values()) reject(new Error(message));
+	hmiWaiting.clear();
+}
+function hmiStart() {
+	if (hmiWorker) return hmiWorker;
+	const url = new URL('hmi-worker.js' + vq, BASE).href;
+	// A host that starts this worker from a blob: (NAUTILUS_BASE) can't start
+	// a worker from a cross-origin URL either; the same bridge works for it.
+	const w = self.NAUTILUS_BASE
+		? new Worker(URL.createObjectURL(new Blob([`self.NAUTILUS_BASE=${JSON.stringify(self.NAUTILUS_BASE)};importScripts(${JSON.stringify(url)});`], { type: 'text/javascript' })))
+		: new Worker(url);
+	w.onmessage = (e) => {
+		const m = e.data;
+		if (m.event === 'fatal') return hmiStop("the screen builder couldn't be downloaded or started: " + m.error + ". Check the connection and press Restart.");
+		if (m.event === 'ready') return;
+		const p = hmiWaiting.get(m.id);
+		if (!p) return;
+		hmiWaiting.delete(m.id);
+		p.resolve(m);
+	};
+	w.onerror = (e) => hmiStop("the screen builder couldn't be started: " + ((e && e.message) || 'worker error') + ". Check the connection and press Restart.");
+	hmiWorker = w;
+	return w;
+}
+self.nautilusHMIBuild = (root, opts) =>
+	new Promise((resolve, reject) => {
+		const id = ++hmiSeq;
+		const timer = setTimeout(() => hmiStop('the screen builder did not answer in ' + HMI_TIMEOUT_MS / 1000 + ' s (a stalled download?). Check the connection and press Restart.'), HMI_TIMEOUT_MS);
+		const settle = (fn) => (v) => (clearTimeout(timer), fn(v));
+		hmiWaiting.set(id, { resolve: settle(resolve), reject: settle(reject) });
+		// the bytes, not text: a screen's images and fonts must arrive as they are
+		hmiStart().postMessage({ id, root, files: mem.api.snapshotBytes(root), opts });
+	});
+
 self.onNautilusReady = () => {
 	T.goReady = performance.now();
 	markReady();

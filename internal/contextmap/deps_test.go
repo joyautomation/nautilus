@@ -375,6 +375,11 @@ var (
 		"github.com/lib/pq", // the Postgres driver
 		"database/sql",
 		"image/png", // hmibuild's PWA icons (cut: pwa_icons.go is !js)
+		// The screen builder is its own module, naut-hmi.wasm (cmd/naut-wasm-hmi),
+		// fetched when a screen is first asked for: 2 MB gzipped that naut.wasm
+		// must not carry again (startHMI calls nautilusHMIBuild, in JavaScript).
+		module + "/internal/hmibuild",
+		"github.com/evanw/esbuild",
 	}
 	// wasmLeaks: today's leaks and who removes them. Keep it shrinking.
 	wasmLeaks = map[string]string{
@@ -424,6 +429,35 @@ func TestWasmStaysFreeOfControllerCode(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("wasmLeaks lists %s, which is not in wasmForbidden", f)
+		}
+	}
+}
+
+// TestWasmHMIModuleStaysSmall is the reverse guard: the screen builder
+// (cmd/naut-wasm-hmi) carries its own Go runtime, so anything of the
+// controller that creeps into it is paid for twice. It may import the
+// builder and the mimic expander, nothing else of nautilus.
+func TestWasmHMIModuleStaysSmall(t *testing.T) {
+	out, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v", err)
+	}
+	root := filepath.Dir(strings.TrimSpace(string(out)))
+	cmd := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", "./cmd/naut-wasm-hmi")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	listed, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list -deps ./cmd/naut-wasm-hmi: %v", err)
+	}
+	allowed := map[string]bool{
+		module + "/cmd/naut-wasm-hmi": true,
+		module + "/internal/hmibuild": true,
+		module + "/internal/mimicdoc": true,
+	}
+	for _, imp := range strings.Split(strings.TrimSpace(string(listed)), "\n") {
+		if (imp == module || strings.HasPrefix(imp, module+"/")) && !allowed[imp] {
+			t.Errorf("cmd/naut-wasm-hmi now links %s: the screen builder module may import only hmibuild and mimicdoc of nautilus (it ships its own Go runtime; controller code belongs in naut.wasm, and the two talk through the page)", imp)
 		}
 	}
 }

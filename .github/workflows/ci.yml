@@ -191,9 +191,11 @@ jobs:
       # internal/project's drivers for simulated ones, so a change that
       # pulls a field driver or a socket into the shared path breaks here.
       - name: playground wasm build
-        run: GOOS=js GOARCH=wasm go vet ./cmd/naut-wasm && GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/naut-wasm
-      # The browser downloads this file, so its size is a budget: the stripped,
-      # gzipped wasm may not pass .github/wasm-budget.txt, and the number is
+        run: GOOS=js GOARCH=wasm go vet ./cmd/naut-wasm ./cmd/naut-wasm-hmi && GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/naut-wasm && GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/naut-wasm-hmi
+      # The browser downloads these files, so their size is a budget: each
+      # stripped, gzipped wasm (naut.wasm; the screen builder, naut-hmi.wasm,
+      # fetched only when a screen is first asked for) may not pass its line in
+      # .github/wasm-budget.txt, and the number is
       # printed (and put in the run summary) on every PR. Controller-only code
       # that leaks into the shared path shows up here, not in review.
       - name: playground wasm size budget
@@ -201,7 +203,7 @@ jobs:
       # Its own tests run under Node (the runner has it): a controller's
       # streams end when naut run replaces it or naut stop stops it.
       - name: playground wasm tests
-        run: GOOS=js GOARCH=wasm go test -exec="$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./cmd/naut-wasm
+        run: GOOS=js GOARCH=wasm go test -exec="$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./cmd/naut-wasm ./cmd/naut-wasm-hmi
       # Every benchmark once, so one that no longer compiles its own program
       # fails here rather than when someone next profiles (#612). The test
       # step above has already built the packages, so this adds little (15-35 s
@@ -805,6 +807,10 @@ jobs:
         with: {node-version: '22'}
       - name: share links (keep.js)
         run: node --test playground/app/keep.test.js
+      # The screen builder module (naut-hmi.wasm) builds a mimic screen and
+      # answers a broken app's errors, under Node in the worker's file system.
+      - name: playground screen builder module
+        run: node --test playground/app/hmi-module.test.mjs
       - run: ./playground/scripts/build.sh
       # The built playground in a real headless Chrome (#906, #833): every
       # example reaches "nautilus: live" (#891's offline bug), and YAML files
@@ -852,6 +858,8 @@ jobs:
           check "share API (the ingress's)" "$(code /playground/api/healthz)" 404
           check "this build's wasm" "$(header "/playground/engine/naut.wasm?v=$version.$build" cache-control)" "public, max-age=31536000, immutable"
           check "another build's wasm" "$(header "/playground/engine/naut.wasm?v=old.000000000000" cache-control)" "no-cache"
+          check "this build's screen builder" "$(header "/playground/engine/naut-hmi.wasm?v=$version.$build" cache-control)" "public, max-age=31536000, immutable"
+          check "precompressed screen builder" "$(curl -s -H 'Accept-Encoding: gzip' -D - -o /dev/null "http://localhost:8080/playground/engine/naut-hmi.wasm?v=$version.$build" | tr -d '\r' | sed -n 's/^content-encoding: //Ip')" gzip
           check "an example" "$(header /playground/engine/examples/lift-station.json cache-control)" "no-cache"
           check "precompressed wasm" "$(curl -s -H 'Accept-Encoding: gzip' -D - -o /dev/null "http://localhost:8080/playground/engine/naut.wasm?v=$version.$build" | tr -d '\r' | sed -n 's/^content-encoding: //Ip')" gzip
           exit $fail
