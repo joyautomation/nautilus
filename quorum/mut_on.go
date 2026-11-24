@@ -565,6 +565,13 @@ var Mutations = []string{
 	"abort_keeps_final",                 // naut: an aborted switchover's final image stays, so the stream sends nothing more (#710 d1c)
 	"final_sent_once_per_connection",    // naut: a stream connection sends one final image per leadership, so a switchover after an aborted one never sends its own (#710 d1c bench)
 	"resign_unchecked",                  // naut: a switchover resigns although its switching state or leadership ended meanwhile (#710 d1c, Fable re-check)
+	"flush_next_tick",                   // runtime: a takeover edge leaves its image flush to the next tick (#710 d1e)
+	"catchup_next_tick",                 // runtime: a takeover edge leaves its operator-intent catch-up to the next tick (#710 d1e)
+	"leading_term_locks",                // runtime: LeadingTerm and a flush's carry wait on leadMu, which the edge's tick holds while it waits for that flush (#710 d1e, Fable M1)
+	"wait_keeps_lead_sample",            // runtime: a takeover edge takes over on a lease sampled before its wait (#710 d1e, Fable S1)
+	"beginswitch_reads_snapshot",        // runtime: BeginSwitch checks the leadership on the snapshot, so a new leadership's takeover can land between the check and the flag (#710 d1e, Fable re-check)
+	"carry_snapshot_any_wait",           // runtime: a carry reads the snapshot during the catch-up's wait too, landing over the store the takeover loaded (#710 d1e, Fable re-check)
+	"edge_wait_blocks_others",           // runtime: other tasks' ticks queue on leadMu while a takeover edge waits for its step (#710 d1e)
 	"final_waits_interval",              // naut: a final image waits out the stream's interval when its wake came first (#710 d1c bench)
 }
 

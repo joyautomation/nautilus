@@ -110,6 +110,12 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 	if r.coord == nil && r.retainStore == nil {
 		return true, 0
 	}
+	if r.edgeWait.Load() && !mutRuntime("edge_wait_blocks_others") {
+		// Another loop's tick holds the takeover edge, waiting a moment
+		// for a step it started (waitStep): nothing scans before the edge
+		// is taken, so answer that at once rather than wait on leadMu.
+		return false, 0
+	}
 	lead := r.coord == nil || r.coord.IsLeader()
 	r.leadMu.Lock()
 	defer r.leadMu.Unlock()
@@ -165,6 +171,13 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		stored := io && hb
 		ready := stored && r.inputsReady()
 		synced := resume || r.intentReady()
+		// The lease and its term are sampled again before taking over: this
+		// tick, or another that waited on leadMu, may have waited for a
+		// step meanwhile (#710 d1e, Fable). A lock-free read.
+		if r.coord != nil && !mutRuntime("wait_keeps_lead_sample") && (!r.coord.IsLeader() || termed != nil && termed.Term() != term) {
+			r.unfresh()
+			return false, r.edges
+		}
 		if !ready || !synced {
 			r.unfresh() // nothing scans: the tags are frozen
 			return false, r.edges
@@ -183,6 +196,7 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		// counted an edge, so a main read that began under the leadership
 		// before it cannot set fresh either.
 		r.leading = true
+		r.publishLead()
 	case lead && (!r.leading || termed != nil && termed.Term() != r.ledTerm):
 		// Leadership from standby, or a new term this replica never saw
 		// the gate close for (lost and regained between two scans): another
@@ -204,6 +218,7 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		if termed != nil {
 			r.ledTerm = termed.Term()
 		}
+		r.publishLead()
 	case !lead:
 		if mutRuntime("resume_ends_switching") {
 			r.switchEnded()
@@ -216,6 +231,7 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 			r.clearTakeovers()
 		}
 		r.leading = false
+		r.publishLead()
 		r.unfresh()
 	}
 	return lead, r.edges

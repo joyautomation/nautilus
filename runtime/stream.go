@@ -121,10 +121,69 @@ func (r *Runtime) SetTakeoverFlush(f func() (*HotImage, error)) {
 // first, or without a Termed coordinator) and whether it leads in it now:
 // its takeover ran and its gate has not closed since. A leader's stream
 // sends an image only while leading is true at the term it stamps.
+//
+// It reads a snapshot published under leadMu, not leadMu itself: the
+// takeover flush calls it while the edge's tick holds leadMu waiting for
+// that flush (#710 d1e, Fable).
 func (r *Runtime) LeadingTerm() (term uint64, leading bool) {
-	r.leadMu.Lock()
-	defer r.leadMu.Unlock()
-	return r.ledTerm, r.leading
+	if mutRuntime("leading_term_locks") {
+		r.leadMu.Lock()
+		defer r.leadMu.Unlock()
+		return r.ledTerm, r.leading
+	}
+	v := r.leadSnap.Load()
+	return v >> 1, v&1 == 1
+}
+
+// publishLead publishes ledTerm and leading for LeadingTerm. Under leadMu,
+// after every change of either.
+func (r *Runtime) publishLead() {
+	v := r.ledTerm << 1
+	if r.leading {
+		v |= 1
+	}
+	r.leadSnap.Store(v)
+}
+
+// sameTickWait is how long a takeover edge's tick waits for a step it
+// just started (the image flush, the operator-intent catch-up) before
+// leaving it to the next tick (#710 d1e). Both take well under a
+// millisecond on the bench, and a tick on the edge scans nothing
+// anyway: without the wait each
+// step cost a whole tick of the fastest task, measured as most of a
+// switchover's standby side.
+var sameTickWait = 15 * time.Millisecond
+
+// waitStep waits at most d for a takeover step's result on ch, under
+// leadMu. Meanwhile the other loops' ticks answer "do not scan" at once
+// (edgeWait, gateEdge) instead of queueing on leadMu: none of them would
+// scan before the edge is taken anyway, and a fast task would otherwise
+// miss its slots for the wait.
+func (r *Runtime) waitStep(ch <-chan flushResult, d time.Duration) (flushResult, bool) {
+	r.edgeWait.Store(true)
+	r.flushWait.Store(true)
+	defer r.edgeWait.Store(false)
+	defer r.flushWait.Store(false)
+	return waitOn(ch, d)
+}
+
+// waitErr is waitStep for the intent catch-up's result.
+func (r *Runtime) waitErr(ch <-chan error, d time.Duration) (error, bool) {
+	r.edgeWait.Store(true)
+	defer r.edgeWait.Store(false)
+	return waitOn(ch, d)
+}
+
+func waitOn[T any](ch <-chan T, d time.Duration) (T, bool) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case v := <-ch:
+		return v, true
+	case <-t.C:
+		var zero T
+		return zero, false
+	}
 }
 
 // flushReady answers, on a pending takeover in term, whether the
@@ -139,6 +198,7 @@ func (r *Runtime) flushReady(term uint64) bool {
 	if r.strm.done {
 		r.strm.done = false // a new term since: its own flush
 	}
+	started := false
 	if r.strm.ch == nil {
 		ch := make(chan flushResult, 1)
 		fn := *f
@@ -148,9 +208,19 @@ func (r *Runtime) flushReady(term uint64) bool {
 		}()
 		r.strm.ch, r.strm.chTerm, r.strm.since = ch, term, time.Now()
 		r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
+		started = true
 	}
+	var res flushResult
+	got := false
 	select {
-	case res := <-r.strm.ch:
+	case res = <-r.strm.ch:
+		got = true
+	default:
+		if started && !mutRuntime("flush_next_tick") {
+			res, got = r.waitStep(r.strm.ch, min(sameTickWait, takeoverFlushWait))
+		}
+	}
+	if got {
 		r.strm.ch, r.strm.done, r.strm.doneTerm = nil, true, r.strm.chTerm
 		r.strm.hot, r.strm.hotWhy = res.hot, ""
 		if res.err != nil {
@@ -167,7 +237,6 @@ func (r *Runtime) flushReady(term uint64) bool {
 			return false
 		}
 		return true
-	default:
 	}
 	if time.Since(r.strm.since) < takeoverFlushWait {
 		return false
@@ -256,9 +325,23 @@ func (r *Runtime) CarryRetained(ctx context.Context, lead []byte, term, seq uint
 // carry is CarryRetained in the saver goroutine: its answer, and how long
 // the store's save took in req.took.
 func (r *Runtime) carry(req *carryReq) error {
-	r.leadMu.Lock()
-	leading := r.leading
-	r.leadMu.Unlock()
+	var leading bool
+	wait := r.flushWait.Load()
+	if mutRuntime("carry_snapshot_any_wait") {
+		wait = r.edgeWait.Load()
+	}
+	if wait && !mutRuntime("leading_term_locks") {
+		// A takeover edge's tick holds leadMu, waiting for its flush, which
+		// is what carries here: its takeover's store load has not begun,
+		// so the snapshot is as good as the lock (#710 d1e, Fable M1). Not
+		// during the catch-up's wait: a carry then is a late flush's, and
+		// the edge may take over on an earlier read of the store (Fable).
+		_, leading = r.LeadingTerm()
+	} else {
+		r.leadMu.Lock()
+		leading = r.leading
+		r.leadMu.Unlock()
+	}
 	if leading && !mutRuntime("stream_leader_carries") {
 		return ErrLeadingNoCarry
 	}

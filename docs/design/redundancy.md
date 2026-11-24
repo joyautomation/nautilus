@@ -1922,6 +1922,24 @@ follow-ups. The plan and rulings are in #710 (naut-lead, 2026-11-23 and 2026-11-
   drain that does not finish sends no RESIGN and the lease runs out (outcome `failover`, HTTP
   502). The old leader stands down and follows its peer as any standby does. The report gives
   each step's time.
+- **The standby's side (d1e).** Measured on the bench, most of the standby's time between its
+  election and its first scan was tick latency: the takeover edge's image flush and
+  operator-intent catch-up (each well under a millisecond once waited for in the same tick)
+  were each started on one tick and seen done on the next tick of the fastest task. The edge's tick now waits for a step it
+  started, up to 15 ms (`sameTickWait`), before leaving it to the next tick as before. The
+  flush asks `LeadingTerm` and carries the image into the store while the tick waits under
+  `leadMu`, so `LeadingTerm` reads a snapshot published under that lock instead of taking it,
+  and the carry does the same while the edge waits for that flush (its store load has not begun
+  then; during the catch-up's wait it locks as before). `BeginSwitch` checks the leadership and
+  sets its flag under `leadMu`. The tick samples the lease and its term again, lock-free,
+  before taking over. While it waits, the
+  other loops' ticks answer "do not scan" at once (`edgeWait`) rather than queueing on the
+  lock; a tick that took the lock just before still waits, and the waiting loop itself skips
+  its slots for the wait (at most two waits: well under liveness's stall bound, at least a
+  quarter lease). Nothing scans before the edge is taken either way. What remains is the tick
+  on which the gate is first seen open: up to one period of the fastest task. The loops sleep in
+  an uninterruptible `clock_nanosleep` on a locked real-time thread, and nothing signals into
+  that path to wake them.
 - **Tests.** Unit rules with one mutation each (`quorum/resign_test.go`); four switchovers back
   and forth on real elections over HTTP, each within lease/4 and with the order checked
   (`TestLoopbackAResignHandsTheLeadOverAtOnce`); in the simulator, the `Resign` fault under link

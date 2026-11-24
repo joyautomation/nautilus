@@ -380,15 +380,26 @@ func (r *Runtime) intentReady() bool {
 	if c == nil {
 		return true
 	}
+	started := false
 	if in.syncCh == nil {
 		ctx, cancel := context.WithCancel(context.Background())
 		ch := make(chan error, 1)
 		l := c.log
 		go func() { ch <- l.SyncLeader(ctx) }()
 		in.syncCh, in.syncCancel, in.syncSince = ch, cancel, time.Now()
+		started = true
 	}
+	var err error
+	got := false
 	select {
-	case err := <-in.syncCh:
+	case err = <-in.syncCh:
+		got = true
+	default:
+		if started && !mutRuntime("catchup_next_tick") {
+			err, got = r.waitErr(in.syncCh, min(sameTickWait, c.wait))
+		}
+	}
+	if got {
 		in.syncCancel()
 		in.syncCh = nil
 		in.synced = err == nil
@@ -396,7 +407,6 @@ func (r *Runtime) intentReady() bool {
 			slog.Warn("runtime: operator-intent log catch-up failed; taking over on the retained substitutes", "error", err)
 		}
 		return true
-	default:
 	}
 	if time.Since(in.syncSince) < c.wait {
 		return false

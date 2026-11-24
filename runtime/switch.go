@@ -70,10 +70,23 @@ func (r *Runtime) BeginSwitch(ctx context.Context, term uint64) error {
 	if err := r.forcesRefuse(); err != nil {
 		return err
 	}
+	// The leadership is read again, and the flag set, under leadMu: a new
+	// leadership's takeover edge, which clears the flag (switchEnded) and
+	// then publishes its term, cannot land between the two (Fable, d1e).
+	if !mutRuntime("beginswitch_reads_snapshot") {
+		r.leadMu.Lock()
+		if !r.leading || r.ledTerm != term {
+			r.leadMu.Unlock()
+			return fmt.Errorf("switchover: this controller does not lead in term %d", term)
+		}
+	}
 	r.tags.mu.Lock() // a write that holds the lock now lands before the flag
 	r.tags.switching.Store(true)
 	r.sw.term.Store(term)
 	r.tags.mu.Unlock()
+	if !mutRuntime("beginswitch_reads_snapshot") {
+		r.leadMu.Unlock()
+	}
 	// An online edit or SFC command looks at the flag under its program's
 	// lock, and the final image copies each frame under that lock: one
 	// under way when the flag was set is in the image, a later one is

@@ -851,6 +851,23 @@ lease, the leader tells the voters nothing, and the standby takes over
 when the lease runs out, as after a failover; the command says
 `failover`.
 
+**How long the field goes without a write.** The gap between the old
+leader's last write and the new leader's first is about the fence
+margin (`net-delay` + `send-margin`, 70 ms by default), plus the
+standby's election once it hears the resign (about 15 ms), plus up to
+one scan period of the fastest task. On a bench pair of containers on
+one host, with a 20 ms main task, 100 switchovers at each of a 500 ms
+and a 1 s lease measured a gap of 74 ms at best, about 94 ms typically
+and 126 ms at worst (113 ms at 1 s); a device that hangs on a write
+adds a few milliseconds. The acceptance target is a quarter lease for
+that bench program: met at a 1 s lease; at a 500 ms lease (target
+125 ms) missed by up to 1 ms on the bench program, once in 100 runs on
+a heavily loaded host, still far below a failover, which waits out the
+lease. A pair on a fast, quiet LAN may lower `net-delay` and
+`send-margin` to shorten the gap; the trade is that a write that takes
+longer than they allow to arrive may land after the standby has taken
+over. The defaults stay as they are.
+
 Alarms keep paging across a switchover: a page on its way when the
 leader resigns is sent all the same, and the new leader pages the
 alarm's level again, so a page may arrive twice, but is never lost.
