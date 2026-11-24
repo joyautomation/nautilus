@@ -70,9 +70,8 @@ namespace Tiad
             }
         }
 
-        // BumpLoad voids every adopt baseline taken for address: a
-        // download to it was handed to TIA, a dry run too (TIA may load
-        // one without asking).
+        // BumpLoad voids every adopt baseline taken for address: a dry
+        // run to it may have loaded (TIA asked no check, or it failed).
         void BumpLoad(string address)
         {
             lock (verifiedMu)

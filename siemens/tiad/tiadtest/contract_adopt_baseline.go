@@ -229,28 +229,6 @@ func contractAdoptBaselineRefusals(t *testing.T, start Starter) {
 	}
 	closeFirst(t, s)
 
-	// A dry run spends it too: TIA may load one without asking.
-	s, r = adoptAndCompare(t, c, "plant", d)
-	if r.LayoutBaseline == nil || !r.LayoutBaseline.Taken {
-		t.Fatalf("no baseline to spend: %+v", r)
-	}
-	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil {
-		t.Fatal(err)
-	}
-	importLayout(t, c, s, layoutV0)
-	// TIA asks a check, at which the dry run is cancelled.
-	a.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionConsistentDownload, Message: "consistent download"}})
-	dry := keepLoad(layoutOf(t, s, false).Digest)
-	dry.DryRun = true
-	if res, err := s.Download(ctx, dry); err != nil || !res.DryRun {
-		t.Fatalf("dry run: %+v %v", res, err)
-	}
-	if l := layoutOf(t, s, false); l.Baseline != "" || !strings.Contains(l.NoBaseline, "a download reached the CPU since the compare") {
-		t.Fatalf("after a dry run: %+v", l)
-	}
-	a.SetQuestions(t, nil)
-	closeFirst(t, s)
-
 	// Not equal: the project changed on the CPU since (another load).
 	s, err = c.Open(ctx, project)
 	if err != nil {
@@ -291,6 +269,65 @@ func contractAdoptBaselineRefusals(t *testing.T, start Starter) {
 	r, err = s.CompareWith(ctx, tiad.CompareRequest{Secrets: BenchLogin, LayoutBaseline: true})
 	if err != nil || r.Equal || r.LayoutBaseline == nil || r.LayoutBaseline.Taken || !strings.Contains(r.LayoutBaseline.Why, "not equal to the CPU") {
 		t.Fatalf("an unequal compare: %+v %+v %v", r, r.LayoutBaseline, err)
+	}
+	closeFirst(t, s)
+
+	// A dry run cancelled at TIA's first check loaded nothing: the
+	// baseline stands, and the download after it keeps the data (a
+	// deploy's --dry-run then its load, naut-lead).
+	newest := func() *tiad.DeployResult {
+		list, err := c.Deploys(ctx, benchCPU)
+		if err != nil || len(list.Deploys) == 0 {
+			t.Fatal(err)
+		}
+		return &tiad.DeployResult{ID: list.Deploys[0].ID}
+	}
+	s, r = adoptAndCompare(t, c, "plant3", newest())
+	if r.LayoutBaseline == nil || !r.LayoutBaseline.Taken {
+		t.Fatalf("no baseline: %+v", r)
+	}
+	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	importLayout(t, c, s, layoutV0)
+	a.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionConsistentDownload, Message: "consistent download"}})
+	l := layoutOf(t, s, false)
+	dry := keepLoad(l.Digest)
+	dry.DryRun = true
+	if res, err := s.Download(ctx, dry); err != nil || !res.DryRun {
+		t.Fatalf("dry run: %+v %v", res, err)
+	}
+	if again := layoutOf(t, s, false); again.BaselineFrom != tiad.BaselineFromAdopted || again.ResetDataNeeded || again.Digest != l.Digest {
+		t.Fatalf("after a cancelled dry run: %+v", again)
+	}
+	before := len(a.Loaded(t))
+	real := keepLoad(l.Digest)
+	real.Decisions.ConsistentDownload = tiad.Yes()
+	if _, err := s.Download(ctx, real); err != nil {
+		t.Fatalf("the download after the dry run: %v", err)
+	}
+	if ld := a.Loaded(t); len(ld) != before+1 || ld[len(ld)-1].EveryBlock {
+		t.Fatalf("it loads only what changed: %+v", ld)
+	}
+	a.SetQuestions(t, nil)
+	closeFirst(t, s)
+	// A dry run TIA ran without asking a check may have loaded: the
+	// baseline goes.
+	s, r = adoptAndCompare(t, c, "plant4", newest())
+	if r.LayoutBaseline == nil || !r.LayoutBaseline.Taken {
+		t.Fatalf("no baseline: %+v", r)
+	}
+	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	importLayout(t, c, s, layoutV0)
+	dry = keepLoad(layoutOf(t, s, false).Digest)
+	dry.DryRun = true
+	if _, err := s.Download(ctx, dry); tiad.Kind(err) != tiad.KindOutcomeUnknown {
+		t.Fatalf("a dry run TIA asked nothing about: %v", err)
+	}
+	if l := layoutOf(t, s, false); l.Baseline != "" || !strings.Contains(l.NoBaseline, "a download reached the CPU since the compare") {
+		t.Fatalf("after a dry run TIA may have loaded: %+v", l)
 	}
 	closeFirst(t, s)
 

@@ -1890,12 +1890,6 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			f.loadGen = map[string]int{}
 		}
 		f.loadGen[req.Address]++
-	} else {
-		// A dry run TIA may load without asking: the adopt baseline goes.
-		if f.loadGen == nil {
-			f.loadGen = map[string]int{}
-		}
-		f.loadGen[req.Address]++
 	}
 	var acting []string
 	var given string
@@ -2083,8 +2077,13 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	s.restored = s.archive
 	s.archive = ""
 	s.changed = false
-	// A dry run TIA asks nothing about cannot be cancelled: TIA loads.
+	// A dry run TIA asks nothing about cannot be cancelled: TIA loads,
+	// and every adopt baseline for the CPU goes (#1347).
 	if req.DryRun {
+		if f.loadGen == nil {
+			f.loadGen = map[string]int{}
+		}
+		f.loadGen[req.Address]++
 		return nil, outcomeUnknown("TIA ran the dry run's download without asking a single check, so tiad could not cancel it", nil)
 	}
 	// Success only on evidence: an online compare right after, in the

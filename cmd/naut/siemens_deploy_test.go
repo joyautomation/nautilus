@@ -1297,6 +1297,36 @@ func TestSiemensDeployKeepsABrownfieldCPUsData(t *testing.T) {
 	}
 }
 
+// TestSiemensDeployAdoptDryRunThenLoad (#1347, naut-lead): the everyday
+// flows. --dry-run runs TIA's first check and then the load, in one
+// deploy: the dry run, cancelled at that check, loads nothing and leaves
+// the adopt baseline standing, so the load keeps the CPU's data without
+// --reset-data. And a plan declined at the prompt, then the same command:
+// the second run adopts and compares again, and keeps the data too.
+func TestSiemensDeployAdoptDryRunThenLoad(t *testing.T) {
+	r := newDeployRig(t)
+	f := r.cpuRuns(false)
+	r.noResetData = true
+	// TIA asks its consistent-download check, at which a dry run cancels.
+	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionConsistentDownload, Message: "consistent download"}})
+	out, code := r.run("no\n", true, "--download", "--dry-run", "--adopt", f)
+	if code == 0 || !strings.Contains(out, "nothing already on the CPU changes its data layout, so its data is kept") || len(r.downloads()) != 0 {
+		t.Fatalf("a declined plan: exit %d, %d download(s):\n%s", code, len(r.downloads()), out)
+	}
+	out, code = r.run("", false, "--download", "--yes", "--dry-run", "--adopt", f)
+	if code != 0 || !strings.Contains(out, "data layout baseline: the adopted project as the CPU runs it (") ||
+		!strings.Contains(out, "data layout: unchanged since the adopted project (adopted:") || !strings.Contains(out, "TIA asks consistent-download") ||
+		!strings.Contains(out, "downloaded; the online compare right after is equal") {
+		t.Fatalf("the dry run, then the load: exit %d:\n%s", code, out)
+	}
+	// The cancelled dry run loaded nothing; the one load took only what
+	// changed, without the consent.
+	dl := r.downloads()
+	if len(dl) != 1 || dl[0].Request.DryRun || dl[0].EveryBlock || dl[0].Request.Decisions.ResetData != nil {
+		t.Fatalf("downloads: %+v", dl)
+	}
+}
+
 // TestSiemensDeployAdoptOnAnOldAgent: an agent before #1347 takes no adopt
 // baseline: the deploy says reinstall, before anything is imported.
 func TestSiemensDeployAdoptOnAnOldAgent(t *testing.T) {

@@ -616,7 +616,6 @@ namespace Tiad
                     // A download to the CPU runs: the verify that found it
                     // equal to its last deploy no longer stands.
                     if (!req.DryRun) ForgetVerified(req.Address);
-                    else BumpLoad(req.Address);
                     // Recorded: TIA's download comes next, and may load.
                     if (marked) s.AccessTurnOnTried = true;
                     try
@@ -648,6 +647,14 @@ namespace Tiad
                             // record it again.
                             bool clean = got != null && !got.Loaded && acting.Count == 0 && !(use.MayHaveAskedCredentials && !use.LoggedOn);
                             if (!clean) instanceLogons.Forget(req.Address, "a download to it ran in TIA and may have changed the CPU's users or access control");
+                            // A dry run TIA did not end cleanly, loading
+                            // nothing (it may have loaded: TIA asked no
+                            // check, or it failed), voids every adopt
+                            // baseline for the CPU. One cancelled at its
+                            // first check loaded nothing and keeps it, so a
+                            // deploy's dry run and its download that follows
+                            // still compare with it (#1347).
+                            if (req.DryRun && !(got != null && !got.Loaded)) BumpLoad(req.Address);
                         }
                     }
                     catch (Exception e)
