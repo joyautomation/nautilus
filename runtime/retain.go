@@ -695,6 +695,15 @@ func (r *Runtime) saveRetainedErr(lastSaved []byte) ([]byte, error) {
 	// has loaded the store (gate, before its next scan), its tags hold seeds
 	// and its frames are fresh, and saving them would overwrite what the
 	// takeover is about to load.
+	//
+	// A takeover edge waiting for its flush holds leadMu, and that flush's
+	// carry goes through this same saver goroutine: a save parked on the
+	// lock would hold the carry behind it for the whole wait. The edge's
+	// takeover has not loaded the store yet, so this save is one to skip
+	// anyway; the next period saves (#710 d1e, CI on #1359).
+	if r.flushWait.Load() && !mutRuntime("save_waits_on_edge") {
+		return lastSaved, ErrNotLeading
+	}
 	r.leadMu.Lock()
 	leading, term := r.leading, r.ledTerm
 	r.leadMu.Unlock()

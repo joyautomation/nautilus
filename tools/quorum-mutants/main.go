@@ -608,6 +608,7 @@ var table = []mutation{
 	{"wait_keeps_lead_sample", []string{"TestALeaseLostDuringTheWaitTakesNothingOver"}},
 	{"beginswitch_reads_snapshot", []string{"TestASwitchoverOfAnOldTermDuringATakeoverIsRefused"}},
 	{"carry_snapshot_any_wait", []string{"TestACarryDuringTheCatchUpWaitIsRefusedOnceLeading"}},
+	{"save_waits_on_edge", []string{"TestASaveDuringTheFlushWaitDoesNotHoldTheCarry"}},
 	{"resign_unchecked", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"final_sent_once_per_connection", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"ack_other_build", []string{"TestPairColdTakeoverOnAnotherBuild"}},
@@ -1058,6 +1059,7 @@ var rowPkgs = map[string][]string{
 	"wait_keeps_lead_sample":            {"./runtime"},
 	"beginswitch_reads_snapshot":        {"./runtime"},
 	"carry_snapshot_any_wait":           {"./runtime"},
+	"save_waits_on_edge":                {"./runtime"},
 	"resign_unchecked":                  {"./cmd/naut"},
 	"final_sent_once_per_connection":    {"./cmd/naut"},
 }

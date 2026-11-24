@@ -250,3 +250,38 @@ func TestACarryDuringTheCatchUpWaitIsRefusedOnceLeading(t *testing.T) {
 		t.Fatalf("a carry during the catch-up wait: %v, want ErrLeadingNoCarry (it landed over the store the takeover loaded)", err)
 	}
 }
+
+// A retain save that comes up while a takeover edge waits for its flush
+// (the saver's tick, or a requested save) does not park the saver on
+// leadMu: the flush's carry goes through the same saver goroutine and
+// would wait the whole wait out behind it (CI on #1359). The save is
+// skipped, as one before the takeover's load must be. save_waits_on_edge
+// turns it red.
+func TestASaveDuringTheFlushWaitDoesNotHoldTheCarry(t *testing.T) {
+	wideWait(t)
+	store := &fakeStore{state: retain.State{Tags: map[string]any{"SP": 1.0}, Stream: &retain.StreamPos{Term: 5, Seq: 3}}}
+	coord := &keepTerm{}
+	rt := newRetained(t, store, coord)
+	took := make(chan time.Duration, 1)
+	rt.SetTakeoverFlush(func() (*HotImage, error) {
+		go func() { _ = rt.SaveRetained(context.Background()) }() // a save the saver takes first
+		time.Sleep(20 * time.Millisecond)
+		t0 := time.Now()
+		if _, err := rt.CarryRetained(context.Background(), []byte(`{"tags":{"SP":9}}`), 5, 4); err != nil {
+			t.Errorf("the flush's carry: %v", err)
+		}
+		took <- time.Since(t0)
+		return nil, nil
+	})
+	runWith(t, rt)
+	coord.term.Store(6)
+	coord.lead.Store(true)
+	select {
+	case d := <-took:
+		if d > 150*time.Millisecond {
+			t.Fatalf("the carry waited %s behind a save parked on the lock the edge held", d)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no takeover flush")
+	}
+}

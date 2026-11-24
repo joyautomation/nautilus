@@ -571,6 +571,7 @@ var Mutations = []string{
 	"wait_keeps_lead_sample",            // runtime: a takeover edge takes over on a lease sampled before its wait (#710 d1e, Fable S1)
 	"beginswitch_reads_snapshot",        // runtime: BeginSwitch checks the leadership on the snapshot, so a new leadership's takeover can land between the check and the flag (#710 d1e, Fable re-check)
 	"carry_snapshot_any_wait",           // runtime: a carry reads the snapshot during the catch-up's wait too, landing over the store the takeover loaded (#710 d1e, Fable re-check)
+	"save_waits_on_edge",                // runtime: a retain save during a takeover edge's flush wait parks the saver on leadMu, holding the flush's carry (#710 d1e, CI on #1359)
 	"edge_wait_blocks_others",           // runtime: other tasks' ticks queue on leadMu while a takeover edge waits for its step (#710 d1e)
 	"final_waits_interval",              // naut: a final image waits out the stream's interval when its wake came first (#710 d1c bench)
 }
