@@ -6,9 +6,11 @@
 //
 //   node hmi-module-run.mjs <naut-hmi.wasm> <wasm_exec.js> <memfs.js> <packs.tar.gz> <project.json>
 //
-// project.json is {root, opts, files: {relativePath: text}}; the result is
-// printed as one JSON line: {ok, pages, files: [names], ms} or {ok: false, messages}.
+// project.json is {root, opts, files: {relativePath: text | {b64: base64 bytes}}}; the
+// result is printed as one JSON line: {ok, pages, files: [names], sha: {name: sha256
+// of each built file}, ms} or {ok: false, messages}.
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { runInThisContext } from 'node:vm';
 
 const [wasmPath, execPath, memfsPath, packsPath, projectPath] = process.argv.slice(2);
@@ -38,6 +40,6 @@ go.run(instance).then(() => write(JSON.stringify({ ok: false, messages: ['naut-h
 await ready;
 
 mem.api.mkdirp(project.root);
-for (const [p, text] of Object.entries(project.files)) mem.api.writeFile(project.root + '/' + p, text);
+for (const [p, f] of Object.entries(project.files)) mem.api.writeFile(project.root + '/' + p, typeof f === 'string' ? f : new Uint8Array(Buffer.from(f.b64, 'base64')));
 const r = await globalThis.nautilusHMI.build(project.root, JSON.stringify(project.opts));
-write(JSON.stringify(r.ok ? { ok: true, pages: r.pages, files: Object.keys(r.files), ms: r.ms } : { ok: false, messages: r.messages }) + '\n');
+write(JSON.stringify(r.ok ? { ok: true, pages: r.pages, files: Object.keys(r.files), sha: Object.fromEntries(Object.entries(r.files).map(([k, u8]) => [k, createHash('sha256').update(u8).digest('hex')])), ms: r.ms } : { ok: false, messages: r.messages }) + '\n');
