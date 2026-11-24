@@ -28,13 +28,16 @@ type HotCheck struct {
 	Campaigns  []uint64
 	LedBefore  uint64
 	// Witness and WitnessFloor: the witness's reply never covers an epoch
-	// at or below WitnessFloor, this controller's voter's term floor
+	// below WitnessFloor, this controller's voter's term floor
 	// (recordsFrom). Its records speak only for its own incarnation: a
-	// rebuilt one's RecordsFrom is the first campaign it granted, which
-	// may predate the adoption that made it count, and an earlier
-	// incarnation may have granted any term up to that adoption's floor,
-	// which the voter's floor holds and never lowers (#710 S2c-1 residual
-	// S3, Fable on #1345). Its records still count as evidence.
+	// rebuilt one's RecordsFrom is set by the first grant that starts its
+	// records (a campaign, or above the Promised of renewals it granted:
+	// it grants a leader's renewals before either controller counts it,
+	// and keeps that leader's mark), which may predate the adoption that
+	// made it count; an earlier incarnation may have granted any term up
+	// to that adoption's floor, which the voter's floor holds and never
+	// lowers (#710 S2c-1 residual S3, Fable on #1345 and #1365). Its
+	// records still count as evidence.
 	Witness      NodeID
 	WitnessFloor uint64
 }
@@ -95,16 +98,16 @@ func (c *Candidate) wonFrom(rd *round) []WonReply {
 
 // Cold reasons (HotCheck.Verdict). Each names what the voters said.
 const (
-	ColdRecordsUnknown = "records-unknown"  // fewer than two of the winning replies know every grant since the image's epoch
-	ColdWitnessRebuilt = "witness-rebuilt"  // as records-unknown, because the witness was re-adopted (rebuilt) since the image's leadership began: its records can't speak for that epoch
-	ColdLaterLeader    = "later-leadership" // a voter granted the old leader an epoch after the image's
-	ColdImageUnseen    = "image-epoch-unrecorded"
-	ColdOwnLeadership  = "own-leadership" // this controller led after the image's epoch
-	ColdNoMark         = "no-mark"        // no voter knows how far the standby was in sync
-	ColdMarkOtherEpoch = "mark-other-epoch"
-	ColdNotCurrent     = "standby-not-current" // the old leader's last word: its standby was behind
-	ColdBehindMark     = "behind-mark"         // the image is older than the one the standby acknowledged
-	ColdNotLeading     = "not-leading"         // the check ran with no lease held
+	ColdRecordsUnknown   = "records-unknown"   // fewer than two of the winning replies know every grant since the image's epoch
+	ColdWitnessReadopted = "witness-readopted" // as records-unknown, because the pair re-adopted its voter set (a rebuilt witness, or a new adoption) since the image's leadership began: the witness's records can't speak for that epoch
+	ColdLaterLeader      = "later-leadership"  // a voter granted the old leader an epoch after the image's
+	ColdImageUnseen      = "image-epoch-unrecorded"
+	ColdOwnLeadership    = "own-leadership" // this controller led after the image's epoch
+	ColdNoMark           = "no-mark"        // no voter knows how far the standby was in sync
+	ColdMarkOtherEpoch   = "mark-other-epoch"
+	ColdNotCurrent       = "standby-not-current" // the old leader's last word: its standby was behind
+	ColdBehindMark       = "behind-mark"         // the image is older than the one the standby acknowledged
+	ColdNotLeading       = "not-leading"         // the check ran with no lease held
 )
 
 // Verdict says whether a takeover may go on hot from an image of the
@@ -128,7 +131,7 @@ func (h HotCheck) Verdict(imgEpoch, imgSeq uint64) (hot bool, why string) {
 	// against hot (a later epoch, a mark not current) counts from every
 	// winning reply, covering or not (Fable, #1345 S2).
 	covering, marked := 0, 0
-	floored := false // the floor took the witness's coverage away
+	floored := false // the floor took the witness's coverage away, which would have counted
 	var peerMax uint64
 	var mark Mark
 	for _, w := range h.Won {
@@ -158,8 +161,8 @@ func (h HotCheck) Verdict(imgEpoch, imgSeq uint64) (hot bool, why string) {
 		// are LedBefore, below.
 	}
 	if covering < 2 {
-		if floored {
-			return false, ColdWitnessRebuilt
+		if floored && (covering == 1 || mut("witness_reason_any")) {
+			return false, ColdWitnessReadopted
 		}
 		return false, ColdRecordsUnknown
 	}

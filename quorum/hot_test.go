@@ -126,13 +126,19 @@ func TestHotVerdictWitnessBelowItsFloor(t *testing.T) {
 		h    HotCheck
 		want string
 	}{
-		// The coverage rule alone: in the S3 history a rebuilt witness
-		// can't hold a mark of B's epoch 5 (its marks come from renewals
-		// it granted, all at 8 or later), so the two realistic rows
-		// below are cold on the marks too.
-		{"the S3 history, coverage only", check(8, won("A", 3, 5, cur(40), 9), won("W", 6, 5, cur(40), 9)), ColdWitnessRebuilt},
-		{"the S3 history, the witness with no mark", check(8, won("A", 3, 5, cur(40), 9), won("W", 6, 5, Mark{}, 9)), ColdWitnessRebuilt},
-		{"the S3 history, the witness's mark at 8", check(8, won("A", 3, 5, cur(40), 9), won("W", 6, 5, Mark{Known: true, Current: true, Term: 8, Scan: 3}, 9)), ColdWitnessRebuilt},
+		// The S3 history. The rebuilt witness CAN hold B's current mark at
+		// epoch 5: it grants renewals from a leader that does not count it
+		// yet (Fable on #1365), so the marks rule alone does not save it.
+		{"the S3 history, the witness's mark at 5", check(8, won("A", 3, 5, cur(40), 9), won("W", 6, 5, cur(40), 9)), ColdWitnessReadopted},
+		{"the S3 history, the witness with no mark", check(8, won("A", 3, 5, cur(40), 9), won("W", 6, 5, Mark{}, 9)), ColdWitnessReadopted},
+		{"the S3 history, the witness's mark at 8", check(8, won("A", 3, 5, cur(40), 9), won("W", 6, 5, Mark{Known: true, Current: true, Term: 8, Scan: 3}, 9)), ColdWitnessReadopted},
+		// The boundary: the old incarnation granted nothing above the
+		// floor, so the witness covers an image epoch equal to it, not one
+		// below (Fable on #1365: floor instead of floor+1 passed before).
+		{"the floor at the image's epoch", check(5, won("A", 3, 5, cur(40), 9), won("W", 4, 5, cur(40), 9)), ""},
+		{"the floor just above the image's epoch", check(6, won("A", 3, 5, cur(40), 9), won("W", 4, 5, cur(40), 9)), ColdWitnessReadopted},
+		// The other voter's coverage was missing anyway: not the floor's doing.
+		{"cold without the floor too", check(8, won("A", 7, 5, cur(40), 9), won("W", 6, 5, cur(40), 9)), ColdRecordsUnknown},
 		{"a floor below the image's epoch", check(4, won("A", 3, 5, cur(40), 9), won("W", 1, 5, cur(40), 9)), ""},
 		{"no floor (no adoption wired)", check(0, won("A", 3, 5, cur(40), 9), won("W", 6, 5, cur(40), 9)), ""},
 		// Records that start above the floor are the new incarnation's own.
@@ -155,6 +161,14 @@ func TestHotVerdictWitnessBelowItsFloor(t *testing.T) {
 	h := check(8, won("A", 3, 5, Mark{}, 0), won("W", 6, 5, Mark{}, 0))
 	if floor, ok, why := h.HandBackFloor(); ok || why != HandBackRecordsUnknown {
 		t.Errorf("hand-back: floor %d ok %v %q, want refused as %s", floor, ok, why, HandBackRecordsUnknown)
+	}
+	// All three answered: the second-highest path reads coverage through
+	// the floor too. B's own voter knows B led in 8; unclamped the witness
+	// made 5 the floor (Fable on #1365: handback.go's second-highest
+	// coverage was untested).
+	h3 := check(8, won("A", 3, 5, Mark{}, 0), won("B", 3, 8, Mark{}, 0), won("W", 6, 5, Mark{}, 0))
+	if floor, ok, _ := h3.HandBackFloor(); ok && floor < 8 {
+		t.Errorf("hand-back, three replies: floor %d, want 8 or refused", floor)
 	}
 	// With the floor below the image's epoch the witness's word stands.
 	if floor, ok, _ := check(4, won("A", 3, 5, Mark{}, 0), won("W", 6, 5, Mark{}, 0)).HandBackFloor(); !ok || floor != 5 {
