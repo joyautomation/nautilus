@@ -1579,22 +1579,65 @@ unless it is turned off.
 #### Peer TLS
 
 Every call on a peer port (votes, the handshake, the operator-intent
-log's copies) runs **TLS 1.3 by default**, with nothing to configure. The
-two controllers and the witness derive one key from the peer token they
-already share, and each end of a connection checks that the other holds
-it: a box without the token can neither read peer traffic nor pass as a
-member, and the token itself never crosses the network in the clear. The
-check is the key alone, with no certificate authority, host name or
-dates, so peers can be addressed by name or by IP (and the witness
-through a floating address), and a controller whose clock is off still
-connects. Nothing is
-copied or re-pinned when a box is replaced.
+log's copies, the state stream) runs **TLS 1.3 by default**, with
+nothing to configure. The token itself never crosses the network in the
+clear.
 
-What it does not do yet: anyone who holds the token holds the key, so a
-leaked env file is still enough to act as any member. Keys of each box's
-own, pinned when the pair is commissioned, will follow (#710). Keep the
-env files as secret as before, and keep peer ports off networks that
-don't need them.
+**Each box has a key of its own.** At its first start a controller (and
+the witness) makes a key in its state directory (`peer-key.json`, mode
+0600), and a certificate for it that names the member (`a`, `b` or
+`witness`) and is signed with a key derived from the peer token. The
+key never leaves the box and is not in the env files. A box answering
+for a member must show a certificate signed with the token's key that
+names that member, and once the member's key is **pinned** at the
+others, it must be that key: the token alone is no longer enough to act
+as a member. There is no certificate authority, host name or date check,
+so peers can be addressed by name or by IP (and the witness through a
+floating address), and a controller whose clock is off still connects.
+
+- **Pinned at first contact.** The first time two members talk, each
+  pins the other's key (`peer-pins.json` in a controller's state
+  directory; the witness keeps one pins file per pair). Every pin is
+  journalled on the controllers (`redundancy.peer-pin`, with the
+  member's name, the key's fingerprint, its address and the time) and
+  logged; the witness logs them. Nothing re-pins by itself afterwards.
+- **Check the fingerprints.** `naut redundancy status` (and `GET
+  /api/cluster`) shows this box's own key and the ones it pinned for
+  the others: `peer keys: this box SHA256:...; pinned: b SHA256:...,
+  witness SHA256:...`. Each box's own fingerprint must be what the
+  others pinned for it. The witness prints its own at start.
+- **Whoever answers first is pinned.** After a new pair's first start,
+  a box replacement or an unpin, the first box that answers for a
+  member with the token is pinned. So **do commissioning, upgrades and
+  replacements on a trusted network, and check the fingerprints
+  afterwards.**
+- **A changed key is refused, loudly.** A box answering for a member
+  with another key than the pinned one is refused: the controller that
+  calls names it on `GET /api/cluster` and the banner, the member that
+  refused it raises a condition (`refused a's peer TLS key`, with the
+  address it came from) and journals both fingerprints. The message
+  names the fix.
+- **A replaced box, a lost state directory, or a new NIC.** The key is
+  bound to its box: it is used while the machine-id is the same and at
+  least one of the physical NICs it was made with is still there.
+  Installing docker, adding a bridge (even moving the NIC into it), a
+  VLAN, a VPN or a USB NIC keeps it; a disk cloned onto other hardware,
+  a cloned VM with a new MAC, or a box whose only NIC was replaced makes
+  a new key, and so does a lost or wiped state directory. The other
+  members then refuse it until an operator runs **`naut redundancy
+  unpin <name>`** on the **surviving** controller (it drops the pin
+  there and at the witness): the new key is pinned at its next contact.
+  A controller whose state directory was lost therefore no longer
+  rejoins by itself: unpin it first. A rebuilt witness is a new
+  incarnation and is pinned when the pair adopts it. A key file that
+  can't be read (wrong owner or mode) is never replaced: the box waits
+  until it can read it, so fix the file rather than delete it. The
+  witness, like the controllers, needs a machine-id.
+- **An unreadable pins file** is moved aside, never silently ignored
+  and never an outage: every member is pinned again at its next contact,
+  which is the moment the trusted-network rule above is for, and a
+  condition (`peer-pins-reset`) stands for a day, past the re-pinning,
+  to remind you to check the fingerprints.
 
 - **A token under 32 characters is refused at start**, by `naut run`
   and `naut witness`: the key's public half is visible to anyone who
@@ -1605,12 +1648,15 @@ don't need them.
 - **A mismatch is named on the controller that calls.** A controller
   that reaches a peer speaking the other protocol (peer TLS off on one
   side, a release from before peer TLS, or something else answering at
-  that address), or holding another key (another token, or something
-  else answering), says so in `GET /api/cluster` and on the banner,
+  that address), or holding another key (another token, a key other
+  than the pinned one, or something else answering), says so in `GET /api/cluster` and on the banner,
   naming the peer, until a call gets through again. The side that is
   called sees only a failed handshake in its log, and the witness has no
-  `/api/cluster`: look at the controllers. The pair runs on any two
-  members that agree. **Never turn peer TLS off to clear a mismatch**:
+  `/api/cluster`: look at the controllers (a refused key is also a
+  condition on the controller that refused it, and in the witness's
+  log). The pair runs on any two
+  members that agree. **Never turn peer TLS off to clear a mismatch**
+  or a refused key:
   turn it on where it is off, or upgrade the old release; off would send
   the token to whatever answers.
 - **Turning it off is for a lab bench only.** `redundancy: peer-tls:

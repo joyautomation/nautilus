@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/peertls"
 	"github.com/joyautomation/nautilus/quorum"
 	"github.com/joyautomation/nautilus/quorum/node"
 )
@@ -72,7 +73,7 @@ func TestWitnessServesVotes(t *testing.T) {
 		}
 		req.Header.Set(node.LeaseHeader, strconv.FormatInt(int64(time.Second), 10))
 		req.Header.Set(node.MembersHeader, "a,b")
-		resp, err := peerClient(t, testPeerToken).Do(req)
+		resp, err := memberClient(t, testPeerToken, cluster, "a", peertls.Witness).Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}

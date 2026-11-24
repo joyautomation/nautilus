@@ -5,7 +5,6 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/subtle"
-	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -218,43 +217,105 @@ func baseURL(addr string, tls bool) string {
 	return "http://" + addr
 }
 
+// TLSWrap is peer TLS's client side (#710): it runs the handshake over
+// raw, a connection dialed to addr (the host:port of a peer address as
+// Options names it: DialAddr), and returns it once the other end is the
+// member at that address (internal/peertls Peer.Wrap: its certificate
+// signed by the token's key, naming that member, its key the pinned one).
+// ctx bounds the handshake. Nil: plain HTTP.
+type TLSWrap func(ctx context.Context, raw net.Conn, addr string) (net.Conn, error)
+
+// DialAddr is the host:port a peer call to addr (a peer address from the
+// manifest, or a URL in tests) dials: what a TLSWrap is handed.
+func DialAddr(addr string) string { return hostOf(baseURL(addr, true)) }
+
 // newClient is the HTTP client for peer calls: connections kept alive,
 // a few per peer, and no overall timeout (each call has its own deadline).
-// conf, when set, is peer TLS's client side (#710): the handshake rides
-// the same dial, so a close is still a reset.
-func newClient(dial func(ctx context.Context, network, addr string) (net.Conn, error), conf *tls.Config) *http.Client {
+// wrap, when set, is peer TLS's client side (#710): the handshake rides
+// the same dial, so a close is still a reset, and each destination gets
+// its own check (a TLS ServerName can't name the member: it is empty for
+// an IP address).
+func newClient(dial func(ctx context.Context, network, addr string) (net.Conn, error), wrap TLSWrap) *http.Client {
 	if dial == nil {
 		dial = (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 15 * time.Second}).DialContext
 	}
-	handshake := tlsHandshakeTimeout
-	if mut("peer_tls_handshake_unbounded") {
-		handshake = 0
-	}
-	return &http.Client{Transport: &http.Transport{
-		Proxy:           nil, // peers are reached directly, never through an HTTP proxy
-		DialContext:     resetOnClose(dial),
-		TLSClientConfig: conf,
-		// A call's deadline ends the call, not the transport's own dial and
-		// handshake: without a bound, a peer that accepts and never speaks
-		// (a hung process) would keep one connection per call (#1230 review).
-		TLSHandshakeTimeout: handshake,
+	tr := &http.Transport{
+		Proxy:               nil, // peers are reached directly, never through an HTTP proxy
+		DialContext:         resetOnClose(dial),
 		MaxIdleConnsPerHost: 4,
 		IdleConnTimeout:     90 * time.Second,
 		ForceAttemptHTTP2:   false,
-	}}
+	}
+	if wrap != nil {
+		tr.DialTLSContext = tlsDial(resetOnClose(dial), wrap)
+	}
+	return &http.Client{Transport: tr}
+}
+
+// tlsDial dials raw and runs wrap's handshake over it, bounded: a call's
+// deadline ends the call, not the dial and handshake, so without a bound
+// a peer that accepts and never speaks (a hung process) would keep one
+// connection per call (#1230 review).
+func tlsDial(dial func(ctx context.Context, network, addr string) (net.Conn, error), wrap TLSWrap) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		raw, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		hctx := ctx
+		if !mut("peer_tls_handshake_unbounded") {
+			var cancel context.CancelFunc
+			hctx, cancel = context.WithTimeout(ctx, tlsHandshakeTimeout)
+			defer cancel()
+		}
+		return wrap(hctx, raw, addr)
+	}
 }
 
 // NewPeerClient is an HTTP client for a peer call of its own, outside the
 // vote protocol's: the pair's state stream (#710 S1b) keeps its own
 // connections, so a busy stream never delays a renewal (design §6). Same
 // dial (every close a reset), same peer TLS, same handshake bound.
-func NewPeerClient(dial func(ctx context.Context, network, addr string) (net.Conn, error), conf *tls.Config) *http.Client {
-	return newClient(dial, conf)
+func NewPeerClient(dial func(ctx context.Context, network, addr string) (net.Conn, error), wrap TLSWrap) *http.Client {
+	return newClient(dial, wrap)
 }
 
 // PeerURL is the base URL of a peer address (host:port, or a URL in
 // tests): https with peer TLS on.
 func PeerURL(addr string, tls bool) string { return baseURL(addr, tls) }
+
+// peerKey is the request context key of the member a peer listener's
+// TLS verified (WithPeer).
+type peerKey struct{}
+
+type verifiedPeer struct{ cluster, name string }
+
+// WithPeer is r carrying the member peer TLS verified for it (cluster, ""
+// for the witness, and name): what internal/peertls's Bind hands the
+// handlers, through cmd/naut, which imports both.
+func WithPeer(r *http.Request, cluster, name string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), peerKey{}, verifiedPeer{cluster, name}))
+}
+
+// VerifiedPeer is the member peer TLS verified for r (WithPeer).
+func VerifiedPeer(r *http.Request) (cluster, name string, ok bool) {
+	v, ok := r.Context().Value(peerKey{}).(verifiedPeer)
+	return v.cluster, v.name, ok
+}
+
+// SenderOK reports whether a request that names sender of cluster in its
+// body (or query) comes from that member: the one its TLS certificate
+// names (#710 per-box keys). A request without TLS is peer TLS off (the
+// loud lab opt-out): nothing to bind. With TLS and no verified member (a
+// listener without Bind) it fails closed. mutation is the handler's own
+// row, which skips the check.
+func SenderOK(r *http.Request, cluster, sender, mutation string) bool {
+	if r.TLS == nil || mut(mutation) {
+		return true
+	}
+	c, n, ok := VerifiedPeer(r)
+	return ok && c == cluster && n == sender
+}
 
 // tlsHandshakeTimeout bounds a peer TLS handshake.
 var tlsHandshakeTimeout = 2 * time.Second
@@ -292,12 +353,22 @@ func faultOf(err error) linkFault {
 		return faultPeerTLS
 	case errors.As(err, &id) && id.PeerIdentity():
 		return faultForeignKey
+	case keyRefusal(err):
+		return faultKeyRefused
 	case errors.As(err, &op) && op.Op == "remote error" && strings.Contains(op.Err.Error(), "certificate"):
 		// A TLS 1.3 client learns that the server refused its key only
 		// at its first read: an alert, "bad certificate".
 		return faultKeyRefused
 	}
 	return faultNone
+}
+
+// keyRefusal reports a peer listener's refusal of this side's key at a
+// request (internal/peertls Bind: a 403 marked peer-key), as when a name's
+// pin changed under a kept connection.
+func keyRefusal(err error) bool {
+	var se *statusError
+	return errors.As(err, &se) && se.reason == "peer-key"
 }
 
 // resetOnClose dials with SO_LINGER 0, so every close of a peer
@@ -426,3 +497,7 @@ func refuse(w http.ResponseWriter, why, msg string) {
 	w.Header().Set(RefusedHeader, why)
 	http.Error(w, msg, http.StatusConflict)
 }
+
+// CloseIdle closes the elector's kept peer connections: after a peer's pin
+// is dropped (#710 per-box keys), its next call meets the new key.
+func (e *Elector) CloseIdle() { e.call.client.CloseIdleConnections() }

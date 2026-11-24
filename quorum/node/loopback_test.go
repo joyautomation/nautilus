@@ -66,7 +66,8 @@ type cluster struct {
 	// plain HTTP). Every other node runs the pair's peer TLS, keyed by its
 	// peer token (#710), as naut run does by default.
 	plain map[quorum.NodeID]bool
-	pairs map[string]*peertls.Pair // by token
+	pairs map[string]*peertls.Peer // by node and token
+	keys  string                   // the peers' key and pin directories
 	// fail reports an oracle breach: t.Errorf, or a recorder in the
 	// monitor's own test.
 	fail func(format string, args ...any)
@@ -143,7 +144,7 @@ func newClusterHere(t *testing.T) *cluster {
 		tok:  map[quorum.NodeID]string{"a": testToken, "b": testToken, WitnessID: testToken},
 		ctok: map[quorum.NodeID]string{"a": "client", "b": "client"}, led: map[uint64]quorum.NodeID{},
 		stop: make(chan struct{}), done: make(chan struct{}), bytes: map[quorum.NodeID]*tap{}, fail: t.Errorf,
-		plain: map[quorum.NodeID]bool{}, pairs: map[string]*peertls.Pair{}}
+		plain: map[quorum.NodeID]bool{}, pairs: map[string]*peertls.Peer{}, keys: t.TempDir()}
 	// Peers address each other by name (test plan §8.2 case 2): the
 	// dialer maps each name to wherever its node listens now, so a
 	// restarted node binds a fresh port.
@@ -192,34 +193,48 @@ func (c *cluster) listen(id quorum.NodeID) net.Listener {
 	if plain {
 		return ln
 	}
-	return tls.NewListener(ln, c.peerTLS(id).Server)
+	return tls.NewListener(ln, c.peerTLS(id).Server())
 }
 
-// peerTLS is id's peer TLS, from its peer token.
-func (c *cluster) peerTLS(id quorum.NodeID) *peertls.Pair {
+// handler is h as id's peer listener serves it: behind peer TLS's
+// per-request check (Bind), unless id is plain.
+func (c *cluster) handler(id quorum.NodeID, h http.Handler) http.Handler {
+	c.mu.Lock()
+	plain := c.plain[id]
+	c.mu.Unlock()
+	if plain {
+		return h
+	}
+	return bindPeer(c.peerTLS(id), h)
+}
+
+// peerTLS is id's peer TLS under its peer token: its box key and pins kept
+// across its restarts (#710 per-box keys).
+func (c *cluster) peerTLS(id quorum.NodeID) *peertls.Peer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tok := c.tok[id]
-	if p := c.pairs[tok]; p != nil {
+	k := string(id) + "/" + tok
+	if p := c.pairs[k]; p != nil {
 		return p
 	}
-	p, err := peertls.New(tok)
-	if err != nil {
-		c.t.Fatal(err)
-	}
-	c.pairs[tok] = p
+	p := newTestPeer(c.t, tok, c.pair, id, filepath.Join(c.keys, fmt.Sprintf("%s-%d", id, len(c.pairs))))
+	c.pairs[k] = p
 	return p
 }
 
 // clientTLS is the TLS id's calls dial with: nil when id is plain.
-func (c *cluster) clientTLS(id quorum.NodeID) *tls.Config {
+func (c *cluster) clientTLS(id quorum.NodeID) TLSWrap {
 	c.mu.Lock()
 	plain := c.plain[id]
 	c.mu.Unlock()
 	if plain {
 		return nil
 	}
-	return c.peerTLS(id).Client
+	return wrapAs(c.peerTLS(id), func(addr string) (quorum.NodeID, bool) {
+		to, ok := c.byHP[addr]
+		return to, ok
+	})
 }
 
 func (c *cluster) startWitness() {
@@ -228,7 +243,7 @@ func (c *cluster) startWitness() {
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	h, _ := Guard(c.tok[WitnessID], w.Handler())
+	h, _ := Guard(c.tok[WitnessID], c.handler(WitnessID, w.Handler()))
 	ctx, cancel := context.WithCancel(context.Background())
 	c.wit.w, c.wit.cancel, c.wit.ran = w, cancel, make(chan struct{})
 	go func() { w.Run(ctx); close(c.wit.ran) }()
@@ -278,7 +293,7 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 			return LogState{Synced: synced, Stuck: m.logStuck.Load() && e.IsLeader(), CanSync: synced && !m.logCannotSync.Load()}
 		})
 	}
-	h, _ := Guard(c.tok[id], e.Handler())
+	h, _ := Guard(c.tok[id], c.handler(id, e.Handler()))
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel, m.ran = cancel, make(chan struct{})
 	go func() { e.Run(ctx); close(m.ran) }()
@@ -344,9 +359,8 @@ func (c *cluster) transport() http.RoundTripper { return c.transportFor("a") }
 
 // transportFor is the production peer transport with id's peer TLS.
 func (c *cluster) transportFor(id quorum.NodeID) http.RoundTripper {
-	tr := newClient(nil, c.clientTLS(id)).Transport.(*http.Transport).Clone()
 	var d net.Dialer
-	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return newClient(func(ctx context.Context, network, addr string) (net.Conn, error) {
 		c.mu.Lock()
 		real, ok := c.real[addr]
 		c.mu.Unlock()
@@ -354,8 +368,7 @@ func (c *cluster) transportFor(id quorum.NodeID) http.RoundTripper {
 			return nil, fmt.Errorf("no such host %s", addr)
 		}
 		return d.DialContext(ctx, network, real)
-	}
-	return tr
+	}, c.clientTLS(id)).Transport
 }
 
 // faultRT applies the cuts: a request on a cut link never arrives; one

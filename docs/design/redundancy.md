@@ -2089,29 +2089,77 @@ when its members address each other by DNS name, so peer traffic is kept apart f
   different times.
 - **Peer TLS (#710), on by default.** Every peer port (both controllers' and the witness's)
   serves TLS 1.3 only, and every peer call (votes, adopt, hello, the `oplog` copies) dials it.
-  - **The key is the peer token's.** `internal/peertls` derives an Ed25519 key with
-    `pairkey.Derive(token, "peer-tls")` on each box at start; nothing is written to disk,
-    distributed or re-pinned when a box is replaced. A listener requires a client certificate,
-    and each end accepts the other only if its leaf holds that key (`VerifyConnection`, which
-    also runs on a resumed session; the listener issues no tickets anyway). There is no CA,
-    no host name and no date check: peers are reached by name or IP (the witness also through
-    a floating address), and
-    §3's rule against comparing wall clocks across hosts holds (a test runs the two ends
-    years apart).
-  - **What it buys.** A party without the token can't read peer traffic, can't learn the
-    token from it, and can't pass as a member on either end: a relay in the middle has
-    another key, so the caller refuses it before a request (or the token) leaves. The token
-    header still travels, inside TLS, so the listener's check is unchanged.
-  - **What it doesn't.** Anyone with the token holds the key: one leaked env file is still
-    every member. Per-box keys pinned at commissioning are the next step (#710 PR 2), and
-    `experimental` waits for them. A witness serving several pairs holds one token, so those
-    pairs share a key until then.
+  - **Per-box keys (#710 PR 2a).** Each member makes an Ed25519 key once, in its state
+    directory (`peer-key.json`, 0600), and a certificate for it on the box, signed with the
+    key `pairkey.Derive(token, "peer-tls")` gives every member and naming it:
+    `<cluster>/a`, `<cluster>/b`, or `witness` (one witness serves many clusters, so its
+    name carries none). A handshake passes only if the other end's leaf is signed by the
+    token's key (`ed25519.Verify` over the TBS bytes: no chain), names a member this end
+    talks to (a call: the very member dialed, from a per-destination check, since a TLS
+    ServerName is empty for an IP; a listener: a controller takes calls from its peer only,
+    the witness from `a` or `b` of a valid cluster), and, once that name is pinned, holds
+    the pinned key. There is no CA, no host name and no date check, and §3's rule against
+    comparing wall clocks across hosts holds.
+  - **Pins (trust on first use, under the token).** The first complete handshake with a
+    name pins its key: on a call before the connection carries a request, on a listener in
+    the per-request check before the handler (`VerifyConnection` runs before the peer's
+    CertificateVerify, so a pin there could hold a key nobody proved). A pin is written
+    atomically and synced; a failed write refuses the contact. Pins live in
+    `peer-pins.json` in a controller's state directory and in `<cluster>.peer-pins.json`
+    beside the witness's `.members` file. Nothing re-pins silently; an operator drops a pin
+    with `naut redundancy unpin <name>` on the surviving controller (PR 2b), and a rebuilt
+    witness is a new name pinned at its adoption (2b). An unreadable pins file is moved
+    aside with a `peer-pins-reset` condition and a journal entry, and every name pins again
+    at first contact (never silent, never an outage; the trade is the guide's
+    trusted-network line).
+  - **Bound to the box.** A key file records the machine-id and the physical NICs' MACs
+    (hashed) it was made with (`/sys/class/net/*/device`: a bridge, VLAN, bond, tun, veth
+    or docker's is not physical; no physical NIC at all, as in a container, falls back to
+    the links' interfaces). It is used while the machine-id is equal and one of those NICs
+    is still present: adding interfaces keeps it, a clone on other hardware or a cloned VM
+    with a new MAC makes a new key (the old file moved aside), which the others refuse. A
+    box not known yet (a link that doesn't resolve, no NIC readable yet), or a key file that
+    exists but can't be read (its mode, an I/O error), never makes or replaces a key: its
+    handshakes wait (Fable on 2a: a replaced key is a lockout until an unpin). Only a
+    missing file, a damaged one or another box's makes a new key. The witness needs a
+    machine-id. This is the key's own rule; the voter state's #1029 fingerprint is
+    unchanged (#616 notes whether it should follow).
+  - **Every request, every sender.** The listener's middleware (`peertls.Bind`) re-checks
+    the leaf against the current pin on every request and hands the verified member to the
+    handlers (`node.WithPeer`); every handler that takes a sender from the request checks
+    it (`node.SenderOK`): votes, adopt, hello, the marks (`/dup`), the witness's votes and
+    marks (the certificate's cluster must be the path's: one witness token serves every
+    cluster), the oplog's replication (`oplog.Options.Sender`), and the state stream, its
+    ack, the hand-back and the switch-ask (no sender in the body: the peer only). With TLS
+    on and no verified member, a handler refuses (fail closed). A dropped pin closes this
+    member's own kept connections to that member, and the dropped key is never pinned
+    again by a connection kept from before the drop (in memory: until another key is
+    pinned for the name, or a restart).
+  - **What it buys.** A party without the token can't read peer traffic or pass as a
+    member. A party with the token but without a member's box key can't pass as a member
+    that is pinned: one leaked env file is no longer every member. What remains is the
+    first-contact window (a new pair, a replacement, an unpin, a reset pins file), which
+    the guide's trusted-network rule and the visible fingerprints cover.
+  - **Visible.** Every pin, refusal, drop, reset, failed pin write and new key is
+    journalled on a controller (`redundancy.peer-pin`: name, SHA-256 fingerprint, peer
+    address, time; events before the journal is attached wait for it) and logged (the
+    witness has no journal: its log is the record). A refusal at the handshake comes
+    before the caller proved its key (a member's certificate is public), so one key's
+    refusals of one name are reported once a minute. A reset pins file's condition stands
+    for a day, past the re-pinning, saying to check the fingerprints; `naut redundancy status` and
+    `/api/cluster` show this box's fingerprint and each pinned one; a refusal is a
+    condition on the refusing controller and `redundancy.peer-identity` on the caller,
+    naming `naut redundancy unpin`.
+  - **No upgrade bridge.** #1230's nameless certificate is refused outright: no release
+    carried it, and a pair on main restarts all three members together across this change.
   - **A short token is refused.** The key's public half is visible to anyone who reaches a
     peer port, so a token could be guessed from it offline: `naut run` and `naut witness`
     refuse one under 32 characters, naming `naut redundancy new-pair` (64 hex digits), and
     `naut check` warns about one in its environment.
-  - **Seams.** `quorum` and `oplog` are substrates, so `cmd/naut` builds the configurations
-    and hands them down as `tls.Config` (`node.Options.TLS`, `oplog.Options.TLS`). `oplog`
+  - **Seams.** `quorum` and `oplog` are substrates, so `cmd/naut` builds peer TLS and hands
+    it down as standard-library types: a handshake function per dialed address
+    (`node.TLSWrap`, `oplog.Options.TLS`), the listener's `tls.Config`, and the verified
+    member as a request context value set through `node.WithPeer`. `oplog`
     keeps naming its peers by their `http://` URLs, which its files record (an operator's
     acceptance names peers by them), and only sends them as https.
   - **Mismatches are named on the side that dials:** `redundancy.peer-tls-mismatch` (the

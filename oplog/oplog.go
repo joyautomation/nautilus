@@ -49,7 +49,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -395,12 +394,19 @@ type Options struct {
 	// Token must accompany every replica-to-replica request. Required with
 	// more than one peer.
 	Token string
-	// TLS, when set, is the pair's peer TLS client configuration (#710):
-	// every call to a peer then runs https, though Peers still name them
-	// as given. A peer's URL is its identity in the log's files (an
-	// operator's acceptance names peers by it), so peer TLS changes the
-	// wire, never the names. Nil: as the URLs say.
-	TLS *tls.Config
+	// TLS, when set, is the pair's peer TLS client side (#710): every call
+	// to a peer then runs https, though Peers still name them as given. A
+	// peer's URL is its identity in the log's files (an operator's
+	// acceptance names peers by it), so peer TLS changes the wire, never
+	// the names. It runs the handshake over raw, dialed to addr (a peer
+	// URL's host:port), and returns the connection once the other end is
+	// the member at that address. Nil: as the URLs say.
+	TLS func(ctx context.Context, raw net.Conn, addr string) (net.Conn, error)
+	// Sender, when set, binds a replication request to its connection
+	// (#710 per-box keys): it reports whether r, which names the member
+	// node (Options.Node) at the URL from, comes from that member by its
+	// peer TLS certificate. A refusal is answered 403.
+	Sender func(r *http.Request, node, from string) bool
 	// Timeout bounds one replica call (default 2s).
 	Timeout time.Duration
 	Now     func() time.Time
@@ -787,11 +793,21 @@ func New(o Options) (*Node, error) {
 	}
 	rt := o.transport
 	if rt == nil && o.TLS != nil && !mutOplog("peer_tls_log_plain") {
-		rt = tlsWire{&http.Transport{Proxy: nil, TLSClientConfig: o.TLS, MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second,
-			// Bounded, so a peer that accepts and never speaks holds no
-			// connection past them (#1230 review).
-			DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 15 * time.Second}).DialContext,
-			TLSHandshakeTimeout: 2 * time.Second}}
+		dial := (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 15 * time.Second}).DialContext
+		wrap := o.TLS
+		rt = tlsWire{&http.Transport{Proxy: nil, MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second,
+			DialContext: dial,
+			// Dial and handshake bounded, so a peer that accepts and never
+			// speaks holds no connection past them (#1230 review).
+			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				raw, err := dial(ctx, network, addr)
+				if err != nil {
+					return nil, err
+				}
+				hctx, cancel := context.WithTimeout(ctx, tlsHandshake)
+				defer cancel()
+				return wrap(hctx, raw, addr)
+			}}}
 	}
 	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout, Transport: rt}, log: o.Log,
 		lastContact: map[string]time.Time{}, peers: map[string]peerInfo{}, pending: o.Pending}
@@ -3251,6 +3267,12 @@ func (n *Node) Handler() http.Handler {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// The sender is the member its connection's certificate names
+		// (#710 per-box keys): a member may not replicate as another.
+		if n.o.Sender != nil && !mutOplog("log_sender_unbound") && !n.o.Sender(r, req.Node, req.From) {
+			http.Error(w, fmt.Sprintf("replication naming %q (%s) from a connection whose certificate names another member", req.Node, req.From), http.StatusForbidden)
+			return
+		}
 		// Only the leader the Leadership names may replicate (or, with
 		// Admit, the member it admits by name), and never from an older
 		// term than one already seen.
@@ -3396,6 +3418,17 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
 }
+
+// CloseIdle closes the log's kept peer connections: after a peer's pin is
+// dropped (#710 per-box keys), its next call meets the new key.
+func (n *Node) CloseIdle() {
+	if c, ok := n.client.(*http.Client); ok {
+		c.CloseIdleConnections()
+	}
+}
+
+// tlsHandshake bounds a peer TLS handshake (#1230 review).
+const tlsHandshake = 2 * time.Second
 
 // tlsWire sends a peer's http:// URL as https (Options.TLS): the URL stays
 // the peer's name, the wire is TLS.

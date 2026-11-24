@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/fence"
+	"github.com/joyautomation/nautilus/internal/peertls"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/quorum"
@@ -498,6 +499,7 @@ func printClusterStatus(w io.Writer, b []byte) {
 		} `json:"log"`
 		Stream    *leader.StreamStatus `json:"stream"`
 		WritesCut map[string]int       `json:"writesCut"`
+		PeerKeys  *leader.PeerKeys     `json:"peerKeys"`
 	}
 	if json.Unmarshal(b, &st) != nil {
 		w.Write(b)
@@ -553,12 +555,34 @@ func printClusterStatus(w io.Writer, b []byte) {
 	if s := st.Stream; s != nil {
 		fmt.Fprintln(bw, streamLine(s))
 	}
+	if k := st.PeerKeys; k != nil {
+		fmt.Fprintln(bw, peerKeysLine(k))
+	}
 	if line := fence.CutLine(st.WritesCut); line != "" {
 		fmt.Fprintf(bw, "writes cut at the send deadline (last %d min): %s\n", int(fence.CutWindow.Minutes()), line)
 	}
 	for _, x := range st.Warnings {
 		fmt.Fprintf(bw, "warning: %s\n", x)
 	}
+}
+
+// peerKeysLine is the peer TLS keys' line in naut redundancy status (#710
+// per-box keys): this box's key and each pinned one, to compare on the
+// boxes themselves.
+func peerKeysLine(k *leader.PeerKeys) string {
+	self := k.Self
+	if self == "" {
+		self = "none yet (" + k.Error + ")"
+	}
+	pinned := "none yet"
+	if len(k.Pinned) > 0 {
+		var ps []string
+		for _, n := range peertls.Names(k.Pinned) {
+			ps = append(ps, n+" "+k.Pinned[n])
+		}
+		pinned = strings.Join(ps, ", ")
+	}
+	return "peer keys: this box " + self + "; pinned: " + pinned
 }
 
 // streamLine is the state stream's line in naut redundancy status (#710

@@ -61,6 +61,12 @@ func (wl *witnessLogs) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(node.Prefix+"{cluster}/log/", func(w http.ResponseWriter, r *http.Request) {
 		cluster := r.PathValue("cluster")
+		// A controller of this cluster, by its certificate (#710 per-box
+		// keys): one witness token serves every cluster.
+		if c, _, ok := node.VerifiedPeer(r); r.TLS != nil && (!ok || c != cluster) && !mutNaut("witness_log_cluster_unbound") {
+			http.Error(w, "not a member of this cluster", http.StatusForbidden)
+			return
+		}
 		l, code, err := wl.open(cluster)
 		if err != nil {
 			http.Error(w, err.Error(), code)
@@ -100,6 +106,11 @@ func (wl *witnessLogs) open(cluster string) (*witnessLog, int, error) {
 		File:       file, Mark: mark, Identity: strconv.FormatUint(inc, 10),
 		Token: wl.token, Timeout: wl.timeout, Log: wl.log.With("cluster", cluster, "log", "operator-intent"),
 		Admit: func(from string, term uint64) error { return wl.admit(cluster, members, from, term) },
+		// The member its certificate names (#710 per-box keys); its URL is
+		// a controller's own, which the witness does not know.
+		Sender: func(r *http.Request, name, _ string) bool {
+			return node.SenderOK(r, cluster, name, "log_sender_unbound")
+		},
 		// No runtime applies the witness's copy: a newer log history
 		// supersedes it in place (#1029 3c-3c-2a).
 		ResetInPlace: !mutNaut("witness_supersede_waits"),

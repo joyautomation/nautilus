@@ -109,6 +109,9 @@ func (r *boxRig) wipeBox(member string) {
 			r.t.Fatal(err)
 		}
 	}
+	// Its peer key went with the disk (#710 per-box keys): the survivors
+	// drop its pin, as an operator's unpin does.
+	unpinIn(r.t, r.env[member]["NAUTILUS_CLUSTER"], member, r.nodes, r.env, r.wdir)
 }
 
 // restartOn starts member again on its peer address, with a tag API.

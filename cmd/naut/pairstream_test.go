@@ -468,7 +468,7 @@ func TestPairStreamEndsWhenTheLeaderStepsDown(t *testing.T) {
 	r.inSync(t, other(lead))
 	req, _ := http.NewRequest(http.MethodGet, r.peerScheme()+r.peer[lead]+streamPath(r.cluster()), nil)
 	req.Header.Set(node.TokenHeader, r.token)
-	resp, err := r.peerHTTP().Do(req)
+	resp, err := r.peerHTTPAs(other(lead), lead).Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +495,7 @@ func TestPairStreamEndsWhenTheLeaderStepsDown(t *testing.T) {
 	// A controller that does not lead answers 503.
 	req2, _ := http.NewRequest(http.MethodGet, r.peerScheme()+r.peer[lead]+streamPath(r.cluster()), nil)
 	req2.Header.Set(node.TokenHeader, r.token)
-	if resp2, err := r.peerHTTP().Do(req2); err == nil {
+	if resp2, err := r.peerHTTPAs(other(lead), lead).Do(req2); err == nil {
 		resp2.Body.Close()
 		if resp2.StatusCode != http.StatusServiceUnavailable && !r.nodes[lead].m.q.IsLeader() {
 			t.Errorf("a controller that does not lead answers %d, want 503", resp2.StatusCode)
@@ -660,7 +660,7 @@ func TestPairStreamSendsEachStandbyAFormatItReads(t *testing.T) {
 		if formats != "" {
 			req.Header.Set(streamFormatsHeader, formats)
 		}
-		resp, err := r.peerHTTP().Do(req)
+		resp, err := r.peerHTTPAs(other(lead), lead).Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}

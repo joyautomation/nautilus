@@ -15,6 +15,8 @@ import "os"
 //
 //   - replicate_sequential: the leader asks its peers one after another,
 //     so a silent peer holds up every write and catch-up by its timeout;
+//   - log_sender_unbound: replication is taken from a connection whose
+//     peer TLS certificate names another member than the request (#710);
 //   - admit_skipped: a replica with Admit takes replication from anyone;
 //   - unsynced_counted: an unsynced replica's answer counts;
 //   - log_loss_silent: a log lost under the held mark comes back empty and
