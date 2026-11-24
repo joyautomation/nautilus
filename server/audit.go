@@ -167,6 +167,7 @@ var actionClass = map[string]string{
 	"redundancy.release-hold": strict,
 	// Hands the lead to the standby (#710 d1c).
 	"redundancy.switchover": strict,
+	"redundancy.failback":   strict,
 }
 
 const (

@@ -121,6 +121,9 @@ type pairMember struct {
 	journal     atomic.Pointer[audit.Recorder]
 	// hold is the takeover hold (pairhold.go), nil without one.
 	hold *pairHold
+	// failback is redundancy.failback (pairfailback.go, #710 d2), nil
+	// without one.
+	failback *pairFailback
 }
 
 // swapHandler serves the handler it is given later, 503 before.

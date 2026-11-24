@@ -422,6 +422,8 @@ type Runtime struct {
 	iok ioKeep
 	// pushk keeps the Web Push subscriptions in the retain store (#722).
 	pushk pushKeep
+	// failk carries a pair's failback state (failbackkeep.go, #710 d2).
+	failk failbackKeep
 	// strm is a pair's state stream: the takeover flush and the standby's
 	// carries (stream.go).
 	strm streamSide

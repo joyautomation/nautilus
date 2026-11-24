@@ -10,7 +10,7 @@ import (
 // what stays the standby's own. A field added to State fails
 // TestCarryClassifiesEveryField until it is put in one of them.
 var (
-	carried = []string{"Tags", "ParamBases", "ParamEdits", "ParamCommitted", "Locals", "Programs", "ProgramBases", "DiscardedPrograms", "Push"}
+	carried = []string{"Tags", "ParamBases", "ParamEdits", "ParamCommitted", "Locals", "Programs", "ProgramBases", "DiscardedPrograms", "Push", "Failback"}
 	kept    = []string{"Alarms", "AlarmFlood", "Substitutes", "IO", "Stream"}
 )
 
@@ -49,6 +49,7 @@ func TestCarry(t *testing.T) {
 		ProgramBases:      map[string]string{"main": "own base"},
 		DiscardedPrograms: map[string]string{"main": "own discarded"},
 		Push:              &PushState{Rows: []PushRow{{ID: "own"}}},
+		Failback:          &FailbackState{Count: 1},
 		Alarms:            map[string]AlarmRetain{"A1": {Acked: true, AckBy: "own"}},
 		AlarmFlood:        &AlarmFlood{ID: "own"},
 		Substitutes:       &SubstituteState{HighID: 7},
@@ -61,6 +62,7 @@ func TestCarry(t *testing.T) {
 		ParamEdits:  map[string]ParamEdit{"SP": {By: "lead"}},
 		Locals:      map[string]map[string]any{"main": {"n": 9.0}},
 		Push:        &PushState{Rows: []PushRow{{ID: "lead"}}},
+		Failback:    &FailbackState{Suspended: true, By: "user:op"},
 		Alarms:      map[string]AlarmRetain{"A1": {Acked: false}},
 		AlarmFlood:  &AlarmFlood{ID: "lead"},
 		Substitutes: &SubstituteState{HighID: 99},

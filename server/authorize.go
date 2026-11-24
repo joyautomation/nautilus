@@ -102,6 +102,7 @@ var actionPerm = map[string]string{
 	"redundancy.release-hold": PermRedundancy,
 	// A planned switchover moves the lead to the standby (#710 d1c).
 	"redundancy.switchover": PermRedundancy,
+	"redundancy.failback":   PermRedundancy,
 }
 
 // presentedToken is the credential a request carries, in either

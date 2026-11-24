@@ -338,6 +338,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
 			return 1
 		}
+		// Failback (#710 d2): its state keeper, before the first load.
+		pair.setupFailback(rt, proj.Redundancy)
 	}
 	// The write gate needs live scans, with redundancy or without (#621,
 	// #625). Set before gate.Run below.
@@ -954,6 +956,7 @@ func systemAlarms(proj *project.Project, pair *pairMember, srv *atomic.Pointer[s
 		sys = append(sys, witnessLeaseAlarm(pair))
 	}
 	sys = append(sys, holdAlarms(pair)...)
+	sys = append(sys, failbackAlarms(pair)...)
 	return sys
 }
 

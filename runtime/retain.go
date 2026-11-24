@@ -429,6 +429,10 @@ func (r *Runtime) loadRetained() error {
 		// Unreadable, not merely a value that no longer fits: this
 		// leadership runs on initial values (RetainLoadFailed).
 		r.strm.loadFailed.Store(!mutRuntime("stream_failed_load_streams"))
+		// The failback state is unknown, not "never set": the keeper must
+		// not read it as enabled (#710 d2). A hot takeover that carries the
+		// image's retain section hands it over again, known.
+		r.failbackLoaded(nil, mutRuntime("failback_unknown_as_known"))
 		return err
 	}
 	return r.applyRetained(st)
@@ -452,6 +456,7 @@ func (r *Runtime) applyRetainedFrom(st retain.State, full bool) error {
 	}
 	r.params.load(st.ParamBases, st.ParamEdits, st.ParamCommitted)
 	r.pushLoaded(st.Push)
+	r.failbackLoaded(st.Failback, true)
 	var errs []error
 	for name, v := range st.Tags {
 		if !allowed[name] {
@@ -857,6 +862,7 @@ func (r *Runtime) retainState() retain.State {
 		// holds is another replica's, and a save must not erase it.
 		st.Push = r.pushHeld()
 	}
+	st.Failback = r.failbackHeld() // a pair's failback state (#710 d2)
 	// Substitutes (substitute_retain.go): their own block, last.
 	st.Substitutes = r.retainedSubstitutes()
 	return st

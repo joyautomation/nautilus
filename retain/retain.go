@@ -86,6 +86,11 @@ type State struct {
 	// Secret, so what it holds must be useless without the box's secrets
 	// file. Nil until the first subscription.
 	Push *PushState `json:"push,omitempty"`
+	// Failback is a redundant pair's failback state (#710 d2): whether
+	// automatic failback to the preferred controller is suspended, by whom
+	// and why, and its ping-pong count. Saved by the leader, carried to the
+	// standby in the state stream's images. Nil when never set.
+	Failback *FailbackState `json:"failback,omitempty"`
 	// Stream is where in a redundant pair's state stream this file stands
 	// (#710 S1b): the leadership (term) and image (seq) a standby last
 	// carried into it, or the term its own controller led when it last
@@ -318,5 +323,28 @@ func Carry(own, lead State) State {
 	own.Locals = lead.Locals
 	own.Programs, own.ProgramBases, own.DiscardedPrograms = lead.Programs, lead.ProgramBases, lead.DiscardedPrograms
 	own.Push = lead.Push
+	if !mutRetain("failback_not_carried") {
+		// The pair's failback state (#710 d2): the leader's decides, so a
+		// suspension an operator made holds on whichever controller leads.
+		own.Failback = lead.Failback
+	}
 	return own
+}
+
+// FailbackState is a pair's failback state (#710 d2,
+// redundancy.failback).
+type FailbackState struct {
+	// Suspended: no automatic failback until an operator resumes it.
+	Suspended bool `json:"suspended,omitempty"`
+	// By and Why say who suspended it and why; AtMs when (Unix ms).
+	By   string `json:"by,omitempty"`
+	Why  string `json:"why,omitempty"`
+	AtMs int64  `json:"atMs,omitempty"`
+	// Stopped: the ping-pong stop suspended it (max failbacks in a row,
+	// each followed by a failover within after); its alarm is up until an
+	// operator resumes.
+	Stopped bool `json:"stopped,omitempty"`
+	// Count is the failbacks in a row each followed by a failover within
+	// the failback's after (the ping-pong count).
+	Count int `json:"count,omitempty"`
 }
