@@ -94,6 +94,17 @@ Usage:
       answer, and together they must hear one process named <name>, else
       nothing is cleared. It clears each member, and checks again a lease
       later: a mark that comes back means a copy still runs.
+  naut redundancy [flags] unpin <name>
+      on the SURVIVING controller, after the other one (<name>, a or b)
+      had its box replaced or lost its state directory: its new peer key
+      is refused wherever its old one is pinned. It drops the old key's
+      pin here and at the witness; that key stays refused, so a box still
+      holding it never comes back as <name>. Then start the replacement:
+      its new key is pinned at its first contact (check its fingerprint
+      with naut redundancy status on that box). Run it a second time to
+      lift the old key's refusal (an unpin by mistake): the next box to
+      contact with the token is pinned, so do that only with the real box
+      ready to connect. Journalled under your name.
   naut redundancy [flags] release-hold
       release the takeover hold (redundancy.takeover-hold) on the leader:
       the program's outputs go out on its next scan, before its release
@@ -450,6 +461,24 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 			return 1
 		}
 		return 0
+	case "unpin":
+		if len(pos) != 2 {
+			fmt.Fprint(stderr, redundancyUsage)
+			return 2
+		}
+		code, b, err := do(http.MethodPost, "/api/cluster/unpin", map[string]any{"name": pos[1]})
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *asJSON {
+			stdout.Write(b)
+		} else {
+			printUnpinAnswer(stdout, code, b)
+		}
+		if code != http.StatusOK {
+			return 1
+		}
+		return 0
 	case "clear-duplicate":
 		if len(pos) != 2 {
 			fmt.Fprint(stderr, redundancyUsage)
@@ -475,6 +504,29 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 	}
 	fmt.Fprint(stderr, redundancyUsage)
 	return 2
+}
+
+// printUnpinAnswer prints POST /api/cluster/unpin's answer for a person:
+// its message, which says what each store found and what to do next.
+func printUnpinAnswer(w io.Writer, code int, b []byte) {
+	var a struct {
+		Error  string `json:"error"`
+		Report struct {
+			Message string `json:"message"`
+		} `json:"report"`
+	}
+	if json.Unmarshal(b, &a) != nil {
+		fmt.Fprintf(w, "%d %s\n", code, bytes.TrimSpace(b))
+		return
+	}
+	switch {
+	case a.Report.Message != "":
+		fmt.Fprintln(w, a.Report.Message)
+	case a.Error != "":
+		fmt.Fprintln(w, a.Error)
+	default:
+		fmt.Fprintf(w, "%d %s\n", code, bytes.TrimSpace(b))
+	}
 }
 
 // printClusterStatus prints GET /api/cluster for a person.
@@ -582,7 +634,17 @@ func peerKeysLine(k *leader.PeerKeys) string {
 		}
 		pinned = strings.Join(ps, ", ")
 	}
-	return "peer keys: this box " + self + "; pinned: " + pinned
+	line := "peer keys: this box " + self + "; pinned: " + pinned
+	for _, n := range peertls.Names(k.Refused) {
+		line += "; refused (unpinned): " + n + " " + k.Refused[n]
+	}
+	if k.WitnessWaiting != "" {
+		line += "\nnew witness key waiting: " + k.WitnessWaiting + " (compare it with the key the witness prints at its start; allow it with naut redundancy unpin witness on BOTH controllers)"
+	}
+	if k.WitnessAllowed != "" {
+		line += "\nthis controller takes the new witness key " + k.WitnessAllowed + ", once (naut redundancy unpin witness)"
+	}
+	return line
 }
 
 // streamLine is the state stream's line in naut redundancy status (#710

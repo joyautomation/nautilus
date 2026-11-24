@@ -141,13 +141,13 @@ func (e *Elector) resignTo(ctx context.Context, to quorum.NodeID, base string, r
 		return false, errResignNoAnswer
 	}
 	b, _ := r.MarshalBinary()
-	body, _, err := e.call.callHeader(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
+	body, _, cn, err := e.call.callCert(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
 	if err != nil {
 		return false, err
 	}
 	var rep quorum.Reply
-	if body == nil || rep.UnmarshalBinary(body) != nil || rep.From != to {
-		return false, errResignNoAnswer
+	if body == nil || rep.UnmarshalBinary(body) != nil || rep.From != to || !e.witnessReplyCounts(to, cn, rep) {
+		return false, errResignNoAnswer // an incarnation the pair does not count takes no RESIGN
 	}
 	e.reply(to, rep)
 	return rep.Granted, nil

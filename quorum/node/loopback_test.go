@@ -54,14 +54,20 @@ type cluster struct {
 	real    map[string]string // name -> the address it listens on now
 	ctl     map[quorum.NodeID]*member
 	wit     *witnessMember
-	tok     map[quorum.NodeID]string // peer token per node
-	ctok    map[quorum.NodeID]string // client token per node
-	led     map[uint64]quorum.NodeID // term -> who led it
-	stop    chan struct{}
-	done    chan struct{}
-	evMu    sync.Mutex
-	evs     []Event
-	bytes   map[quorum.NodeID]*tap
+	// witRunning is the running witness: its peer TLS names each pair's
+	// incarnation by it (#710 2b).
+	witRunning atomic.Pointer[Witness]
+	// witCertLie is added to the incarnation the witness's certificate
+	// names: a witness whose certificate is not its replies' (#710 2b).
+	witCertLie atomic.Uint64
+	tok        map[quorum.NodeID]string // peer token per node
+	ctok       map[quorum.NodeID]string // client token per node
+	led        map[uint64]quorum.NodeID // term -> who led it
+	stop       chan struct{}
+	done       chan struct{}
+	evMu       sync.Mutex
+	evs        []Event
+	bytes      map[quorum.NodeID]*tap
 	// plain: the node runs with peer TLS off (its listener and its calls
 	// plain HTTP). Every other node runs the pair's peer TLS, keyed by its
 	// peer token (#710), as naut run does by default.
@@ -218,7 +224,13 @@ func (c *cluster) peerTLS(id quorum.NodeID) *peertls.Peer {
 	if p := c.pairs[k]; p != nil {
 		return p
 	}
-	p := newTestPeer(c.t, tok, c.pair, id, filepath.Join(c.keys, fmt.Sprintf("%s-%d", id, len(c.pairs))))
+	p := newTestPeerInc(c.t, tok, c.pair, id, filepath.Join(c.keys, fmt.Sprintf("%s-%d", id, len(c.pairs))), func(cl string) uint64 {
+		w := c.witRunning.Load()
+		if w == nil {
+			return 0
+		}
+		return w.Incarnation(cl) + c.witCertLie.Load()
+	})
 	c.pairs[k] = p
 	return p
 }
@@ -246,6 +258,7 @@ func (c *cluster) startWitness() {
 	h, _ := Guard(c.tok[WitnessID], c.handler(WitnessID, w.Handler()))
 	ctx, cancel := context.WithCancel(context.Background())
 	c.wit.w, c.wit.cancel, c.wit.ran = w, cancel, make(chan struct{})
+	c.witRunning.Store(w)
 	go func() { w.Run(ctx); close(c.wit.ran) }()
 	c.wit.srv = &http.Server{Handler: h}
 	go c.wit.srv.Serve(c.listen(WitnessID))
@@ -377,6 +390,14 @@ type faultRT struct {
 	c    *cluster
 	from quorum.NodeID
 	base http.RoundTripper
+}
+
+// CloseIdleConnections closes the transport's kept connections, as an
+// elector's CloseIdle and a reply refused by its certificate do.
+func (f *faultRT) CloseIdleConnections() {
+	if c, ok := f.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {

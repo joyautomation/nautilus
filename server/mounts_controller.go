@@ -64,6 +64,7 @@ func mountCluster(s *Server, mux *http.ServeMux) {
 	mux.Handle("POST /api/cluster/release-hold", s.audited("redundancy.release-hold", s.releaseHoldTarget, s.handleReleaseHold))
 	mux.Handle("POST /api/cluster/switchover", s.audited("redundancy.switchover", s.switchoverTarget, s.handleSwitchover))
 	mux.Handle("POST /api/cluster/failback", s.audited("redundancy.failback", s.failbackTarget, s.handleFailback))
+	mux.Handle("POST /api/cluster/unpin", s.audited("redundancy.unpin", s.unpinTarget, s.handleUnpin))
 }
 
 // mountDisk: what reads or writes a controller's files: the live I/O configuration and its staged edits, config files and commits, the program's commit history and activating one, and importing parameters.

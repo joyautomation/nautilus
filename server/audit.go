@@ -168,6 +168,8 @@ var actionClass = map[string]string{
 	// Hands the lead to the standby (#710 d1c).
 	"redundancy.switchover": strict,
 	"redundancy.failback":   strict,
+	// Which key a pair takes as the other controller's (#710 2b).
+	"redundancy.unpin": strict,
 }
 
 const (

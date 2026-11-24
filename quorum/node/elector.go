@@ -471,6 +471,7 @@ type Elector struct {
 
 	gate    atomic.Pointer[gateState]
 	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
+	adopted atomic.Uint64 // the witness incarnation this controller adopted (AdoptedIncarnation)
 	wake    chan struct{}
 	// helloNow asks the hello loop for a hello at once, from the fast
 	// start: the link to the peer came up, or the peer's votes carry a new
@@ -556,6 +557,7 @@ func New(o Options) (*Elector, error) {
 		wake: make(chan struct{}, 1), helloNow: make(chan struct{}, 1), events: make(chan Event, 64), decided: make(chan struct{}),
 	}
 	e.call.note, e.call.tls = e.noteLink, o.TLS != nil
+	e.call.wit, e.call.adopted = e.wit, e.adopted.Load
 	free := func() {}
 	if !mut("controller_unlocked") {
 		f, err := lock(o.StatePath + ".lock")
@@ -1031,8 +1033,13 @@ func (e *Elector) after(now quorum.Instant) {
 // Read without the lock, so the log may ask under its own.
 func (e *Elector) CountedIncarnation() uint64 { return e.counted.Load() }
 
+// AdoptedIncarnation is the witness incarnation this controller adopted
+// (its voter state's), 0 while uncommissioned. Read without the lock.
+func (e *Elector) AdoptedIncarnation() uint64 { return e.adopted.Load() }
+
 // publish stores the gate. Under mu.
 func (e *Elector) publish(now quorum.Instant) {
+	e.adopted.Store(e.v.State().Incarnation)
 	inc, from := e.c.Counting()
 	if now < from {
 		inc = 0 // its quiet period: its grants don't count yet, nor its log
@@ -1127,7 +1134,20 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 	}
 	b, _ := r.MarshalBinary()
 	go func() {
-		body, hdr, err := e.call.callHeader(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
+		body, hdr, cn, err := e.call.callCert(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
+		if to == e.o.Witness && e.call.tls && !witnessOpOK(cn, e.adopted.Load()) && !mut("witness_refusals_unbound") {
+			// A refusal or a reply under witness@0, or under an incarnation
+			// this controller does not count, raises and clears nothing
+			// (#710 2b): only a reply bound to its certificate goes on, to
+			// witnessBound and, unadopted, to the adoption alone.
+			if err == nil && body != nil {
+				var rep quorum.Reply
+				if rep.UnmarshalBinary(body) == nil && rep.From == to {
+					e.witnessReplyCounts(to, cn, rep)
+				}
+			}
+			return
+		}
 		var se *statusError
 		if errors.As(err, &se) && se.code == http.StatusConflict {
 			switch se.reason {
@@ -1162,8 +1182,71 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 		if rep.From != to {
 			return // a voter answers as itself, or not at all
 		}
+		if !e.witnessReplyCounts(to, cn, rep) {
+			return
+		}
 		e.reply(to, rep)
 	}()
+}
+
+// witnessReplyCounts reports whether a vote's (or a RESIGN's) reply from
+// to, under the certificate named cn, goes to reply() (#710 2b): any
+// controller's does; the witness's when it is bound to its certificate
+// (witnessBound) and that is the incarnation this controller adopted (or
+// it adopted none). A bound reply from an incarnation it has not adopted
+// goes to the adoption alone (unadoptedWitness), and counts for nothing
+// else.
+func (e *Elector) witnessReplyCounts(to quorum.NodeID, cn string, rep quorum.Reply) bool {
+	if !e.witnessBound(to, cn, rep) {
+		return false
+	}
+	if to != e.o.Witness || !e.call.tls || witnessOpOK(cn, e.adopted.Load()) || mut("unadopted_reply_heard") {
+		return true
+	}
+	e.unadoptedWitness(rep)
+	return false
+}
+
+// unadoptedWitness hands a reply from a witness incarnation this
+// controller has not adopted (bound to its own certificate) to the
+// adoption alone (#710 2b): it is evidence that the incarnation answers,
+// nothing more. Its marks, fences, held state, relayed promise and grants
+// count only once the pair adopts it; a token holder answering as a fresh
+// incarnation must not mark this controller a duplicate, fence it, or
+// hold it. (An uncommissioned controller, nothing adopted, hears every
+// bound incarnation in full, as it must to adopt: witnessReplyCounts.)
+func (e *Elector) unadoptedWitness(rep quorum.Reply) {
+	e.mu.Lock()
+	now := e.now()
+	e.a.OnWitness(now, rep)
+	e.after(now)
+	e.mu.Unlock()
+	e.poke()
+}
+
+// witnessBound reports whether a vote reply from to counts by the
+// certificate it came under (#710 2b): with peer TLS, the witness's reply
+// must carry the incarnation its certificate names, never 0. A token
+// holder answering as a fresh incarnation (pinned at first contact) can't
+// speak for the one the pair counts, and nothing it says reaches the
+// voter, the marks or the adoption. A reply over witness@0 (a pair's
+// first vote, the witness drawing its incarnation) ends that connection,
+// so the next vote meets the incarnation's certificate.
+func (e *Elector) witnessBound(to quorum.NodeID, cn string, rep quorum.Reply) bool {
+	if to != e.o.Witness || !e.call.tls || mut("reply_inc_unbound") {
+		return true
+	}
+	inc, ok := witnessCertInc(cn)
+	if ok && inc != 0 && inc == rep.Incarnation {
+		return true
+	}
+	if !mut("bound_reply_keeps_conn") {
+		e.call.client.CloseIdleConnections() // the next vote dials again: a pair's first vote rode witness@0
+	}
+	if !ok || inc != 0 {
+		e.log.Warn("redundancy: a witness reply's incarnation is not the one its certificate names: not counted", "certificate", nonEmptyCN(cn), "reply", rep.Incarnation)
+	}
+	return false
 }
 
 // reply takes a voter's reply to this controller's request.
@@ -1245,8 +1328,8 @@ func (e *Elector) noteLink(url string, err error) {
 		tlsMsg = who + " speaks TLS on its peer port and this controller plain HTTP (redundancy.peer-tls: off here): run one peer TLS setting on both controllers and the witness"
 	case faultForeignKey:
 		idMsg = who + "'s TLS certificate is not this pair's: it holds another NAUTILUS_PEER_TOKEN, or something else answers at " + hostOf(e.baseOf(voter)) + ". Give the two controllers and the witness the same token"
-		var pin interface{ PinMismatch() bool }
-		if errors.As(err, &pin) && pin.PinMismatch() {
+		var pin interface{ SaysWhy() bool }
+		if errors.As(err, &pin) && pin.SaysWhy() {
 			// Its key is the pair's, but not the one pinned for it here
 			// (#710 per-box keys): the refusal says both fingerprints.
 			idMsg = who + " was refused: " + identityText(err)

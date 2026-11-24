@@ -2092,8 +2092,11 @@ when its members address each other by DNS name, so peer traffic is kept apart f
   - **Per-box keys (#710 PR 2a).** Each member makes an Ed25519 key once, in its state
     directory (`peer-key.json`, 0600), and a certificate for it on the box, signed with the
     key `pairkey.Derive(token, "peer-tls")` gives every member and naming it:
-    `<cluster>/a`, `<cluster>/b`, or `witness` (one witness serves many clusters, so its
-    name carries none). A handshake passes only if the other end's leaf is signed by the
+    `<cluster>/a`, `<cluster>/b`, or `witness@<incarnation>` (one witness serves many
+    clusters, each with its own incarnation: a controller's call names its cluster in the
+    ClientHello's ALPN, `nautilus-pair/<cluster>`, never negotiated, and the witness answers
+    with that pair's incarnation, read only from its state, `witness@0` before the pair's
+    first vote; PR 2b). A handshake passes only if the other end's leaf is signed by the
     token's key (`ed25519.Verify` over the TBS bytes: no chain), names a member this end
     talks to (a call: the very member dialed, from a per-destination check, since a TLS
     ServerName is empty for an IP; a listener: a controller takes calls from its peer only,
@@ -2106,9 +2109,7 @@ when its members address each other by DNS name, so peer traffic is kept apart f
     CertificateVerify, so a pin there could hold a key nobody proved). A pin is written
     atomically and synced; a failed write refuses the contact. Pins live in
     `peer-pins.json` in a controller's state directory and in `<cluster>.peer-pins.json`
-    beside the witness's `.members` file. Nothing re-pins silently; an operator drops a pin
-    with `naut redundancy unpin <name>` on the surviving controller (PR 2b), and a rebuilt
-    witness is a new name pinned at its adoption (2b). An unreadable pins file is moved
+    beside the witness's `.members` file. Nothing re-pins silently (PR 2b below). An unreadable pins file is moved
     aside with a `peer-pins-reset` condition and a journal entry, and every name pins again
     at first contact (never silent, never an outage; the trade is the guide's
     trusted-network line).
@@ -2133,8 +2134,59 @@ when its members address each other by DNS name, so peer traffic is kept apart f
     ack, the hand-back and the switch-ask (no sender in the body: the peer only). With TLS
     on and no verified member, a handler refuses (fail closed). A dropped pin closes this
     member's own kept connections to that member, and the dropped key is never pinned
-    again by a connection kept from before the drop (in memory: until another key is
-    pinned for the name, or a restart).
+    again (kept in the pins file: until another key is pinned for the name or a second
+    unpin lifts it, PR 2b).
+  - **Re-pin paths (#710 PR 2b).**
+    - *The witness, per incarnation.* Each incarnation's name is pinned on its own, at first
+      contact under the token; `witness@0` never is. A vote reply counts only when it
+      carries the incarnation its certificate names, never 0 (`Elector.witnessBound`,
+      before `reply()` feeds fences, marks, the held state or the adoption): a token holder
+      answering as a fresh incarnation is heard by nothing, and a reply over `witness@0`
+      (a pair's first vote, the witness drawing its incarnation) closes the connection, so
+      the next vote meets the incarnation's certificate. Every other witness call (the
+      marks, the commissioning state, the log's copy) counts only under the certificate of
+      the incarnation this controller adopted (any but 0 while it has adopted none: the
+      uncommissioned flows can't be narrower), so the log's count of the witness copy by
+      the incarnation the witness states is the witness's own word. A reply bound to an
+      incarnation this commissioned controller has not adopted reaches the adoption alone
+      (`Elector.unadoptedWitness`): its marks, fences, held state, relayed promise and
+      grants count only once the pair adopts it, and a refusal under such a certificate
+      raises or clears no condition (Fable on 2b: one Marked reply would otherwise stop a
+      standby campaigning for good).
+    - *A new incarnation, the same key (B', naut-lead).* A controller pins a new
+      incarnation, the counted name included, by itself only under the key of the one it
+      counts, kept in its pins file across adoptions (`witnessKey`, set at `Promote` from the
+      counted name's pin and when the counted name pins): one adopted on the peer's
+      proposal, never heard here, is no exception (Fable re-check). With no key known (a new
+      pair, a reset pins file) the first contact pins; a commissioned controller then takes
+      only its counted name. Another key is a new witness box, or a token holder at the witness's
+      address while the witness is down (adoption needs only the counted incarnation silent
+      for a lease, and a commissioned acceptor accepts without hearing the new one): it is
+      refused, named, and shown waiting on `naut redundancy status` until `naut redundancy
+      unpin witness` on each controller allows that very key, once (durable; refused when
+      none is waiting; ended by the next adoption). An adoption, a re-commission and a start
+      drop every other incarnation's pin (`Peer.Promote`; a start that adopted nothing and
+      knows no witness key drops them all). An uncommissioned controller
+      pins any incarnation at first contact; at most 8 it does not count, a new one past
+      that refused, never one evicted (eviction would let a token holder take the name the
+      pair is about to adopt).
+    - *A controller: `naut redundancy unpin <name>` on the survivor* (audited, the
+      redundancy permission, answered by a standby itself). It drops the pin here and, over
+      this controller's own pinned connection, at the witness; the dropped key stays
+      refused in both pins files. The witness takes it only from a controller of that
+      cluster by its certificate, about the other one, from one pinned no later than the
+      one it drops (pin epochs: a name re-pinned after a drop is newer; otherwise a token
+      holder who won `a`'s first contact after `unpin a` could unpin `b`), and only on the
+      asking controller's key of it, checked under the pins' lock (one re-pinned since
+      stays). Before its local drop the survivor records the dropped key as pending, durably:
+      a retry (the witness not reached, or its answer lost) only finishes the witness's leg
+      about that key, never drops here again (a replacement pinned meanwhile stays) and
+      never lifts. A second unpin, nothing pending and both stores answering "already
+      dropped" (or the witness never pinned it), lifts the refusal. Residual (agreed): equal
+      epochs (a new pair, a witness whose pins were rebuilt or reset) give the epoch rule
+      nothing to compare, the same first-contact window as every first pin. `naut witness unpin --cluster <id> <name>`, on the witness box with the
+      witness stopped (its state lock), is the way out with no survivor (both disks lost)
+      or for the epoch refusal.
   - **What it buys.** A party without the token can't read peer traffic or pass as a
     member. A party with the token but without a member's box key can't pass as a member
     that is pinned: one leaked env file is no longer every member. What remains is the

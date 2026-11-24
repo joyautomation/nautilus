@@ -7,8 +7,15 @@
 // to the box, so a disk or VM cloned onto other hardware makes a new one.
 // Its certificate is made on the box too, signed by a key every member
 // derives from the peer token (NAUTILUS_PEER_TOKEN) and naming the member:
-// "<cluster>/a", "<cluster>/b", or "witness" (one witness serves many
-// clusters).
+// "<cluster>/a", "<cluster>/b", or "witness@<incarnation>". One witness
+// serves many clusters, each with an incarnation of its own (drawn at the
+// pair's first vote, again when the witness is rebuilt): a controller's
+// call names its cluster in the handshake (ALPN, PairProto) and the
+// witness answers with a certificate naming that pair's incarnation
+// ("witness@0" before the pair's first vote). A controller pins each
+// incarnation's name on its own, counts a vote reply only when it carries
+// the incarnation its certificate names (quorum/node), and drops the
+// other incarnations' pins when the pair adopts one (Promote).
 //
 // A handshake is accepted only if the other end's certificate is signed
 // by the token's key (it holds the token, at least at first contact), it
@@ -17,9 +24,12 @@
 // The first full handshake with a name pins its key (trust on first use,
 // under the token), durably, before any request crosses the connection.
 // After that the token alone is not enough: a party must also hold that
-// box's private key. Nothing re-pins by itself; an operator drops a pin
-// with `naut redundancy unpin <name>` on the surviving controller (#710
-// 2b), after a box is replaced or its state directory lost.
+// box's private key. Nothing re-pins a controller by itself: an operator
+// drops a pin with `naut redundancy unpin <name>` on the surviving
+// controller (#710 2b), after a box is replaced or its state directory
+// lost, and the dropped key stays refused (in the pins file) until a new
+// key is pinned for the name or a second unpin lifts it. "witness@0" is
+// never pinned: nothing it answers counts.
 //
 // No CA chain, host name or validity date is checked (the signature, the
 // name and the pin are): peers are reached by name, by IP or through a
@@ -44,6 +54,7 @@ import (
 	"math/big"
 	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,8 +66,24 @@ import (
 // redundancy new-pair` draws 64 hex digits.
 const MinToken = 32
 
-// Witness is the witness's member name: its certificate names no cluster.
+// Witness is the witness's member name (Options.Self, and a call's
+// want): its certificates name no cluster, and an incarnation each
+// (WitnessName).
 const Witness = "witness"
+
+// PairProto prefixes the cluster a controller's call to the witness names
+// in its handshake (ALPN), so the witness answers with that pair's
+// incarnation. Never negotiated: the witness's listener offers no
+// protocol (net/http drops a connection that negotiated one it doesn't
+// serve), it only reads the client's.
+const PairProto = "nautilus-pair/"
+
+// WitnessName is the witness's certificate name for a pair whose
+// incarnation is inc ("witness@0" before the pair's first vote).
+func WitnessName(inc uint64) string { return Witness + "@" + strconv.FormatUint(inc, 10) }
+
+// WitnessInc reads a WitnessName.
+func WitnessInc(name string) (uint64, bool) { return witnessInc(name) }
 
 // ShortTokenError is New's refusal of a token under MinToken.
 type ShortTokenError struct{ Len int }
@@ -80,14 +107,30 @@ type IdentityError struct {
 	Pinned, Got string
 	// Dropped: Got is the key whose pin for Name was dropped.
 	Dropped bool
+	// Full: Name is a witness incarnation past MaxWitnessNames.
+	Full bool
+	// NewWitness: Name is a new witness incarnation under another key
+	// than the counted one's (Pinned, when known): a new witness box, or
+	// a token holder at its address, allowed only by an operator.
+	NewWitness bool
 }
 
 func (e *IdentityError) Error() string {
 	switch {
 	case e.Missing:
 		return "the other end sent no TLS certificate: it is not a member of this pair"
+	case e.NewWitness:
+		was := ""
+		if e.Pinned != "" {
+			was = " (the witness this pair counts has " + e.Pinned + ")"
+		}
+		return fmt.Sprintf("the witness answers as %s with a new TLS key, %s%s: a new witness box, its state directory lost, or something else at the witness's address holding the peer token. A rebuilt witness keeps its key and needs nothing. If the witness box really changed, compare this key with the one the witness prints at its start, then run `naut redundancy unpin witness` on BOTH controllers: each then takes this key, once", e.Name, e.Got, was)
 	case e.Dropped:
-		return fmt.Sprintf("%s's TLS key (%s) is the one whose pin was dropped here (naut redundancy unpin): it is not pinned again, so a box still holding it is refused; the replacement's new key is pinned at its first contact (a restart of this member forgets the drop, if the unpin was a mistake)", e.Name, e.Got)
+		return fmt.Sprintf("%s's TLS key (%s) is the one whose pin was dropped here (naut redundancy unpin): it stays refused, so a box still holding it never comes back as %s; the replacement's new key is pinned at its first contact. If the unpin was a mistake and this is the same box, run `naut redundancy unpin %s` again on the surviving controller: a second unpin lifts the refusal", e.Name, e.Got, e.Name, e.Name)
+	case e.Full:
+		return fmt.Sprintf("the witness answers as %s, and %d other witness incarnations are pinned here while this controller has adopted none: a witness makes a new incarnation only when it is rebuilt, so something else holds the peer token and answers at the witness's address. Find it; an adoption, or a restart of this controller while it has adopted none, drops the incarnations it does not count", e.Name, MaxWitnessNames)
+	case e.Pinned != "" && strings.HasPrefix(e.Name, Witness+"@"):
+		return fmt.Sprintf("the witness answers as %s with a TLS key (%s) that is not the one pinned for it here (%s): another box answers as the witness, or the witness's state directory was moved to another box (never restore or copy it: start the witness on a fresh state directory, a new incarnation its pairs adopt together)", e.Name, e.Got, e.Pinned)
 	case e.Pinned != "":
 		return fmt.Sprintf("%s's TLS key (%s) is not the one pinned for it here (%s): another box answers as %s, or %s's box was replaced or lost its state directory. If the box really changed, run `naut redundancy unpin %s` on the surviving controller; otherwise find what answers as %s", e.Name, e.Got, e.Pinned, e.Name, e.Name, e.Name, e.Name)
 	case e.Name == "":
@@ -104,6 +147,11 @@ func (e *IdentityError) PeerIdentity() bool { return true }
 // PinMismatch reports whether a refusal is a key that is not the pinned
 // one, the case `naut redundancy unpin` is for.
 func (e *IdentityError) PinMismatch() bool { return e.Pinned != "" || e.Dropped }
+
+// SaysWhy reports whether the refusal's own text says what happened (a
+// key that is not the pinned one, a dropped one, a witness incarnation
+// past MaxWitnessNames), so a caller shows it as it is.
+func (e *IdentityError) SaysWhy() bool { return e.PinMismatch() || e.Full || e.NewWitness }
 
 // Options configure a member's peer TLS.
 type Options struct {
@@ -123,6 +171,14 @@ type Options struct {
 	// Accept reports whether this member's listener takes calls from the
 	// member named name of cluster.
 	Accept func(cluster, name string) bool
+	// Incarnation is, on the witness, the incarnation of cluster ("" when
+	// the call named none): what its certificate names to that pair's
+	// controllers. Read only: a handshake never starts a pair. Required on
+	// the witness.
+	Incarnation func(cluster string) uint64
+	// Counted is, on a controller, the witness incarnation its pair counts
+	// (0 when none yet): its name is not one of the MaxWitnessNames.
+	Counted func() uint64
 	// OnEvent hears every pin, refusal, drop, reset and new key.
 	OnEvent func(Event)
 	Now     func() time.Time
@@ -137,8 +193,9 @@ type Peer struct {
 	tokenDER []byte // the token key's own certificate: the parent of every member's
 
 	keyMu sync.Mutex
-	cert  *tls.Certificate // nil until the box is known
+	priv  ed25519.PrivateKey // nil until the box is known
 	pub   ed25519.PublicKey
+	certs map[string]*tls.Certificate // by name
 
 	pins *pins
 
@@ -160,6 +217,8 @@ func New(o Options) (*Peer, error) {
 		return nil, fmt.Errorf("peertls: member %q of cluster %q: want a or b of a cluster ID", o.Self, o.Cluster)
 	case o.KeyFile == "" || o.PinsFile == nil || o.Box == nil || o.Accept == nil:
 		return nil, errors.New("peertls: KeyFile, PinsFile, Box and Accept are required")
+	case o.Self == Witness && o.Incarnation == nil:
+		return nil, errors.New("peertls: the witness's peer TLS needs Incarnation")
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -168,13 +227,13 @@ func New(o Options) (*Peer, error) {
 	if err != nil {
 		return nil, err
 	}
-	p := &Peer{o: o, tokenKey: ed25519.NewKeyFromSeed(seed)}
+	p := &Peer{o: o, tokenKey: ed25519.NewKeyFromSeed(seed), certs: map[string]*tls.Certificate{}}
 	p.tokenPub = p.tokenKey.Public().(ed25519.PublicKey)
 	p.tokenDER, err = x509.CreateCertificate(crand.Reader, tokenTemplate, tokenTemplate, p.tokenPub, p.tokenKey)
 	if err != nil {
 		return nil, fmt.Errorf("peer TLS certificate: %w", err)
 	}
-	p.pins = newPins(o.PinsFile, p.event, o.Now)
+	p.pins = newPins(o.PinsFile, p.event, o.Now, o.Counted)
 	if o.Cluster != "" {
 		p.pins.load(o.Cluster)
 	}
@@ -202,8 +261,8 @@ func (p *Peer) Server() *tls.Config {
 func (p *Peer) serverFor(addr string) *tls.Config {
 	c := &tls.Config{
 		MinVersion: tls.VersionTLS13,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return p.certificate()
+		GetCertificate: func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return p.certificate(p.serverName(h))
 		},
 		ClientAuth:             tls.RequireAnyClientCert, // no chain or dates: verifyServer checks
 		VerifyConnection:       func(cs tls.ConnectionState) error { return p.verifyServer(cs, addr) },
@@ -215,17 +274,47 @@ func (p *Peer) serverFor(addr string) *tls.Config {
 	return c
 }
 
-// client is the configuration of a call to the member named want.
-func (p *Peer) client(want, addr string) *tls.Config {
+// serverName is the name this member's certificate gives the caller of
+// h: a controller's own, or the witness's for the pair the caller named
+// (PairProto), witness@0 for one that named none.
+func (p *Peer) serverName(h *tls.ClientHelloInfo) string {
+	if p.o.Self != Witness {
+		return p.selfName()
+	}
+	var inc uint64
+	if !mut("witness_cert_one_inc") {
+		for _, proto := range h.SupportedProtos {
+			if c, ok := strings.CutPrefix(proto, PairProto); ok && validCluster(c) {
+				inc = p.o.Incarnation(c)
+				break
+			}
+		}
+	}
+	return WitnessName(inc)
+}
+
+func (p *Peer) selfName() string {
+	if p.o.Self == Witness {
+		return WitnessName(0) // the witness never calls: no listener takes it
+	}
+	return p.o.Cluster + "/" + p.o.Self
+}
+
+// client is the configuration of a call to the member named want; on a
+// call to the witness, incOK says which incarnations it takes.
+func (p *Peer) client(want, addr string, incOK func(uint64) bool) *tls.Config {
 	c := &tls.Config{
 		MinVersion: tls.VersionTLS13,
 		// No CA and no host name to check: VerifyConnection checks the
 		// signature, the name and the pin, on every handshake.
 		InsecureSkipVerify: true,
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			return p.certificate()
+			return p.certificate(p.selfName())
 		},
-		VerifyConnection: func(cs tls.ConnectionState) error { _, err := p.verifyClient(cs, want, addr); return err },
+		VerifyConnection: func(cs tls.ConnectionState) error { _, err := p.verifyClient(cs, want, addr, incOK); return err },
+	}
+	if want == Witness {
+		c.NextProtos = []string{PairProto + p.o.Cluster} // which pair's incarnation the witness names
 	}
 	if mut("peer_tls_client_any_server") {
 		c.VerifyConnection = nil
@@ -239,7 +328,19 @@ func (p *Peer) client(want, addr string) *tls.Config {
 // now, durably, before the connection carries a request. ctx bounds the
 // handshake. addr is for the journal.
 func (p *Peer) Wrap(ctx context.Context, raw net.Conn, want, addr string) (net.Conn, error) {
-	tc := tls.Client(raw, p.client(want, addr))
+	return p.wrap(ctx, raw, want, addr, nil)
+}
+
+// WrapWitness is Wrap to the witness, taking only an incarnation incOK
+// takes: a call that is not a vote goes only to the incarnation the pair
+// counts (a vote reply's own incarnation is checked against the
+// certificate's, quorum/node).
+func (p *Peer) WrapWitness(ctx context.Context, raw net.Conn, addr string, incOK func(uint64) bool) (net.Conn, error) {
+	return p.wrap(ctx, raw, Witness, addr, incOK)
+}
+
+func (p *Peer) wrap(ctx context.Context, raw net.Conn, want, addr string, incOK func(uint64) bool) (net.Conn, error) {
+	tc := tls.Client(raw, p.client(want, addr, incOK))
 	if err := tc.HandshakeContext(ctx); err != nil {
 		raw.Close()
 		return nil, err
@@ -248,8 +349,8 @@ func (p *Peer) Wrap(ctx context.Context, raw net.Conn, want, addr string) (net.C
 		return tc, nil
 	}
 	cs := tc.ConnectionState()
-	who, err := p.verifyClient(cs, want, addr)
-	if err == nil {
+	who, err := p.verifyClient(cs, want, addr, incOK)
+	if err == nil && who.name != WitnessName(0) {
 		err = p.pins.check(p.pinCluster(who), who.name, leafKey(cs), addr, true)
 	}
 	if err != nil {
@@ -274,10 +375,10 @@ var clusterRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
 func validCluster(c string) bool { return clusterRE.MatchString(c) }
 
 // parseName reads a certificate's name: exactly "<cluster>/a",
-// "<cluster>/b" or "witness".
+// "<cluster>/b" or "witness@<incarnation>".
 func parseName(cn string) (member, bool) {
-	if cn == Witness {
-		return member{name: Witness}, true
+	if _, ok := witnessInc(cn); ok {
+		return member{name: cn}, true
 	}
 	c, n, ok := strings.Cut(cn, "/")
 	if !ok || !validCluster(c) || (n != "a" && n != "b") {
@@ -308,20 +409,39 @@ func (p *Peer) signed(cs tls.ConnectionState) (member, error) {
 }
 
 // verifyClient checks a called member's certificate: signed, naming the
-// member dialed, and its key the pinned one if the name is pinned.
-func (p *Peer) verifyClient(cs tls.ConnectionState, want, addr string) (member, error) {
+// member dialed (the witness: an incarnation of it incOK takes, any when
+// nil), and its key the pinned one if the name is pinned. witness@0 is
+// never pinned: nothing it answers counts.
+func (p *Peer) verifyClient(cs tls.ConnectionState, want, addr string, incOK func(uint64) bool) (member, error) {
 	m, err := p.signed(cs)
 	if err != nil {
 		return m, err
 	}
-	wantM := member{cluster: p.o.Cluster, name: want}
 	if want == Witness {
-		wantM.cluster = ""
+		inc, ok := witnessInc(m.name)
+		switch {
+		case (!ok || m.cluster != "") && !mut("pin_any_name"):
+			return m, &IdentityError{Name: m.String(), Want: Witness}
+		case ok && incOK != nil && !incOK(inc) && !mut("witness_call_any_inc"):
+			return m, &IncarnationError{Got: inc}
+		case inc == 0:
+			return m, nil
+		}
+		return m, p.pins.match(p.pinCluster(m), m.name, leafKey(cs), addr)
 	}
+	wantM := member{cluster: p.o.Cluster, name: want}
 	if m != wantM && !mut("pin_any_name") {
 		return m, &IdentityError{Name: m.String(), Want: wantM.String()}
 	}
 	return m, p.pins.match(p.pinCluster(m), m.name, leafKey(cs), addr)
+}
+
+// IncarnationError is a call to the witness that is not a vote refused
+// because the witness answered as an incarnation the pair does not count.
+type IncarnationError struct{ Got uint64 }
+
+func (e *IncarnationError) Error() string {
+	return fmt.Sprintf("the witness answers as incarnation %d, which this pair does not count: only votes go to an incarnation the pair has not adopted (a rebuilt witness is adopted by both controllers together)", e.Got)
 }
 
 // pinCluster is the cluster whose pins hold m's: the witness's name is
@@ -353,23 +473,32 @@ func leafKey(cs tls.ConnectionState) ed25519.PublicKey {
 	return k
 }
 
-// certificate is this member's certificate: its box key, signed by the
-// token's key, naming it. Made at the first handshake once the box is
-// known, then kept.
-func (p *Peer) certificate() (*tls.Certificate, error) {
-	p.keyMu.Lock()
-	defer p.keyMu.Unlock()
-	if p.cert != nil {
-		return p.cert, nil
+// key is this box's key: read or made at the first handshake once the
+// box is known, then kept. keyMu is held.
+func (p *Peer) keyLocked() (ed25519.PrivateKey, error) {
+	if p.priv != nil {
+		return p.priv, nil
 	}
 	priv, err := p.boxKey()
 	if err != nil {
 		return nil, err
 	}
-	pub := priv.Public().(ed25519.PublicKey)
-	name := p.o.Self
-	if p.o.Cluster != "" {
-		name = p.o.Cluster + "/" + p.o.Self
+	p.priv, p.pub = priv, priv.Public().(ed25519.PublicKey)
+	return priv, nil
+}
+
+// certificate is this member's certificate naming it name: its box key,
+// signed by the token's key. Made once per name, then kept (a witness
+// makes one per incarnation it names).
+func (p *Peer) certificate(name string) (*tls.Certificate, error) {
+	p.keyMu.Lock()
+	defer p.keyMu.Unlock()
+	if c := p.certs[name]; c != nil {
+		return c, nil
+	}
+	priv, err := p.keyLocked()
+	if err != nil {
+		return nil, err
 	}
 	tmpl := *memberTemplate
 	tmpl.Subject = pkix.Name{CommonName: name}
@@ -377,23 +506,27 @@ func (p *Peer) certificate() (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	der, err := x509.CreateCertificate(crand.Reader, &tmpl, parent, pub, p.tokenKey)
+	der, err := x509.CreateCertificate(crand.Reader, &tmpl, parent, p.pub, p.tokenKey)
 	if err != nil {
 		return nil, fmt.Errorf("peer TLS certificate: %w", err)
 	}
-	p.cert, p.pub = &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}, pub
-	return p.cert, nil
+	if len(p.certs) >= 256 {
+		clear(p.certs) // bounded: names are remade on demand
+	}
+	c := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}
+	p.certs[name] = c
+	return c, nil
 }
 
 // Fingerprint is this member's own key's fingerprint, waiting for the key
 // to be read or made; "" while the box is not known yet (or its key could
 // not be made: the error says why).
 func (p *Peer) Fingerprint() (string, error) {
-	if _, err := p.certificate(); err != nil {
-		return "", err
-	}
 	p.keyMu.Lock()
 	defer p.keyMu.Unlock()
+	if _, err := p.keyLocked(); err != nil {
+		return "", err
+	}
 	return Fingerprint(p.pub), nil
 }
 
@@ -403,7 +536,7 @@ func (p *Peer) FingerprintNow() (string, error) {
 	if !p.keyMu.TryLock() {
 		return "", errors.New("this box's peer key is being read")
 	}
-	made, pub := p.cert != nil, p.pub
+	made, pub := p.priv != nil, p.pub
 	p.keyMu.Unlock()
 	if made {
 		return Fingerprint(pub), nil
@@ -420,23 +553,216 @@ func (p *Peer) Pinned(cluster string) map[string]string {
 	return p.pins.list(cluster)
 }
 
-// Drop removes name's pin in cluster ("" for this controller's own): its
-// next contact pins again. The store-level drop `naut redundancy unpin`
-// runs (#710 2b); OnChange hears it.
-func (p *Peer) Drop(cluster, name, why string) error {
+// Refused is cluster's dropped keys that stay refused ("" for this
+// controller's own), name to key fingerprint.
+func (p *Peer) Refused(cluster string) map[string]string {
 	if cluster == "" {
 		cluster = p.o.Cluster
 	}
-	if err := p.pins.drop(cluster, name, why); err != nil {
+	return p.pins.droppedList(cluster)
+}
+
+// Drop removes name's pin in cluster ("" for this controller's own), and
+// refuses its key from then on: `naut redundancy unpin` (#710 2b).
+// OnChange hears a drop.
+func (p *Peer) Drop(cluster, name, why string) (DropOutcome, error) {
+	if cluster == "" {
+		cluster = p.o.Cluster
+	}
+	return p.DropKey(cluster, name, why, "")
+}
+
+// DropKey is Drop only while name holds the key whose fingerprint is
+// expect (pinned, or refused already): one pinned or refused since stays,
+// OtherKey ("" expects any). The witness's side of an unpin.
+func (p *Peer) DropKey(cluster, name, why, expect string) (DropOutcome, error) {
+	if cluster == "" {
+		cluster = p.o.Cluster
+	}
+	out, err := p.pins.drop(cluster, name, why, true, expect)
+	if err == nil && out == Dropped {
+		p.changed(cluster, name)
+	}
+	return out, err
+}
+
+// Lift ends the refusal of name's dropped key in cluster ("" for this
+// controller's own): the next key to contact as name is pinned. It
+// reports whether a key was refused.
+func (p *Peer) Lift(cluster, name, why string) (bool, error) {
+	if cluster == "" {
+		cluster = p.o.Cluster
+	}
+	return p.pins.lift(cluster, name, why, "")
+}
+
+// LiftKey is Lift only while the refused key is the one whose
+// fingerprint is expect.
+func (p *Peer) LiftKey(cluster, name, why, expect string) (bool, error) {
+	if cluster == "" {
+		cluster = p.o.Cluster
+	}
+	return p.pins.lift(cluster, name, why, expect)
+}
+
+// UnpinPending is the fingerprint of the key an unpin of name on this
+// controller dropped whose witness leg is not confirmed yet ("" none):
+// SetUnpinPending.
+func (p *Peer) UnpinPending(name string) string {
+	p.pins.mu.Lock()
+	defer p.pins.mu.Unlock()
+	return p.pins.loadLocked(p.o.Cluster).pending[name]
+}
+
+// SetUnpinPending records, durably, that an unpin of name dropped the key
+// whose fingerprint is key and has its witness leg to confirm ("" clears
+// it): a retry finishes it, about that key, and never lifts the refusal
+// (cmd/naut).
+func (p *Peer) SetUnpinPending(name, key string) error {
+	if mut("unpin_pending_volatile") {
+		return nil
+	}
+	return p.pins.update(p.o.Cluster, func(m *clusterPins) bool {
+		if m.pending[name] == key {
+			return false
+		}
+		if key != "" {
+			m.pending[name] = key
+		} else {
+			delete(m.pending, name)
+		}
+		return true
+	})
+}
+
+// ErrNoWitnessWaiting: naut redundancy unpin witness with no new witness
+// key refused here yet; an allowance is always of the one key waiting.
+var ErrNoWitnessWaiting = errors.New("no new witness key has called this controller yet: start the new witness first, then run this once naut redundancy status shows its key waiting, after comparing that key with the one the witness prints at its start")
+
+// AllowWitnessKey allows, durably and once, the new witness key waiting
+// here (`naut redundancy unpin witness`), and returns its fingerprint:
+// that very key pins at its next contact; another stays refused. The
+// allowance ends when it pins, or at an adoption of an incarnation whose
+// name is pinned here.
+func (p *Peer) AllowWitnessKey(why string) (string, error) {
+	waiting := p.WitnessWaiting()
+	if waiting == "" {
+		return "", ErrNoWitnessWaiting
+	}
+	err := p.pins.update(p.o.Cluster, func(m *clusterPins) bool {
+		if m.allowWitness == waiting {
+			return false
+		}
+		m.allowWitness = waiting
+		return true
+	})
+	if err != nil {
+		return "", err
+	}
+	p.event(Event{Kind: EventWitnessAllowed, Name: Witness, Fingerprint: waiting, Detail: why})
+	p.changed(p.o.Cluster, Witness)
+	return waiting, nil
+}
+
+// WitnessWaiting is the fingerprint of the last new witness key refused
+// for want of an operator's allowance ("" none since it was pinned or this
+// process started).
+func (p *Peer) WitnessWaiting() string {
+	p.pins.mu.Lock()
+	defer p.pins.mu.Unlock()
+	if k := p.pins.waiting[p.o.Cluster]; k != nil {
+		return Fingerprint(k)
+	}
+	return ""
+}
+
+// WitnessAllowed is the fingerprint of the new witness key allowed here
+// ("" none).
+func (p *Peer) WitnessAllowed() string {
+	p.pins.mu.Lock()
+	defer p.pins.mu.Unlock()
+	return p.pins.loadLocked(p.o.Cluster).allowWitness
+}
+
+// PinEpoch is name's pin epoch in cluster: the count of the cluster's
+// drops when its key was pinned (kept after its pin is dropped), and
+// whether name was ever pinned there.
+func (p *Peer) PinEpoch(cluster, name string) (uint64, bool) {
+	return p.pins.sinceOf(cluster, name)
+}
+
+// Promote keeps the witness incarnation inc the pair now counts: every
+// other incarnation's pin is dropped (not refused: nothing an
+// incarnation the pair does not count says counts, and a rebuilt one is
+// adopted together). A controller runs it at each adoption and at its
+// start. OnChange hears it.
+func (p *Peer) Promote(inc uint64) error {
+	// The counted incarnation's key, kept for the next one to match, and
+	// the allowance ends: both once its name is pinned here. One adopted
+	// on the peer's proposal, never heard here, keeps the old key, and an
+	// allowance (of that one key) stands until its name pins.
+	keep := WitnessName(inc)
+	if err := p.pins.update(p.o.Cluster, func(m *clusterPins) bool {
+		k := m.keys[keep]
+		if k == nil && !mut("allowance_cleared_unheard") {
+			return false
+		}
+		changed := false
+		if k != nil && !equalKey(k, m.witnessKey) {
+			m.witnessKey, changed = k, true
+		}
+		if m.allowWitness != "" && !mut("allowance_kept_at_adoption") {
+			m.allowWitness, changed = "", true
+		}
+		return changed
+	}); err != nil {
 		return err
 	}
+	if mut("adopt_keeps_witness_pins") {
+		return nil
+	}
+	for _, n := range p.pins.witnessPins(p.o.Cluster) {
+		if n == keep {
+			continue
+		}
+		out, err := p.pins.drop(p.o.Cluster, n, fmt.Sprintf("the pair counts witness incarnation %d: this one's pin is dropped", inc), false, "")
+		if err != nil {
+			return err
+		}
+		if out == Dropped {
+			p.changed(p.o.Cluster, n)
+		}
+	}
+	return nil
+}
+
+// PromoteAtStart is Promote at a controller's start: one that has
+// adopted nothing and knows no witness key (a wiped state directory) drops
+// every witness incarnation's pin, so names pinned before never hold
+// places under the cap; one that knows the key keeps them (they are
+// gated by it).
+func (p *Peer) PromoteAtStart(inc uint64) error {
+	if inc != 0 {
+		return p.Promote(inc)
+	}
+	if p.pins.load(p.o.Cluster).witnessKey != nil {
+		return nil
+	}
+	for _, n := range p.pins.witnessPins(p.o.Cluster) {
+		if _, err := p.pins.drop(p.o.Cluster, n, "this controller adopted no witness incarnation and knows no witness key: its witness pins are dropped at its start", false, ""); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Peer) changed(cluster, name string) {
 	p.chMu.Lock()
 	fs := append([]func(string, string){}, p.onChange...)
 	p.chMu.Unlock()
 	for _, f := range fs {
 		f(cluster, name)
 	}
-	return nil
 }
 
 // OnChange registers f to hear every dropped pin: a caller closes its idle

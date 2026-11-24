@@ -90,8 +90,18 @@ type PeerKeys struct {
 	Self  string `json:"self"`
 	Error string `json:"error,omitempty"`
 	// Pinned is each other member's pinned key, by name (the peer's a or
-	// b, and witness); a member not pinned yet is absent.
+	// b, and the witness's incarnations, witness@<incarnation>); a member
+	// not pinned yet is absent.
 	Pinned map[string]string `json:"pinned"`
+	// Refused is each name's dropped key that stays refused (naut
+	// redundancy unpin) until another key is pinned or a second unpin
+	// lifts it.
+	Refused map[string]string `json:"refused,omitempty"`
+	// WitnessWaiting is the fingerprint of a new witness key refused
+	// until an operator allows it (naut redundancy unpin witness, on both
+	// controllers); WitnessAllowed is the one this controller takes.
+	WitnessWaiting string `json:"witnessWaiting,omitempty"`
+	WitnessAllowed string `json:"witnessAllowed,omitempty"`
 }
 
 // StreamStatus is a pair's state stream (#710 S1b, design §4.1) as one

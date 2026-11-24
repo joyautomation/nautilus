@@ -1585,8 +1585,9 @@ clear.
 
 **Each box has a key of its own.** At its first start a controller (and
 the witness) makes a key in its state directory (`peer-key.json`, mode
-0600), and a certificate for it that names the member (`a`, `b` or
-`witness`) and is signed with a key derived from the peer token. The
+0600), and a certificate for it that names the member (`a`, `b`, or
+for the witness `witness@<incarnation>`, the pair's incarnation at that
+witness) and is signed with a key derived from the peer token. The
 key never leaves the box and is not in the env files. A box answering
 for a member must show a certificate signed with the token's key that
 names that member, and once the member's key is **pinned** at the
@@ -1604,8 +1605,9 @@ floating address), and a controller whose clock is off still connects.
 - **Check the fingerprints.** `naut redundancy status` (and `GET
   /api/cluster`) shows this box's own key and the ones it pinned for
   the others: `peer keys: this box SHA256:...; pinned: b SHA256:...,
-  witness SHA256:...`. Each box's own fingerprint must be what the
-  others pinned for it. The witness prints its own at start.
+  witness@8817281607883511391 SHA256:...`. Each box's own fingerprint
+  must be what the others pinned for it. The witness prints its own at
+  start.
 - **Whoever answers first is pinned.** After a new pair's first start,
   a box replacement or an unpin, the first box that answers for a
   member with the token is pinned. So **do commissioning, upgrades and
@@ -1624,20 +1626,90 @@ floating address), and a controller whose clock is off still connects.
   VLAN, a VPN or a USB NIC keeps it; a disk cloned onto other hardware,
   a cloned VM with a new MAC, or a box whose only NIC was replaced makes
   a new key, and so does a lost or wiped state directory. The other
-  members then refuse it until an operator runs **`naut redundancy
-  unpin <name>`** on the **surviving** controller (it drops the pin
-  there and at the witness): the new key is pinned at its next contact.
-  A controller whose state directory was lost therefore no longer
-  rejoins by itself: unpin it first. A rebuilt witness is a new
-  incarnation and is pinned when the pair adopts it. A key file that
-  can't be read (wrong owner or mode) is never replaced: the box waits
-  until it can read it, so fix the file rather than delete it. The
-  witness, like the controllers, needs a machine-id.
+  members then refuse it. A controller whose state directory was lost
+  therefore no longer rejoins by itself; a key file that can't be read
+  (wrong owner or mode) is never replaced (the box waits until it can
+  read it, so fix the file rather than delete it). The witness, like the
+  controllers, needs a machine-id.
+- **Replacing a controller, or one that lost its state directory:
+  unpin it on the survivor.** Before starting the replacement, run on
+  the **surviving** controller:
+
+  ```sh
+  naut redundancy unpin b
+  ```
+
+  It drops b's old key here and at the witness, journalled under your
+  name. The old key **stays refused** (in the pins files, across
+  restarts), so the old box, or a copy of its disk, never comes back as
+  b. Then start the replacement: its new key is pinned at its first
+  contact; check its fingerprint with `naut redundancy status` on that
+  box. If the witness was not reachable, the command says so: run it
+  again once it is (a retry only drops the pin at the witness, and never
+  lifts the refusal). The witness drops a pin only on the survivor's
+  word about that same old key, so an unpin never removes a key the
+  witness pinned since. A rerun after an incomplete one only finishes
+  the witness's part: it never touches a replacement already pinned
+  here, and never lifts the refusal.
+- **Unpinned by mistake (the same box)?** Run `naut redundancy unpin b`
+  a second time: once both the survivor and the witness answer that the
+  pin is already dropped, the refusal of the old key is lifted. The
+  next box to contact with the token is pinned: do this only with the
+  real box ready to connect.
+- **Both controllers lost their state directories, or the survivor is
+  down.** No controller holds a pin to drop, but the witness still
+  refuses the new keys. Unpin on the witness box itself, with the
+  witness stopped:
+
+  ```sh
+  # with the witness stopped (its service, or the process)
+  naut witness unpin --state <its state directory> --cluster <cluster ID> a
+  naut witness unpin --state <its state directory> --cluster <cluster ID> b
+  # then start the witness again
+  ```
+
+  Stopping the witness takes the third vote from **every** pair it
+  serves: do it while both controllers of each of those pairs are up
+  and healthy, and start the witness again straight after. The cluster
+  ID is `NAUTILUS_CLUSTER` in the pair's env files. The same command is
+  the way out when the witness refuses an unpin because the survivor's
+  own key is newer than the one it drops (both controllers were
+  replaced in turn): it takes an unpin only from a controller pinned no
+  earlier than the one it drops, so a token holder who answered first
+  for a replacement can't unpin the survivor. A survivor that comes
+  back afterwards still holds the old pin: run `naut redundancy unpin`
+  there too (the witness keeps the key it pinned since).
+- **A rebuilt witness needs nothing.** `naut witness --rebuild` (or a
+  lost state file beside a kept `peer-key.json`) keeps the witness's
+  key: its new incarnation (`witness@<incarnation>`) is taken by itself,
+  its replies count only once both controllers adopt it, and the
+  adoption drops the old incarnation's pin. A controller's calls other
+  than votes (the log's copy, the operator commands' checks) go only to
+  the incarnation the pair adopted.
+- **The witness box replaced** (or its whole state directory lost, key
+  and all). Its new key is refused by both controllers, so a box at the
+  witness's address that holds the token is never taken as the witness
+  by itself:
+  1. `naut redundancy status` on each controller shows `new witness key
+     waiting: SHA256:...`. Compare it with the key the new witness
+     prints at its start (`naut witness — peer port ..., TLS, key
+     SHA256:...`).
+  2. If they match, run `naut redundancy unpin witness` on **both**
+     controllers. Each then takes that very key, once; another key
+     stays refused. An allowance not used by the pair's next adoption
+     ends with it.
+  3. The pair adopts the new witness as it would a rebuilt one.
+
+  A controller whose pins file was reset (see below) has forgotten the
+  witness's key: it takes the counted incarnation's name at first
+  contact, the same trusted-network window as any first pin.
 - **An unreadable pins file** is moved aside, never silently ignored
   and never an outage: every member is pinned again at its next contact,
   which is the moment the trusted-network rule above is for, and a
   condition (`peer-pins-reset`) stands for a day, past the re-pinning,
-  to remind you to check the fingerprints.
+  to remind you to check the fingerprints. That includes the witness's
+  key: a controller that lost its pins file learns it again from the
+  witness incarnation it counts, at its first contact.
 
 - **A token under 32 characters is refused at start**, by `naut run`
   and `naut witness`: the key's public half is visible to anyone who

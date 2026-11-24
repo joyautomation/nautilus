@@ -5,6 +5,7 @@ import (
 	"context"
 	crand "crypto/rand"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -400,6 +401,48 @@ type caller struct {
 	// tls: calls go out with peer TLS. Only a plain call can meet a TLS
 	// listener's 400, so only then is that answer read as one.
 	tls bool
+	// wit is the witness's base URL, and adopted the witness incarnation
+	// this controller's pair counts (0 when none): with peer TLS, an
+	// answer from the witness to anything but a vote counts only from
+	// that incarnation's certificate (#710 2b; a vote reply is bound to
+	// its own, Elector.witnessBound).
+	wit     string
+	adopted func() uint64
+}
+
+// errWitnessInc: an answer from the witness to a call that is not a vote
+// came under the certificate of an incarnation the pair does not count.
+var errWitnessInc = errors.New("the witness answered as an incarnation this pair does not count (a rebuilt witness counts once both controllers adopt it)")
+
+// witnessCertInc reads the witness's certificate name, witness@<inc>, as
+// internal/peertls writes it (WitnessName: decimal, canonical).
+func witnessCertInc(cn string) (uint64, bool) {
+	s, ok := strings.CutPrefix(cn, "witness@")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil || strconv.FormatUint(n, 10) != s {
+		return 0, false
+	}
+	return n, true
+}
+
+// leafCN is the other end's certificate name on a TLS answer ("" when
+// none).
+func leafCN(cs *tls.ConnectionState) string {
+	if cs == nil || len(cs.PeerCertificates) == 0 {
+		return ""
+	}
+	return cs.PeerCertificates[0].Subject.CommonName
+}
+
+// witnessOpOK reports whether an answer from the witness under the
+// certificate named cn counts for a call that is not a vote: an
+// incarnation, not 0, and the one the pair counts once it counts one.
+func witnessOpOK(cn string, adopted uint64) bool {
+	inc, ok := witnessCertInc(cn)
+	return ok && inc != 0 && (adopted == 0 || inc == adopted)
 }
 
 // call sends one request with a deadline of d and returns the body of a
@@ -411,6 +454,13 @@ func (c *caller) call(ctx context.Context, d time.Duration, method, url string, 
 
 // callHeader is call with the answer's headers (nil when none came).
 func (c *caller) callHeader(ctx context.Context, d time.Duration, method, url string, body []byte) ([]byte, http.Header, error) {
+	b, h, _, err := c.callCert(ctx, d, method, url, body)
+	return b, h, err
+}
+
+// callCert is callHeader with the name on the answering end's
+// certificate ("" without peer TLS).
+func (c *caller) callCert(ctx context.Context, d time.Duration, method, url string, body []byte) ([]byte, http.Header, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
 	var rd io.Reader
@@ -419,7 +469,7 @@ func (c *caller) callHeader(ctx context.Context, d time.Duration, method, url st
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, rd)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	req.Header.Set(TokenHeader, c.token)
 	req.Header.Set(LeaseHeader, strconv.FormatInt(int64(c.lease), 10))
@@ -430,26 +480,45 @@ func (c *caller) callHeader(ctx context.Context, d time.Duration, method, url st
 	resp, err := c.client.Do(req)
 	if err != nil {
 		c.noted(url, err)
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 	defer resp.Body.Close()
+	cn := leafCN(resp.TLS)
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxFrame))
 	if err == nil && !c.tls && resp.StatusCode == http.StatusBadRequest && bytes.Contains(b, []byte(httpsAnswer)) {
 		err = fmt.Errorf("%s %s: %w", method, url, errPeerSpeaksTLS)
 	}
+	if err == nil && c.tls && c.wit != "" && strings.HasPrefix(url, c.wit+Prefix) && !strings.HasSuffix(url, "/vote") &&
+		!witnessOpOK(cn, c.adoptedInc()) && !mut("witness_ops_any_inc") {
+		err = fmt.Errorf("%s %s: %w (its certificate names %s)", method, url, errWitnessInc, nonEmptyCN(cn))
+	}
 	c.noted(url, err)
 	switch {
 	case err != nil:
-		return nil, resp.Header, err
+		return nil, resp.Header, cn, err
 	case resp.StatusCode == http.StatusNoContent:
-		return nil, resp.Header, nil
+		return nil, resp.Header, cn, nil
 	case resp.StatusCode != http.StatusOK:
 		body := bytes.TrimSpace(b)
 		said := strings.ToValidUTF8(string(body[:min(len(body), maxRefusalText)]), "")
-		return nil, resp.Header, &statusError{code: resp.StatusCode, reason: resp.Header.Get(RefusedHeader),
+		return nil, resp.Header, cn, &statusError{code: resp.StatusCode, reason: resp.Header.Get(RefusedHeader),
 			msg: fmt.Sprintf("%s %s: %s: %s", method, url, resp.Status, body), body: said}
 	}
-	return b, resp.Header, nil
+	return b, resp.Header, cn, nil
+}
+
+func (c *caller) adoptedInc() uint64 {
+	if c.adopted == nil {
+		return 0
+	}
+	return c.adopted()
+}
+
+func nonEmptyCN(cn string) string {
+	if cn == "" {
+		return "nothing"
+	}
+	return cn
 }
 
 func (c *caller) noted(url string, err error) {

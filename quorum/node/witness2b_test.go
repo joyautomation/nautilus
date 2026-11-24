@@ -1,0 +1,157 @@
+package node
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/joyautomation/nautilus/internal/peertls"
+	"github.com/joyautomation/nautilus/quorum"
+)
+
+// A witness reply counts only under the certificate of its own
+// incarnation (#710 2b): one whose certificate names another (a token
+// holder answering as a fresh incarnation, pinned at its first contact)
+// is heard by nothing, and the pair runs on its two controllers. The
+// pair's own commissioning rode witness@0 for its first vote: that reply
+// did not count, the connection was closed, and the next vote met the
+// incarnation's certificate.
+func TestLoopbackAWitnessReplyCountsOnlyUnderItsIncarnation(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	who := c.settledLeader(leases(20))
+	inc := c.wit.w.Incarnation(c.pair)
+	if inc == 0 {
+		t.Fatal("the witness has no incarnation for the pair")
+	}
+	// The leader's renewals are what hear the witness (a standby's relay
+	// probes don't count as hearing it).
+	heard := func() time.Duration { return c.elector(who).Status().WitnessAge }
+	fresh := func() bool { a := heard(); return a >= 0 && a < c.lease }
+	c.waitFor("the leader hears the witness", leases(20), fresh)
+	// The witness's certificate now names another incarnation than its
+	// replies carry.
+	c.witCertLie.Store(1)
+	for _, id := range []quorum.NodeID{"a", "b"} {
+		c.elector(id).CloseIdle()
+	}
+	time.Sleep(6 * c.lease)
+	if age := heard(); age >= 0 && age < 4*c.lease {
+		t.Errorf("%s heard the witness %v ago under a certificate naming witness@%d: its reply counted", who, age, inc+1)
+	}
+	for _, id := range []quorum.NodeID{"a", "b"} {
+		if p := c.peerTLS(id).Pinned(""); p[peertls.WitnessName(inc+1)] == "" {
+			t.Errorf("%s never met the other certificate (pins %v): the test proves nothing", id, p)
+		}
+	}
+	if l := c.elector(who).Status(); !l.Leading {
+		t.Errorf("%s lost the lead without the witness: %+v", who, l)
+	}
+	// A call that is not a vote: only from the incarnation the pair
+	// counts.
+	ms := c.elector("a").membersState(context.Background())
+	if w := ms[2]; !strings.Contains(w.Err, "does not count") {
+		t.Fatalf("the witness's state under another incarnation's certificate: %+v, want refused", w)
+	}
+	c.witCertLie.Store(0)
+	for _, id := range []quorum.NodeID{"a", "b"} {
+		c.elector(id).CloseIdle()
+	}
+	c.waitFor("the witness heard again", leases(20), fresh)
+	if w := c.elector("a").membersState(context.Background())[2]; w.Err != "" {
+		t.Fatalf("the witness's state under its own certificate: %s", w.Err)
+	}
+}
+
+// A reply from a witness incarnation this commissioned controller has not
+// adopted, bound to its own certificate, reaches the adoption alone (#710
+// 2b): its fence, marks and held state count for nothing until the pair
+// adopts it. Without that, one reply from a token holder answering as a
+// fresh incarnation fences a controller (superseded: it campaigns no
+// more, across restarts, until an operator clears it).
+func TestLoopbackAnUnadoptedWitnessReplyReachesOnlyTheAdoption(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	c.settledLeader(leases(20))
+	e := c.elector("b")
+	inc := e.AdoptedIncarnation()
+	if inc == 0 {
+		t.Fatal("b adopted nothing")
+	}
+	rep := quorum.Reply{From: WitnessID, To: "b", Nonce: e.nonce, Incarnation: inc + 1, Fence: 1 << 40, Marked: true, Promised: 1 << 30}
+	if e.witnessReplyCounts(WitnessID, peertls.WitnessName(inc+1), rep) {
+		t.Fatal("a reply bound to an unadopted incarnation goes to reply() (row unadopted_reply_heard)")
+	}
+	if !e.witnessReplyCounts(WitnessID, peertls.WitnessName(inc), quorum.Reply{From: WitnessID, To: "b", Incarnation: inc}) {
+		t.Fatal("a reply bound to the adopted incarnation does not count")
+	}
+	time.Sleep(2 * c.lease)
+	if st := e.Status(); st.Superseded != "" || st.Held || len(st.Marked) != 0 {
+		t.Fatalf("an unadopted incarnation's reply counted: superseded %q, held %v, marked %v", st.Superseded, st.Held, st.Marked)
+	}
+}
+
+// A refusal under the certificate of an incarnation the pair does not
+// count raises nothing (#710 2b): a token holder answering as a fresh
+// incarnation can't raise or clear a controller's lease condition with
+// its own text. The same refusal under the counted incarnation's
+// certificate is raised (the control).
+func TestLoopbackAnUnboundWitnessRefusalRaisesNothing(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	who := c.settledLeader(leases(20))
+	from := map[quorum.NodeID]int{"a": c.eventCount("a"), "b": c.eventCount("b")}
+	c.witCertLie.Store(1)
+	c.stopWitness()
+	c.setLease(WitnessID, loopLease/2)
+	c.startWitness()
+	for _, id := range []quorum.NodeID{"a", "b"} {
+		c.elector(id).CloseIdle()
+	}
+	c.steady(who, 6)
+	for _, id := range []quorum.NodeID{"a", "b"} {
+		c.noLeaseReports(id, from[id])
+	}
+	c.witCertLie.Store(0)
+	for _, id := range []quorum.NodeID{"a", "b"} {
+		c.elector(id).CloseIdle()
+	}
+	for _, id := range []quorum.NodeID{"a", "b"} {
+		c.waitLease(id, WitnessID, false, "longer than this witness's")
+	}
+}
+
+// closeSpy counts CloseIdleConnections.
+type closeSpy struct {
+	http.RoundTripper
+	closed int
+}
+
+func (s *closeSpy) CloseIdleConnections() { s.closed++ }
+
+// A witness reply refused by its certificate closes the kept connections
+// (#710 2b): a pair's first vote rides witness@0 (the witness draws the
+// pair's incarnation answering it), and a kept connection would keep that
+// certificate for every later vote. A bound reply closes nothing.
+func TestARefusedWitnessReplyClosesTheConnections(t *testing.T) {
+	spy := &closeSpy{}
+	e := &Elector{o: Options{Witness: WitnessID}, log: slog.Default(), call: caller{tls: true, client: &http.Client{Transport: spy}}}
+	if e.witnessBound(WitnessID, "witness@0", quorum.Reply{Incarnation: 7}) {
+		t.Fatal("a reply over witness@0 counted")
+	}
+	if spy.closed != 1 {
+		t.Fatalf("%d closes after a reply over witness@0, want 1", spy.closed)
+	}
+	if !e.witnessBound(WitnessID, "witness@7", quorum.Reply{Incarnation: 7}) || spy.closed != 1 {
+		t.Fatalf("a bound reply: closes %d", spy.closed)
+	}
+	if e.witnessBound(WitnessID, "witness@8", quorum.Reply{Incarnation: 7}) || spy.closed != 2 {
+		t.Fatalf("a reply under another incarnation's certificate: closes %d", spy.closed)
+	}
+}
