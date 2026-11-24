@@ -286,13 +286,16 @@ func armFunc(deadline time.Time, reset func()) (stop func() (fired bool)) {
 type Socket struct {
 	mu sync.Mutex
 	rc syscall.RawConn
+	// reset: this connection was reset (Abort), by whichever path got
+	// there first.
+	reset bool
 }
 
 // Control is a net.Dialer Control func: it keeps the socket and sets
 // SO_LINGER 0 on it.
 func (s *Socket) Control(_, _ string, c syscall.RawConn) error {
 	s.mu.Lock()
-	s.rc = c
+	s.rc, s.reset = c, false
 	s.mu.Unlock()
 	if mut("fence_fin") {
 		return nil
@@ -311,15 +314,30 @@ func (s *Socket) Control(_, _ string, c syscall.RawConn) error {
 // drops what it still held, and the transport's next read or write fails,
 // without closing the descriptor under it (Linux: connect AF_UNSPEC;
 // elsewhere nothing, and Abort reports false: a pair runs on Linux only).
+//
+// It reports whether the connection is reset, by this call or an earlier
+// one: a fenced write's send-deadline timer and its failure path both
+// abort, and whichever comes second finds it done (on a loaded runner the
+// timer often wins; CI on main after #1359).
 func (s *Socket) Abort() bool {
 	s.mu.Lock()
-	rc := s.rc
+	rc, done := s.rc, s.reset
 	s.mu.Unlock()
 	if rc == nil || mut("fence_fin") {
 		return false
 	}
+	if done && !mut("abort_twice_fails") {
+		return true
+	}
 	ok := false
 	_ = rc.Control(func(fd uintptr) { ok = abortFD(fd) })
+	if ok {
+		s.mu.Lock()
+		if s.rc == rc {
+			s.reset = true
+		}
+		s.mu.Unlock()
+	}
 	return ok
 }
 
