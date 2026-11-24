@@ -215,3 +215,16 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// A tag may not be named as a nautilus system function (#710 (b)), in a
+// tag file or the manifest; the message names where.
+func TestATagNamedAsASystemFunctionIsRefused(t *testing.T) {
+	fs := tagProject(map[string]string{
+		"nautilus.yaml": oneTask + "tag-files: [tags/a.yaml]\n",
+		"tags/a.yaml":   "- { name: Peer_Ready, role: state, init: false }\n",
+	})
+	_, err := ReadManifest(fs, "")
+	if err == nil || !strings.Contains(err.Error(), `tag "Peer_Ready" (tags/a.yaml) has the name of a nautilus system function (PEER_READY())`) {
+		t.Fatalf("got %v", err)
+	}
+}

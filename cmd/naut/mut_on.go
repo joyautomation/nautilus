@@ -80,6 +80,9 @@ import "os"
 //   - handback_peer_file_unjudged: a peer's retain file older than the voters' floor is good (#710 S2c-3);
 //   - handback_taken_unalarmed: a takeover from the peer's hand-back raises no condition (#710 S2c-3);
 //   - handback_restart_empty_trusted: a restart after a hand-back trusts the emptied retain file (#710 S2c-3, Fable M1);
+//   - ack_other_build: a standby acknowledges an image of another build (#710 (b));
+//   - peer_ready_ignores_forces: PEER_READY() is TRUE while the leader holds forces (#710 (b));
+//   - ack_kept_across_reconnect: a leader keeps an acknowledgement across a new stream connection (#710 (b));
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutNaut(name string) bool { return name == mutOn }

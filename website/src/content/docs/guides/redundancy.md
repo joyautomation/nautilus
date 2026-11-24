@@ -387,9 +387,12 @@ rather than an address it has, sets `NAUTILUS_PEER_LISTEN` (for example
 
 :::caution[Redundancy is experimental]
 A takeover goes on **hot** from the old leader's state when the standby
-was in sync with it, and is **cold** otherwise (below). On every
-takeover, hot or cold, `FIRST_SCAN()` is TRUE on the new leader's first
-scan, so `IF FIRST_SCAN()` start-up code runs again. A pair without
+was in sync with it, and is **cold** otherwise (below). A cold takeover
+is a start: `FIRST_SCAN()` is TRUE on the new leader's first scan, so `IF
+FIRST_SCAN()` start-up code runs again. A hot one is not: the state goes
+on, and `FIRST_SCAN()` stays FALSE. The program can tell what happened
+from [`TAKEOVER_SCAN()`, `HOT_TAKEOVER()`, `PEER_READY()` and
+`TAKEOVERS()`](/reference/functions/#redundancy). A pair without
 `experimental: true` is refused, and `naut run` says so at every start.
 Live I/O applies are refused on a pair.
 :::

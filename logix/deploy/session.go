@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -188,6 +189,11 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 		Inits: s.t.Inits, Descs: s.t.Descs, Aliases: s.t.Aliases, Tags: s.t.Tags, Side: s.t.Side,
 		AllTags: s.t.AllTags, ControllerScoped: s.t.ControllerScoped, Hardware: s.t.Hardware,
 		Channels: s.t.Channels, Messages: s.t.Messages,
+		Warn: func(w string) { // once each: the partial writes below warn again
+			if !slices.Contains(rep.Warnings, w) {
+				rep.Warnings = append(rep.Warnings, w)
+			}
+		},
 	}
 	full, diags, err := s.t.write(src, wopts)
 	if err != nil {

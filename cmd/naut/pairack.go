@@ -84,6 +84,13 @@ func (s *pairStream) noteSent(epoch, seq uint64, now time.Time, first bool) {
 	if n := len(a.sends); n > 0 && (!first || mutNaut("interval_across_reconnect")) {
 		a.interval = now.Sub(a.sends[n-1].at)
 	}
+	if first && !mutNaut("ack_kept_across_reconnect") {
+		// A new connection may be a standby that restarted, maybe on
+		// another build or with an empty shadow: an acknowledgement made
+		// before it is no word on what it holds now (#710 (b): PEER_READY()
+		// read a restarted standby of another build as current).
+		a.acked, a.ackedAt = 0, time.Time{}
+	}
 	a.sends = append(a.sends, sentImage{seq: seq, at: now})
 	if len(a.sends) > ackSends {
 		a.sends = a.sends[len(a.sends)-ackSends:]
@@ -219,6 +226,26 @@ func (s *pairStream) postAck(ack streamAck) {
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 512))
 	resp.Body.Close()
+}
+
+// peerReady is PEER_READY() on this leader (#710 (b)): a takeover by its
+// standby now would go hot. The standby is current by the acknowledgement
+// rule (syncMark: it acknowledges only images it applied whole, of its own
+// build), this leader holds no forces (a takeover drops them), and
+// hot-max-age is not 0. FALSE on a standby.
+func (s *pairStream) peerReady() bool {
+	epoch, lead := s.rt.LeadingTerm()
+	if !lead || !s.leads(epoch) {
+		return false
+	}
+	if s.hotMaxAge == 0 {
+		return false
+	}
+	if s.rt.Tags().ForceCount() > 0 && !mutNaut("peer_ready_ignores_forces") {
+		return false
+	}
+	_, current := s.syncMark(epoch)
+	return current
 }
 
 // coldWhy says a hot check's cold reason (quorum.Cold*) in words, for the

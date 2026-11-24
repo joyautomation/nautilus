@@ -61,7 +61,6 @@ import "os"
 //   - hot_globals_not_carried: a hot takeover installs the frames but not the image's tags (#710 S2b).
 //   - hot_timer_not_rebased: a hot takeover keeps the timers on the old leader's clock (#710 S2b).
 //   - hot_age_not_elapsed: a hot takeover rebases the timers to the image's arrival, not counting its age and the inputs wait (#710 S2b).
-//   - hot_keeps_first_scan_false: a hot takeover leaves FIRST_SCAN() FALSE on a box that led before (#710 S2b).
 //   - hot_late_flush_installs: a takeover waits out a late flush and installs what it hands over (#710 S2b).
 //   - hot_failed_flush_installs: a takeover whose flush failed (not on an unreadable own store) still goes hot (#710 S2b).
 //   - hot_ticket_carried: a hot takeover keeps a READ/WRITE ticket of the old controller (#710 S2b).
@@ -71,6 +70,11 @@ import "os"
 //   - handback_on_readable_store: a takeover asks for a hand-back with its own store readable (#710 S2c-3).
 //   - handback_when_hot: a takeover that will go hot asks for a hand-back (#710 S2c-3).
 //   - handback_store_bad_forgotten: an edge's failed store read is forgotten once a hand-back closes the gate (#710 S2c-3, Fable M1).
+//   - hot_first_scan_true: a hot takeover makes FIRST_SCAN() TRUE (#710 (b)).
+//   - takeover_unmarked: a takeover sets no TAKEOVER_SCAN()/HOT_TAKEOVER() and counts nothing (#710 (b)).
+//   - takeover_flag_kept: TAKEOVER_SCAN()/HOT_TAKEOVER() stay TRUE past the first scan (#710 (b)).
+//   - peer_ready_never_set: PEER_READY() never takes what the pair sets (#710 (b)).
+//   - takeover_flag_survives_step_down: a takeover flag a program never scanned after survives a step-down (#710 (b)).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutRuntime(name string) bool { return name == mutOn }

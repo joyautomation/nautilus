@@ -2,6 +2,7 @@ package writer
 
 import (
 	"fmt"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/st"
@@ -200,6 +201,12 @@ func (pw *progWriter) typ(e st.Expression) string {
 			return strings.ToUpper(strings.TrimSpace(p.ret))
 		}
 		name := strings.ToUpper(e.Name)
+		if ir.IsSystemFunction(name) {
+			if name == "TAKEOVERS" {
+				return "DINT"
+			}
+			return "BOOL"
+		}
 		args, _ := pw.positional(e)
 		if _, to, ok := strings.Cut(name, "_TO_"); ok {
 			return to

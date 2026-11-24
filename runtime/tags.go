@@ -56,6 +56,9 @@ type Tags struct {
 	// comm serves the programs' READ and WRITE blocks (channels.go); nil
 	// when the runtime has no channels.
 	comm *commHub
+	// red is a pair's redundancy state the system functions read
+	// (redstate.go); all zero outside a pair.
+	red  redState
 	mu   sync.RWMutex
 	vals map[string]*tagVal
 	// fold maps ir.NameKey(name) to the spelling a tag was created under.

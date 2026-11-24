@@ -229,7 +229,7 @@ func globalI(t *testing.T, rt *Runtime, name string) int64 {
 // from the image, on its own clock an hour off the old leader's. Its
 // timer counts the image's age as elapsed (never the clocks' offset), its
 // counter and locals go on, a tag the program latched and one an operator
-// wrote come with it, FIRST_SCAN() is TRUE once more (until S2 (b)), and
+// wrote come with it, FIRST_SCAN() stays FALSE (#710 (b): no start), and
 // a READ parked mid-request holds no ticket of the old controller's.
 func TestHotTakeoverGoesOnFromTheImage(t *testing.T) {
 	r := newHotRig(t, hotMain, hotMain)
@@ -267,13 +267,9 @@ func TestHotTakeoverGoesOnFromTheImage(t *testing.T) {
 		t.Fatalf("leader at the image: ET %d n %d, want 3000 and 31", leadET, leadN)
 	}
 	r.sc.step(700 * time.Millisecond) // the image is 700 ms old when the standby scans
-	// A box that led before: its programs have scanned, FIRST_SCAN() is
-	// FALSE there until a takeover makes it TRUE again.
-	for _, np := range r.stby.namedPrograms() {
-		np.prog.mu.Lock()
-		np.prog.ran = true
-		np.prog.mu.Unlock()
-	}
+	// The standby never led: its programs have never scanned. A hot
+	// takeover is no start all the same (#710 (b)), so FIRST_SCAN() stays
+	// FALSE on its first scan.
 
 	rep := r.takeOver(t)
 	if !rep.Hot || rep.Reason != "" || !rep.Image {
@@ -289,8 +285,8 @@ func TestHotTakeoverGoesOnFromTheImage(t *testing.T) {
 	if n := local(t, sp, "n").I; n != leadN+1 {
 		t.Errorf("local n %d, want the image's %d plus one scan", n, leadN)
 	}
-	if f := local(t, sp, "firsts").I; f != 2 {
-		t.Errorf("FIRST_SCAN count %d, want 2: the image's 1, and TRUE again on the first hot scan", f)
+	if f := local(t, sp, "firsts").I; f != 1 {
+		t.Errorf("FIRST_SCAN count %d, want the image's 1: a hot takeover is no start, also on a standby that never led (hot_first_scan_true)", f)
 	}
 	if k := local(t, r.stby.TaskProgram("aux"), "k").I; k != 31 {
 		t.Errorf("aux's k %d, want the image's 30 plus one scan", k)
@@ -313,8 +309,8 @@ func TestHotTakeoverGoesOnFromTheImage(t *testing.T) {
 	if et := fbSlot(t, sp, "tmr", "ET").I; et != leadET+1700 {
 		t.Errorf("TON ET %d a second on, want %d", et, leadET+1700)
 	}
-	if f := local(t, sp, "firsts").I; f != 2 {
-		t.Errorf("FIRST_SCAN count %d on the second scan, want still 2", f)
+	if f := local(t, sp, "firsts").I; f != 1 {
+		t.Errorf("FIRST_SCAN count %d on the second scan, want still 1", f)
 	}
 }
 

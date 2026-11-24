@@ -124,7 +124,11 @@ func (q *Quorum) IsLeader() bool { return q.n.IsLeader() }
 // take it.
 func (q *Quorum) SendGate() (bool, time.Duration, uint64) { return q.n.SendGate() }
 
-func (q *Quorum) Term() uint64             { return q.n.Term() }
+func (q *Quorum) Term() uint64 { return q.n.Term() }
+
+// IsTakeover is runtime.TakeoverKnower: whether the leadership acquired
+// last took over from the peer (node.Elector.IsTakeover).
+func (q *Quorum) IsTakeover() bool         { return q.n.IsTakeover() }
 func (q *Quorum) Decided() <-chan struct{} { return q.n.Decided() }
 func (q *Quorum) Run(ctx context.Context)  { q.n.Run(ctx) }
 func (q *Quorum) Release()                 { q.n.Release() }

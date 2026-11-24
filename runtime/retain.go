@@ -200,6 +200,9 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		if r.leading {
 			// Stepping down: forces belong to the active controller only.
 			r.dropForces("lost leadership")
+			// A takeover a program never scanned after is spent: a resume
+			// in the same term is no takeover (Sonnet, #1350).
+			r.clearTakeovers()
 		}
 		r.leading = false
 		r.unfresh()
@@ -326,6 +329,10 @@ func (r *Runtime) takeover() {
 		r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
 		hot = r.hotTakeover(h, why, had)
 	}
+	// TAKEOVER_SCAN() and HOT_TAKEOVER() for each program's next scan, and
+	// TAKEOVERS(), when this leadership took over from the peer rather
+	// than started (#710 (b)): the coordinator knows which.
+	defer func() { r.markTakeovers(hot) }()
 	if !hot {
 		r.prog.ResetFrame()
 		for _, tr := range r.tasks {

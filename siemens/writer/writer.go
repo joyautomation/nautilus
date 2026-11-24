@@ -515,6 +515,8 @@ type writer struct {
 	diags   []Diag
 	// warnings: Output.Warnings.
 	warnings []Diag
+	// pairWarned: the pair-state warning went out (expr.go).
+	pairWarned bool
 	// guarded are the guarded division functions the programs call
 	// (ops.go), each with the first program that called it.
 	guarded map[string]string

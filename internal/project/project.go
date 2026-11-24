@@ -1752,6 +1752,9 @@ func composeTags(fsys fs.FS, m *Manifest, manifestName string) error {
 			if t.Name == "" {
 				continue
 			}
+			if ir.IsSystemFunction(t.Name) {
+				return fmt.Errorf("tag %q (%s) has the name of a nautilus system function (%s()): rename the tag", t.Name, src, ir.NameKey(t.Name))
+			}
 			if prev, dup := from[ir.NameKey(t.Name)]; dup {
 				if prev.name != t.Name {
 					return fmt.Errorf("tag %q (%s) and tag %q (%s) are one tag — "+

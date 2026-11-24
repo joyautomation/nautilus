@@ -123,6 +123,13 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 	return ""
 }
 
+// PairStateRule tags the warning that a program reads a nautilus pair's
+// state (#710 (b)), PairStateWarning its text.
+const (
+	PairStateRule    = "siemens/pair-state"
+	PairStateWarning = "TAKEOVER_SCAN/HOT_TAKEOVER/PEER_READY/TAKEOVERS/TAKEOVER_HOLD read a nautilus pair; on this target they are constant (FALSE/0)"
+)
+
 func (pw *progWriter) timeLit(raw string, line int) string {
 	s, why := timeLit(raw)
 	if why != "" {
@@ -271,6 +278,22 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		return ""
 	}
 	name := strings.ToUpper(c.Name)
+	// The nautilus system functions read a nautilus pair's state (#710
+	// (b)). A CPU this writes for runs no nautilus pair: never a takeover,
+	// no peer, no hold. (An S7-1500R/H's own redundancy status is in its
+	// system diagnostics, which nautilus does not map.)
+	if ir.IsSystemFunction(name) && len(c.Args) == 0 && len(c.NamedArgs) == 0 {
+		// Logic gated on one is dead code on the CPU: say so, once per
+		// project (naut-lead).
+		if !pw.w.pairWarned {
+			pw.w.pairWarned = true
+			pw.w.warnings = append(pw.w.warnings, Diag{Rule: PairStateRule, Path: pw.path, Line: line, Message: PairStateWarning})
+		}
+		if name == "TAKEOVERS" {
+			return "0"
+		}
+		return "FALSE"
+	}
 
 	if l, ok := pw.locals[strings.ToLower(c.Name)]; ok {
 		if pw.w.userFB(l.typ) != nil {

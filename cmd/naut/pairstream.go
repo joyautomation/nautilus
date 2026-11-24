@@ -457,6 +457,7 @@ func (s *pairStream) run(ctx context.Context) {
 		if s.mayFollow() || mutNaut("stream_leader_follows") {
 			s.startFollower(ctx)
 		}
+		s.rt.SetPeerReady(s.peerReady())
 		s.m.q.SetCondition("state-stream", s.condition())
 		cold, mem := s.takeoverConditions()
 		s.m.q.SetCondition("takeover-cold", cold)
@@ -695,9 +696,11 @@ func (s *pairStream) take(img *runtime.Image, now time.Time, intervalMs int64, n
 	}
 	s.pending = append(s.pending[:0], img.Retain...)
 	s.pendTerm, s.pendSeq = img.Term, img.Seq
-	if s.state == "in-sync" {
-		// Applied whole: a takeover could go on hot from it. Tell the
-		// leader (#710 S2c-1).
+	if s.state == "in-sync" && (img.Build == s.build || mutNaut("ack_other_build")) {
+		// Applied whole, of this build: a takeover could go on hot from
+		// it. Tell the leader (#710 S2c-1). An image of another build is
+		// never hot (S2b), so it is no acknowledgement: the leader's
+		// PEER_READY() reads "would go hot" from it (#710 (b)).
 		s.ack(img.Term, img.Seq)
 	}
 	if s.persistErr != "" {
