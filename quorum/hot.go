@@ -27,6 +27,25 @@ type HotCheck struct {
 	Won        []WonReply
 	Campaigns  []uint64
 	LedBefore  uint64
+	// Witness and WitnessFloor: the witness's reply never covers an epoch
+	// at or below WitnessFloor, this controller's voter's term floor
+	// (recordsFrom). Its records speak only for its own incarnation: a
+	// rebuilt one's RecordsFrom is the first campaign it granted, which
+	// may predate the adoption that made it count, and an earlier
+	// incarnation may have granted any term up to that adoption's floor,
+	// which the voter's floor holds and never lowers (#710 S2c-1 residual
+	// S3, Fable on #1345). Its records still count as evidence.
+	Witness      NodeID
+	WitnessFloor uint64
+}
+
+// recordsFrom is w's RecordsFrom as the check reads it: the witness's
+// raised above WitnessFloor (0, covering nothing, stays 0).
+func (h HotCheck) recordsFrom(w WonReply) uint64 {
+	if w.From == h.Witness && h.Witness != "" && w.RecordsFrom != 0 && w.RecordsFrom <= h.WitnessFloor && !mut("witness_covers_below_floor") {
+		return h.WitnessFloor + 1
+	}
+	return w.RecordsFrom
 }
 
 // maxCampaigns bounds the campaign terms a candidate keeps (HotCheck).
@@ -38,8 +57,12 @@ func (c *Candidate) HotCheck() HotCheck {
 	if !c.leading {
 		return HotCheck{}
 	}
-	return HotCheck{Self: c.cfg.Self, Peer: c.cfg.Peer, Epoch: c.epoch, Won: slices.Clone(c.won),
-		Campaigns: slices.Clone(c.campaigns), LedBefore: c.ledBefore}
+	h := HotCheck{Self: c.cfg.Self, Peer: c.cfg.Peer, Epoch: c.epoch, Won: slices.Clone(c.won),
+		Campaigns: slices.Clone(c.campaigns), LedBefore: c.ledBefore, Witness: c.cfg.Witness}
+	if c.ownFloor != nil {
+		h.WitnessFloor = c.ownFloor() // read now: a later rise errs cold
+	}
+	return h
 }
 
 // wonFrom is the winning round's replies, in voter order.
@@ -73,6 +96,7 @@ func (c *Candidate) wonFrom(rd *round) []WonReply {
 // Cold reasons (HotCheck.Verdict). Each names what the voters said.
 const (
 	ColdRecordsUnknown = "records-unknown"  // fewer than two of the winning replies know every grant since the image's epoch
+	ColdWitnessRebuilt = "witness-rebuilt"  // as records-unknown, because the witness was re-adopted (rebuilt) since the image's leadership began: its records can't speak for that epoch
 	ColdLaterLeader    = "later-leadership" // a voter granted the old leader an epoch after the image's
 	ColdImageUnseen    = "image-epoch-unrecorded"
 	ColdOwnLeadership  = "own-leadership" // this controller led after the image's epoch
@@ -104,12 +128,15 @@ func (h HotCheck) Verdict(imgEpoch, imgSeq uint64) (hot bool, why string) {
 	// against hot (a later epoch, a mark not current) counts from every
 	// winning reply, covering or not (Fable, #1345 S2).
 	covering, marked := 0, 0
+	floored := false // the floor took the witness's coverage away
 	var peerMax uint64
 	var mark Mark
 	for _, w := range h.Won {
-		cov := Covers(w.RecordsFrom, imgEpoch) || mut("unknown_counts_toward_majority")
+		cov := Covers(h.recordsFrom(w), imgEpoch) || mut("unknown_counts_toward_majority")
 		if cov {
 			covering++
+		} else if Covers(w.RecordsFrom, imgEpoch) {
+			floored = true
 		}
 		if r, ok := w.Recs.Of(h.Peer); ok && (cov || !mut("evidence_from_covering_only")) {
 			peerMax = max(peerMax, r.Epoch)
@@ -131,6 +158,9 @@ func (h HotCheck) Verdict(imgEpoch, imgSeq uint64) (hot bool, why string) {
 		// are LedBefore, below.
 	}
 	if covering < 2 {
+		if floored {
+			return false, ColdWitnessRebuilt
+		}
 		return false, ColdRecordsUnknown
 	}
 	if h.LedBefore > imgEpoch && !mut("own_record_ignored") {

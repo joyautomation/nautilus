@@ -1660,14 +1660,29 @@ voters vouch too:
   and the pair test of the ruling-B sequence.
 - **Cold cases left:** a takeover within about `lease/4` of a takeover, or within about a lease
   and a quarter of a voter's restart (no mark yet), a voter on an older release, a rebuilt
-  witness until it grants a campaign.
+  witness until it grants a campaign, and an image whose leadership began before the witness's
+  current incarnation was adopted (`witness-rebuilt`, below).
 - **Residuals (Fable, #1345).** The floor-derived `RecordsFrom` inherits the adoption's own
   residuals: an operator's `Recommission` with a floor set too low, and
   `EventReadoptOverSwitch`. A rebuilt witness's first campaign grant may reach it before the
   adoption that raises the controllers' floors, setting its `RecordsFrom` at or below a
-  leadership its old incarnation granted; a wrong hot from it needs that compound history and
-  stays within `hot-max-age`. The simulator's oracle checks epochs only: it sets every mark
-  current.
+  leadership its old incarnation granted. **Closed (#710 S3):** the witness's records speak
+  only for its own incarnation, and an earlier one may have granted any term up to the floor of
+  the adoption that made the current one count. So the check (`HotCheck.recordsFrom`) never lets
+  the witness's reply cover an epoch at or below the controller's own voter's term floor, which
+  that adoption raised and which only rises; it is read when the check is made, so a later
+  rise (a recommission) errs cold. A `RecordsFrom` of 0 stays 0. The hot verdict and the
+  hand-back floor read coverage only through it. **Where it mattered:** on the hot verdict the
+  S3 history was already cold through the marks rule, since a rebuilt witness's marks come from
+  renewals it granted, all of the later leadership (`no-mark` or `mark-other-epoch`); there the
+  floor only names the reason (`witness-rebuilt`). The hand-back floor has no marks rule, and
+  took the witness's word for a floor below the later leadership: that is the path this
+  closes (`TestHandBackFloorAfterAWitnessRebuild`). The cost: a leadership that began before
+  the witness was re-adopted gets no coverage from it, so a failover before the next election
+  is cold unless both controllers' voters elect the standby (`witness-rebuilt`, or
+  `records-unknown` when the witness's records started above that leadership anyway). The
+  simulator's oracle checks epochs only: it sets every mark current, and it does not run the
+  hand-back, so the unit and candidate tests carry this.
 
 **The new leader, in order:**
 

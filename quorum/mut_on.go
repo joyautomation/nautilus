@@ -578,6 +578,8 @@ var Mutations = []string{
 	"failback_abort_keeps_suspend",      // naut: a manual switchover from the preferred controller that aborts leaves failback suspended (#710 d2, Fable)
 	"failback_suspend_not_saved",        // naut: a failback suspend is answered before the retain store holds it (#710 d2, Fable)
 	"failback_ignores_prefer_mismatch",  // naut: a failback goes to a standby whose manifest prefers otherwise (#710 d2, Fable)
+	"witness_covers_below_floor",        // quorum: the hot check takes a witness reply's coverage of an epoch at or below the controller's voter floor (#710 S3)
+	"witness_floor_unwired",             // quorum: NewAdoption does not give the candidate its voter's floor for the witness check (#710 S3)
 	"switch_ignores_standby_io",         // naut: a switchover goes to a standby whose field I/O is not healthy (#710 d1c)
 	"abort_keeps_final",                 // naut: an aborted switchover's final image stays, so the stream sends nothing more (#710 d1c)
 	"final_sent_once_per_connection",    // naut: a stream connection sends one final image per leadership, so a switchover after an aborted one never sends its own (#710 d1c bench)
