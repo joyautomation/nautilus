@@ -157,7 +157,7 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 	// it to the controller that takes over.
 	if f := s.m.failback; f != nil {
 		undo := f.switchingAway(by)
-		f.flush()
+		go f.flush() // never a journal write while the scans are stopped
 		defer func() {
 			if !handedOver && !mutNaut("failback_abort_keeps_suspend") {
 				undo() // refused or aborted: it still leads, nothing moved away

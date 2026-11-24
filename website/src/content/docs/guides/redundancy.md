@@ -913,7 +913,8 @@ where its state is kept.
   `naut redundancy failback resume`; `naut redundancy failback suspend
   [<why>]` suspends it by hand. Both need the redundancy permission, are
   journalled (`redundancy.failback`), answer once the change is saved
-  to the retain store, and a standby forwards them to the leader.
+  to the leader's retain store (the standby gets it with the next state
+  image, a moment later), and a standby forwards them to the leader.
 - **Ping-pong stop.** If `a` fails over back to the other controller
   within `after` of a failback, `max` times in a row, failback stops
   itself: it is suspended, the system alarm `nautilus.failback-stopped`

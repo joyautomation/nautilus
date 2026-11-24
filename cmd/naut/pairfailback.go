@@ -110,6 +110,9 @@ func (f *pairFailback) record(event, user, why string, result string, extra ...a
 	for i := 0; i+1 < len(extra); i += 2 {
 		detail[extra[i].(string)] = extra[i+1]
 	}
+	if len(f.pending) >= 64 {
+		f.pending = f.pending[1:] // no journal set yet: keep the newest
+	}
 	f.pending = append(f.pending, audit.Entry{
 		User: user, Source: audit.SourceSystem,
 		Action: "redundancy.failback", Target: string(f.m.o.Self),
@@ -120,16 +123,16 @@ func (f *pairFailback) record(event, user, why string, result string, extra ...a
 // flush writes the queued events to the journal, in order. Never under
 // f.mu.
 func (f *pairFailback) flush() {
+	j := f.m.journal.Load()
+	if j == nil {
+		return // kept until the journal is set (SetJournal)
+	}
 	f.flushMu.Lock()
 	defer f.flushMu.Unlock()
 	f.mu.Lock()
 	p := f.pending
 	f.pending = nil
 	f.mu.Unlock()
-	j := f.m.journal.Load()
-	if j == nil {
-		return
-	}
 	for _, e := range p {
 		_, _ = (*j).Record(e)
 	}
@@ -314,7 +317,7 @@ func (f *pairFailback) switchingAway(by string) (undo func()) {
 			f.record("suspend-undone", by, "the switchover did not hand over", audit.ResultOK)
 		}
 		f.mu.Unlock()
-		f.flush()
+		go f.flush() // it runs before EndSwitch: the scans are still stopped
 	}
 }
 
