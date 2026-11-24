@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"net"
@@ -304,7 +305,7 @@ func (r *boxRig) clone(box string) *node.Elector {
 func (r *boxRig) cloneDisk(member, box string) *node.Elector {
 	r.t.Helper()
 	dir := r.t.TempDir()
-	if err := os.CopyFS(dir, os.DirFS(r.env[member]["STATE_DIRECTORY"])); err != nil {
+	if err := copyDisk(dir, r.env[member]["STATE_DIRECTORY"]); err != nil {
 		r.t.Fatal(err)
 	}
 	env := maps.Clone(r.env[member])
@@ -580,7 +581,7 @@ func TestSpoofedCloneBootsWithItsOriginal(t *testing.T) {
 	r.nodes["a"].crash()
 	r.nodes["b"].crash()
 	dir := t.TempDir()
-	if err := os.CopyFS(dir, os.DirFS(r.env["a"]["STATE_DIRECTORY"])); err != nil {
+	if err := copyDisk(dir, r.env["a"]["STATE_DIRECTORY"]); err != nil {
 		t.Fatal(err)
 	}
 	env := maps.Clone(r.env["a"])
@@ -723,12 +724,49 @@ func TestTheStandbysPeerProbeLetsItsPeerSeeAClone(t *testing.T) {
 	pairWait(t, "A to mark b", 10*time.Second, func() bool { return slices.Contains(r.el("a").DuplicateMarks(), "b") })
 }
 
+// copyDisk copies a state directory that a running elector may be writing
+// into: every state file is written to name.tmp and renamed, so os.CopyFS
+// (which lists the directory, then opens each entry) failed with "open
+// quorum.state.tmp: no such file" when the rename landed between the two
+// (#1120). A .tmp file is a write in flight and is skipped (its rename is
+// the file, whole, before or after this copy), and one that vanishes before
+// it is read is skipped too.
+func copyDisk(dst, src string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		to := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(to, 0o755)
+		}
+		if strings.HasSuffix(p, ".tmp") {
+			return nil
+		}
+		b, err := os.ReadFile(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(to, b, 0o600)
+	})
+}
+
 // cloneDiskEnv is cloneDisk returning the clone's env too, so a test can
 // restart it on its own state.
 func (r *boxRig) cloneDiskEnv(member, box string) map[string]string {
 	r.t.Helper()
 	dir := r.t.TempDir()
-	if err := os.CopyFS(dir, os.DirFS(r.env[member]["STATE_DIRECTORY"])); err != nil {
+	if err := copyDisk(dir, r.env[member]["STATE_DIRECTORY"]); err != nil {
 		r.t.Fatal(err)
 	}
 	env := maps.Clone(r.env[member])
@@ -826,4 +864,42 @@ func TestAnOriginalRestartingBesideItsSpareStaysAMember(t *testing.T) {
 		t.Fatal("the original went spare beside its silent spare")
 	}
 	pairWait(t, "a leader", 10*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
+}
+
+// A state directory copied while its writer renames temp files into place
+// copies without an error, and the copy holds whole files only. os.CopyFS
+// fails on this directory within a few hundred copies (the flake of #1120:
+// "open quorum.state.tmp: no such file or directory"); copyDisk does not.
+func TestCopyDiskToleratesAWriteInFlight(t *testing.T) {
+	src := t.TempDir()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			body := []byte(strings.Repeat("v", 64+i%7))
+			tmp := filepath.Join(src, "quorum.state.tmp")
+			if os.WriteFile(tmp, body, 0o600) == nil {
+				_ = os.Rename(tmp, filepath.Join(src, "quorum.state"))
+			}
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	for i := 0; i < 400; i++ {
+		dst := t.TempDir()
+		if err := copyDisk(dst, src); err != nil {
+			t.Fatalf("copy %d: %v", i, err)
+		}
+		if b, err := os.ReadFile(filepath.Join(dst, "quorum.state")); err == nil && !strings.HasPrefix(string(b), strings.Repeat("v", 64)) {
+			t.Fatalf("copy %d holds a torn file: %q", i, b)
+		}
+		if _, err := os.Stat(filepath.Join(dst, "quorum.state.tmp")); err == nil {
+			t.Fatalf("copy %d carries a write in flight", i)
+		}
+	}
 }

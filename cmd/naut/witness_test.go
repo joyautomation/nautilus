@@ -91,11 +91,23 @@ func TestWitnessServesVotes(t *testing.T) {
 	if r := post(testPeerToken); r.StatusCode != http.StatusOK {
 		t.Fatalf("with the token: %s", r.Status)
 	}
+	// The witness saves a pair's state from a writer goroutine of its own, and
+	// stopping the witness stops that writer: cancelling at once could beat
+	// the first save (0.01 s, #1120). Wait for the file, then stop.
+	file := filepath.Join(dir, cluster+".quorum")
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if _, err := os.Stat(file); err == nil {
+			break
+		} else if time.Now().After(deadline) {
+			t.Fatalf("no state file for the pair in $STATE_DIRECTORY after 5 s: %v", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	cancel()
 	if code := <-exited; code != 0 {
 		t.Fatalf("exit %d after stop", code)
 	}
-	if _, err := os.Stat(filepath.Join(dir, cluster+".quorum")); err != nil {
-		t.Fatalf("no state file for the pair in $STATE_DIRECTORY: %v", err)
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("the state file for the pair is gone after the stop: %v", err)
 	}
 }
