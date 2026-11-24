@@ -8,7 +8,7 @@ it at nautilus.joyautomation.com/playground/: `website/scripts/sync-playground.m
 copies `dist/` to `/playground/engine/`, and `docs.yml` builds and deploys
 both.
 
-    ./scripts/build.sh          # -> dist/: naut.wasm, wasm_exec.js, worker.js, memfs.js, client.js, sw.js, app/, hmi/
+    ./scripts/build.sh          # -> dist/: naut.wasm, naut-hmi.wasm, wasm_exec.js, worker.js, hmi-worker.js, memfs.js, client.js, sw.js, app/, hmi/
     python3 -m http.server -d .. 8765   # then open /playground/dev/test.html
     node --test playground/app/live.browser.test.mjs   # after build.sh: examples reach "nautilus: live" in headless Chrome
 

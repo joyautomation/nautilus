@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Build @joyautomation/nautilus-playground into dist/:
-#   naut.wasm (GOOS=js, so internal/project links no field drivers), Go's
+#   naut.wasm (GOOS=js, so internal/project links no field drivers),
+#   naut-hmi.wasm (the screen builder, fetched on first use), Go's
 #   wasm_exec.js, the worker, client, bridge and sw.js (the dashboard and
 #   HMI server), examples/, hmi/ (prebuilt HMIs), and app/: the
 #   workbench (app/, monaco-vscode-api) with the nautilus extension's web
@@ -24,6 +25,10 @@ version="${NAUT_VERSION:-$(git -C "$repo" describe --tags --abbrev=0 2>/dev/null
 ( cd "$repo" && GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false \
     -ldflags "-s -w -X github.com/joyautomation/nautilus/internal/lsp.Version=$version" \
     -o "$out/naut.wasm" ./cmd/naut-wasm )
+# The screen builder (esbuild, Svelte): a second module, fetched only when a
+# screen is first asked for (hmi-worker.js); not in naut.wasm.
+( cd "$repo" && GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags "-s -w" \
+    -o "$out/naut-hmi.wasm" ./cmd/naut-wasm-hmi )
 goroot="$(go env GOROOT)"
 cp "$goroot/lib/wasm/wasm_exec.js" "$out/" 2>/dev/null || cp "$goroot/misc/wasm/wasm_exec.js" "$out/"
 cp "$here"/src/*.js "$here"/src/*.d.ts "$out/"
