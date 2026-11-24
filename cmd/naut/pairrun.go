@@ -111,7 +111,9 @@ type pairMember struct {
 	// peerTLS is the pair's peer TLS (#710 per-box keys), nil when off;
 	// pins journals and conditions its events.
 	peerTLS *peertls.Peer
-	pins    *pinLog
+	// logTLS is the operator-intent log's peer TLS client side (logWrap).
+	logTLS node.TLSWrap
+	pins   *pinLog
 	// witnessLease: the witness refuses this controller's lease
 	// (WitnessLeaseCondition), for the system alarm.
 	witnessLease atomic.Bool
@@ -249,6 +251,17 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	var pt *peertls.Peer
 	var srvTLS *tls.Config
 	pins := newPinLog("redundancy")
+	// The election, once built: the witness incarnation it adopted is the
+	// one whose name is not among the capped others (#710 2b), and the
+	// only one the log's calls to the witness take.
+	var el atomic.Pointer[node.Elector]
+	adopted := func() uint64 {
+		if e := el.Load(); e != nil {
+			return e.AdoptedIncarnation()
+		}
+		return 0
+	}
+	var logTLS node.TLSWrap
 	if pto != nil {
 		keyBox, links := d.keyBox, []string{o.PeerAddr, o.WitnessAddr}
 		if keyBox == nil {
@@ -256,10 +269,12 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		}
 		pto.Box = func() (peertls.Box, error) { return keyBox(links) }
 		pto.OnEvent = pins.event
+		pto.Counted = adopted
 		if pt, err = peertls.New(*pto); err != nil {
 			return nil, err
 		}
 		o.TLS = peerWrap(pt, map[string]string{node.DialAddr(o.PeerAddr): string(o.Peer), node.DialAddr(o.WitnessAddr): peertls.Witness})
+		logTLS = logWrap(pt, o.TLS, node.DialAddr(o.WitnessAddr), adopted)
 		srvTLS = pt.Server()
 	}
 	// What an operator edits to move the peer port: the override, else
@@ -281,7 +296,7 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o750); err != nil {
 		return nil, fmt.Errorf("state directory: %w", err)
 	}
-	m := &pairMember{peers: r.Peers, box: boxFn, getenv: d.getenv, restart: make(chan struct{}), peerTLS: pt, pins: pins}
+	m := &pairMember{peers: r.Peers, box: boxFn, getenv: d.getenv, restart: make(chan struct{}), peerTLS: pt, pins: pins, logTLS: logTLS}
 	o.OnEvent = m.onEvent // events start with the election's Run, after m.q is set
 	// The election first: it locks the state file, so a second process of
 	// this controller stops here, before it binds anything.
@@ -290,15 +305,21 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		return nil, err
 	}
 	m.q, m.o = q, o
+	el.Store(q.Node())
 	if pt != nil {
 		q.SetPeerKeys(func() *leader.PeerKeys { return peerKeys(pt) })
 		pins.attachConditions(q.SetCondition, func() bool {
 			p := pt.Pinned("")
-			return p[string(o.Peer)] != "" && p[peertls.Witness] != ""
+			return p[string(o.Peer)] != "" && p[peertls.WitnessName(adopted())] != ""
 		})
+		// The witness incarnations the pair does not count lose their pins
+		// (#710 2b): left over from a stop between an adoption and its
+		// promotion, they would hold places under the cap.
+		m.promoteAtStart(adopted())
 		// A dropped pin (naut redundancy unpin, #710 2b) ends that member's
 		// kept connections, so the next call meets its new key.
 		pt.OnChange(func(string, string) { m.closeIdle() })
+		q.SetUnpin(m.Unpin)
 	}
 	if srvTLS == nil {
 		// Loud at every start, and standing on /api/cluster (#710).
@@ -638,6 +659,33 @@ func (m *pairMember) onEvent(ev node.Event) {
 		m.q.SetCondition("peer-identity/"+string(ev.Voter), ev.Detail)
 	case node.EventLeaseMismatch:
 		m.leaseMismatch(ev)
+	case node.EventAdopted, node.EventRecommissioned:
+		m.promote(ev.Incarnation)
+	}
+}
+
+// promoteAtStart is promote at a start (peertls PromoteAtStart): one that
+// adopted nothing and knows no witness key drops every witness pin too,
+// so names pinned before it lost its state never hold places under the
+// cap.
+func (m *pairMember) promoteAtStart(inc uint64) {
+	if m.peerTLS == nil {
+		return
+	}
+	if err := m.peerTLS.PromoteAtStart(inc); err != nil {
+		slog.Error("redundancy: the pins of witness incarnations the pair does not count could not be dropped", "incarnation", inc, "err", err)
+	}
+}
+
+// promote keeps the pins of the witness incarnation inc the pair now
+// counts and drops the others' (#710 2b): an adoption re-pins the witness
+// by itself, no operator step.
+func (m *pairMember) promote(inc uint64) {
+	if m.peerTLS == nil || inc == 0 {
+		return
+	}
+	if err := m.peerTLS.Promote(inc); err != nil {
+		slog.Error("redundancy: the pins of witness incarnations the pair no longer counts could not be dropped", "incarnation", inc, "err", err)
 	}
 }
 
@@ -942,7 +990,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		Lapse: func(e oplog.Entry, now time.Time) bool {
 			return sl.Lapse(e, now) || (al != nil && al.Lapse(e, now))
 		},
-		Token: m.o.Token, TLS: m.o.TLS, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
+		Token: m.o.Token, TLS: m.logTLS, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
 		// Replication from the member its certificate names, at its own
 		// URL (#710 per-box keys).
 		Sender: func(r *http.Request, name, from string) bool {

@@ -33,7 +33,10 @@ func TestLoopbackFirstContactPinsAllThree(t *testing.T) {
 		return len(c.peerTLS("a").Pinned("")) == 2 && len(c.peerTLS("b").Pinned("")) == 2 && len(c.peerTLS(WitnessID).Pinned(c.pair)) == 2
 	})
 	a, b, w := c.peerTLS("a").Pinned(""), c.peerTLS("b").Pinned(""), c.peerTLS(WitnessID).Pinned(c.pair)
-	if a["b"] != own("b") || a[peertls.Witness] != own(WitnessID) || b["a"] != own("a") || b[peertls.Witness] != own(WitnessID) || w["a"] != own("a") || w["b"] != own("b") {
+	// The witness's name is its incarnation for this pair (#710 2b):
+	// witness@0, the name of the pair's first vote, is never pinned.
+	wn := peertls.WitnessName(c.wit.w.Incarnation(c.pair))
+	if a["b"] != own("b") || a[wn] != own(WitnessID) || b["a"] != own("a") || b[wn] != own(WitnessID) || w["a"] != own("a") || w["b"] != own("b") {
 		t.Fatalf("pins: a %v, b %v, witness %v", a, b, w)
 	}
 }
@@ -103,8 +106,8 @@ func TestEveryHandlerBindsItsSender(t *testing.T) {
 		}
 		for _, as := range []struct{ desc, cl, n string }{
 			{"as b", c.pair, "b"},
-			{"as the witness", "", peertls.Witness},
-			{"as the witness of this cluster", c.pair, peertls.Witness},
+			{"as the witness", "", peertls.WitnessName(1)},
+			{"as the witness of this cluster", c.pair, peertls.WitnessName(1)},
 			{"as another cluster's a", other, "a"},
 			{"with no verified member", "", ""},
 		} {

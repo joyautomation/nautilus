@@ -280,15 +280,14 @@ func TestPairPeerKeysShowInStatus(t *testing.T) {
 		return len(keys("a").Pinned) == 2 && len(keys("b").Pinned) == 2
 	})
 	a, b := keys("a"), keys("b")
-	if a.Self == "" || a.Self != b.Pinned["a"] || b.Self != a.Pinned["b"] || a.Pinned["witness"] == "" || a.Pinned["witness"] != b.Pinned["witness"] {
+	// The witness is pinned under the name of the incarnation the pair
+	// counts (#710 2b).
+	wn := peertls.WitnessName(r.elector("a").Status().Incarnation)
+	if a.Self == "" || a.Self != b.Pinned["a"] || b.Self != a.Pinned["b"] || a.Pinned[wn] == "" || a.Pinned[wn] != b.Pinned[wn] {
 		t.Fatalf("a %+v, b %+v: each box's own key must be what the other pinned", a, b)
 	}
 	// The witness pinned the controllers' own keys too.
-	wp, ok := witnessPeers.Load(r.witDir)
-	if !ok {
-		t.Fatal("no witness peer")
-	}
-	if w := wp.(*peertls.Peer).Pinned(r.cluster()); w["a"] != a.Self || w["b"] != b.Self {
+	if w := witnessPinned(t, r.witDir, r.cluster()); w["a"] != a.Self || w["b"] != b.Self {
 		t.Fatalf("the witness pinned %v; a is %s, b %s", w, a.Self, b.Self)
 	}
 	// The events from before the journal, now in it: a's new key and its
@@ -297,7 +296,7 @@ func TestPairPeerKeysShowInStatus(t *testing.T) {
 	for _, e := range j.entries("redundancy.peer-pin") {
 		kinds = append(kinds, fmt.Sprint(e.Detail["kind"], ":", e.Target))
 	}
-	for _, want := range []string{"new-key:a", "pinned:b", "pinned:witness"} {
+	for _, want := range []string{"new-key:a", "pinned:b", "pinned:" + wn} {
 		if !slices.Contains(kinds, want) {
 			t.Fatalf("a's journal: %v, want %s", kinds, want)
 		}
@@ -312,7 +311,7 @@ func TestPairPeerKeysShowInStatus(t *testing.T) {
 	}
 	var out bytes.Buffer
 	printClusterStatus(&out, []byte(body))
-	if want := "peer keys: this box " + a.Self + "; pinned: b " + a.Pinned["b"] + ", witness " + a.Pinned["witness"]; !strings.Contains(out.String(), want) {
+	if want := "peer keys: this box " + a.Self + "; pinned: b " + a.Pinned["b"] + ", " + wn + " " + a.Pinned[wn]; !strings.Contains(out.String(), want) {
 		t.Fatalf("naut redundancy status:\n%s\nwant the line %q", out.String(), want)
 	}
 }
@@ -330,7 +329,7 @@ func TestPairATokenHolderFirstLocksOutTheRealMemberLoudly(t *testing.T) {
 	r.nodes["b"].m.SetJournal(j)
 	realKey := r.nodes["a"].m.q.Status().PeerKeys.Self
 	r.nodes["a"].crash()
-	r.unpin("a")
+	r.unpinOn("b", "a")
 	imp := memberPeer(t, r.token, r.cluster(), "a")
 	impKey, _ := imp.Fingerprint()
 	ask := func(c *http.Client, url string) {

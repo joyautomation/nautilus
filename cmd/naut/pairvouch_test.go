@@ -120,7 +120,8 @@ func TestPairAcceptLossFreesASyncedLeaderAlone(t *testing.T) {
 	pairWait(t, "the read-only condition naming the vouch", 15*time.Second, func() bool {
 		return r.hasWarning(lead, "naut redundancy vouch")
 	})
-	r.restart(stand) // wiped: it re-adopts, its log empty and unsynced
+	r.unpinOn(lead, stand) // its key went with its disk (#710 2b)
+	r.restart(stand)       // wiped: it re-adopts, its log empty and unsynced
 	vr, pic, out := r.vouch(lead, "", "")
 	if !strings.HasPrefix(out, "refused") || !slices.Contains(pic.Needs, oplog.NeedLoss) || !strings.Contains(vr.Refused, "--accept-loss="+pic.Digest) {
 		t.Fatalf("a plain vouch: %s %+v", out, pic)
@@ -272,6 +273,9 @@ func TestPairAPlainVouchAfterARefusedOneGoesAhead(t *testing.T) {
 	}
 	r.wipeState("a")
 	r.rebuildWitnessLog()
+	// b, the survivor, is down: the operator unpins a on the witness box,
+	// and on b once it is back (#710 2b).
+	r.witnessUnpinOffline("a")
 	r.restart("a")
 	a := r.elector("a")
 	pairWait(t, "a to hear the witness", 10*time.Second, func() bool { return a.Status().WitnessIncarnation != 0 })
@@ -288,6 +292,9 @@ func TestPairAPlainVouchAfterARefusedOneGoesAhead(t *testing.T) {
 		return r.hasWarning("a", "not vouched for") && r.hasWarning("a", "naut redundancy vouch --accept-loss=")
 	})
 	r.restart("b")
+	if rep := r.unpinOn("b", "a"); rep.Witness != node.UnpinOther {
+		t.Fatalf("b's unpin of a after the witness re-pinned a's new key: %+v, want the witness's pin left as it is", rep)
+	}
 	pairWait(t, "a to hear b's log", 10*time.Second, func() bool {
 		return slices.Contains(r.nodes["a"].m.log.Status().Reached, peerURL(r.peer["b"]))
 	})
@@ -411,7 +418,8 @@ func TestPairANewPairsPlainVouchNeedsNoAcceptLoss(t *testing.T) {
 	pairWait(t, "the read-only condition naming the plain vouch", 15*time.Second, func() bool {
 		return r.hasWarning(lead, OplogReadOnlyNewPair)
 	})
-	r.restart(stand) // wiped: it re-adopts, its log empty and unsynced
+	r.unpinOn(lead, stand) // its key went with its disk (#710 2b)
+	r.restart(stand)       // wiped: it re-adopts, its log empty and unsynced
 	var out string
 	var pic oplog.Picture
 	pairWait(t, "the plain vouch to go ahead", 15*time.Second, func() bool {

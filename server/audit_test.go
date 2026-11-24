@@ -591,6 +591,24 @@ func auditRows() []auditRow {
 			method: "POST", path: "/api/cluster/failback", body: `{"suspend":true}`,
 			action: "redundancy.failback", target: "failback of b", user: "anonymous", source: "api", result: "refused",
 			check: wantReason("NAUTILUS_TOKEN")},
+		{name: "unpin the other controller", pattern: "POST /api/cluster/unpin", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/unpin", body: `{"name":"a"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.unpin", target: "a", user: "token", source: "api", result: "ok"},
+		{name: "unpin, refused", pattern: "POST /api/cluster/unpin", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/unpin", body: `{"name":"b"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.unpin", target: "b", user: "token", source: "api", result: "refused",
+			check: wantReason("fake refused")},
+		{name: "unpin without a name", pattern: "POST /api/cluster/unpin", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/unpin", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.unpin", target: "", user: "token", source: "api", result: "refused",
+			check: wantReason("want")},
+		{name: "unpin, no credential configured", pattern: "POST /api/cluster/unpin", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/unpin", body: `{"name":"a"}`,
+			action: "redundancy.unpin", target: "a", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
 		{name: "vouch, the picture printed", pattern: "POST /api/cluster/vouch", server: pairServer("refused"),
 			method: "POST", path: "/api/cluster/vouch", body: `{}`,
 			header: map[string]string{"Authorization": "Bearer s3cret"},
@@ -1057,6 +1075,10 @@ func (f *fakePair) Switchover(_ context.Context, by string) (any, string, string
 func (f *fakePair) ClearDuplicate(_ context.Context, name, by string) (any, string, string) {
 	f.by = append(f.by, by)
 	return map[string]any{"name": name}, f.outcome, "fake " + f.outcome
+}
+
+func (f *fakePair) Unpin(_ context.Context, name, by string) (any, string, string) {
+	return map[string]string{"name": name}, f.outcome, "fake " + f.outcome
 }
 
 func (f *fakePair) Commission(_ context.Context, by, acceptLoss, acceptLostLog string) (any, string, string) {

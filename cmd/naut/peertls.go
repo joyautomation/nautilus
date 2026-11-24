@@ -93,10 +93,68 @@ func peerWrap(p *peertls.Peer, names map[string]string) node.TLSWrap {
 	}
 }
 
+// logWrap is the operator-intent log's peer TLS client side (#710 2b): as
+// the votes' (wrap), but the witness's copy is reached only under the
+// certificate of the incarnation the pair adopted (any but witness@0
+// while it has adopted none). The log counts the witness's copy by the
+// incarnation the witness states; the certificate makes that statement
+// the witness's own, not a token holder's answering as a fresh one.
+func logWrap(p *peertls.Peer, wrap node.TLSWrap, witAddr string, adopted func() uint64) node.TLSWrap {
+	return func(ctx context.Context, raw net.Conn, addr string) (net.Conn, error) {
+		if addr != witAddr || mutNaut("log_witness_any_inc") {
+			return wrap(ctx, raw, addr)
+		}
+		var at uint64
+		c, err := p.WrapWitness(ctx, raw, addr, func(inc uint64) bool {
+			a := adopted()
+			at = inc
+			return inc != 0 && (a == 0 || inc == a)
+		})
+		if err != nil || mutNaut("log_witness_checked_at_dial") {
+			return c, err
+		}
+		return &incBound{Conn: c, inc: at, adopted: adopted}, nil
+	}
+}
+
+// incBound is a log connection to the witness incarnation inc: every
+// read and write checks that the pair has not adopted another since, so a
+// connection kept busy across an adoption (closeIdle closes idle ones
+// only) ends at its next use.
+type incBound struct {
+	net.Conn
+	inc     uint64
+	adopted func() uint64
+}
+
+var errWitnessNotCounted = errors.New("the pair adopted another witness incarnation than this connection's")
+
+func (c *incBound) ok() error {
+	if a := c.adopted(); a != 0 && a != c.inc {
+		c.Conn.Close()
+		return errWitnessNotCounted
+	}
+	return nil
+}
+
+func (c *incBound) Read(b []byte) (int, error) {
+	if err := c.ok(); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(b)
+}
+
+func (c *incBound) Write(b []byte) (int, error) {
+	if err := c.ok(); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(b)
+}
+
 // peerKeys is a member's PeerKeys block (naut redundancy status,
 // /api/cluster).
 func peerKeys(p *peertls.Peer) *leader.PeerKeys {
-	k := &leader.PeerKeys{Pinned: p.Pinned("")}
+	k := &leader.PeerKeys{Pinned: p.Pinned(""), Refused: p.Refused(""), WitnessWaiting: p.WitnessWaiting(), WitnessAllowed: p.WitnessAllowed()}
 	fp, err := p.FingerprintNow() // a status call never waits behind a handshake's box read
 	if err != nil {
 		k.Error = err.Error()

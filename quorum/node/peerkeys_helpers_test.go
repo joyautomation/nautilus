@@ -18,6 +18,16 @@ import (
 // witness).
 func newTestPeer(t testing.TB, token, cluster string, self quorum.NodeID, dir string) *peertls.Peer {
 	t.Helper()
+	return newTestPeerInc(t, token, cluster, self, dir, nil)
+}
+
+// newTestPeerInc is newTestPeer whose witness names each pair's
+// incarnation by inc (witness@0 for every pair when nil).
+func newTestPeerInc(t testing.TB, token, cluster string, self quorum.NodeID, dir string, inc func(string) uint64) *peertls.Peer {
+	t.Helper()
+	if inc == nil {
+		inc = func(string) uint64 { return 0 }
+	}
 	name, cl := string(self), cluster
 	peer := map[quorum.NodeID]string{"a": "b", "b": "a"}[self]
 	accept := func(c, n string) bool { return c == cluster && n == peer }
@@ -29,7 +39,7 @@ func newTestPeer(t testing.TB, token, cluster string, self quorum.NodeID, dir st
 	}
 	box := peertls.Box{MachineID: "box-" + string(self)}
 	p, err := peertls.New(peertls.Options{Token: token, Cluster: cl, Self: name, KeyFile: filepath.Join(dir, "peer-key.json"),
-		Box: func() (peertls.Box, error) { return box, nil }, PinsFile: pins, Accept: accept})
+		Box: func() (peertls.Box, error) { return box, nil }, PinsFile: pins, Accept: accept, Incarnation: inc})
 	if err != nil {
 		t.Fatal(err)
 	}

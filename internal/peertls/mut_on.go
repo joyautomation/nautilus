@@ -34,6 +34,26 @@ import "os"
 //     a connection kept from before the drop);
 //   - refusals_undeduped: every refusal of one key is an event (a
 //     replayed certificate floods the journal).
+//   - witness_cert_one_inc: the witness's certificate names witness@0
+//     whatever pair calls (#710 2b);
+//   - witness_names_uncapped: a controller pins any number of witness
+//     incarnations its pair does not count;
+//   - witness_call_any_inc: a call to the witness that is not a vote takes
+//     any incarnation's certificate;
+//   - drop_ban_in_memory: a dropped pin's key is refused only until a
+//     restart (not kept in the pins file);
+//   - adopt_keeps_witness_pins: Promote keeps the other incarnations' pins.
+//   - witness_any_new_key: a commissioned controller pins a new witness
+//     incarnation under any key, not only the counted one's;
+//   - unpin_pending_volatile: SetUnpinPending records nothing.
+//   - witness_key_forgotten: the counted witness key kept across
+//     adoptions is ignored;
+//   - unknown_key_any_name: with no witness key known, a commissioned
+//     controller pins any incarnation;
+//   - allowance_any_key: an allowance takes any new witness key;
+//   - allowance_kept_at_adoption: Promote keeps an allowance.
+//   - allowance_cleared_unheard: Promote of a name not pinned here ends
+//     an allowance.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mut(name string) bool { return name == mutOn }

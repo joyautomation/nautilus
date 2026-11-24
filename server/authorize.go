@@ -103,6 +103,8 @@ var actionPerm = map[string]string{
 	// A planned switchover moves the lead to the standby (#710 d1c).
 	"redundancy.switchover": PermRedundancy,
 	"redundancy.failback":   PermRedundancy,
+	// Drops the other controller's pinned key (#710 2b).
+	"redundancy.unpin": PermRedundancy,
 }
 
 // presentedToken is the credential a request carries, in either

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -69,66 +71,81 @@ func (r *pairRig) peerHTTPAs(from, to string) *http.Client {
 
 var _ = node.WithPeer
 
-// unpin stands in for `naut redundancy unpin <name>` on the survivors
-// (#710 2b) after the rig wipes name's state directory or rebuilds the
-// witness: the pin of name is dropped at every other member, running or
-// not (in its pins file then), so name's new key pins at its next contact.
-func (r *pairRig) unpin(name string) {
+// unpinOn is naut redundancy unpin <name> on the surviving controller
+// (#710 2b), through its Quorum as the tag API runs it: after <name>'s
+// box was replaced or its state directory lost. The command end to end
+// (the CLI, the tag API, the audit seam) is TestUnpinThroughTheCLI.
+func (r *pairRig) unpinOn(survivor, name string) unpinReport {
 	r.t.Helper()
-	unpinIn(r.t, r.cluster(), name, r.nodes, r.env, r.witDir)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rep, outcome, reason := r.nodes[survivor].m.q.Unpin(ctx, name, "op")
+	if outcome != "done" {
+		r.t.Fatalf("naut redundancy unpin %s on %s: %s: %s (%+v)", name, survivor, outcome, reason, rep)
+	}
+	return rep.(unpinReport)
 }
 
-// unpinIn drops name's pin at the controllers of nodes other than name
-// and, for a controller's name, at the witness kept in witDir.
-func unpinIn(t *testing.T, cluster, name string, nodes map[string]*pairNode, env map[string]map[string]string, witDir string) {
+// witnessUnpinIn is naut witness unpin <names> on the witness box, the
+// witness stopped (the caller stops and starts it): the way out when no
+// controller can ask, such as both controllers' disks lost.
+func witnessUnpinIn(t *testing.T, witDir, cluster string, names ...string) {
 	t.Helper()
-	if name == "w" {
-		name = peertls.Witness
-	}
-	for _, n := range []string{"a", "b"} {
-		if n == name {
-			continue
+	for _, n := range names {
+		var out bytes.Buffer
+		if code := witnessMain(context.Background(), []string{"unpin", "--state", witDir, "--cluster", cluster, n}, func(string) string { return "" }, &out, &out, nil); code != 0 {
+			t.Fatalf("naut witness unpin %s: exit %d\n%s", n, code, out.String())
 		}
-		if nd := nodes[n]; nd != nil && nd.m != nil && nd.m.peerTLS != nil {
-			if err := nd.m.peerTLS.Drop("", name, "test: the rig's stand-in for naut redundancy unpin"); err != nil {
-				t.Fatal(err)
-			}
-			continue
-		}
-		dropPinFile(t, filepath.Join(env[n]["STATE_DIRECTORY"], peerPinsFile), name)
 	}
-	if name == peertls.Witness {
-		return
-	}
-	if p, ok := witnessPeers.Load(witDir); ok {
-		if err := p.(*peertls.Peer).Drop(cluster, name, "test: the rig's stand-in for naut redundancy unpin"); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-	dropPinFile(t, filepath.Join(witDir, cluster+"."+peerPinsFile), name)
 }
 
-// dropPinFile removes name from a pins file of a member that is down.
-func dropPinFile(t *testing.T, path, name string) {
+// witnessUnpinOffline is witnessUnpinIn with the rig's witness stopped and
+// started again around it.
+func (r *pairRig) witnessUnpinOffline(names ...string) {
+	r.t.Helper()
+	r.stopWitness()
+	witnessUnpinIn(r.t, r.witDir, r.cluster(), names...)
+	r.startWitness(r.wit)
+}
+
+// witnessRefused is the witness's refused (unpinned) keys of cluster.
+func witnessRefused(t *testing.T, witDir, cluster string) map[string]string {
 	t.Helper()
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return
-	}
+	return witnessPinsField(t, witDir, cluster, "dropped")
+}
+
+// witnessPinned is the witness's pins of cluster, read from its pins file
+// (name to fingerprint).
+func witnessPinned(t *testing.T, witDir, cluster string) map[string]string {
+	t.Helper()
+	return witnessPinsField(t, witDir, cluster, "pins")
+}
+
+// witnessPinsField is one name-to-key map of the witness's pins file of
+// cluster, as fingerprints.
+func witnessPinsField(t *testing.T, witDir, cluster, field string) map[string]string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(witDir, cluster+"."+peerPinsFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var f struct {
-		V    int               `json:"v"`
-		Pins map[string]string `json:"pins"`
-	}
+	var f map[string]json.RawMessage
 	if err := json.Unmarshal(b, &f); err != nil {
 		t.Fatal(err)
 	}
-	delete(f.Pins, name)
-	out, _ := json.Marshal(f)
-	if err := os.WriteFile(path, out, 0o600); err != nil {
-		t.Fatal(err)
+	m := map[string]string{}
+	if raw, ok := f[field]; ok {
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
 	}
+	out := map[string]string{}
+	for n, k := range m {
+		raw, err := base64.StdEncoding.DecodeString(k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[n] = peertls.Fingerprint(ed25519.PublicKey(raw))
+	}
+	return out
 }

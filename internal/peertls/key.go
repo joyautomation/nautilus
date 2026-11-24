@@ -148,7 +148,7 @@ func (p *Peer) boxKey() (ed25519.PrivateKey, error) {
 	}
 	priv := ed25519.NewKeyFromSeed(seed)
 	p.event(Event{Kind: EventNewKey, Name: p.o.Self, Fingerprint: Fingerprint(priv.Public().(ed25519.PublicKey)),
-		Detail: why + ": the other members pin it at their first contact, or refuse it where another key is pinned for " + p.o.Self + " (naut redundancy unpin " + p.o.Self + " on the surviving controller, if this box really changed)"})
+		Detail: why + ": " + newKeyHint(p.o.Self)})
 	return priv, nil
 }
 
@@ -159,4 +159,12 @@ func (p *Peer) moveAside(path, tag, why string) string {
 		return why + "; it could not be moved aside (" + err.Error() + ") and is replaced"
 	}
 	return why + "; kept at " + aside
+}
+
+// newKeyHint is what a new box key's event says the others do with it.
+func newKeyHint(self string) string {
+	if self == Witness {
+		return "the controllers of a pair this witness served take it only once an operator runs naut redundancy unpin witness on both (a rebuild that kept the key needs nothing); a new pair pins it at its first contact"
+	}
+	return "the other members pin it at their first contact, or refuse it where another key is pinned for " + self + " (naut redundancy unpin " + self + " on the surviving controller, if this box really changed)"
 }

@@ -263,6 +263,30 @@ func (w *Witness) Grant(cluster string) (grantedTo quorum.NodeID, promised, inca
 	return st.GrantedTo, st.Promised, st.Incarnation, st.Incarnation != 0
 }
 
+// Incarnation is the cluster's incarnation at this witness, 0 when it has
+// none yet (no vote ever, or its state rebuilt and no vote since): what
+// the witness's peer TLS certificate names to that pair's controllers
+// (#710 2b). Read only: it never starts a voter or binds a cluster, since
+// a handshake asking it has proved nothing yet.
+func (w *Witness) Incarnation(cluster string) uint64 {
+	if !ValidCluster(cluster) {
+		return 0
+	}
+	w.mu.Lock()
+	p, ok := w.pairs[cluster]
+	w.mu.Unlock()
+	if ok {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.v.State().Incarnation
+	}
+	st, err := (&State{Path: filepath.Join(w.o.Dir, cluster+stateSuffix)}).Load()
+	if err != nil || st.Cluster != cluster {
+		return 0
+	}
+	return st.Incarnation
+}
+
 // Pairs lists the pairs this witness has answered since it started.
 func (w *Witness) Pairs() []PairStatus {
 	w.mu.Lock()

@@ -37,7 +37,14 @@ type tm struct {
 	mu   sync.Mutex
 	box  Box
 	evs  []Event
+	// incs are the witness's incarnations per cluster; counted the
+	// incarnation a controller's pair counts.
+	incs    map[string]uint64
+	counted uint64
 }
+
+func (m *tm) setInc(cluster string, inc uint64) { m.mu.Lock(); m.incs[cluster] = inc; m.mu.Unlock() }
+func (m *tm) setCounted(inc uint64)             { m.mu.Lock(); m.counted = inc; m.mu.Unlock() }
 
 // newMember starts a member's peer TLS in a state directory of its own.
 func newMember(t *testing.T, token, self string) *tm {
@@ -49,7 +56,7 @@ func newMember(t *testing.T, token, self string) *tm {
 // restart keeps dir).
 func newMemberIn(t *testing.T, token, self, dir string) *tm {
 	t.Helper()
-	m := &tm{t: t, dir: dir, self: self, box: Box{MachineID: "m-" + self, NICs: []string{"02:00:00:00:00:0" + self[:1]}}}
+	m := &tm{t: t, dir: dir, self: self, box: Box{MachineID: "m-" + self, NICs: []string{"02:00:00:00:00:0" + self[:1]}}, incs: map[string]uint64{}}
 	cl := cluster
 	accept := func(c, n string) bool { return c == cluster && n == map[string]string{"a": "b", "b": "a"}[self] }
 	pins := func(string) string { return filepath.Join(dir, "peer-pins.json") }
@@ -60,7 +67,9 @@ func newMemberIn(t *testing.T, token, self, dir string) *tm {
 	}
 	p, err := New(Options{Token: token, Cluster: cl, Self: self, KeyFile: filepath.Join(dir, "peer-key.json"),
 		Box: func() (Box, error) { m.mu.Lock(); defer m.mu.Unlock(); return m.box, nil }, PinsFile: pins, Accept: accept,
-		OnEvent: func(e Event) { m.mu.Lock(); m.evs = append(m.evs, e); m.mu.Unlock() }})
+		OnEvent:     func(e Event) { m.mu.Lock(); m.evs = append(m.evs, e); m.mu.Unlock() },
+		Incarnation: func(c string) uint64 { m.mu.Lock(); defer m.mu.Unlock(); return m.incs[c] },
+		Counted:     func() uint64 { m.mu.Lock(); defer m.mu.Unlock(); return m.counted }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -339,7 +348,7 @@ func TestThePinIsCheckedOnEveryRequest(t *testing.T) {
 	if _, err := get(old, addr); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.p.Drop("", "a", "test: a replaced"); err != nil {
+	if _, err := b.p.Drop("", "a", "test: a replaced"); err != nil {
 		t.Fatal(err)
 	}
 	if d := b.events(EventDropped); len(d) != 1 || d[0].Fingerprint != a.fp() {
@@ -379,7 +388,7 @@ func TestAPinThatCannotBeWrittenRefuses(t *testing.T) {
 // written only after the handshake has proved the key.
 func TestNoPinWithoutProofOfTheKey(t *testing.T) {
 	a, b := newMember(t, tokenA, "a"), newMember(t, tokenA, "b")
-	cert, err := a.p.certificate()
+	cert, err := a.p.certificate(a.p.selfName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +408,7 @@ func TestNoPinWithoutProofOfTheKey(t *testing.T) {
 // without its private key pins nothing at the caller.
 func TestNoPinWithoutProofOfTheKeyOnACall(t *testing.T) {
 	a, b := newMember(t, tokenA, "a"), newMember(t, tokenA, "b")
-	cert, err := b.p.certificate()
+	cert, err := b.p.certificate(b.p.selfName())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +451,7 @@ func TestADroppedKeyIsNotPinnedAgain(t *testing.T) {
 	if _, err := get(old, addr); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.p.Drop("", "a", "test"); err != nil {
+	if _, err := b.p.Drop("", "a", "test"); err != nil {
 		t.Fatal(err)
 	}
 	var he *httpErr
@@ -649,14 +658,14 @@ func TestServerRefusesAClientWithoutACertificate(t *testing.T) {
 // TLS 1.3 only, on both ends.
 func TestOnlyTLS13(t *testing.T) {
 	a, b := newMember(t, tokenA, "a"), newMember(t, tokenA, "b")
-	old := a.p.client("b", "")
+	old := a.p.client("b", "", nil)
 	old.MinVersion, old.MaxVersion = tls.VersionTLS12, tls.VersionTLS12
 	if _, sErr := handshake(t, old, b.p.Server()); sErr == nil {
 		t.Fatal("the server took TLS 1.2")
 	}
 	oldSrv := b.p.serverFor("") // without the per-connection configuration, which is 1.3 again
 	oldSrv.MinVersion, oldSrv.MaxVersion = tls.VersionTLS12, tls.VersionTLS12
-	if cErr, _ := handshake(t, a.p.client("b", ""), oldSrv); cErr == nil {
+	if cErr, _ := handshake(t, a.p.client("b", "", nil), oldSrv); cErr == nil {
 		t.Fatal("the client took TLS 1.2")
 	}
 }
@@ -665,7 +674,7 @@ func TestOnlyTLS13(t *testing.T) {
 // key in a full handshake.
 func TestNoSessionResumption(t *testing.T) {
 	a, b := newMember(t, tokenA, "a"), newMember(t, tokenA, "b")
-	client := a.p.client("b", "")
+	client := a.p.client("b", "", nil)
 	client.ClientSessionCache = tls.NewLRUClientSessionCache(4)
 	srv := b.p.Server()
 	for i := range 3 {
@@ -705,7 +714,7 @@ func TestNoSessionResumption(t *testing.T) {
 func TestClocksYearsApartStillHandshake(t *testing.T) {
 	a, b := newMember(t, tokenA, "a"), newMember(t, tokenA, "b")
 	for _, ct := range []time.Time{time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC), time.Unix(0, 0).Add(-time.Hour)} {
-		c := a.p.client("b", "")
+		c := a.p.client("b", "", nil)
 		c.Time = func() time.Time { return ct }
 		s := b.p.serverFor("")
 		s.Time = func() time.Time { return time.Date(2075, 6, 1, 0, 0, 0, 0, time.UTC) }

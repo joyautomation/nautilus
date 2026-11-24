@@ -109,9 +109,6 @@ func (r *boxRig) wipeBox(member string) {
 			r.t.Fatal(err)
 		}
 	}
-	// Its peer key went with the disk (#710 per-box keys): the survivors
-	// drop its pin, as an operator's unpin does.
-	unpinIn(r.t, r.env[member]["NAUTILUS_CLUSTER"], member, r.nodes, r.env, r.wdir)
 }
 
 // restartOn starts member again on its peer address, with a tag API.
@@ -138,8 +135,16 @@ func TestRecommissionThroughTheCLIPrintsTheEvidence(t *testing.T) {
 	for _, n := range []string{"a", "b"} {
 		r.nodes[n].crash()
 	}
-	for i, n := range []string{"a", "b"} {
+	for _, n := range []string{"a", "b"} {
 		r.wipeBox(n)
+	}
+	// Both keys went with the disks (#710 per-box keys): no survivor, so
+	// the operator unpins both on the witness box, the witness stopped.
+	r.wstop()
+	<-r.wdone
+	witnessUnpinIn(t, r.wdir, r.env["a"]["NAUTILUS_CLUSTER"], "a", "b")
+	r.startWitness(r.wit)
+	for i, n := range []string{"a", "b"} {
 		r.restartOn(n, "box-"+n, r.env[n], i)
 	}
 	var out string

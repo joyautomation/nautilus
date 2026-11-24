@@ -153,16 +153,28 @@ func TestPairRebuiltWitnessIsRecopiedAndCarriesATakeover(t *testing.T) {
 	r.stopWitness()
 	files, _ := filepath.Glob(filepath.Join(r.witDir, "*"))
 	for _, f := range files {
+		if filepath.Base(f) == peerKeyFile {
+			continue // a rebuild keeps the witness's box key (#710 2b): its new incarnation is taken by itself
+		}
 		if err := os.RemoveAll(f); err != nil {
 			t.Fatal(err)
 		}
 	}
-	r.unpin("w") // a rebuilt witness has a new key; #710 2b re-pins it at its adoption
+	// A rebuilt witness has a new key and a new incarnation: no operator
+	// step, its name is new, and the adoption drops the old one's pin
+	// (#710 2b).
 	r.startWitness(r.wit)
 	pairWait(t, "the pair to adopt the rebuilt witness", 60*time.Second, func() bool {
 		a, b := r.elector("a").Status(), r.elector("b").Status()
 		return a.Incarnation != inc && a.Incarnation == b.Incarnation && a.Commissioned && b.Commissioned
 	})
+	for _, n := range []string{"a", "b"} {
+		newInc := r.elector(n).Status().Incarnation
+		pairWait(t, n+" to keep only the adopted incarnation's pin", 10*time.Second, func() bool {
+			p := r.nodes[n].m.peerTLS.Pinned("")
+			return p[peertls.WitnessName(newInc)] != "" && p[peertls.WitnessName(inc)] == ""
+		})
+	}
 	lead = r.leader()
 	stand = other(lead)
 	pairWait(t, "the leader to re-copy the log to the witness, and count it (after its quiet period)", 15*time.Second, func() bool {
@@ -343,12 +355,14 @@ func TestPairTwoFaultsStopThePairAndLoseNothing(t *testing.T) {
 	r.stopWitness()
 	files, _ := filepath.Glob(filepath.Join(r.witDir, "*"))
 	for _, f := range files {
+		if filepath.Base(f) == peerKeyFile {
+			continue // a rebuild keeps the witness's box key (#710 2b): its new incarnation is taken by itself
+		}
 		if err := os.RemoveAll(f); err != nil {
 			t.Fatal(err)
 		}
 	}
-	r.unpin("w") // a rebuilt witness has a new key; #710 2b re-pins it at its adoption
-	r.startWitness(r.wit)
+	r.startWitness(r.wit) // a new key and incarnation: pinned under its new name (#710 2b)
 	pairWait(t, "A to lose its majority", 15*time.Second, func() bool { return !r.nodes[lead].m.q.IsLeader() })
 	r.nodes[lead].crash()
 	r.restart(stand)
@@ -462,9 +476,10 @@ func (r *pairRig) wipeState(n string) {
 			r.t.Fatal(err)
 		}
 	}
-	// Its peer key went with the disk (#710 per-box keys): the survivors
-	// drop its pin, as an operator's unpin does.
-	r.unpin(n)
+	// Its peer key went with the disk (#710 per-box keys): each test runs
+	// the operator's step, naut redundancy unpin on the survivor
+	// (unpinOn) or, with no survivor, naut witness unpin on the witness
+	// box (witnessUnpinOffline).
 }
 
 // recommissionA re-commissions a at the witness's incarnation, once both
@@ -498,6 +513,11 @@ func TestPairBothControllersLostRecoverFromTheWitness(t *testing.T) {
 	}
 	for _, n := range []string{"a", "b"} {
 		r.wipeState(n)
+	}
+	// Both keys lost: no survivor holds a pin to drop but the witness,
+	// so the operator unpins both on the witness box.
+	r.witnessUnpinOffline("a", "b")
+	for _, n := range []string{"a", "b"} {
 		r.restart(n)
 	}
 	if err := r.recommissionA(); err != nil {
@@ -540,8 +560,11 @@ func TestPairRefusedVouchStillCommissions(t *testing.T) {
 		}
 	}
 	r.startWitness(r.wit)
-	r.restart("a")
+	// b survived (its pins kept): the operator unpins a there, which
+	// drops a's pin at the witness too.
 	r.restart("b")
+	r.unpinOn("b", "a")
+	r.restart("a")
 	refused := r.recommissionA()
 	if refused == nil || !strings.Contains(refused.Error(), "controller b") || !strings.Contains(refused.Error(), "does not count") {
 		t.Fatalf("the vouch's refusal: %v", refused)

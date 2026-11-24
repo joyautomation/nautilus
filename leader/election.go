@@ -64,6 +64,33 @@ type Quorum struct {
 	writesCut    func() map[string]int                    // SetWritesCut
 	switchover   SwitchoverFunc                           // SetSwitchover
 	failback     func(suspend bool, by, why string) error // SetFailback
+	unpin        UnpinFunc                                // SetUnpin
+}
+
+// UnpinFunc is `naut redundancy unpin` (#710 2b): name is the other
+// controller, by the person. It returns the report (JSON), the outcome
+// ("done", "refused", "incomplete") and, when not done, why.
+type UnpinFunc func(ctx context.Context, name, by string) (report any, outcome, reason string)
+
+// SetUnpin gives the Quorum its unpin (cmd/naut, which holds the pair's
+// peer TLS).
+func (q *Quorum) SetUnpin(f UnpinFunc) {
+	q.mu.Lock()
+	q.unpin = f
+	q.mu.Unlock()
+}
+
+// Unpin is `naut redundancy unpin <name>` on this controller (SetUnpin);
+// refused when none is set (peer TLS off).
+func (q *Quorum) Unpin(ctx context.Context, name, by string) (report any, outcome, reason string) {
+	q.mu.Lock()
+	f := q.unpin
+	q.mu.Unlock()
+	if f == nil {
+		why := "peer TLS is off on this controller (redundancy.peer-tls: off): nothing is pinned, so there is nothing to unpin"
+		return map[string]string{"message": why}, "refused", why
+	}
+	return f(ctx, name, by)
 }
 
 // The outcomes of Switchover.

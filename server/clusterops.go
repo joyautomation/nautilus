@@ -40,6 +40,9 @@ var localClusterOps = map[string]bool{
 	"/api/cluster/commission":      true,
 	"/api/cluster/recommission":    true,
 	"/api/cluster/vouch":           true,
+	// The pins are the box's own: the survivor drops them, leader or
+	// standby (#710 2b).
+	"/api/cluster/unpin": true,
 }
 
 // copyStoppedAttest is the journal's words for the operator's attestation.
