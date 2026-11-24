@@ -1427,7 +1427,7 @@ plan measures it with a pause hook in exactly that spot.
 | PROFINET device (#790) | gate look every 200 ms | check before each RT, DCP and LLDP frame (test plan F33). **Already so** (`Config.MaySend` gates the port and every RPC socket; #790); 3b-3b-2 adds the F33 test, which closes the gate in a running AR with LLDP announcing and finds no frame of any kind after it, and the gate now carries the fence margin (3b-3a) |
 | OPC UA server Write service | refused on a standby | unchanged |
 | HTTP API writes | proxied to the leader, or refused (503) | unchanged |
-| Alarm notifiers (mail, chat) | run from scans, so leader only | unchanged |
+| Alarm notifiers (mail, chat) | run from scans, so leader only | unchanged; not drained before a switchover's RESIGN (below): across a switchover a page may be sent twice, never lost |
 | PLCnext (`plcnext`, `project_full.go`) | **none**: flushes its output image from its own loop | **refused under `redundancy:` for now**, by load and `naut check` (#832). Its `poll()` flushes every scan on the shm route, because that write is the shim's watchdog heartbeat, and on change over gRPC. Gating it is later work. |
 | Floating IP | (new) | §8 |
 
@@ -1446,6 +1446,41 @@ own `WriteDrops`. Device names are the manifest's source or driver id, `driver/i
 project has several drivers.
 
 The test plan's I3 oracle checks every row.
+
+**The drain before a planned switchover's RESIGN (#710 d1b).** RESIGN removes the
+lease-and-fence gap that lets a send which passed the gate just before it closed finish in
+time, so before RESIGN leaves, every such send must have ended (`fence.Drain`):
+
+- **Counted from before the read.** A send is counted (`fence.Enter`, inside `fence.Begin`)
+  *before* the gate read it is judged on, until it has ended (answered, failed or reset). After
+  the gate closes, every send that can still leave read it open earlier, so it was counted
+  earlier; the drain waits until nothing is counted. Counted after the read, a send that read
+  the gate open just before it closed would be missed.
+- **Cut short, not waited out.** While the drain runs, every armed send is reset at once (as at
+  its deadline), a send armed later is reset as it is armed, every fenced context is cancelled,
+  and a send not yet started does not start (`fence.Started`). A hung device cannot stretch the
+  drain to a lease.
+- **Settled.** The drain then waits the fence margin (`m_send + d_net`) after the last send that
+  went out: its bytes have arrived.
+- **Unproven is a failover.** A drain that has not finished within half a lease sends no
+  RESIGN: the leader has stopped leading all the same, and its lease runs out at the voters as
+  in a failover (`node.ErrDrainUnproven`). Its own voter keeps its promise until then too
+  (§4.7), so no standby leads before that lease's end, and a send still to leave on its send
+  deadline goes within it. A drain that ends after that lease (the resigner stalled) frees
+  nothing and sends no RESIGN either: the promise may back a new campaign by then.
+- **A drain's reset is no write cut.** A send the drain cuts short is not counted in
+  `fence.Cut`: its deadline had not passed.
+
+| Path | How it is drained |
+|---|---|
+| Modbus TCP and RTU, EtherNet/IP, OPC UA client, OptoMMP, Redfish, SNMP, Prometheus, READ/WRITE channels | counted by `fence.Begin` before each request's gate read; ended when the request returns (after its socket's reset, where it failed), on every path that drops it after `Begin` |
+| The takeover hold's safe values (#710 (b2)) | queued as commands, so drained as the driver's writes |
+| Sparkplug host NCMD/DCMD | counted before `commandsAllowed` reads the gate; a publish whose wait timed out stays counted until paho's token completes, since it may still leave from paho's queue |
+| Sparkplug edge, PROFINET device, PLCnext | refused at load under `redundancy:` (#798, #787 step 6, #832): nothing to drain. A path that lifts its refusal must count its sends first |
+| Alarm notifiers | not drained (naut-lead, 2026-11-24): a page is not a field output, and a send runs to a mail or chat server's timeout, which would break the switchover's bound. Across a switchover a page may be sent twice, never lost: escalation carries across a takeover (#715 PR 1, `TestTakeoverResendLabel`, `TestTermChangeNoDuplicate`) |
+| Sparkplug host NCMD Node Control/Rebirth | not counted: any host may ask for a rebirth (Sparkplug 3.0 §5), and it commands no field device |
+| SNMP, and a send whose gate has no lease (`budget < 0`) | counted, but bounded only by their own timeouts (a UDP datagram has no socket to reset): a slow one makes the drain unproven, and the switchover a failover |
+| OPC UA server writes, HTTP API writes, IO-Link ISDU parameter writes (an operator's, through the API) | inbound commands, not scan outputs; refused on a standby as before. d1c's switching state refuses them on the leader too |
 
 ## 4. The state stream and hot takeover
 
@@ -1799,8 +1834,13 @@ image, the command and the bench. The plan and rulings are in #710 (naut-lead, 2
 
 - **RESIGN** (vote protocol 9: a request's `Resign` flag, with its epoch, boot nonce, a Seq
   above every renewal, and the standby's acknowledgement of the final image as its mark). The
-  leader first stops leading, in one call with its own voter's promise to it
-  (`quorum.ResignAt`, as `YieldTo`), its gate closes, and only then does RESIGN leave. It goes
+  leader first stops leading (`quorum.ResignAt`) and its gate closes. Its own voter keeps its
+  promise to it, and does not yield it, until the outputs are drained (d1b, below): sends the
+  lease let start may still be on the wire, and a standby whose own voter heard none of the
+  leader's renewals could otherwise lead beside them with that freed promise (Fable, d1b). Once
+  the drain is proven, its own voter drops the promise (`quorum.ResignDrained`, in one call, as
+  `YieldTo`), and only then does RESIGN leave. A drain that is never proven leaves the promise
+  to run out where the lease would have ended: a failover. It goes
   to the **witness first**, and to the peer's voter on the witness's answer (or lease/8): the
   standby campaigns as soon as its own voter takes it, and a campaign that reached the witness
   before the witness's RESIGN would be refused, its retry a look away.
@@ -1832,9 +1872,14 @@ image, the command and the bench. The plan and rulings are in #710 (naut-lead, 2
   hold has ended early. A lost RESIGN falls back to the
   lease running out, no worse than before. The hold is not "may not lead" in a bad-retain
   hand-back (S2c-3): `Elector.EndResignHold` ends it when the peer hands the lead back (wired in
-  d1c). `Elector.resign` stays unexported until d1b: RESIGN removes the lease-and-fence gap that
-  lets a send which passed the gate just before finish, so its caller must have drained every
-  output path first, and d1b's exported form takes the drain's proof.
+  d1c).
+- **The drain (d1b).** RESIGN removes the lease-and-fence gap that lets a send which passed the
+  gate just before it closed finish, so `Elector.Resign` runs the steps itself, in order: the
+  gate shuts (`ResignAt`), the outputs are drained (§3.4, "The drain before a planned
+  switchover's RESIGN"), and only then does RESIGN leave. `quorum/node` knows no driver, so the
+  drain is handed in (`leader.Quorum.Resign` hands it `fence.Drain`); a drain that does not
+  finish within half a lease sends no RESIGN, and the switchover becomes a failover. Alarm pages
+  are not drained: across a switchover a page may be sent twice, never lost.
 - **Tests.** Unit rules with one mutation each (`quorum/resign_test.go`); four switchovers back
   and forth on real elections over HTTP, each within lease/4 and with the order checked
   (`TestLoopbackAResignHandsTheLeadOverAtOnce`); in the simulator, the `Resign` fault under link

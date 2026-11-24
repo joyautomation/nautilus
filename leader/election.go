@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
 	"github.com/joyautomation/nautilus/quorum/node"
 )
 
@@ -132,6 +133,19 @@ func (q *Quorum) IsLeader() bool { return q.n.IsLeader() }
 func (q *Quorum) SendGate() (bool, time.Duration, uint64) { return q.n.SendGate() }
 
 func (q *Quorum) Term() uint64 { return q.n.Term() }
+
+// Resign hands the lead to the standby in a planned switchover (#710 d1,
+// node.Elector.Resign): the gate shuts, every output path is drained
+// (fence.Drain: every send that passed the gate before it closed has
+// ended, cut short where it would wait, and the fence margin has passed
+// after the last one), and only then does RESIGN go to the voters. seq and
+// current are the standby's acknowledgement of the final image. A drain
+// that does not finish sends no RESIGN (node.ErrDrainUnproven): the lease
+// runs out as in a failover. The caller has stopped the scans and their
+// outputs first (d1c).
+func (q *Quorum) Resign(ctx context.Context, seq uint64, current bool) (node.ResignReport, error) {
+	return q.n.Resign(ctx, seq, current, fence.Drain)
+}
 
 // IsTakeover is runtime.TakeoverKnower: whether the leadership acquired
 // last took over from the peer (node.Elector.IsTakeover).

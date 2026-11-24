@@ -19,20 +19,37 @@ func gate(ok bool, budget time.Duration) func() (bool, time.Duration, uint64) {
 // deadline; otherwise the deadline is now plus the budget.
 func TestBegin(t *testing.T) {
 	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
-	if d, term, ok := Begin(nil, now); !ok || !d.IsZero() || term != 0 {
+	if d, term, ok, done := Begin(nil, now); !ok || !d.IsZero() || term != 0 {
 		t.Errorf("no gate: %v %v; want started, no deadline", d, ok)
+	} else if done(); InFlight() != 0 {
+		t.Error("a send without a gate was counted")
 	}
-	if _, _, ok := Begin(gate(false, time.Second), now); ok {
+	if _, _, ok, done := Begin(gate(false, time.Second), now); ok {
 		t.Error("a closed gate started a send")
+	} else if done(); InFlight() != 0 {
+		t.Errorf("a send the closed gate refused is still counted (%d)", InFlight())
 	}
-	if _, _, ok := Begin(gate(true, 0), now); ok {
+	if _, _, ok, _ := Begin(gate(true, 0), now); ok {
 		t.Error("a send with no budget left started")
+	} else if InFlight() != 0 {
+		t.Errorf("a send with no budget left is still counted (%d)", InFlight())
 	}
-	if d, _, ok := Begin(gate(true, -1), now); !ok || !d.IsZero() {
+	if d, _, ok, done := Begin(gate(true, -1), now); !ok || !d.IsZero() {
 		t.Errorf("a plain gate: %v %v; want started with no deadline", d, ok)
+	} else {
+		done()
 	}
-	if d, term, ok := Begin(gate(true, 300*time.Millisecond), now); !ok || !d.Equal(now.Add(300*time.Millisecond)) || term != 4 {
+	d, term, ok, done := Begin(gate(true, 300*time.Millisecond), now)
+	if !ok || !d.Equal(now.Add(300*time.Millisecond)) || term != 4 {
 		t.Errorf("300 ms of budget: %v %v; want a deadline 300 ms out", d, ok)
+	}
+	if InFlight() != 1 {
+		t.Errorf("a started send is not counted (%d in flight)", InFlight())
+	}
+	done()
+	done() // a second done does not count again
+	if InFlight() != 0 {
+		t.Errorf("an ended send is still counted (%d in flight)", InFlight())
 	}
 	if Started(now, now) || !Started(now.Add(time.Millisecond), now) || !Started(time.Time{}, now) {
 		t.Error("Started: a send at or past its deadline must not start; one before it, or with none, may")

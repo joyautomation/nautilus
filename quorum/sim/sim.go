@@ -1309,6 +1309,7 @@ func (w *World) resign(n *node) {
 	}
 	now := w.local(n)
 	r := quorum.ResignAt(now, n.voter, n.cand, 1, true)
+	quorum.ResignDrained(now, n.voter, n.cand, r) // the simulator has no outputs to drain
 	if r == nil {
 		w.tracef("%v: the operator's switchover: not leading, nothing to resign", n.addr)
 		return

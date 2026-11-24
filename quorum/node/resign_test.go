@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -22,10 +23,12 @@ import (
 //   - a switchover back is not held up by the new standby's own resign
 //     hold.
 //
-//   - each RESIGN leaves with the resigner's gate already shut.
+//   - each RESIGN leaves with the resigner's gate already shut, and after
+//     the outputs' drain, which starts with the gate shut and is handed
+//     the fence margin to settle (#710 d1b).
 //
-// resign_peer_first, resign_waits_for_look, resign_keeps_own_hold and
-// resign_publish_after_send turn it red.
+// resign_peer_first, resign_waits_for_look, resign_keeps_own_hold,
+// resign_publish_after_send and resign_before_drain turn it red.
 func TestLoopbackAResignHandsTheLeadOverAtOnce(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
@@ -51,9 +54,24 @@ func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) {
 	mark := len(c.votes)
 	c.mu.Unlock()
 	start := time.Now()
-	rep := c.elector(who).resign(context.Background(), 41, true)
-	if !rep.Resigned || !rep.Witness || !rep.Peer {
-		t.Fatalf("%s's resign: %+v\n%s", who, rep, c.voteTrail(who, c.leases(1)))
+	e := c.elector(who)
+	var drainEnd time.Time
+	var gateAtDrain bool
+	var settle time.Duration
+	rep, err := e.Resign(context.Background(), 41, true, func(_ context.Context, s time.Duration) error {
+		gateAtDrain, settle = e.IsLeader(), s
+		time.Sleep(c.lease / 64) // the drain takes a while
+		drainEnd = time.Now()
+		return nil
+	})
+	if err != nil || !rep.Resigned || !rep.Drained || !rep.Witness || !rep.Peer {
+		t.Fatalf("%s's resign: %+v %v\n%s", who, rep, err, c.voteTrail(who, c.leases(1)))
+	}
+	if gateAtDrain {
+		t.Fatalf("%s's drain began with its gate open", who)
+	}
+	if settle != e.Fence() || settle <= 0 {
+		t.Fatalf("the drain was handed %v to settle, want the fence margin %v", settle, e.Fence())
 	}
 	if c.elector(who).IsLeader() {
 		t.Fatalf("the resigned leader %s's gate is open", who)
@@ -82,6 +100,9 @@ func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) {
 		t.Fatalf("%s's RESIGN sent to the witness at %d, to %s at %d", who, toWit, peer, toPeer)
 	}
 	w, p := votes[toWit], votes[toPeer]
+	if drainEnd.IsZero() || !w.at.After(drainEnd) {
+		t.Fatalf("a RESIGN left before the outputs' drain ended (drain ended %v, RESIGN sent %v)", drainEnd.Sub(start), w.at.Sub(start))
+	}
 	if w.gateOpen || p.gateOpen {
 		t.Fatalf("a RESIGN left with %s's gate open (to the witness: %v, to %s: %v)", who, w.gateOpen, peer, p.gateOpen)
 	}
@@ -112,4 +133,45 @@ func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) {
 		}
 	}
 	t.Fatalf("%s sent the witness no campaign after the RESIGN", peer)
+}
+
+// A drain that does not finish sends no RESIGN (#710 d1b): the resigner
+// has stopped leading, and its standby takes over only once the lease has
+// run out at the voters, as after a failover. A drain that does not end is
+// cut at half a lease. resign_despite_drain_error turns it red.
+func TestLoopbackAnUnfinishedDrainSendsNoResign(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	who := c.settledLeader(leases(20))
+	peer := c.other(who)
+	c.waitFor(string(peer)+" to see the leader", c.leases(4), func() bool { return c.status(peer).Leader == string(who) })
+	time.Sleep(c.leases(1))
+	c.mu.Lock()
+	mark := len(c.votes)
+	c.mu.Unlock()
+	start := time.Now()
+	rep, err := c.elector(who).Resign(context.Background(), 41, true, func(ctx context.Context, _ time.Duration) error {
+		<-ctx.Done() // a send that never ends
+		return ctx.Err()
+	})
+	took := time.Since(start)
+	if !errors.Is(err, ErrDrainUnproven) || !rep.Resigned || rep.Drained || rep.Witness || rep.Peer {
+		t.Fatalf("resign with an unfinished drain: %+v %v; want resigned, not drained, no RESIGN taken", rep, err)
+	}
+	if took < c.lease/2-c.lease/16 || took > c.lease {
+		t.Fatalf("the unfinished drain was cut after %v, want half a lease (%v)", took, c.lease/2)
+	}
+	c.mu.Lock()
+	for _, v := range c.votes[mark:] {
+		if v.req.Resign {
+			c.mu.Unlock()
+			t.Fatalf("a RESIGN left after an unfinished drain (%s to %s)", v.from, v.to)
+		}
+	}
+	c.mu.Unlock()
+	if c.elector(who).IsLeader() {
+		t.Fatalf("%s's gate is open after its resign", who)
+	}
+	c.waitFor(string(peer)+" to lead", c.leases(4), func() bool { return c.elector(peer).IsLeader() })
 }

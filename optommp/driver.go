@@ -1421,23 +1421,29 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 	// gives its send deadline: false when the flush stops, the rest
 	// dropped (closed, or the budget used up) or already forgotten
 	// (reopened, a new term).
-	goOn := func(i int) (time.Time, bool) {
-		deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+	goOn := func(i int) (time.Time, func(), bool) {
+		deadline, _, ok, done := fence.Begin(d.look, time.Now()) // the budget counts from before the read
 		if !ok || !fence.Started(deadline, time.Now()) {
+			done()
 			drop(rest(i))
-			return time.Time{}, false
+			return time.Time{}, nil, false
 		}
 		d.mu.Lock()
 		same := d.term == term
 		d.mu.Unlock()
-		return deadline, same
+		if !same {
+			done()
+		}
+		return deadline, done, same
 	}
 	for i, w := range writes {
-		deadline, ok := goOn(i)
+		deadline, done, ok := goOn(i)
 		if !ok {
 			return i, nil
 		}
-		if err := c.WriteBy(w.addr, w.data, deadline); err != nil {
+		err := c.WriteBy(w.addr, w.data, deadline)
+		done() // the write has returned (answered, failed, or reset): ended for a drain
+		if err != nil {
 			// Requeue this write and every one after it, unless a newer
 			// command for the same tag arrived meanwhile, or a reopen
 			// forgot them as the previous term's.

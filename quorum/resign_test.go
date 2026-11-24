@@ -47,7 +47,7 @@ func settledA(t *testing.T) (*pair, Instant) {
 	return p, now
 }
 
-// switchAt resigns A at now: ResignAt, then the RESIGN to the witness
+// switchAt resigns A at now: ResignAt, ResignDrained, then the RESIGN to the witness
 // first and to B's voter, as the elector sends it. A renewal A sent just
 // before (in flight) lands at both after the RESIGN.
 func switchAt(t *testing.T, p *pair, now Instant, to ...NodeID) Request {
@@ -68,6 +68,7 @@ func switchAt(t *testing.T, p *pair, now Instant, to ...NodeID) Request {
 	if p.c["A"].Leading(now) {
 		t.Fatal("A still leads after resigning")
 	}
+	ResignDrained(now, p.v["A"], p.c["A"], r) // the outputs drained (#710 d1b)
 	for _, vid := range to {
 		if !p.deliver(now, vid, *r) {
 			t.Fatalf("%s refused the RESIGN", vid)
@@ -290,7 +291,7 @@ func TestResignClearsRelaysAtTheLeadersOwnVoter(t *testing.T) {
 	p, now := settledA(t)
 	relay := Relay{To: "A", Nonce: p.c["A"].cfg.Nonce, Left: lease}
 	p.v["A"].Hear(now, "B", p.c["B"].cfg.Nonce, relay)
-	ResignAt(now, p.v["A"], p.c["A"], 1, true)
+	ResignDrained(now, p.v["A"], p.c["A"], ResignAt(now, p.v["A"], p.c["A"], 1, true))
 	p.v["A"].Hear(now.Add(time.Millisecond), "B", p.c["B"].cfg.Nonce, relay) // in flight before B's voter took it
 	camp := Request{From: "B", Term: p.c["B"].VoteTerm() + 10, Nonce: p.c["B"].cfg.Nonce, ID: 999, Seq: 1 << 40}
 	if !rv(t, p.v["A"], now.Add(2*time.Millisecond), camp).Granted {
@@ -413,5 +414,72 @@ func TestLeadSeqDropsTheBootHeardLongestAgo(t *testing.T) {
 	}
 	if got := v.leadSeqOf("A", 0xA); got != 7 {
 		t.Fatalf("the live boot's Seq: %d, want 7", got)
+	}
+}
+
+// #710 d1b (Fable): between the resign and its drain, sends the lease let
+// start may still be on the wire, so the resigner's own voter keeps its
+// promise and does not yield it. B's voter heard none of A's renewals
+// (its own promise is free), so with A's voter's promise freed B would
+// lead beside those sends. Only once the drain is proven (ResignDrained)
+// does it grant B; a drain that never ends frees it where A's lease would
+// have ended: a failover. resign_frees_own_before_drain turns it red.
+func TestTheOwnVoterKeepsItsPromiseUntilTheDrain(t *testing.T) {
+	p, now := settledA(t)
+	lend := p.c["A"].leaseEnd
+	r := ResignAt(now, p.v["A"], p.c["A"], 1, true)
+	if r == nil {
+		t.Fatal("A did not resign")
+	}
+	camp := Request{From: "B", Term: p.c["B"].VoteTerm() + 10, Nonce: p.c["B"].cfg.Nonce, ID: 999, Seq: 1 << 40}
+	if p.deliver(now.Add(time.Millisecond), "A", camp) {
+		t.Fatal("A's own voter granted B's campaign before A's outputs were drained")
+	}
+	if lend <= now.Add(2*time.Millisecond) {
+		t.Fatal("A's lease was already over")
+	}
+	// Undrained, the promise runs where the lease would have ended.
+	camp.ID, camp.Seq = 1000, camp.Seq+1
+	if p.deliver(lend.Add(-time.Millisecond), "A", camp) {
+		t.Fatal("A's own voter granted B's campaign inside the lease A resigned, its drain unproven")
+	}
+	camp.ID, camp.Seq = 1001, camp.Seq+1
+	if !p.deliver(lend.Add(lease), "A", camp) {
+		t.Fatal("A's own voter still refuses B's campaign a lease after A's lease ended")
+	}
+
+	p2, now2 := settledA(t)
+	r2 := ResignAt(now2, p2.v["A"], p2.c["A"], 1, true)
+	ResignDrained(now2, p2.v["A"], p2.c["A"], r2)
+	camp2 := Request{From: "B", Term: p2.c["B"].VoteTerm() + 10, Nonce: p2.c["B"].cfg.Nonce, ID: 999, Seq: 1 << 40}
+	if !p2.deliver(now2.Add(time.Millisecond), "A", camp2) {
+		t.Fatal("A's own voter refused B's campaign after the drain")
+	}
+}
+
+// Fable re-check (#710 d1b): the resigner stalls after its drain past its
+// resign hold and campaigns again; its own voter's promise now backs that
+// campaign. A late ResignDrained must free nothing (and report false, so
+// no RESIGN leaves), or both controllers could lead. A ResignDrained in
+// time frees the promise. resign_drained_unchecked turns it red.
+func TestALateDrainFreesNothing(t *testing.T) {
+	p, now := settledA(t)
+	lend := p.c["A"].leaseEnd
+	r := ResignAt(now, p.v["A"], p.c["A"], 1, true)
+	if r == nil {
+		t.Fatal("A did not resign")
+	}
+	before := p.v["A"].promiseUntil
+	if ResignDrained(lend, p.v["A"], p.c["A"], r) {
+		t.Fatal("a drain that ended at the resigned lease's end freed the own voter's promise")
+	}
+	if p.v["A"].promiseUntil != before || p.v["A"].st.GrantedTo != "A" {
+		t.Fatalf("a late drain changed A's own voter: promise until %v (was %v), to %q", p.v["A"].promiseUntil, before, p.v["A"].st.GrantedTo)
+	}
+
+	p2, now2 := settledA(t)
+	r2 := ResignAt(now2, p2.v["A"], p2.c["A"], 1, true)
+	if !ResignDrained(now2.Add(time.Millisecond), p2.v["A"], p2.c["A"], r2) || p2.v["A"].promiseUntil != 0 {
+		t.Fatal("a drain in time did not free the own voter's promise")
 	}
 }

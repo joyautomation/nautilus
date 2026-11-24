@@ -538,6 +538,15 @@ var Mutations = []string{
 	"resign_waits_for_look",             // node: a standby whose voter took its peer's RESIGN campaigns at its next look, not at once (#710 d1)
 	"resign_no_hold",                    // a resigned leader does not hold off campaigning (#710 d1)
 	"resign_own_keeps_heard",            // a resigned leader's own voter keeps the promises it heard relayed to it, so it refuses the standby's campaign (#710 d1)
+	"resign_before_drain",               // node: a resigning leader's RESIGN leaves before the outputs' drain ends (#710 d1b)
+	"resign_despite_drain_error",        // node: a RESIGN leaves after a drain that did not finish (#710 d1b)
+	"resign_frees_own_before_drain",     // a resigned leader's own voter frees its promise before the outputs' drain is proven (#710 d1b, Fable)
+	"resign_drained_unchecked",          // a late ResignDrained (after the resigned lease) still frees the own voter's promise, which may back a new campaign (#710 d1b, Fable re-check)
+	"enter_after_read",                  // fence: a send is counted for the drain only after its gate read, so a drain misses one that read it open just before it closed (#710 d1b)
+	"drain_no_wait",                     // fence: a drain does not wait for the sends in flight (#710 d1b)
+	"drain_no_reset",                    // fence: a drain cuts nothing short: armed sends wait out their deadlines, late ones still start (#710 d1b)
+	"drain_no_settle",                   // fence: a drain does not wait the fence margin after the last send (#710 d1b)
+	"host_enter_after_gate",             // sparkplug host: an NCMD is counted for the drain only after its gate read (#710 d1b)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

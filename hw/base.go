@@ -1151,15 +1151,17 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 			continue
 		}
 		w := b.writes[name]
-		deadline, term, ok := time.Time{}, batchTerm, true
+		deadline, term, ok, done := time.Time{}, batchTerm, true, func() {}
 		if !mut("gate_per_batch") {
-			deadline, term, ok = fence.Begin(b.gate(), time.Now())
+			deadline, term, ok, done = fence.Begin(b.gate(), time.Now())
 		}
 		if !ok || !fence.Started(deadline, time.Now()) {
+			done()
 			b.dropRest(s, batch[i:])
 			return
 		}
 		if q.term != term && !mut("old_term_sent") {
+			done()
 			oldTerm = append(oldTerm, name)
 			continue
 		}
@@ -1167,6 +1169,7 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 		fence.BeforeSend()
 		err := b.write(wctx, s.cfg.ID, w.decl, q.v)
 		cancel()
+		done() // answered, failed, or reset: ended for a drain
 		if errors.Is(err, ErrNoWrite) {
 			continue
 		}
