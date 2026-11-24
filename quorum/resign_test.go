@@ -311,10 +311,14 @@ func TestALateRenewalGrantDoesNotReLeadAfterTheHoldEnds(t *testing.T) {
 	if ren == nil || !ren.Renewal {
 		t.Fatalf("no renewal: %+v", ren)
 	}
-	if ResignAt(now, p.v["A"], c, 1, true) == nil {
+	r := ResignAt(now, p.v["A"], c, 1, true)
+	if r == nil {
 		t.Fatal("A did not resign")
 	}
 	later := now.Add(5 * time.Millisecond)
+	if !ResignDrained(later, p.v["A"], c, r) { // the hold ends only after the drain (#710 d1d)
+		t.Fatal("the drain freed nothing")
+	}
 	if !c.EndResignHold(later) {
 		t.Fatal("no resign hold to end")
 	}
@@ -481,5 +485,55 @@ func TestALateDrainFreesNothing(t *testing.T) {
 	r2 := ResignAt(now2, p2.v["A"], p2.c["A"], 1, true)
 	if !ResignDrained(now2.Add(time.Millisecond), p2.v["A"], p2.c["A"], r2) || p2.v["A"].promiseUntil != 0 {
 		t.Fatal("a drain in time did not free the own voter's promise")
+	}
+}
+
+// A resign hold does not end inside the resign's drain window (before
+// ResignDrained): ResignDrained relies on the hold keeping the resigner
+// from campaigning there, or it frees the promise its own voter gave the
+// new campaign, and two can lead (Fable on #710 d1d, a stale hand-back ask
+// answered yes during the drain). After the drain the hold ends as before.
+// hold_ends_in_drain turns it red.
+func TestAResignHoldDoesNotEndBeforeTheDrain(t *testing.T) {
+	p, now := settledA(t)
+	c, v := p.c["A"], p.v["A"]
+	r := ResignAt(now, v, c, 1, true)
+	if r == nil {
+		t.Fatal("no resign")
+	}
+	later := now.Add(5 * time.Millisecond)
+	if c.EndResignHold(later) {
+		t.Fatal("the hold ended inside the drain window")
+	}
+	c.nextLook = later
+	if camp := c.Tick(later, "", 0, true); camp != nil && !camp.Renewal {
+		t.Fatalf("the resigner campaigned (term %d) inside the drain window", camp.Term)
+	}
+	if !ResignDrained(later.Add(time.Millisecond), v, c, r) {
+		t.Fatal("the drain freed nothing")
+	}
+	if !c.EndResignHold(later.Add(2 * time.Millisecond)) {
+		t.Fatal("the hold did not end after the drain")
+	}
+}
+
+// A hand-back ends the hold only from a leadership after the one the
+// controller resigned: an ask of that epoch or an earlier one is stale
+// (#710 d1d, Fable). handback_any_epoch turns it red.
+func TestAHandBackOfAnOldEpochEndsNoHold(t *testing.T) {
+	p, now := settledA(t)
+	c, v := p.c["A"], p.v["A"]
+	epoch := c.Term()
+	r := ResignAt(now, v, c, 1, true)
+	later := now.Add(time.Millisecond)
+	if !ResignDrained(later, v, c, r) {
+		t.Fatal("the drain freed nothing")
+	}
+	later = later.Add(time.Millisecond)
+	if c.EndResignHoldFor(later, epoch) || c.EndResignHoldFor(later, epoch-1) {
+		t.Fatalf("a hand-back of the resigned epoch %d or an earlier one ended the hold", epoch)
+	}
+	if !c.EndResignHoldFor(later, epoch+1) {
+		t.Fatal("a hand-back of the next leadership did not end the hold")
 	}
 }

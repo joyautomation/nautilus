@@ -101,7 +101,7 @@ func (e *Elector) Resign(ctx context.Context, seq uint64, current bool, drain Dr
 	e.mu.Lock()
 	freed := quorum.ResignDrained(e.now(), e.v, e.c, r) // only now does its own voter free its promise
 	e.mu.Unlock()
-	if !freed && !mut("resign_despite_drain_error") {
+	if !freed && !mut("resign_despite_late_drain") {
 		// The drain outlasted the lease the resign cut short (the process
 		// stalled): its own voter's promise may back a new campaign now.
 		e.log.Warn("redundancy: the outputs' drain ended after the resigned lease; no RESIGN sent, the lease has run out as in a failover", "epoch", r.Epoch)
@@ -159,4 +159,21 @@ func (e *Elector) EndResignHold() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.c.EndResignHold(e.now())
+}
+
+// EndResignHoldFor ends it for a peer handing the lead back from its
+// leadership epoch, only one after the epoch this controller resigned
+// (quorum Candidate.EndResignHoldFor).
+func (e *Elector) EndResignHoldFor(epoch uint64) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.c.EndResignHoldFor(e.now(), epoch)
+}
+
+// InResignHold reports whether this controller is in a resign hold, and
+// the epoch it resigned (quorum Candidate.InResignHold).
+func (e *Elector) InResignHold() (bool, uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.c.InResignHold(e.now())
 }

@@ -854,8 +854,11 @@ when the lease runs out, as after a failover; the command says
 **How long the field goes without a write.** The gap between the old
 leader's last write and the new leader's first is about the fence
 margin (`net-delay` + `send-margin`, 70 ms by default), plus the
-standby's election once it hears the resign (about 15 ms), plus up to
-one scan period of the fastest task. On a bench pair of containers on
+standby's election once it hears the resign, plus up to one scan period
+of the fastest task. The election is almost all the voters' durable
+write of their grant to the standby (two fsyncs each, made before they
+answer; about 16 ms on the bench's storage, and slower on a slow SD card
+or eMMC), so the disk the voters write to shows in the gap. On a bench pair of containers on
 one host, with a 20 ms main task, 100 switchovers at each of a 500 ms
 and a 1 s lease measured a gap of 74 ms at best, about 94 ms typically
 and 126 ms at worst (113 ms at 1 s); a device that hangs on a write

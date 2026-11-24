@@ -736,7 +736,7 @@ func (w *World) gate(n *node) {
 		// (HotOracle), and lead with the standby in sync, as far as the
 		// stream goes here (one image, current).
 		epoch := n.cand.Term()
-		w.rec.LeadStarts = append(w.rec.LeadStarts, LeadStart{At: w.now, Node: n.addr, Epoch: epoch})
+		w.rec.LeadStarts = append(w.rec.LeadStarts, LeadStart{At: w.now, Node: n.addr, Epoch: epoch, Boot: n.boot, Local: w.local(n)})
 		if n.imgEpoch != 0 {
 			hot, why := n.cand.HotCheck().Verdict(n.imgEpoch, 1)
 			w.rec.Takeovers = append(w.rec.Takeovers, HotTakeover{At: w.now, Node: n.addr, Image: n.imgEpoch, Epoch: epoch, Hot: hot, Why: why})
@@ -1316,7 +1316,7 @@ func (w *World) resign(n *node) {
 	}
 	// Its own voter's promise to itself ends here (the ledger's truth).
 	w.rec.released = append(w.rec.released, release{voter: n.addr, at: w.now})
-	w.rec.Resigns = append(w.rec.Resigns, ResignRec{At: w.now, Node: n.addr, Epoch: r.Epoch})
+	w.rec.Resigns = append(w.rec.Resigns, ResignRec{At: w.now, Node: n.addr, Epoch: r.Epoch, Boot: n.boot, Local: now})
 	w.tracef("%v resigns epoch %d (id %d)", n.addr, r.Epoch, r.ID)
 	w.gate(n)
 	b, _ := r.MarshalBinary()

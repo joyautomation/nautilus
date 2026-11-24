@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -40,6 +41,46 @@ func newSwitchRig(t *testing.T) *pairRig {
 	return newHotPairRig(t, nil)
 }
 
+// readySwitchover waits for the standby to be current and asks for a
+// switchover, again (at most three times) when it is refused as not
+// current: under load the standby's acknowledgement can fall a moment
+// behind between the wait and the ask (CI flake, #710 d1d).
+func (r *pairRig) readySwitchover(t *testing.T, lead string) (int, switchAnswerOf) {
+	t.Helper()
+	var code int
+	var ans switchAnswerOf
+	for range 3 {
+		r.switchReady(t, lead)
+		code, ans = r.switchover(t, lead)
+		if ans.Outcome != "refused" || !strings.Contains(ans.Error, "not current") {
+			break
+		}
+	}
+	return code, ans
+}
+
+// waitNewLeader waits for n to lead after a switchover, and on a timeout
+// says what each controller's election, runtime and stream held: a
+// switchover answered done whose standby never led (CI run 45402792635)
+// left nothing to read in the rig job's log (#710 d1d).
+func (r *pairRig) waitNewLeader(t *testing.T, n string, d time.Duration) {
+	t.Helper()
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		if r.nodes[n].m.q.IsLeader() && r.nodes[n].rt.Leading() {
+			return
+		}
+	}
+	var b strings.Builder
+	for _, m := range []string{"a", "b"} {
+		nd := r.nodes[m]
+		term, lead := nd.rt.LeadingTerm()
+		held, resigned := nd.m.q.Node().InResignHold()
+		fmt.Fprintf(&b, "\n%s: election %+v\n   gate %v term %d; runtime leads %v in %d, switching %d; resign hold %v (resigned %d); last takeover %+v; stream %+v",
+			m, nd.m.q.Node().Status(), nd.m.q.IsLeader(), nd.m.q.Term(), lead, term, nd.rt.Switching(), held, resigned, nd.rt.LastTakeover(), r.streamStatus(m))
+	}
+	t.Fatalf("%s never led within %s after the switchover:%s", n, d, b.String())
+}
+
 // switchReady waits until the leader's standby is current, as the
 // switchover requires, and the voters have heard so.
 func (r *pairRig) switchReady(t *testing.T, lead string) {
@@ -66,7 +107,7 @@ func TestPairSwitchoverIsHot(t *testing.T) {
 	term := r.nodes[lead].m.q.Term()
 
 	t0 := time.Now()
-	code, ans := r.switchover(t, lead)
+	code, ans := r.readySwitchover(t, lead)
 	if code != http.StatusOK || ans.Outcome != "done" {
 		t.Fatalf("switchover: %d %+v", code, ans)
 	}
@@ -74,9 +115,7 @@ func TestPairSwitchoverIsHot(t *testing.T) {
 		t.Fatalf("report %+v: want both voters took the RESIGN of term %d, with the final image's seq", ans.Report, term)
 	}
 	stopped := r.count(lead) // the old leader scans no more
-	pairWait(t, stand+" to lead", 5*time.Second, func() bool {
-		return r.nodes[stand].m.q.IsLeader() && r.nodes[stand].rt.Leading()
-	})
+	r.waitNewLeader(t, stand, 5*time.Second)
 	took := time.Since(t0)
 	lease := r.nodes[lead].m.o.Lease
 	if took >= lease {
@@ -204,10 +243,9 @@ func TestPairSwitchoverAbortsWithoutTheFinalAck(t *testing.T) {
 	// EndSwitch; in the field a new leadership's takeover): the last look
 	// before the resign aborts rather than resigning a leadership whose
 	// scans run (Fable M1, re-check).
-	r.switchReady(t, lead)
 	ended := func() { r.nodes[lead].rt.EndSwitch() }
 	st.beforeResign.Store(&ended)
-	code, ans = r.switchover(t, lead)
+	code, ans = r.readySwitchover(t, lead)
 	st.beforeResign.Store(nil)
 	if code != http.StatusConflict || ans.Outcome != "aborted" || !strings.Contains(ans.Error, "ended before the resign") {
 		t.Fatalf("a switchover whose switching state ended before the resign: %d %q %q, want aborted", code, ans.Outcome, ans.Error)
@@ -219,9 +257,8 @@ func TestPairSwitchoverAbortsWithoutTheFinalAck(t *testing.T) {
 	// A switchover after the abort, in the same leadership, goes through:
 	// the aborted one's final image does not stop the next one's (the
 	// bench: every switchover after an abort aborted).
-	r.switchReady(t, lead)
-	if code, ans := r.switchover(t, lead); code != http.StatusOK || ans.Outcome != "done" {
+	if code, ans := r.readySwitchover(t, lead); code != http.StatusOK || ans.Outcome != "done" {
 		t.Fatalf("a switchover after the abort: %d %q %q", code, ans.Outcome, ans.Error)
 	}
-	r.waitLeads(t, other(lead))
+	r.waitNewLeader(t, other(lead), 15*time.Second)
 }

@@ -93,6 +93,12 @@ const (
 	// Node that does not lead does nothing. For is ignored. The generator
 	// never draws it; Record.Resigns says what each did.
 	Resign
+	// EndHold ends controller Node's resign hold at At, early (#710 d1d):
+	// it said yes to its peer's hand-back (Elector.EndResignHold), so it
+	// may campaign again before the hold's two leases are out. A Node in
+	// no hold does nothing. For is ignored. The generator never draws it;
+	// Record.HoldEnds says which ended one.
+	EndHold
 	nKinds
 )
 
@@ -117,7 +123,7 @@ const (
 )
 
 var kindNames = [nKinds]string{"Cut", "Delay", "Loss", "Duplicate", "Mirror", "Crash", "Wipe",
-	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission", "Clone", "Unhealthy", "Clear", "FromSpare", "Resign"}
+	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission", "Clone", "Unhealthy", "Clear", "FromSpare", "Resign", "EndHold"}
 
 func (k FaultKind) String() string {
 	if k >= 0 && k < nKinds {
@@ -344,6 +350,11 @@ func (w *World) applyFault(i int, on bool) {
 	case Resign:
 		if on {
 			w.resign(w.nodes[f.Node])
+		}
+	case EndHold:
+		if n := w.nodes[f.Node]; on && n.up && n.cand != nil && !n.spare && n.cand.EndResignHold(w.local(n)) {
+			w.rec.HoldEnds = append(w.rec.HoldEnds, HoldEnd{At: w.now, Node: n.addr, Boot: n.boot})
+			w.tracef("%v ends its resign hold early (its peer hands the lead back)", n.addr)
 		}
 	case Unhealthy:
 		if on {

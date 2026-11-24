@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -387,5 +392,80 @@ func TestPairHandBackFallsBackWhenThePeerNeverTakes(t *testing.T) {
 	time.Sleep(time.Second)
 	if b, _ := os.ReadFile(filepath.Join(dirs[lead], "retain.json")); !strings.Contains(string(b), "41.5") {
 		t.Fatalf("%s's good file lost its 41.5: %s", lead, b)
+	}
+}
+
+// A controller that resigned the lead (a switchover's RESIGN) and is then
+// asked by its peer to take it back (the peer's takeover would go cold on
+// an unreadable retain file) ends its own resign hold when it says yes,
+// and leads again without waiting the hold's two leases out (#710 d1d).
+// handback_keeps_resign_hold turns it red.
+func TestPairHandBackEndsTheResignersHold(t *testing.T) {
+	r, dirs := newHandBackRig(t)
+	lead := r.leader()
+	stand := other(lead)
+	r.inSync(t, stand)
+	r.set(t, lead, "SP", 41.5)
+	r.imaged(t, lead)
+	corrupt(t, dirs, stand, false)
+	before := r.nodes[stand].m.q.Node().Term()
+	resigned := time.Now()
+	rep, err := r.nodes[lead].m.q.Resign(context.Background(), 1, false)
+	if err != nil || !rep.Resigned || !rep.Peer {
+		t.Fatalf("%s's resign: %+v %v", lead, rep, err)
+	}
+	r.wonAfter(t, stand, before)
+	// Once it has said yes to the hand-back, its hold is over: ending it
+	// now ends nothing.
+	st := r.nodes[lead].m.stream
+	pairWait(t, lead+" to say yes to the hand-back", 10*time.Second, func() bool {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		return st.offer != nil
+	})
+	if r.nodes[lead].m.q.Node().EndResignHold() {
+		t.Fatalf("%s still held its resign hold after saying yes to its peer's hand-back", lead)
+	}
+	pairWait(t, lead+" to lead again", 10*time.Second, func() bool { return r.nodes[lead].m.q.IsLeader() && r.nodes[lead].rt.Leading() })
+	t.Logf("resign to %s leading again on %s's hand-back: %s (its resign hold: 2 leases, 1s)", lead, stand, time.Since(resigned).Round(time.Millisecond))
+	if got := r.get(lead, "SP"); got != "41.5" {
+		t.Errorf("SP on %s = %s, want its own file's 41.5", lead, got)
+	}
+}
+
+// A hand-back ask of the leadership a controller resigned (or an earlier
+// one) is stale: the resigner may still say yes, but its resign hold
+// stays. An ask of the peer's new leadership ends it (#710 d1d, Fable).
+// handback_any_epoch turns it red.
+func TestPairAStaleHandBackKeepsTheResignHold(t *testing.T) {
+	r, _ := newHandBackRig(t)
+	lead := r.leader()
+	stand := other(lead)
+	r.inSync(t, stand)
+	r.set(t, lead, "SP", 41.5)
+	r.imaged(t, lead)
+	resigned := r.nodes[lead].m.q.Term()
+	before := r.nodes[stand].m.q.Node().Term()
+	if rep, err := r.nodes[lead].m.q.Resign(context.Background(), 1, false); err != nil || !rep.Resigned {
+		t.Fatalf("%s's resign: %+v %v", lead, rep, err)
+	}
+	r.wonAfter(t, stand, before)
+	ask := func(epoch uint64) handBackAnswer {
+		b, _ := json.Marshal(handBackAsk{Epoch: epoch})
+		rec := httptest.NewRecorder()
+		r.nodes[lead].m.stream.serveHandBack(rec, httptest.NewRequest(http.MethodPost, handBackPath(r.cluster()), bytes.NewReader(b)))
+		var ans handBackAnswer
+		if err := json.NewDecoder(rec.Body).Decode(&ans); err != nil {
+			t.Fatal(err)
+		}
+		return ans
+	}
+	ask(resigned)
+	if held, epoch := r.nodes[lead].m.q.Node().InResignHold(); !held || epoch != resigned {
+		t.Fatalf("a hand-back ask of the resigned leadership %d ended the hold (held %v, resigned %d)", resigned, held, epoch)
+	}
+	ask(r.nodes[stand].m.q.Node().Term())
+	if held, _ := r.nodes[lead].m.q.Node().InResignHold(); held {
+		t.Fatal("a hand-back ask of the peer's new leadership left the hold")
 	}
 }

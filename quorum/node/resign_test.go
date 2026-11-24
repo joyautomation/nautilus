@@ -175,3 +175,37 @@ func TestLoopbackAnUnfinishedDrainSendsNoResign(t *testing.T) {
 	}
 	c.waitFor(string(peer)+" to lead", c.leases(4), func() bool { return c.elector(peer).IsLeader() })
 }
+
+// A drain that finishes, but only after the lease the resign cut short
+// would have run out (the process stalled), frees nothing and sends no
+// RESIGN: its own voter's promise may already back a new campaign, so the
+// lease running out, as in a failover, is all that is left (#710 d1b, the
+// node's late-drain path). resign_despite_late_drain turns it red.
+func TestLoopbackALateDrainSendsNoResign(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	who := c.settledLeader(leases(20))
+	peer := c.other(who)
+	c.waitFor(string(peer)+" to see the leader", c.leases(4), func() bool { return c.status(peer).Leader == string(who) })
+	time.Sleep(c.leases(1))
+	c.mu.Lock()
+	mark := len(c.votes)
+	c.mu.Unlock()
+	rep, err := c.elector(who).Resign(context.Background(), 41, true, func(context.Context, time.Duration) error {
+		time.Sleep(c.lease + c.lease/4) // a stall: done, but after the resigned lease
+		return nil
+	})
+	if !errors.Is(err, ErrDrainUnproven) || !rep.Resigned || rep.Drained || rep.Witness || rep.Peer {
+		t.Fatalf("resign with a late drain: %+v %v; want resigned, not drained, no RESIGN taken", rep, err)
+	}
+	c.mu.Lock()
+	for _, v := range c.votes[mark:] {
+		if v.req.Resign {
+			c.mu.Unlock()
+			t.Fatalf("a RESIGN left after a drain that ended past the resigned lease (%s to %s)", v.from, v.to)
+		}
+	}
+	c.mu.Unlock()
+	c.waitFor(string(peer)+" to lead", c.leases(4), func() bool { return c.elector(peer).IsLeader() })
+}

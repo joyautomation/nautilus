@@ -102,6 +102,8 @@ type Record struct {
 	// promise (a duplicate's answer is not one) (#710 d1).
 	Resigns      []ResignRec
 	ResignsTaken []ResignTaken
+	// HoldEnds are the resign holds ended early (EndHold).
+	HoldEnds []HoldEnd
 }
 
 // ResignRec is a controller resigning its leadership of Epoch at At.
@@ -109,6 +111,18 @@ type ResignRec struct {
 	At    time.Duration
 	Node  Addr
 	Epoch uint64
+	// Boot is the resigner's process (node.boot); Local its own clock at
+	// the resign: its hold runs on that clock, in that process.
+	Boot  int
+	Local quorum.Instant
+}
+
+// HoldEnd is a resign hold ended early (an EndHold fault: the controller
+// said yes to its peer's hand-back, #710 d1d).
+type HoldEnd struct {
+	At   time.Duration
+	Node Addr
+	Boot int
 }
 
 // ResignTaken is Voter dropping its promise to the boot (Name, Nonce) on
@@ -209,6 +223,10 @@ type LeadStart struct {
 	At    time.Duration
 	Node  Addr
 	Epoch uint64
+	// Boot and Local: the leader's process and its own clock at the start
+	// (the rejoin oracle judges a resign hold on them).
+	Boot  int
+	Local quorum.Instant
 }
 
 // HotTakeover is a lease start by a controller that held an image of its
@@ -1069,8 +1087,11 @@ func (r *Record) checkResign() []Violation {
 
 // Rejoin: a controller that resigned leads again only after its peer led,
 // or its hold ran out (two leases), or its own voter took a fresh RESIGN
-// from the peer (a switchover back). An old copy of a RESIGN must not make
-// it campaign at once (#710 d1, Fable on #1355).
+// from the peer (a switchover back), or the hold was ended early (it said
+// yes to its peer's hand-back, an EndHold). An old copy of a RESIGN must
+// not make it campaign at once (#710 d1, Fable on #1355). The hold runs on
+// the resigner's own clock, which a Skew may run fast, and in its own
+// process: a restarted controller holds none (#710 d1d).
 func (r *Record) checkRejoin() []Violation {
 	var vs []Violation
 	for _, rs := range r.Resigns {
@@ -1081,7 +1102,12 @@ func (r *Record) checkRejoin() []Violation {
 			if ls.Node != rs.Node {
 				break // the peer led first
 			}
-			ok := ls.At >= rs.At+2*r.lease || slices.ContainsFunc(r.ResignsTaken, func(rt ResignTaken) bool {
+			held := ls.Local.Sub(rs.Local) >= quorum.ResignHold(r.lease)
+			restarted := ls.Boot != rs.Boot
+			ended := slices.ContainsFunc(r.HoldEnds, func(h HoldEnd) bool {
+				return h.Node == rs.Node && h.Boot == rs.Boot && h.At >= rs.At && h.At <= ls.At
+			})
+			ok := held || restarted || ended || slices.ContainsFunc(r.ResignsTaken, func(rt ResignTaken) bool {
 				return rt.Voter == rs.Node && rt.Name != nodeIDs[rs.Node] && rt.At > rs.At && rt.At <= ls.At
 			})
 			if !ok {
