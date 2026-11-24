@@ -51,6 +51,19 @@ func (r *pairRig) readySwitchover(t *testing.T, lead string) (int, switchAnswerO
 	var ans switchAnswerOf
 	for range 3 {
 		r.switchReady(t, lead)
+		// PEER_READY is refreshed on the stream's own tick; the switchover
+		// asks the live acknowledgement rule. Just after an abort the flag
+		// can still say ready while the rule says not current: wait for
+		// the rule itself (the stress run on #710 S3: 3 in 26 under -race
+		// on 2 contended cores, all three tries in the same second).
+		pairWait(t, "the standby to be current by the live rule", 10*time.Second, func() bool {
+			term, leading := r.nodes[lead].rt.LeadingTerm()
+			if !leading {
+				return true // the switchover will say why
+			}
+			_, cur := r.nodes[lead].m.stream.syncMark(term)
+			return cur
+		})
 		code, ans = r.switchover(t, lead)
 		if ans.Outcome != "refused" || !strings.Contains(ans.Error, "not current") {
 			break

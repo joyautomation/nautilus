@@ -138,7 +138,10 @@ func (s *pairStream) waitAck(ctx context.Context, epoch, seq uint64) error {
 	s.markMu.Lock()
 	a := &s.acks
 	a.reset(epoch)
-	if a.acked == seq {
+	// The test hold covers an acknowledgement that came before this wait
+	// too: under load the standby's ack of the final image can beat the
+	// wait (#710 S3 stress run: a held switchover answered done).
+	if a.acked == seq && !s.finalAckHold.Load() {
 		s.markMu.Unlock()
 		return nil
 	}
