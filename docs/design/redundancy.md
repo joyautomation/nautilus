@@ -1465,7 +1465,9 @@ time, so before RESIGN leaves, every such send must have ended (`fence.Drain`):
 - **Unproven is a failover.** A drain that has not finished within half a lease sends no
   RESIGN: the leader has stopped leading all the same, and its lease runs out at the voters as
   in a failover (`node.ErrDrainUnproven`). Its own voter keeps its promise until then too
-  (§4.7), so no standby leads before that lease's end, and a send still to leave goes within it.
+  (§4.7), so no standby leads before that lease's end, and a send still to leave on its send
+  deadline goes within it. A drain that ends after that lease (the resigner stalled) frees
+  nothing and sends no RESIGN either: the promise may back a new campaign by then.
 - **A drain's reset is no write cut.** A send the drain cuts short is not counted in
   `fence.Cut`: its deadline had not passed.
 

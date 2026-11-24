@@ -456,3 +456,30 @@ func TestTheOwnVoterKeepsItsPromiseUntilTheDrain(t *testing.T) {
 		t.Fatal("A's own voter refused B's campaign after the drain")
 	}
 }
+
+// Fable re-check (#710 d1b): the resigner stalls after its drain past its
+// resign hold and campaigns again; its own voter's promise now backs that
+// campaign. A late ResignDrained must free nothing (and report false, so
+// no RESIGN leaves), or both controllers could lead. A ResignDrained in
+// time frees the promise. resign_drained_unchecked turns it red.
+func TestALateDrainFreesNothing(t *testing.T) {
+	p, now := settledA(t)
+	lend := p.c["A"].leaseEnd
+	r := ResignAt(now, p.v["A"], p.c["A"], 1, true)
+	if r == nil {
+		t.Fatal("A did not resign")
+	}
+	before := p.v["A"].promiseUntil
+	if ResignDrained(lend, p.v["A"], p.c["A"], r) {
+		t.Fatal("a drain that ended at the resigned lease's end freed the own voter's promise")
+	}
+	if p.v["A"].promiseUntil != before || p.v["A"].st.GrantedTo != "A" {
+		t.Fatalf("a late drain changed A's own voter: promise until %v (was %v), to %q", p.v["A"].promiseUntil, before, p.v["A"].st.GrantedTo)
+	}
+
+	p2, now2 := settledA(t)
+	r2 := ResignAt(now2, p2.v["A"], p2.c["A"], 1, true)
+	if !ResignDrained(now2.Add(time.Millisecond), p2.v["A"], p2.c["A"], r2) || p2.v["A"].promiseUntil != 0 {
+		t.Fatal("a drain in time did not free the own voter's promise")
+	}
+}

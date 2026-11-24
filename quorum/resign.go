@@ -233,9 +233,20 @@ func ResignAt(now Instant, v *Voter, c *Candidate, seq uint64, current bool) *Re
 // promise to c, and the promises it heard relayed to c's boot, as the
 // RESIGN makes every voter do, in one call, as YieldTo does: nothing runs
 // in between, so the dropped promise never backs a lease.
-func ResignDrained(now Instant, v *Voter, c *Candidate, r *Request) {
+//
+// Only while the lease the resign cut short would still run (drainKeep),
+// with c not leading or campaigning: inside it the resign hold keeps c
+// from campaigning, so the promise v holds is still the resigned one. A
+// call later than that (the resigner stalled after its drain) could
+// otherwise free a promise that backs c's next campaign or leadership.
+// It reports whether it did; false: the RESIGN must not leave, and the
+// lease runs out as in a failover.
+func ResignDrained(now Instant, v *Voter, c *Candidate, r *Request) bool {
 	if v == nil || c == nil || r == nil || c.cfg.Self != v.self {
-		return
+		return false
+	}
+	if !(c.drainKeep != 0 && now < c.drainKeep && !c.leading && c.pending == nil) && !mut("resign_drained_unchecked") {
+		return false
 	}
 	c.drainKeep = 0
 	if v.st.GrantedTo == v.self {
@@ -251,6 +262,7 @@ func ResignDrained(now Instant, v *Voter, c *Candidate, r *Request) {
 		// ignored for the quiet, as at every other voter.
 		v.dropResigned(now, v.self, r.Nonce, r.Epoch)
 	}
+	return true
 }
 
 // EndResignHold ends the hold a resign started, at now, so this candidate

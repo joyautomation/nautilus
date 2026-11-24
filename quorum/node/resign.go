@@ -55,11 +55,14 @@ var ErrDrainUnproven = errors.New("the outputs' drain did not finish: no RESIGN 
 //     send, so it may leave only after a drain that finished: one that
 //     did not (an error, or longer than half a lease) sends no RESIGN,
 //     and the lease runs out as in a failover (ErrDrainUnproven).
-//  3. Its own voter drops its promise (quorum.ResignDrained), as the RESIGN
-//     makes every voter do, and the RESIGN goes to the witness first and to the peer's voter after
-//     the witness's answer (or its timeout): the standby campaigns as soon
-//     as its own voter takes it, and a campaign that reached the witness
-//     before the witness's RESIGN would be refused, its retry a look away.
+//  3. Its own voter drops its promise (quorum.ResignDrained), as the
+//     RESIGN makes every voter do, only while the resigned lease would
+//     still run: a drain that ended later (a stall) sends no RESIGN
+//     either. Then the RESIGN goes to the witness first and to the peer's
+//     voter after the witness's answer (or its timeout): the standby
+//     campaigns as soon as its own voter takes it, and a campaign that
+//     reached the witness before the witness's RESIGN would be refused,
+//     its retry a look away.
 //
 // seq and current are the standby's acknowledgement of the final image,
 // the mark the RESIGN carries. A controller that does not lead resigns
@@ -95,10 +98,16 @@ func (e *Elector) Resign(ctx context.Context, seq uint64, current bool, drain Dr
 		e.log.Warn("redundancy: the outputs' drain did not finish; no RESIGN sent, the lease runs out as in a failover", "epoch", r.Epoch, "error", derr)
 		return rep, fmt.Errorf("%w: %v", ErrDrainUnproven, derr)
 	}
-	rep.Drained = true
 	e.mu.Lock()
-	quorum.ResignDrained(e.now(), e.v, e.c, r) // only now does its own voter free its promise
+	freed := quorum.ResignDrained(e.now(), e.v, e.c, r) // only now does its own voter free its promise
 	e.mu.Unlock()
+	if !freed && !mut("resign_despite_drain_error") {
+		// The drain outlasted the lease the resign cut short (the process
+		// stalled): its own voter's promise may back a new campaign now.
+		e.log.Warn("redundancy: the outputs' drain ended after the resigned lease; no RESIGN sent, the lease has run out as in a failover", "epoch", r.Epoch)
+		return rep, fmt.Errorf("%w: the drain ended after the resigned lease", ErrDrainUnproven)
+	}
+	rep.Drained = true
 	order := []struct {
 		to   quorum.NodeID
 		base string

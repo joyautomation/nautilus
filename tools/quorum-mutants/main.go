@@ -577,6 +577,7 @@ var table = []mutation{
 	{"resign_before_drain", []string{"TestLoopbackAResignHandsTheLeadOverAtOnce"}},
 	{"resign_despite_drain_error", []string{"TestLoopbackAnUnfinishedDrainSendsNoResign"}},
 	{"resign_frees_own_before_drain", []string{"TestTheOwnVoterKeepsItsPromiseUntilTheDrain"}},
+	{"resign_drained_unchecked", []string{"TestALateDrainFreesNothing"}},
 	{"enter_after_read", []string{"TestDrainWaitsForASendThatReadTheGateOpenJustBeforeItClosed"}},
 	{"drain_no_wait", []string{"TestDrainWaitsForASendThatReadTheGateOpenJustBeforeItClosed", "TestDrainSettlesAfterTheLastSend", "TestDrainUnprovenWhenASendNeverEnds"}},
 	{"drain_no_reset", []string{"TestDrainResetsAHungSend", "TestDuringADrainLateSendsAreCutShort", "TestOptoMMPWriteIsCountedAndCutShortByTheDrain", "TestADrainCutsAHungCommandShort"}},
