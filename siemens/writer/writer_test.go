@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,28 @@ func TestGolden(t *testing.T) {
 	}
 }
 
+// TestInstancesGolden: every IEC function block the writer knows, called
+// every way the writer writes it, as compiled 0/0 on TIA V21
+// (testdata/instances/README.md, #1338). A type added to the writer's
+// maps must join main.st, and the golden a new TIA compile.
+func TestInstancesGolden(t *testing.T) {
+	src, err := os.ReadFile("testdata/instances/main.st")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goldenInput(t, "instances", Input{
+		Programs:    []Program{{Path: "main.st", Source: string(src)}},
+		Globals:     []Global{{Name: "Go", Type: "BOOL"}, {Name: "Out", Type: "BOOL"}, {Name: "N", Type: "DINT"}},
+		Tasks:       []Task{{Name: "main", Program: "main", Interval: 100 * time.Millisecond}},
+		BlockPrefix: "naut_",
+	})
+	for typ := range instMembers {
+		if !regexp.MustCompile(`(?i):\s*` + typ + `\s*;`).MatchString(string(src)) {
+			t.Errorf("testdata/instances/main.st declares no %s: add one, and compile the golden on TIA again", typ)
+		}
+	}
+}
+
 func TestTaskRules(t *testing.T) {
 	prog := []Program{
 		{Path: "p.st", Source: "PROGRAM P\nVAR x : REAL; END_VAR\nx := x + 1.0;\nEND_PROGRAM\n"},
@@ -170,7 +193,7 @@ func TestRefusals(t *testing.T) {
 		{"int arithmetic into an FB input", "t : TON; n : INT; b : BOOL;", "t(IN := b, PT := INT_TO_TIME(n + 1));", "siemens/int-width", 3},
 		{"int arithmetic as a CASE selector", "n : INT;", "CASE n + 1 OF 1: n := 0; END_CASE;", "siemens/int-width", 3},
 		{"int arithmetic stored into a REAL", "n : INT; r : REAL;", "r := n + 1;", "siemens/int-width", 3},
-		{"counter CV bound to an INT", "c : CTU; n : INT; b : BOOL;", "c(CU := b, PV := 5, CV => n);", "siemens/int-width", 3},
+		{"a counter's member written outside its call", "c : CTU; b : BOOL;", "c.PV := 5;", "siemens/member", 3},
 		{"sqrt of an int", "n : INT; r : REAL;", "r := SQRT(n);", "siemens/function", 3},
 		{"instance as an input", "", "", "siemens/var", 0},
 		{"positional instance args (nautilus refuses first)", "t : TON; b : BOOL;", "t(b, T#1s);", "siemens/nautilus", 3},
@@ -260,7 +283,7 @@ func TestIntegerArithmeticIsWidenedAndWrapped(t *testing.T) {
 		"#ok := INT_TO_LINT(#a) + INT_TO_LINT(#b) > 30000;",
 		"#a := LINT_TO_INT((((#c.CV) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);",
 		"#a := 16#FF;",
-		"c : CTU_LINT;",
+		"c : IEC_LCOUNTER;",
 	} {
 		if !strings.Contains(fb, want) {
 			t.Errorf("missing %q in\n%s", want, fb)

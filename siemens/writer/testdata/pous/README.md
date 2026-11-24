@@ -40,4 +40,6 @@ the dialect-logix-tonr conformance project 0/0. What the runs measured:
   "naut_X" := (PT := T#2s)`) is dropped silently by the import (nautilus
   has no instance initializers, so nothing is written that way).
 - A CTD (`CTD_LINT`, `CTD_DINT` or `CTD_INT`) does not compile as written
-  ("Invalid data type"), while CTU and CTUD do: a separate writer bug.
+  ("Invalid data type"), and CTU's `CTU_LINT` has no `.Q` either. Fixed
+  in #1338/#1371: every counter is an `IEC_LCOUNTER` called by its method
+  (`../instances/README.md`).
