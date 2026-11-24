@@ -1130,7 +1130,7 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 	v.grantNonce = r.Nonce
 	// A campaign's grant records its epoch, in the grant's own write and
 	// before the state takes its term (recordsFrom reads the old one).
-	if !r.Renewal && v.recordGrant(r.From, r.Term) {
+	if !r.Renewal && v.recordGrant(r.From, r.Term, r.Nonce) {
 		v.dirty++
 		v.need = v.dirty
 	}
@@ -1222,7 +1222,7 @@ func (v *Voter) reply(now Instant, r Request, granted bool) Reply {
 	return Reply{From: v.self, To: r.From, Term: r.Term, Nonce: r.Nonce, ID: r.ID, Granted: granted,
 		Promised: max(v.st.Promised, v.st.Floor), Incarnation: v.witnessIncarnation(),
 		Marked: v.marked[r.From] && !mut("marked_not_told"), ClearGen: v.gens[r.From], VoterBoot: v.boot, HeldBy: v.HeldBy(now, r.From, r.Nonce),
-		Gen: v.st.Gen, Fences: v.Fences(), RecordsFrom: v.recordsFrom(), Recs: v.recs(r.From)}
+		Gen: v.st.Gen, Fences: v.Fences(), RecordsFrom: v.recordsFrom(), Recs: v.recs(r.From, r.Nonce)}
 }
 
 // Spare reports whether this voter's state says its controller demoted

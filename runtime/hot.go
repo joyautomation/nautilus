@@ -81,6 +81,10 @@ type TakeoverReport struct {
 	// read, so its retained values are the image's, held only in memory
 	// until a save succeeds (RetainOnlyInMemory).
 	RetainFromImage bool
+	// NoHandBack is, on a cold takeover whose own retain store could not
+	// be read, why the lead was not handed to the peer (#710 S2c-3), ""
+	// when the hand-back was not asked.
+	NoHandBack string
 }
 
 // LastTakeover is the report of this runtime's last takeover with a

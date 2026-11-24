@@ -68,6 +68,9 @@ import "os"
 //   - hot_retain_before_checks: a takeover over an unreadable own store loads the image's retained values before its checks, and keeps them when one fails (#710 S2b).
 //   - hot_rebase_per_task: a hot takeover rebases each task from its own copy time, not the image's one leader reference, so a fast task beside a slow one loses the gap (#710 S2b, Fable).
 //   - retain_memory_only_forgotten: a hot takeover over an unreadable own store does not say its retained values are only in memory, or a failed save clears it (#710 S2b).
+//   - handback_on_readable_store: a takeover asks for a hand-back with its own store readable (#710 S2c-3).
+//   - handback_when_hot: a takeover that will go hot asks for a hand-back (#710 S2c-3).
+//   - handback_store_bad_forgotten: an edge's failed store read is forgotten once a hand-back closes the gate (#710 S2c-3, Fable M1).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutRuntime(name string) bool { return name == mutOn }

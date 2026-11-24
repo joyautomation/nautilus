@@ -18,14 +18,16 @@ func TestACampaignGrantRecordsItsEpoch(t *testing.T) {
 	if p == nil || len(out) != 0 {
 		t.Fatalf("a campaign's grant left before its write: %v %+v", p, out)
 	}
-	if p.State.RecordsFrom != 5 || len(p.State.Epochs) != 1 || p.State.Epochs[0] != (EpochRecord{Name: "A", Epoch: 5}) {
+	if p.State.RecordsFrom != 5 || len(p.State.Epochs) != 1 || p.State.Epochs[0] != (EpochRecord{Name: "A", Epoch: 5, Nonce: 0xA}) {
 		t.Fatalf("the grant's write: RecordsFrom %d, records %+v; want 5 and A at 5", p.State.RecordsFrom, p.State.Epochs)
 	}
 	out = v.Persisted(p.Seq, true)
 	if len(out) != 1 || !out[0].Granted {
 		t.Fatalf("the grant: %+v", out)
 	}
-	if r, ok := out[0].Recs.Of("A"); !ok || r.Epoch != 5 || out[0].RecordsFrom != 5 {
+	// The reply tells A of its EARLIER boots' epochs only (#710 S2c-3):
+	// none here, so its own campaign does not show.
+	if r, ok := out[0].Recs.Of("A"); !ok || r.Epoch != 0 || out[0].RecordsFrom != 5 {
 		t.Fatalf("the reply's records: %+v from %d", out[0].Recs, out[0].RecordsFrom)
 	}
 	// Renewals, one at a higher vote term (a re-term), start no epoch.

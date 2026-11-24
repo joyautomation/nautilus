@@ -93,9 +93,7 @@ const (
 //     leadership after the image.
 //   - Among them, the highest epoch granted to the peer must be the
 //     image's: any above it is a later leadership the image predates.
-//   - This boot led in no epoch after the image's but the current one, and
-//     no reply records one for this name that this boot did not campaign
-//     in (a previous boot's leadership).
+//   - This boot led in no epoch after the image's but the current one.
 //   - The newest mark (by epoch, then sequence) the peer's renewals left
 //     at those voters must be of the image's epoch and current, and the
 //     image at or past it. Of two marks at one (epoch, sequence), the one
@@ -124,10 +122,13 @@ func (h HotCheck) Verdict(imgEpoch, imgSeq uint64) (hot bool, why string) {
 				}
 			}
 		}
-		if r, ok := w.Recs.Of(h.Self); ok && r.Epoch > imgEpoch && r.Epoch != h.Epoch &&
-			!slices.Contains(h.Campaigns, r.Epoch) && !mut("own_record_ignored") {
-			return false, ColdOwnLeadership
-		}
+		// This controller's own record is not read here (#710 S2c-3,
+		// Fable S1): a reply reports it of earlier boots only, and an
+		// earlier boot's record above the image's epoch can only be a
+		// campaign that never led (the image came in this boot, from a
+		// leadership after every earlier boot's). Taking it for a
+		// leadership went cold for nothing. This boot's own leaderships
+		// are LedBefore, below.
 	}
 	if covering < 2 {
 		return false, ColdRecordsUnknown

@@ -1671,6 +1671,23 @@ field) when:
 - the **build hash differs**. A rolling update through `tools/deploy` is therefore a cold
   handover, and the guide says so.
 
+**The bad-retain hand-back (S2c-3, #710).** A cold takeover whose own retain store cannot be
+read asks the peer first, as the edge's gate after the flush and the store's first read
+(before the inputs wait), so nothing has loaded, saved, scanned or written. The peer's file
+is good when it reads, holds a stream position, and that position's term is at or past the
+newest earlier leadership a covering majority of the winning round records. That is the
+peer's epoch record, this controller's records of its EARLIER boots, and this boot's own
+leaderships. A campaign's grant overwrites the asker's record, so each record also keeps
+the boot of its last grant and the highest epoch granted to an earlier boot (state format
+10). A reply reports that earlier-boot value as the asker's own, with no wire change: a
+voter of the S2c-1 build reports the asker's current epoch, which refuses the hand-back.
+A record is a grant, not a leadership (a split vote's lost campaign raises one voter's record),
+so with all three voters answering and covering, the floor is each name's second-highest
+record. The hot check (§4.2) does not read the earlier-boot record: above the image's epoch
+it can only be a campaign that never led. A good peer gets the lead through a hold of 3 leases (no renewal, no campaign, gate shut).
+A controller hands back at most once per max(20 leases, 1 min), on the wall clock, kept in
+its voter state (a future time is ignored).
+
 This reverses the guide's "process state is deliberately not replicated", **for the pair
 only**. The guide gains a section for the pair, and the Kubernetes text stays.
 

@@ -124,6 +124,7 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		r.ioReset()
 		r.resetIntentSync()
 		r.flushReset()
+		r.handBackReset()
 	} else if !r.leading || termed != nil && termed.Term() != r.ledTerm {
 		// A takeover (not the same leadership resumed) first re-applies
 		// the kept I/O configuration (#706), so the inputs it then waits
@@ -150,7 +151,19 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 			r.unfresh()
 			return false, r.edges
 		}
-		ready := (resume || r.ioReady()) && r.inputsReady()
+		// Once the edge has read the store (the flush, the I/O restore's
+		// first read): a
+		// takeover that would go cold on an unreadable store first asks
+		// whether to hand the lead back to the peer (#710 S2c-3), before
+		// the waits for live inputs and the log's catch-up, which a
+		// hand-back would spend for nothing. (The log's catch-up runs
+		// alongside all of these, as before: it reads, it never sends.)
+		io := resume || r.ioReady()
+		// The hand-back needs the edge's first read of the store only, not
+		// the I/O restore's retries of a failed one (about a second).
+		hb := resume || r.iokRead() && r.handBackReady(term)
+		stored := io && hb
+		ready := stored && r.inputsReady()
 		synced := resume || r.intentReady()
 		if !ready || !synced {
 			r.unfresh() // nothing scans: the tags are frozen
@@ -178,6 +191,7 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		r.takeover()
 		r.ioReset()
 		r.flushReset()
+		r.handBackReset()
 		r.leading = true
 		if termed != nil {
 			r.ledTerm = termed.Term()

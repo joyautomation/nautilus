@@ -714,7 +714,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		discounted = true
 	}
 	rd.replies[r.From] = true
-	if rd.campaign && !discounted {
+	if rd.campaign && (!discounted || mut("discounted_vouches")) {
 		// A discounted voter's word (two processes cast it) never vouches
 		// for a hot takeover either.
 		if rd.recs == nil {

@@ -240,7 +240,7 @@ func (e *Elector) selfLog() string {
 	now := e.now()
 	hold := e.logDefers(now, ls, has) != deferNo &&
 		(e.holdSince.IsZero() || time.Since(e.holdSince) < 2*e.o.Lease)
-	may := healthy && !e.released && !e.boxPending && e.v.State().Incarnation != 0 &&
+	may := healthy && !e.released && !e.handingBack(now) && !e.boxPending && e.v.State().Incarnation != 0 &&
 		e.mayCampaign(now) && !hold && (!e.c.Marked() || mut("may_ignores_mark"))
 	return logReport(ls.Synced, ls.Synced && ls.CanSync, may, ls.History, ls.HistoryID)
 }
