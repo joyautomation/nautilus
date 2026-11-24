@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/joyautomation/nautilus/siemens/station"
 	"github.com/joyautomation/nautilus/siemens/tiad"
@@ -196,6 +197,13 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 	}
 	if d.Status == tiad.DeployLoaded {
 		res.ChangedOutside = boolp(!equal && res.Latest == d.ID)
+	}
+	// The data layout gate's proof (#1341): the CPU holds its newest load.
+	if equal && res.Latest == d.ID && f.unreadableLines == 0 {
+		if f.verifiedLoads == nil {
+			f.verifiedLoads = map[string]verifiedLoad{}
+		}
+		f.verifiedLoads[address] = verifiedLoad{deploy: d.ID, at: time.Now()}
 	}
 	if req.Fingerprint != nil {
 		fp, fl := f.fingerprintOf(s, address, req.Fingerprint.TrustUnverifiedCertificate, password, verifyTrustFix)

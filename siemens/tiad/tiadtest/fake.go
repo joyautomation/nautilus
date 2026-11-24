@@ -162,6 +162,10 @@ type Fake struct {
 	archiveN      int
 	// unreadableLines is what the deploy list reports (SetUnreadableLines).
 	unreadableLines int
+	// layoutScript is SetLayout; verifiedLoads each CPU's verify that
+	// found it equal to its newest load (the layout gate's proof).
+	layoutScript  LayoutScript
+	verifiedLoads map[string]verifiedLoad
 
 	mu        sync.Mutex
 	pins      map[string]tiad.DeviceIdentity // CPU address → device pin
@@ -190,9 +194,12 @@ type session struct {
 	// to, "" when offline (the agent's Session.HeldOnline).
 	heldOnline string
 	// guard is the directory a created project owns, "projects/<name>/".
-	guard    string
-	station  *tiad.Station
-	blocks   []tiad.Block
+	guard   string
+	station *tiad.Station
+	blocks  []tiad.Block
+	// decls is each imported block's declaration part (layoutDecl), by
+	// lower-cased name: the fake's layout is made from it.
+	decls    map[string]string
 	compiled bool
 	// changed is true until a download loads the project as it is.
 	changed bool
@@ -282,6 +289,7 @@ type savedProject struct {
 	blocks []tiad.Block
 	groups map[string]string
 	obInfo map[string]projectBlock
+	decls  map[string]string
 	// node and restored are the session's (session.node, .restored).
 	node     projectNode
 	restored string
@@ -488,6 +496,9 @@ type Download struct {
 	Session string
 	Request tiad.DownloadRequest
 	State   string
+	// EveryBlock: the load took the whole program (the agent's
+	// DownloadOptions.Software), not only what changed.
+	EveryBlock bool
 }
 
 // New returns an empty fake with a random token.
@@ -634,6 +645,7 @@ func (f *Fake) init() {
 		m.HandleFunc("POST /v1/sessions/{id}/software", f.wrap(f.software, true))
 		m.HandleFunc("POST /v1/sessions/{id}/compile", f.wrap(f.compile, true))
 		m.HandleFunc("POST /v1/sessions/{id}/download", f.wrap(f.download, true))
+		m.HandleFunc("POST /v1/sessions/{id}/layout", f.wrap(f.layout, true))
 		m.HandleFunc("POST /v1/sessions/{id}/compare", f.wrap(f.compare, true))
 		m.HandleFunc("POST /v1/sessions/{id}/export", f.wrap(f.export, true))
 		m.HandleFunc("POST /v1/sessions/{id}/upload", f.wrap(f.upload, true))
@@ -1138,6 +1150,7 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 		s.cpu, s.others, s.protection, s.protectedWith = sp.cpu, sp.others, sp.protection, sp.protectedWith
 		s.accessControl, s.access, s.webServer, s.webHTTPS = sp.accessControl, sp.access.clone(), sp.webServer, sp.webHTTPS
 		s.blocks, s.groups, s.obInfo = slices.Clone(sp.blocks), maps.Clone(sp.groups), maps.Clone(sp.obInfo)
+		s.decls = maps.Clone(sp.decls)
 		s.node, s.restored = sp.node, sp.restored
 		// A project that is a loaded archive, unchanged, is what that
 		// load put on the CPU.
@@ -1551,6 +1564,12 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 					s.typeModified[strings.ToLower(h.Name)] = fmt.Sprintf("regenerated %d", len(s.typeModified)+1)
 				}
 			}
+			if s.decls == nil {
+				s.decls = map[string]string{}
+			}
+			for _, h := range heads {
+				s.decls[strings.ToLower(h.Name)] = layoutDecl(string(b))
+			}
 			made = append(made, heads...)
 		}
 		res.Results = append(res.Results, sr)
@@ -1821,6 +1840,13 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		return nil, fail(http.StatusConflict, tiad.KindBusy, "CPU %s belongs to session %s: one CPU, one project; close that session first", req.Address, holder)
 	}
 	f.claims[req.Address] = s.id
+	// The data layout gate (#1341): before the record, so a refusal
+	// records nothing.
+	layout, layoutNow := f.readLayout(s, req.Address, req.Hardware)
+	if fl := layoutRefusal(layout, req); fl != nil {
+		return nil, fl
+	}
+	everyBlock := req.Hardware || (req.Decisions.ResetData != nil && *req.Decisions.ResetData && layout.Baseline == "")
 	// The deploy record of a real download: the project archived, then
 	// the intent line, just before TIA's download; either failing refuses
 	// it with nothing sent to the CPU.
@@ -1830,10 +1856,13 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		if run, fl = f.recordIntent(s, req, attested); fl != nil {
 			return nil, fl
 		}
+		run.Layout = tiad.LayoutRecordOf(layoutNow, fakeTIAVersion)
+		// A download to the CPU runs: the verify no longer stands.
+		delete(f.verifiedLoads, req.Address)
 	}
 	var acting []string
 	var given string
-	res, fl := f.downloadTIA(s, req, attested, accessControlKept, reset, &acting, &given)
+	res, fl := f.downloadTIA(s, req, attested, accessControlKept, reset, everyBlock, layout.Baseline, &acting, &given)
 	if run == nil {
 		return res, fl
 	}
@@ -1842,7 +1871,8 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 
 // downloadTIA is the part of a download after every refusal the agent
 // makes itself: TIA's checks, the load and the compare right after it.
-func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, actingOut *[]string, givenOut *string) (_ any, fl *failure) {
+func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, everyBlock bool, baseline string, actingOut *[]string, givenOut *string) (_ any, fl *failure) {
+	relaxed := req.Decisions.ResetData == nil || !*req.Decisions.ResetData
 	var qs []tiad.Question
 	if f.PreDownload != nil {
 		qs = f.PreDownload(req)
@@ -1915,6 +1945,17 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 			}
 			return tiad.DownloadResult{DryRun: true, Provisional: true, QuestionsIncomplete: true, Questions: dq, KeptDevices: keptList(s.kept), BlindTrust: f.blindTrust}, nil
 		}
+		// The RUN backstop (#1341): without the consent, a stop, a
+		// reinitialize or a load of every block is a gate miss, never
+		// answered.
+		if relaxed && tiad.LayoutGateMissQuestion(q.ID) {
+			if len(acting) > 0 {
+				return nil, outcomeUnknown(tiad.LayoutGateMiss(q.ID, baseline)+"; and tiad cancelled the download at TIA's "+q.ID+" check, which the request does not answer yes", acting)
+			}
+			return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
+				msg:  tiad.LayoutGateMiss(q.ID, baseline) + "; nothing was loaded",
+				data: map[string]any{"questions": []tiad.Question{q}, "keptDevices": keptList(s.kept), "gateMiss": q.ID}}
+		}
 		now := reset
 		if q.ID == tiad.QuestionUserManagement {
 			now = reset.At(loggedOn, credentialsAsked, held, answeredBefore)
@@ -1976,7 +2017,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	}
 	rec := req
 	rec.Secrets = nil
-	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state})
+	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state, EveryBlock: everyBlock})
 	// A load may change the CPU's users: the evidence goes, and the
 	// compare after it may record it again.
 	loadedNow = true

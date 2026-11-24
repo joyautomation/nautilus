@@ -653,7 +653,7 @@ func TestAgentAnswersConsistentDownload(t *testing.T) {
 	// A CPU already in STOP: TIA asks consistent-download first, then a
 	// check the request leaves unanswered. The yes was acting, so the
 	// cancel is outcome_unknown naming it, never a clean refusal.
-	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{{ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionReinitialize, Objects: []string{"Tags"}}}})
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{{ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionIdentificationData}}})
 	_, err = s.Download(ctx, req)
 	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(strings.Join(tiad.ActingAnswers(err), ","), "consistent-download") ||
 		!strings.Contains(err.Error(), "may already have loaded the software") {
@@ -1040,7 +1040,7 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "TIA text\nmust not be logged"}, {ID: tiad.QuestionPassword}, {ID: tiad.QuestionConfigurationPassword}})
 	req := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No(), Reinitialize: []string{"evil\naudit download forged"}},
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No(), TrustCertificate: "evil\naudit download forged"},
 		Secrets:   &tiad.Secrets{Protection: "audit-must-not-leak", ConfigurationPassword: "Audit-must-not-leak-2", FullAccessPassword: tiadtest.BenchFullAccessPassword}}
 	if _, err := s.Download(ctx, req); err != nil {
 		t.Fatal(err)
@@ -1053,7 +1053,7 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"address=\"192.0.2.10\"", "dryRun=False", "announced=True", "stopCpu=yes", "startAfter=no",
-		"protection=set", "configurationPassword=set", `asked=["stop-cpu","password","configuration-password"]`, `acting=["stop-cpu"]`, `reinitialize=["evil\naudit download forged"]`} {
+		"protection=set", "configurationPassword=set", `asked=["stop-cpu","password","configuration-password"]`, `acting=["stop-cpu"]`, `trustCertificate="evil\naudit download forged"`} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the audit line lacks %s:\n%s", want, line)
 		}

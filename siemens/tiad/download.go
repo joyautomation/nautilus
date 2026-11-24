@@ -58,7 +58,12 @@ const (
 	// TIA instance that trusted a CPU's certificate blindly earlier
 	// (CheckBlindTrust). Only Decisions.AcceptBlindTrust yes answers it.
 	QuestionBlindTrust = "blind-trust"
-	QuestionOther      = "other"
+	// QuestionResetData is the agent's own question too: a download the
+	// data layout gate says may reset data blocks (Layout,
+	// ResetDataNeeded), answered only by Decisions.ResetData yes. Its
+	// Objects are the data blocks the gate names.
+	QuestionResetData = "reset-data"
+	QuestionOther     = "other"
 )
 
 // Question is one pre-download check that needs an answer.
@@ -75,14 +80,12 @@ type Question struct {
 // which is different from "no".
 type Decisions struct {
 	StopCPU *bool `json:"stopCpu,omitempty"`
-	// ResetData is the caller's consent to what a load in STOP does
-	// (#1341, measured on an S7-1500 with TIA V21): every data block of
-	// the program returns to its start values, retained ones included,
-	// and TIA asks nothing about it. A CPU already in STOP loads the same
-	// way without any stop question, and nothing reads the CPU's mode
-	// first, so the agent refuses every download without it, a dry run
-	// too (one TIA asks nothing of may load), before anything reaches the
-	// CPU (CheckResetData).
+	// ResetData is the caller's consent to a load that may return data
+	// blocks to their start values, retained ones included (#1341): what
+	// the data layout gate found needs it (Layout.ResetDataNeeded), as
+	// does StopCPU yes (CheckResetData). With it the agent answers TIA's
+	// reinitialize check yes; without it, TIA asking that check, the stop
+	// or a load of every block is a gate miss that cancels the download.
 	ResetData *bool `json:"resetData,omitempty"`
 	Overwrite *bool `json:"overwrite,omitempty"`
 	// ConsistentDownload answers QuestionConsistentDownload; only yes
@@ -110,9 +113,6 @@ type Decisions struct {
 	// load no identification data.
 	IdentificationDataLoadNothing *bool `json:"identificationDataLoadNothing,omitempty"`
 	StartAfter                    *bool `json:"startAfter,omitempty"`
-	// Reinitialize names every DB the caller agrees to reset. It must
-	// cover every DB the question names.
-	Reinitialize []string `json:"reinitialize,omitempty"`
 	// TrustCertificate is the fingerprint of the CPU certificate the
 	// caller trusts; it must equal the question's.
 	TrustCertificate string `json:"trustCertificate,omitempty"`
@@ -141,18 +141,14 @@ func KeptQuestion(kept []KeptDevice) Question {
 		Objects: keptNames(kept)}
 }
 
-// ResetDataSentence says what a load in STOP does to the CPU's data
-// (#1341): the deploy's plan and every refusal without the consent carry
-// it, with ResetDataInStop.
-const ResetDataSentence = "the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask"
+// ResetDataSentence says what the consent is to (#1341): the deploy's
+// plan and the agent's refusals carry it.
+const ResetDataSentence = "a load may return data blocks to their start values, retained ones included, and with the CPU in STOP TIA does so without asking"
 
-// ResetDataInStop is why every download needs the consent, not only one
-// that answers a stop.
-const ResetDataInStop = "a CPU already in STOP loads the same way, with no stop question"
-
-// CheckResetData is the agent's ResetDataRule.Check: "" when req carries
-// the resetData consent, else why it is refused. A dry run needs it too:
-// one TIA asks nothing of may load.
+// CheckResetData is the agent's ResetDataRule.Check, before anything
+// reaches the CPU: "" when req may go on to the data layout gate, else
+// why it is refused. A stop needs the consent; a download without it
+// needs the digest of the layout check the caller showed.
 func CheckResetData(req DownloadRequest) string {
 	d := req.Decisions
 	switch {
@@ -160,8 +156,10 @@ func CheckResetData(req DownloadRequest) string {
 		return ""
 	case d.StopCPU != nil && *d.StopCPU:
 		return "decisions.stopCpu yes needs decisions.resetData yes: " + ResetDataSentence + " (#1341); nothing was sent to the CPU"
+	case req.LayoutDigest == "":
+		return "a download without decisions.resetData needs layoutDigest, the digest of the data layout check the caller showed (POST /v1/sessions/{id}/layout): only that check says the load keeps the CPU's data, and " + ResetDataSentence + " (#1341); nothing was sent to the CPU"
 	}
-	return "a download needs decisions.resetData yes: " + ResetDataSentence + ", and " + ResetDataInStop + " (#1341); nothing was sent to the CPU"
+	return ""
 }
 
 // CheckKept is the agent's KeptRule.Check: "" when answer names exactly
@@ -248,6 +246,11 @@ type DownloadRequest struct {
 	// number and firmware off the device, for a pinned CPU the agent
 	// cannot identify online (DeviceAttestation, #1325); unused otherwise.
 	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
+	// LayoutDigest is Layout.Digest of the data layout check the caller
+	// showed: a download without Decisions.ResetData needs it, and any
+	// download that sends it is refused when the layout is no longer
+	// that one (#1341).
+	LayoutDigest string `json:"layoutDigest,omitempty"`
 }
 
 // Attestation is the operator's statement that the CPU's hardware
@@ -924,12 +927,11 @@ func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPasswo
 				unanswered = append(unanswered, q)
 			}
 		case QuestionReinitialize:
-			// A reset nobody named cannot be agreed to: without objects
-			// the question is never answered.
-			if missing := notCovered(q.Objects, d.Reinitialize); len(d.Reinitialize) == 0 || len(q.Objects) == 0 {
-				unanswered = append(unanswered, q)
-			} else if len(missing) > 0 {
-				q.Message = fmt.Sprintf("%s (not agreed: %s)", q.Message, strings.Join(missing, ", "))
+			// TIA names no data block (bench 1510SP, 2026-11-24); the
+			// layout gate named them. Its yes stops the CPU
+			// (StopPlcAndReinitialize): it needs the consent to the reset
+			// and to the stop.
+			if d.ResetData == nil || !*d.ResetData || d.StopCPU == nil || !*d.StopCPU {
 				unanswered = append(unanswered, q)
 			}
 		case QuestionCertificate:
@@ -965,21 +967,6 @@ func sortAnswer(q Question, a *bool, unanswered, declined *[]Question) {
 
 // notCovered returns the names in want that agreed does not contain,
 // case-insensitively (TIA block names are case-insensitive).
-func notCovered(want, agreed []string) []string {
-	ok := map[string]bool{}
-	for _, a := range agreed {
-		ok[strings.ToLower(a)] = true
-	}
-	var out []string
-	for _, w := range want {
-		if !ok[strings.ToLower(w)] {
-			out = append(out, w)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 // Yes is a convenience for a Decisions answer.
 func Yes() *bool { t := true; return &t }
 

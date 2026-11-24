@@ -642,7 +642,7 @@ namespace Tiad
         // line, on the TIA thread, in the download's own work item, just
         // before TIA's download. Either failing refuses the download, with
         // nothing sent to the CPU.
-        void Record(ITia t, Session s, DownloadRequest req, BlindTrust rode, DeployRun run)
+        void Record(ITia t, Session s, DownloadRequest req, BlindTrust rode, DeployRun run, List<LayoutObject> layout)
         {
             // A project left part-way is never archived as a deploy.
             if (s.Unclean) throw CpuReuse.Unclean("archiving it for the deploy record");
@@ -688,6 +688,9 @@ namespace Tiad
             // unless the record says loaded (TurnOnRule.MarkerSuffix).
             if (s.AccessTurnOn && !s.AccessTurnOnLoaded) line["accessTurnOn"] = true;
             line["blindTrust"] = rode == null ? null : rode.ToJson();
+            // The data layout loaded (#1341): the baseline of the next
+            // download, once a verify finds the CPU equal to this deploy.
+            line["layout"] = LayoutRule.ToRecord(layout, host.TiaVersion);
             try
             {
                 deploys.Append(line);

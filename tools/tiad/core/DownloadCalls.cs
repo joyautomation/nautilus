@@ -169,16 +169,44 @@ namespace Tiad
 
         static string AuditDecisions(Decisions d)
         {
-            var reinit = new List<string>();
-            foreach (var n in d.Reinitialize) reinit.Add(Json.Quote(n));
             return "stopCpu=" + YesNo(d.StopCpu) + " resetData=" + YesNo(d.ResetData) + " overwrite=" + YesNo(d.Overwrite) + " consistentDownload=" + YesNo(d.ConsistentDownload) +
                 " alarmTexts=" + YesNo(d.AlarmTexts) + " allBlocks=" + YesNo(d.AllBlocks) +
                 " userManagementKeepOnline=" + YesNo(d.UserManagementKeepOnline) + " userManagementResetToProject=" + YesNo(d.UserManagementResetToProject) +
                 " identificationDataLoadNothing=" + YesNo(d.IdentificationDataLoadNothing) +
-                " startAfter=" + YesNo(d.StartAfter) + " reinitialize=[" + string.Join(",", reinit) + "]" +
+                " startAfter=" + YesNo(d.StartAfter) +
                 " keptDevices=[" + string.Join(",", Quoted(d.KeptDevices)) + "]" +
                 " trustCertificate=" + (d.TrustCertificate == "" ? "unset" : Json.Quote(d.TrustCertificate)) +
                 " acceptUnverifiedHardware=" + YesNo(d.AcceptUnverifiedHardware) + " acceptBlindTrust=" + YesNo(d.AcceptBlindTrust);
+        }
+
+        // GateMissed is e, led by the gate miss's words when the download
+        // ended at one (LayoutRule.GateMiss): a cancel after an acting
+        // answer is in doubt, and says why it was cancelled.
+        static TiadException GateMissed(TiadException e, string gateMiss, string baseline)
+        {
+            if (gateMiss == "") return e;
+            return new TiadException(e.Status, e.Kind, LayoutRule.GateMiss(gateMiss, baseline) + "; and " + e.Message, e.Payload, e.Fatal);
+        }
+
+        // LayoutRefusal is null, or the refusal of a download the data
+        // layout gate does not let (LayoutRule): a digest that is not the
+        // layout's, or a layout that needs the consent the request does
+        // not give. Nothing has reached TIA's download.
+        static TiadException LayoutRefusal(LayoutDiff layout, DownloadRequest req)
+        {
+            var d = new Obj();
+            d["layout"] = layout.ToJson();
+            if (req.LayoutDigest != "" && req.LayoutDigest != layout.Digest)
+            {
+                return new TiadException(409, Kinds.DecisionRequired, "the data layout is no longer the one the caller showed (layoutDigest " + Json.Quote(req.LayoutDigest) + ", now " + layout.Digest +
+                    "): the project, the CPU's last deploy or its verify changed since; read POST /v1/sessions/{id}/layout again; nothing was sent to the CPU", d, false);
+            }
+            if (layout.ResetDataNeeded && req.Decisions.ResetData != true)
+            {
+                d["questions"] = Question.ToJson(new List<Question> { new Question { Id = QuestionIds.ResetData, Message = layout.Why, Objects = layout.DataBlocks } });
+                return new TiadException(409, Kinds.DecisionRequired, "the download needs decisions.resetData: " + layout.Why + "; nothing was sent to the CPU", d, false);
+            }
+            return null;
         }
 
         // AuditKept is the devices an apply kept as found, for the audit
@@ -288,7 +316,7 @@ namespace Tiad
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
             }
             // A stop without the consent to what it does to the data (#1341).
-            string resetWhy = ResetDataRule.Check(req.Decisions);
+            string resetWhy = ResetDataRule.Check(req.Decisions, req.LayoutDigest);
             if (resetWhy != null) throw TiadException.BadRequest("{0}", resetWhy);
             // A kept CPU's access control turned on by an apply on this
             // session loads only by the attestation route (TurnOnRule).
@@ -458,6 +486,14 @@ namespace Tiad
             var askedQs = new List<Question>();
             int calls = 0;
             bool cancelled = false;
+            // The data layout gate's verdict, read on the TIA thread just
+            // before TIA's download (LayoutRule): relaxed is a download
+            // without the consent to a reset, so a stop, a reinitialize or
+            // a load of every block TIA asks is a gate miss; gateMiss is
+            // the check that missed, baseline the deploy compared with.
+            bool relaxed = req.Decisions.ResetData != true;
+            string gateMiss = "", gateBaseline = "";
+            bool layoutRefused = false;
             // answer runs once per check TIA asks, in TIA's order. Each is
             // answered on its own, only from the request; the first one
             // not answered yes cancels the download there, and from then
@@ -470,6 +506,18 @@ namespace Tiad
                 if (cancelled || req.DryRun)
                 {
                     cancelled = true;
+                    return null;
+                }
+                // The RUN backstop (#1341): without the consent, TIA asking
+                // to stop the CPU, reinitialize data blocks or load every
+                // block means the layout gate missed a change. Never
+                // answered: cancelled there, and logged.
+                if (relaxed && LayoutRule.GateMissQuestion(q.Id))
+                {
+                    gateMiss = q.Id;
+                    cancelled = true;
+                    unanswered.Add(q);
+                    Log.Line("audit layout-gate-miss session={0} address={1} question={2} baseline={3} acting=[{4}]", s.Id, Json.Quote(req.Address), Json.Quote(q.Id), gateBaseline == "" ? "none" : gateBaseline, string.Join(",", Quoted(acting).ToArray()));
                     return null;
                 }
                 var one = new List<Question> { q };
@@ -545,9 +593,29 @@ namespace Tiad
                     // (#1180 review), as it must get the hardware opt-in,
                     // and with it any outsideChanges accept the request
                     // carries: an overwrite must be on the record (#789).
+                    // The data layout gate (#1341), on this same work item,
+                    // so the layout checked is the one archived and loaded:
+                    // before the record, so a refusal records nothing.
+                    List<LayoutObject> layoutNow;
+                    LayoutDiff layout = ReadLayout(t, s, req.Address, req.Hardware, out layoutNow);
+                    gateBaseline = layout.Baseline;
+                    string digestSeen = req.LayoutDigest == "" ? "unset" : req.LayoutDigest == layout.Digest ? "match" : "mismatch";
+                    Log.Line("audit layout-gate session={0} address={1} baseline={2} changes={3} dataBlocks={4} resetDataNeeded={5} resetData={6} digest={7}",
+                        s.Id, Json.Quote(req.Address), layout.Baseline == "" ? "none" : layout.Baseline, layout.Changes.Count,
+                        layout.AllDataBlocks ? "all" : string.Join(",", Quoted(layout.DataBlocks).ToArray()), layout.ResetDataNeeded ? "yes" : "no", YesNo(req.Decisions.ResetData), digestSeen);
+                    TiadException layoutWhy = LayoutRefusal(layout, req);
+                    if (layoutWhy != null)
+                    {
+                        layoutRefused = true;
+                        throw layoutWhy;
+                    }
+                    bool everyBlock = req.Hardware || (req.Decisions.ResetData == true && layout.Baseline == "");
                     bool marked = !req.DryRun && s.AccessTurnOn && !s.AccessTurnOnLoaded;
                     if (marked) MarkTurnOnPending(s, req);
-                    if (!req.DryRun) Record(t, s, req, ranWith, run);
+                    if (!req.DryRun) Record(t, s, req, ranWith, run, layoutNow);
+                    // A download to the CPU runs: the verify that found it
+                    // equal to its last deploy no longer stands.
+                    if (!req.DryRun) ForgetVerified(req.Address);
                     // Recorded: TIA's download comes next, and may load.
                     if (marked) s.AccessTurnOnTried = true;
                     try
@@ -566,7 +634,7 @@ namespace Tiad
                         DownloadOutcome got = null;
                         try
                         {
-                            got = t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer, use);
+                            got = t.Download(s.Handle, req.Address, req.Hardware, req.Software, everyBlock, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer, use);
                             return got;
                         }
                         finally
@@ -596,6 +664,12 @@ namespace Tiad
             catch (TiadException e)
             {
                 rode = ranWith;
+                if (layoutRefused)
+                {
+                    asked = Json.Quote(QuestionIds.ResetData);
+                    outcome = e.Kind + ":[" + asked + "]";
+                    throw;
+                }
                 if (lateRefused)
                 {
                     asked = Json.Quote(QuestionIds.BlindTrust);
@@ -610,7 +684,7 @@ namespace Tiad
                 {
                     outcome = Kinds.OutcomeUnknown;
                     MayHaveStarted(req, acting);
-                    throw WithReason(WithActing(e, acting), atWhy);
+                    throw GateMissed(WithReason(WithActing(e, acting), atWhy), gateMiss, gateBaseline);
                 }
                 // TIA failed once it asked a check: whether it acted on an
                 // answer, or loaded, is unknown, so from there on a failure
@@ -619,7 +693,7 @@ namespace Tiad
                 {
                     outcome = Kinds.OutcomeUnknown;
                     MayHaveStarted(req, acting);
-                    throw WithReason(UnknownAfter(e, acting), atWhy);
+                    throw GateMissed(WithReason(UnknownAfter(e, acting), atWhy), gateMiss, gateBaseline);
                 }
                 throw;
             }
@@ -642,7 +716,7 @@ namespace Tiad
             {
                 outcome = Kinds.OutcomeUnknown;
                 if (calls == 0) throw Unknown("TIA ran the dry run's download without asking a single check, so tiad could not cancel it", acting);
-                throw Unknown("TIA loaded the CPU although tiad cancelled the download", acting);
+                throw GateMissed(Unknown("TIA loaded the CPU although tiad cancelled the download", acting), gateMiss, gateBaseline);
             }
             if (!result.Loaded && calls == 0)
             {
@@ -675,7 +749,8 @@ namespace Tiad
             {
                 outcome = Kinds.OutcomeUnknown;
                 var at = unanswered.Count > 0 ? unanswered[0] : declined[0];
-                throw WithReason(Unknown("tiad cancelled the download at TIA's " + at.Id + " check, which the request does not answer yes", acting), at.Id == QuestionIds.UserManagement ? atWhy : "");
+                string missed = gateMiss != "" ? LayoutRule.GateMiss(gateMiss, gateBaseline) + "; and " : "";
+                throw WithReason(Unknown(missed + "tiad cancelled the download at TIA's " + at.Id + " check, which the request does not answer yes", acting), at.Id == QuestionIds.UserManagement ? atWhy : "");
             }
             if (unanswered.Count > 0)
             {
@@ -683,6 +758,11 @@ namespace Tiad
                 var d = new Obj();
                 d["questions"] = Question.ToJson(unanswered);
                 d["keptDevices"] = KeptDevice.ToJson(s.Kept);
+                if (gateMiss != "")
+                {
+                    d["gateMiss"] = gateMiss;
+                    throw new TiadException(409, Kinds.DecisionRequired, LayoutRule.GateMiss(gateMiss, gateBaseline) + "; nothing was loaded", d, false);
+                }
                 throw new TiadException(409, Kinds.DecisionRequired, "TIA asked a check the request does not answer; nothing was loaded (TIA asks one check at a time: answer it, and it may ask another)", d, false);
             }
             if (declined.Count > 0)

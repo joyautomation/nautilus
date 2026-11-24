@@ -65,6 +65,9 @@ type deployRig struct {
 	// oldResetData answers a download that carries resetData as an agent
 	// before #1341 does: 400, unknown field.
 	oldResetData bool
+	// oldLayout answers the data layout check as an agent before #1341's
+	// layout gate does: no such call.
+	oldLayout bool
 	// noResetData leaves --reset-data off a download (run adds it).
 	noResetData bool
 }
@@ -178,6 +181,11 @@ func newDeployRig(t *testing.T) *deployRig {
 			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"body: json: unknown field \"prunePrefix\"","fatal":false},"events":[]}`)
 			return
 		}
+		if r.oldLayout && strings.HasSuffix(q.URL.Path, "/layout") {
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"ok":false,"error":{"kind":"not_found","message":"no such call POST `+q.URL.Path+`","fatal":false},"events":[]}`)
+			return
+		}
 		if r.oldResetData && strings.HasSuffix(q.URL.Path, "/download") && strings.Contains(string(body), `"resetData"`) {
 			w.WriteHeader(http.StatusBadRequest)
 			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"body: unknown field \"decisions.resetData\"","fatal":false},"events":[]}`)
@@ -227,8 +235,8 @@ func (r *deployRig) run(stdin string, terminal bool, args ...string) (string, in
 	if slices.Contains(args, "--download") && !slices.Contains(args, "--start") && !slices.Contains(args, "--no-start") {
 		args = append(args, "--start")
 	}
-	// Every download needs --reset-data (#1341), unless the test is of
-	// that refusal.
+	// A download gets --reset-data (#1341), unless the test is of the
+	// layout gate: an adopted CPU's first nautilus load needs it.
 	if slices.Contains(args, "--download") && !slices.Contains(args, "--reset-data") && !r.noResetData {
 		args = append(args, "--reset-data")
 	}
@@ -358,8 +366,9 @@ func TestSiemensDeployAsksBeforeItLoads(t *testing.T) {
 			"announced: you have told everyone who shares this CPU",
 			"user management: not answered",
 			"stop the CPU if TIA needs to: yes (--allow-stop)",
-			"reset the CPU's data: yes (--reset-data). The CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask, and a CPU already in STOP loads the same way, with no stop question (#1341)",
-			"reinitialize a DB: no. If TIA asks, the download is cancelled there: before the CPU was stopped that loads nothing, but after a stop it ends IN DOUBT",
+			"reset the CPU's data: yes (--reset-data): ",
+			"TIA's reinitialize check, which stops the CPU, is answered yes (--allow-stop)",
+			"data layout: ",
 			"start the CPU after the load: yes (--start), also a CPU that was in STOP before",
 		} {
 			if !strings.Contains(plan, want) {
@@ -489,8 +498,7 @@ func TestSiemensDeployDataTypes(t *testing.T) {
 }
 
 // TestSiemensDeployRefusesAStopItWasNotAllowed: when the dry run shows TIA
-// stops the CPU, a deploy without --allow-stop refuses before asking,
-// and a reinitialize of a DB not named in --reinit too.
+// stops the CPU, a deploy without --allow-stop refuses before asking.
 func TestSiemensDeployRefusesAStopItWasNotAllowed(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
@@ -500,10 +508,12 @@ func TestSiemensDeployRefusesAStopItWasNotAllowed(t *testing.T) {
 		strings.Contains(out, "downloading to") {
 		t.Fatalf("exit %d, downloads %d:\n%s", code, len(r.downloads()), out)
 	}
-	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionReinitialize, Message: "reinitialize", Objects: []string{"naut_Tags", "naut_main_DB"}}})
-	out, code = r.run("", false, "--download", "--dry-run", "--yes", "--allow-stop", "--reset-data", "--reinit=naut_Tags")
-	if code != 1 || !strings.Contains(out, "TIA reinitializes naut_main_DB") || len(r.downloads()) != 0 {
-		t.Fatalf("exit %d, downloads %d:\n%s", code, len(r.downloads()), out)
+	// --reinit is retired (#1341): --reset-data answers TIA's
+	// reinitialize check, which names no data block.
+	var flagOut bytes.Buffer
+	o := siemensDeployOptions{}
+	if err := parseSiemensDeployFlags(&o, []string{"--download", "--reinit=naut_Tags", r.dir}, &flagOut); err == nil || !strings.Contains(flagOut.String(), "flag provided but not defined: -reinit") {
+		t.Fatalf("--reinit: %v\n%s", err, flagOut.String())
 	}
 }
 
@@ -530,7 +540,7 @@ func TestSiemensDeployEndToEnd(t *testing.T) {
 	}
 	dl := r.downloads()
 	if len(dl) != 1 || dl[0].Request.Hardware || !dl[0].Request.Software || !dl[0].Request.Announced || dl[0].Request.OutsideChanges != nil ||
-		dl[0].Request.Decisions.StopCPU == nil || !*dl[0].Request.Decisions.StopCPU || len(dl[0].Request.Decisions.Reinitialize) != 0 ||
+		dl[0].Request.Decisions.StopCPU == nil || !*dl[0].Request.Decisions.StopCPU ||
 		dl[0].Request.Decisions.ConsistentDownload == nil || !*dl[0].Request.Decisions.ConsistentDownload {
 		t.Fatalf("downloads: %+v", dl)
 	}
@@ -644,9 +654,9 @@ func TestSiemensDeployStopsWhenTheDryRunLoaded(t *testing.T) {
 	}
 }
 
-// TestSiemensDeployAnswersOnlyWhatItWasAllowed: without --allow-stop and
-// --reinit, the download says no to a stop and names no DB, so a check
-// the dry run could not show is refused by TIA's answer, not given.
+// TestSiemensDeployAnswersOnlyWhatItWasAllowed: without --allow-stop the
+// download says no to a stop, so a check the dry run could not show is
+// refused by TIA's answer, not given.
 func TestSiemensDeployAnswersOnlyWhatItWasAllowed(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
@@ -662,7 +672,7 @@ func TestSiemensDeployAnswersOnlyWhatItWasAllowed(t *testing.T) {
 		t.Fatalf("downloads: %+v", dl)
 	}
 	d := dl[0].Request.Decisions
-	if d.StopCPU == nil || *d.StopCPU || len(d.Reinitialize) != 0 || d.StartAfter == nil || *d.StartAfter ||
+	if d.StopCPU == nil || *d.StopCPU || d.StartAfter == nil || *d.StartAfter ||
 		d.AcceptUnverifiedHardware != nil || d.UserManagementResetToProject != nil || d.Overwrite != nil {
 		t.Fatalf("decisions: %+v", d)
 	}
@@ -675,7 +685,7 @@ func TestSiemensDeployInDoubtAfterAStop(t *testing.T) {
 	r := newDeployRig(t)
 	r.adopt()
 	r.fake.SetQuestions([]tiad.Question{{ID: tiad.QuestionStopCPU, Message: "stop the CPU"},
-		{ID: tiad.QuestionReinitialize, Message: "reinitialize", Objects: []string{"naut_Tags"}}})
+		{ID: tiad.QuestionUserManagement, Message: "user management"}})
 	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--reset-data")
 	if code != 1 || !strings.Contains(out, "download: OUTCOME UNKNOWN") || !strings.Contains(out, "TIA may already have acted on: stop-cpu") ||
 		strings.Contains(out, "saved projects/") {
@@ -794,9 +804,8 @@ func TestSiemensDeployFlagsGoTogether(t *testing.T) {
 		{siemensDeployOptions{dryRun: true}, "go with --download"},
 		{siemensDeployOptions{allowStop: true}, "go with --download"},
 		{siemensDeployOptions{resetData: true}, "go with --download"},
-		{siemensDeployOptions{download: true, start: true}, "--download needs --reset-data"},
 		{siemensDeployOptions{start: true}, "go with --download"},
-		{siemensDeployOptions{reinit: []string{"x"}}, "go with --download"},
+		{siemensDeployOptions{download: true, start: true, allowStop: true}, "--allow-stop needs --reset-data"},
 		{siemensDeployOptions{acceptOutside: true}, "go with --download"},
 		{siemensDeployOptions{download: true}, "--download needs --start or --no-start"},
 		{siemensDeployOptions{download: true, start: true, noStart: true}, "--download needs --start or --no-start"},
@@ -832,19 +841,24 @@ func TestSiemensDeployFlagsGoTogether(t *testing.T) {
 	}
 }
 
-// TestSiemensDeployDownloadNeedsResetData (#1341): every --download
-// needs --reset-data (a load in STOP resets every DB, and a CPU already in
-// STOP loads with no stop question). Without it the deploy is refused
-// before anything is read, saying what happens and printing the command
-// to rerun, without --yes; with it the agent gets the consent and the
-// plan says it in words, and the no-stop line never promises a CPU in
-// STOP loads nothing; an agent that does not know the consent is told to
-// be reinstalled, on the dry-run path too.
-func TestSiemensDeployDownloadNeedsResetData(t *testing.T) {
+// TestSiemensDeployLayoutGate (#1341): the agent's data layout check
+// decides whether a download needs --reset-data. Without a baseline
+// (adopted, or a new layout) the deploy is refused before the plan,
+// naming why, the changes and the data blocks, and printing the command
+// to rerun without --yes; with the consent the whole program loads. Once
+// the CPU verifiably holds a nautilus load, an unchanged layout loads
+// without the consent, only what changed, and the plan says the CPU keeps
+// its data; a layout change is refused, naming the data block it
+// reaches. --allow-stop needs --reset-data. An agent without the layout
+// check, or without the consent, is told to be reinstalled.
+func TestSiemensDeployLayoutGate(t *testing.T) {
 	var out bytes.Buffer
 	o := siemensDeployOptions{by: "op"}
-	if err := parseSiemensDeployFlags(&o, []string{"--agent", "http://h:8190", "--download", "--yes", "--allow-stop", "--start", "--attest-hardware", "it's the bench", "--hardware", "proj dir"}, &out); err != nil {
+	if err := parseSiemensDeployFlags(&o, []string{"--agent", "http://h:8190", "--download", "--yes", "--start", "--attest-hardware", "it's the bench", "--hardware", "proj dir"}, &out); err != nil {
 		t.Fatal(err)
+	}
+	if got := o.rerunWithResetData(); got != "naut siemens deploy --agent http://h:8190 --download --reset-data --start --attest-hardware 'it'\\''s the bench' --hardware 'proj dir'" {
+		t.Errorf("rerun: %s", got)
 	}
 	// A flag's value spelt --yes stays its value (Fable).
 	o2 := siemensDeployOptions{by: "op"}
@@ -860,39 +874,72 @@ func TestSiemensDeployDownloadNeedsResetData(t *testing.T) {
 	if got := o2.rerunWithResetData(); got != "naut siemens deploy --download --reset-data --start dir" {
 		t.Errorf("rerun drops --yes=true: %s", got)
 	}
-	err := o.flagsError()
-	want := "--download needs --reset-data: the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask, and a CPU already in STOP loads the same way, with no stop question (#1341). To accept that, run (POSIX shell; it still asks you to confirm the plan):\n" +
-		"  naut siemens deploy --agent http://h:8190 --download --reset-data --allow-stop --start --attest-hardware 'it'\\''s the bench' --hardware 'proj dir'"
-	if err == nil || err.Error() != want {
-		t.Fatalf("got\n%v\nwant\n%s", err, want)
+	if err := (siemensDeployOptions{download: true, start: true, allowStop: true}).flagsError(); err == nil ||
+		!strings.Contains(err.Error(), "--allow-stop needs --reset-data: a load may return data blocks to their start values, retained ones included") {
+		t.Fatalf("--allow-stop without --reset-data: %v", err)
+	}
+	if err := (siemensDeployOptions{download: true, start: true}).flagsError(); err != nil {
+		t.Fatalf("a download without --reset-data passes the flags (the layout check decides): %v", err)
 	}
 
 	r := newDeployRig(t)
 	r.adopt()
+	// The CPU's newest load is the customer's project, not the adopted
+	// copy: no baseline, so the consent and the whole program.
 	r.noResetData = true
 	got, code := r.run("", false, "--download", "--yes")
-	if code != 2 || !strings.Contains(got, "--download needs --reset-data") || len(r.downloads()) != 0 {
-		t.Fatalf("no --reset-data: exit %d, %d download(s):\n%s", code, len(r.downloads()), got)
+	if code != 1 || len(r.downloads()) != 0 || strings.Contains(got, "PLAN") ||
+		!strings.Contains(got, "this download needs --reset-data: no layout baseline (the CPU's newest load, deploy") || !strings.Contains(got, "loaded another project (projects/customer/customer.ap21)") ||
+		!strings.Contains(got, "data blocks whose values may be lost: every one") || !strings.Contains(got, "Nothing was loaded. To accept the reset, and the stop TIA needs") ||
+		!strings.Contains(got, "--download --reset-data --allow-stop --start") || strings.Contains(got, "--yes --") {
+		t.Fatalf("a new layout without --reset-data: exit %d, %d download(s):\n%s", code, len(r.downloads()), got)
 	}
-	r.noResetData = false
+	got, code = r.run("", false, "--download", "--yes", "--reset-data")
+	dls := r.fake.Downloads()
+	if code != 0 || len(dls) != r.base+1 || dls[r.base].Request.Decisions.ResetData == nil || !*dls[r.base].Request.Decisions.ResetData ||
+		dls[r.base].Request.LayoutDigest == "" || !dls[r.base].EveryBlock ||
+		!strings.Contains(got, "reset the CPU's data: yes (--reset-data): there is no layout baseline") ||
+		!strings.Contains(got, "TIA's reinitialize check stops the CPU, so without --allow-stop it is not answered") || !strings.Contains(got, "data layout: ") {
+		t.Fatalf("with --reset-data: exit %d:\n%s", code, got)
+	}
+	// The CPU now holds that load, and the deploy verifies it first.
 	got, code = r.run("", false, "--download", "--yes")
-	dls := r.downloads()
-	if code != 0 || len(dls) != 1 || dls[0].Request.Decisions.ResetData == nil || !*dls[0].Request.Decisions.ResetData ||
-		!strings.Contains(got, "reset the CPU's data: yes (--reset-data). The CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask, and a CPU already in STOP loads the same way, with no stop question (#1341)") ||
-		!strings.Contains(got, "stop the CPU: no. If TIA asks, the download is cancelled there and loads nothing (pass --allow-stop to let it stop the CPU); a CPU already in STOP is loaded without that question") {
-		t.Fatalf("with --reset-data: exit %d, %d download(s):\n%s", code, len(dls), got)
+	dls = r.fake.Downloads()
+	if code != 0 || len(dls) != r.base+2 || dls[r.base+1].Request.Decisions.ResetData != nil || dls[r.base+1].EveryBlock ||
+		dls[r.base+1].Request.LayoutDigest == "" ||
+		!strings.Contains(got, "reset the CPU's data: no. The data layout is unchanged since deploy") ||
+		!strings.Contains(got, "data layout: unchanged since deploy") ||
+		!strings.Contains(got, "stop the CPU: no. If TIA asks, the download is cancelled there and loads nothing: a GATE MISS") ||
+		!strings.Contains(got, "CPU mode: not read") {
+		t.Fatalf("an unchanged layout: exit %d:\n%s", code, got)
+	}
+	// A program variable more: its FB and instance DB change.
+	if err := os.WriteFile(filepath.Join(r.dir, "main.st"), []byte(strings.Replace(siemensDeployProgram, "n : DINT;", "n : DINT; m : INT;", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, code = r.run("", false, "--download", "--yes")
+	if code != 1 || len(r.fake.Downloads()) != r.base+2 || !strings.Contains(got, "CHANGED naut_main [FB]") ||
+		!strings.Contains(got, "data blocks whose values may be lost (reset, or removed by the load): naut_main_DB") {
+		t.Fatalf("a layout change without --reset-data: exit %d:\n%s", code, got)
 	}
 
-	for _, args := range [][]string{{"--download", "--yes", "--allow-stop"}, {"--download", "--yes", "--dry-run"}} {
+	for _, args := range [][]string{{"--download", "--yes", "--reset-data", "--allow-stop"}, {"--download", "--yes", "--reset-data", "--dry-run"}} {
 		r = newDeployRig(t)
 		r.adopt()
 		r.oldResetData = true
 		got, code = r.run("", false, args...)
 		// A dry run stops where the agent refused: never on to the download.
-		if code != 1 || !strings.Contains(got, "it does not know resetData, the consent every download needs, #1341): reinstall tiad") || len(r.downloads()) != 0 ||
+		if code != 1 || !strings.Contains(got, "it does not know resetData, the consent to a reset of the CPU's data, #1341): reinstall tiad") || len(r.downloads()) != 0 ||
 			(slices.Contains(args, "--dry-run") && strings.Contains(got, "downloading to")) {
 			t.Fatalf("an agent before #1341 %v: exit %d:\n%s", args, code, got)
 		}
+	}
+	r = newDeployRig(t)
+	r.adopt()
+	r.oldLayout = true
+	got, code = r.run("", false, "--download", "--yes", "--reset-data")
+	if code != 1 || !strings.Contains(got, "it has no data layout check") || !strings.Contains(got, "reinstall tiad") || len(r.downloads()) != 0 {
+		t.Fatalf("an agent without the layout check: exit %d:\n%s", code, got)
 	}
 }
 

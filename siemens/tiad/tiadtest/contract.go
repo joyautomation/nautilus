@@ -82,6 +82,9 @@ type Target interface {
 	// customer's, whether the agent's reading before an import misses
 	// them, whether a compile moves their dates.
 	SetTypes(t testing.TB, ts TypesScript)
+	// SetLayout scripts the fake TIA's layout export (LayoutScript): the
+	// objects it cannot export, and those a customer edited in TIA.
+	SetLayout(t testing.TB, ls LayoutScript)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -89,6 +92,9 @@ type Loaded struct {
 	Address            string
 	Hardware, Software bool
 	State              string
+	// EveryBlock: the load took the whole program, not only what changed
+	// (#1341).
+	EveryBlock bool
 }
 
 // Config is the agent-side configuration a Target starts with: what the
@@ -155,6 +161,7 @@ func (g goFake) SetImportReplacesForeign(_ testing.TB, on bool) {
 }
 func (g goFake) SetOBImportIgnoresClass(_ testing.TB, on bool) { g.f.SetOBImportIgnoresClass(on) }
 func (g goFake) SetTypes(_ testing.TB, ts TypesScript)         { g.f.SetTypes(ts) }
+func (g goFake) SetLayout(_ testing.TB, ls LayoutScript)       { g.f.SetLayout(ls) }
 func (g goFake) LoadOutside(_ testing.TB, address, file string) {
 	if file == "" {
 		g.f.LoadOutside(address)
@@ -169,7 +176,7 @@ func (g goFake) SetDeployAddress(_ testing.TB, id, address string) {
 func (g goFake) Loaded(testing.TB) []Loaded {
 	var out []Loaded
 	for _, d := range g.f.Downloads() {
-		out = append(out, Loaded{Address: d.Request.Address, Hardware: d.Request.Hardware, Software: d.Request.Software, State: d.State})
+		out = append(out, Loaded{Address: d.Request.Address, Hardware: d.Request.Hardware, Software: d.Request.Software, State: d.State, EveryBlock: d.EveryBlock})
 	}
 	return out
 }
@@ -191,6 +198,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("Fingerprint", func(t *testing.T) { contractFingerprint(t, start) })
 	t.Run("Deploys", func(t *testing.T) { contractDeploys(t, start) })
 	t.Run("Verify", func(t *testing.T) { contractVerify(t, start) })
+	t.Run("LayoutGate", func(t *testing.T) { contractLayoutGate(t, start) })
 	t.Run("Adopt", func(t *testing.T) { contractAdopt(t, start) })
 	t.Run("Show", func(t *testing.T) { contractShow(t, start) })
 	t.Run("Online", func(t *testing.T) { contractOnline(t, start) })

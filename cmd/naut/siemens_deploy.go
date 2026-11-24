@@ -31,6 +31,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/siemens/station"
 	"github.com/joyautomation/nautilus/siemens/tiad"
+	"github.com/joyautomation/nautilus/siemens/webapi"
 	swriter "github.com/joyautomation/nautilus/siemens/writer"
 )
 
@@ -75,16 +76,16 @@ Answers are never implied: each acting one has its own flag.
   --allow-stop        TIA may stop the CPU to load (without it, a load that
                       needs STOP is cancelled, and loads nothing; a CPU
                       already in STOP is loaded without that question)
-  --reset-data        every --download needs it: you accept what a load
-                      in STOP does: the CPU stops and every data block of
-                      the program returns to its start values, retained
-                      ones included; TIA does not ask. A CPU already in
-                      STOP loads the same way, and today every deploy
-                      loads in STOP (#1341)
-  --reinit DB,...     the DBs TIA may reinitialize (their values go back to
-                      start values, retained ones too). Without the DB it
-                      asks for, the download is cancelled there: after a
-                      stop that ends in doubt, the CPU possibly in STOP
+  --reset-data        you accept that the load may return data blocks to
+                      their start values, retained ones included. The
+                      data layout check decides whether a download needs
+                      it (#1341): any block or data type whose layout
+                      changed since the deploy the CPU verifiably holds,
+                      or no such deploy, or a hardware load; the plan
+                      names the data blocks. Without it, only what changed
+                      loads and the CPU keeps its data, and TIA asking to
+                      stop the CPU or reinitialize anyway is a gate miss
+                      that cancels the download
   --start, --no-start one of them, always: whether TIA starts the CPU after
                       the load (--start starts one that was in STOP before
                       too)
@@ -170,11 +171,10 @@ type siemensDeployOptions struct {
 	download, yes, dryRun bool
 	verbose               bool // -v: list the sites behind a summary warning
 	allowStop             bool
-	resetData             bool            // --reset-data: the consent to what a load in STOP does to the data (#1341); every --download needs it
+	resetData             bool            // --reset-data: the consent to a load that may return data blocks to their start values (#1341); the layout check says when a download needs it
 	args                  []string        // the command line's arguments, for a refusal's rerun line
 	valueFlags            map[string]bool // the flags that take a value (the rerun line keeps it with its flag)
 	start, noStart        bool
-	reinit                []string
 	hardware              bool
 	attest, cpuAccess     string
 	turnOnAccess          bool // --turn-on-access-control: accessControlTurnOn on the apply
@@ -193,6 +193,9 @@ type siemensDeployOptions struct {
 	timeout               time.Duration
 	agentFlag             string
 	inDoubt               func() // called when the deploy goes in doubt; may be nil
+	// readMode reads the CPU's operating mode over its Web API for the
+	// plan (informational only); nil reads it with siemens/webapi.
+	readMode func(ctx context.Context, host, user, password, pin string) (string, error)
 }
 
 func runSiemensDeploy(args []string) int {
@@ -222,10 +225,9 @@ func parseSiemensDeployFlags(o *siemensDeployOptions, args []string, stderr io.W
 	fs.BoolVar(&o.verbose, "v", false, "list every site behind a summary warning")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "after the confirmation, ask TIA's first pre-download check (it reaches the CPU)")
 	fs.BoolVar(&o.allowStop, "allow-stop", false, "TIA may stop the CPU")
-	fs.BoolVar(&o.resetData, "reset-data", false, "with --download: you accept that "+tiad.ResetDataSentence+" ("+tiad.ResetDataInStop+")")
+	fs.BoolVar(&o.resetData, "reset-data", false, "with --download: you accept that "+tiad.ResetDataSentence+" (the data layout check says when a download needs it)")
 	fs.BoolVar(&o.start, "start", false, "start the CPU after the load")
 	fs.BoolVar(&o.noStart, "no-start", false, "leave the CPU in STOP after the load")
-	reinit := fs.String("reinit", "", "DBs TIA may reinitialize, comma-separated")
 	fs.BoolVar(&o.hardware, "hardware", false, "load the hardware configuration too")
 	fs.StringVar(&o.attest, "attest-hardware", "", "your statement that the CPU's hardware configuration is what you intend to load")
 	fs.StringVar(&o.cpuAccess, "cpu-access-control", "", "the CPU's access control now, as you observed it: disabled or enabled")
@@ -253,11 +255,6 @@ func parseSiemensDeployFlags(o *siemensDeployOptions, args []string, stderr io.W
 	o.dir = "."
 	if fs.NArg() == 1 {
 		o.dir = fs.Arg(0)
-	}
-	for _, db := range strings.Split(*reinit, ",") {
-		if db = strings.TrimSpace(db); db != "" {
-			o.reinit = append(o.reinit, db)
-		}
 	}
 	return nil
 }
@@ -302,11 +299,11 @@ func (o siemensDeployOptions) flagsError() error {
 	if _, err := o.device.attestation(o.by); err != nil {
 		return err
 	}
-	acting := o.yes || o.dryRun || o.allowStop || o.resetData || o.start || o.noStart || len(o.reinit) > 0 || o.hardware || o.attest != "" ||
+	acting := o.yes || o.dryRun || o.allowStop || o.resetData || o.start || o.noStart || o.hardware || o.attest != "" ||
 		o.cpuAccess != "" || o.trustCertificate != "" || o.acceptOutside
 	switch {
 	case !o.download && acting:
-		return errors.New("--yes, --dry-run, --allow-stop, --reset-data, --start, --no-start, --reinit, --hardware, --attest-hardware, --cpu-access-control, --trust-certificate and --accept-outside-changes go with --download")
+		return errors.New("--yes, --dry-run, --allow-stop, --reset-data, --start, --no-start, --hardware, --attest-hardware, --cpu-access-control, --trust-certificate and --accept-outside-changes go with --download")
 	case o.download && o.start == o.noStart:
 		return errors.New("--download needs --start or --no-start: whether TIA starts the CPU after the load (also one that was in STOP before) is never implied")
 	case !o.hardware && (o.attest != "" || o.cpuAccess != ""):
@@ -327,11 +324,11 @@ func (o siemensDeployOptions) flagsError() error {
 		return fmt.Errorf("--adopt %q: want a project archive (.zap21), last-deploy or upload", o.adopt)
 	case o.trustUnverified && o.adopt != adoptUpload:
 		return errors.New("--trust-unverified-certificate goes with --adopt upload: no other step of a deploy trusts a certificate blindly")
-	case o.download && !o.resetData:
-		// #1341: a load in STOP resets every DB, retained ones included,
-		// and a CPU already in STOP is loaded with no stop question, so
-		// every download needs the consent until a load keeps the data.
-		return fmt.Errorf("--download needs --reset-data: %s, and %s (#1341). To accept that, run (POSIX shell; it still asks you to confirm the plan):\n  %s", tiad.ResetDataSentence, tiad.ResetDataInStop, o.rerunWithResetData())
+	case o.allowStop && !o.resetData:
+		// #1341: a load that stops the CPU resets every data block whose
+		// layout changed, and without the consent the agent treats TIA's
+		// stop as a gate miss.
+		return fmt.Errorf("--allow-stop needs --reset-data: %s (#1341). Without --reset-data a load keeps the CPU's data and never stops it", tiad.ResetDataSentence)
 	}
 	return nil
 }
@@ -341,6 +338,18 @@ func (o siemensDeployOptions) flagsError() error {
 // confirmation), each argument quoted for a POSIX shell where it needs
 // it.
 func (o siemensDeployOptions) rerunWithResetData() string {
+	return o.rerunWith("--reset-data")
+}
+
+// rerunWith is the deploy's command line with add after --download
+// (each flag the line does not hold yet) and without --yes.
+func (o siemensDeployOptions) rerunWith(add ...string) string {
+	var missing []string
+	for _, f := range add {
+		if !slices.ContainsFunc(o.args, func(a string) bool { return a == f || strings.HasPrefix(a, f+"=") }) {
+			missing = append(missing, f)
+		}
+	}
 	parts := []string{"naut", "siemens", "deploy"}
 	added, value, flags := false, false, true
 	for _, a := range o.args {
@@ -358,7 +367,7 @@ func (o siemensDeployOptions) rerunWithResetData() string {
 			value = o.valueFlags[name] && !hasValue
 			parts = append(parts, shellQuote(a))
 			if !added && name == "download" {
-				parts = append(parts, "--reset-data")
+				parts = append(parts, missing...)
 				added = true
 			}
 			continue
@@ -368,7 +377,7 @@ func (o siemensDeployOptions) rerunWithResetData() string {
 		parts = append(parts, shellQuote(a))
 	}
 	if !added {
-		parts = append(parts, "--reset-data")
+		parts = append(parts, missing...)
 	}
 	return strings.Join(parts, " ")
 }
@@ -388,7 +397,15 @@ func oldResetDataAgent(err error) bool {
 	return tiad.Kind(err) == tiad.KindBadRequest && strings.Contains(err.Error(), "unknown field") && strings.Contains(err.Error(), `resetData"`)
 }
 
-const oldResetDataMessage = "the agent is older than this naut (it does not know resetData, the consent every download needs, #1341): reinstall tiad from this nautilus version"
+const oldResetDataMessage = "the agent is older than this naut (it does not know resetData, the consent to a reset of the CPU's data, #1341): reinstall tiad from this nautilus version"
+
+// oldLayoutAgent is an agent older than the data layout gate (#1341): it
+// has no layout route.
+func oldLayoutAgent(err error) bool {
+	return tiad.Kind(err) == tiad.KindNotFound && strings.Contains(err.Error(), "/layout")
+}
+
+const oldLayoutMessage = "the agent is older than this naut (it has no data layout check, which says whether a download keeps the CPU's data, #1341): reinstall tiad from this nautilus version; nothing was loaded"
 
 // The --adopt sources besides a project archive.
 const (
@@ -576,6 +593,12 @@ type siemensDeployer struct {
 	adoptedEqual bool
 	// group is the block group nautilus imports into.
 	group string
+	// layout is the agent's data layout check of the compiled project
+	// (#1341): what the download does to the CPU's data.
+	layout tiad.Layout
+	// cpuMode is the plan's line on the CPU's operating mode, read over
+	// its Web API (informational: the layout gate never reads it).
+	cpuMode string
 }
 
 // siemensStationRecord is where a successful deploy leaves the station
@@ -938,19 +961,24 @@ func (d *siemensDeployer) decisions(st tiad.Station, kept []tiad.KeptDevice) (ti
 		plan = append(plan, "stop the CPU if TIA needs to: yes (--allow-stop)")
 	} else {
 		dec.StopCPU = tiad.No()
-		plan = append(plan, "stop the CPU: no. If TIA asks, the download is cancelled there and loads nothing (pass --allow-stop to let it stop the CPU); a CPU already in STOP is loaded without that question")
+		if o.resetData {
+			plan = append(plan, "stop the CPU: no. If TIA asks, the download is cancelled there and loads nothing (pass --allow-stop to let it stop the CPU); a CPU already in STOP is loaded without that question")
+		} else {
+			plan = append(plan, "stop the CPU: no. If TIA asks, the download is cancelled there and loads nothing: a GATE MISS (the layout check found nothing that needs a stop); a CPU already in STOP is loaded without that question")
+		}
 	}
-	// The consent the agent needs for every download (#1341); flagsError
-	// refused a download without --reset-data.
+	// The consent to a reset of the CPU's data (#1341): the layout check
+	// says whether this download needs it; the deploy refused one that
+	// does without --reset-data before the plan.
 	if o.resetData {
 		dec.ResetData = tiad.Yes()
-		plan = append(plan, "reset the CPU's data: yes (--reset-data). "+strings.ToUpper(tiad.ResetDataSentence[:1])+tiad.ResetDataSentence[1:]+", and "+tiad.ResetDataInStop+" (#1341)")
-	}
-	if len(o.reinit) > 0 {
-		dec.Reinitialize = slices.Clone(o.reinit)
-		plan = append(plan, "reinitialize, if TIA asks: "+strings.Join(o.reinit, ", ")+" (values go back to start values, retained ones too). TIA asking for any other DB cancels the download there, IN DOUBT after a stop")
+		if o.allowStop {
+			plan = append(plan, "reset the CPU's data: yes (--reset-data): "+resetDataPlan(d.layout, o.hardware)+"; TIA's reinitialize check, which stops the CPU, is answered yes (--allow-stop)")
+		} else {
+			plan = append(plan, "reset the CPU's data: yes (--reset-data): "+resetDataPlan(d.layout, o.hardware)+"; TIA's reinitialize check stops the CPU, so without --allow-stop it is not answered: with the CPU in RUN the download is cancelled there and loads nothing, and with the CPU in STOP TIA asks nothing and resets those data blocks")
+		}
 	} else {
-		plan = append(plan, "reinitialize a DB: no. If TIA asks, the download is cancelled there: before the CPU was stopped that loads nothing, but after a stop it ends IN DOUBT with the CPU possibly left in STOP (pass --reinit <DB,...> naming each DB you accept to reset)")
+		plan = append(plan, "reset the CPU's data: no. "+layoutKeepsPlan(d.layout))
 	}
 	if o.start {
 		dec.StartAfter = tiad.Yes()
@@ -1002,6 +1030,76 @@ func keptDeviceNames(kept []tiad.KeptDevice) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// resetDataPlan says what --reset-data lets this download do to the
+// CPU's data, from the layout check.
+func resetDataPlan(l tiad.Layout, hardware bool) string {
+	switch {
+	case l.AllDataBlocks && l.Baseline == "":
+		return "there is no layout baseline (" + l.NoBaseline + "), so the whole program loads and every data block returns to its start values, retained ones included"
+	case l.AllDataBlocks && hardware:
+		return "the hardware configuration loads too, and what that does to the data is not measured: every data block may return to its start values, retained ones included"
+	case l.AllDataBlocks:
+		return "tiad cannot read the layout of an object that changed or is new (UNREADABLE above: a software unit, a technology object, an export that failed), so any data block may return to its start values, retained ones included"
+	case len(l.Changes) == 0:
+		return "the data layout is unchanged since deploy " + l.Baseline + ", so no data block should be reset"
+	case len(l.DataBlocks) == 0:
+		// Only changes that reach no data block land here: a function's or
+		// an OB's interface, an FB with no instance, a new block, a
+		// constant no data block uses.
+		return "the data layout changed since deploy " + l.Baseline + ", in no data block's layout and in nothing a data block uses"
+	}
+	return "these data blocks may lose their values (back to start values, retained ones included, or removed): " + strings.Join(l.DataBlocks, ", ") + " (the layout changed since deploy " + l.Baseline + "; with the CPU in STOP TIA resets them without asking)"
+}
+
+// layoutKeepsPlan is the plan's line for a download without the consent,
+// which the layout check let.
+func layoutKeepsPlan(l tiad.Layout) string {
+	return "The data layout is unchanged since deploy " + l.Baseline + ", which the CPU compared equal to: only what changed loads, and the CPU keeps its data, retained or not. If TIA asks to stop the CPU, reinitialize data blocks or load every block anyway, that is a GATE MISS: the download is cancelled there"
+}
+
+// layoutRefusal is the deploy's refusal of a download the layout check
+// says needs --reset-data, naming why and the data blocks.
+func (d *siemensDeployer) layoutRefusal(l tiad.Layout) string {
+	var b strings.Builder
+	b.WriteString("this download needs --reset-data: " + l.Why + ".")
+	for _, line := range layoutLines(l) {
+		b.WriteString("\n  " + line)
+	}
+	b.WriteString("\nNothing was loaded. To accept the reset, and the stop TIA needs to reinitialize a CPU in RUN, run (POSIX shell; it still asks you to confirm the plan):\n  " + d.o.rerunWith("--reset-data", "--allow-stop"))
+	return b.String()
+}
+
+// layoutLines are the data layout check in words, for the plan and the
+// refusal: the changes (the first 20) and the data blocks they reach.
+func layoutLines(l tiad.Layout) []string {
+	var out []string
+	if l.Baseline == "" {
+		out = append(out, "data layout: no baseline ("+l.NoBaseline+")")
+	} else if len(l.Changes) == 0 {
+		out = append(out, "data layout: unchanged since deploy "+l.Baseline+" (the CPU compared equal to it)")
+	} else {
+		out = append(out, fmt.Sprintf("data layout: %d change(s) since deploy %s (the CPU compared equal to it):", len(l.Changes), l.Baseline))
+		for i, c := range l.Changes {
+			if i == 20 {
+				out = append(out, fmt.Sprintf("  ... and %d more", len(l.Changes)-20))
+				break
+			}
+			out = append(out, fmt.Sprintf("  %s %s [%s]", strings.ToUpper(c.Change), c.Name, c.Type))
+		}
+	}
+	switch {
+	case l.AllDataBlocks && len(l.DataBlocks) > 0:
+		out = append(out, "data blocks whose values may be lost: every one ("+strings.Join(l.DataBlocks, ", ")+")")
+	case l.AllDataBlocks:
+		out = append(out, "data blocks whose values may be lost: every one")
+	case len(l.DataBlocks) > 0:
+		out = append(out, "data blocks whose values may be lost (reset, or removed by the load): "+strings.Join(l.DataBlocks, ", "))
+	case len(l.Changes) > 0:
+		out = append(out, "data blocks whose values may be lost: none (no data block holds or is a changed object)")
+	}
+	return out
 }
 
 // describeOB says an OB step in words.
@@ -1381,7 +1479,65 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 		}
 		return 0
 	}
+	// 6b. The data layout check (#1341): whether the download keeps the
+	// CPU's data, before the plan; nothing reaches the CPU.
+	l, err := s.Layout(ctx, st.CPU.Address, o.hardware)
+	if err != nil {
+		if oldLayoutAgent(err) {
+			d.fail("%s", oldLayoutMessage)
+			return 1
+		}
+		return d.tiadErr("data layout check", err)
+	}
+	d.layout = l
+	if l.ResetDataNeeded && !o.resetData {
+		d.fail("%s", d.layoutRefusal(l))
+		return 1
+	}
+	d.cpuMode = d.readCPUMode(ctx, tgt, st.CPU.Address)
 	return d.download(ctx, s, st, sec, kept, sw, last)
+}
+
+// readCPUMode is the plan's line on the CPU's operating mode, read over
+// its Web API with target.siemens.online's user and pin and
+// NAUTILUS_SIEMENS_PASSWORD: informational, the gate never reads it.
+func (d *siemensDeployer) readCPUMode(ctx context.Context, tgt *project.SiemensTarget, address string) string {
+	o := d.o
+	var user, pin string
+	if tgt.Online != nil {
+		user, pin = tgt.Online.User, tgt.Online.CertSHA256
+	}
+	password, _ := siemensSecret(o.getenv, "NAUTILUS_SIEMENS_PASSWORD")
+	if user == "" || pin == "" || password == "" {
+		return "CPU mode: not read (target.siemens.online's user and cert-sha256 and NAUTILUS_SIEMENS_PASSWORD let the plan read it over the Web API)"
+	}
+	read := o.readMode
+	if read == nil {
+		read = readCPUModeWebAPI
+	}
+	rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	m, err := read(rctx, address, user, password, pin)
+	switch {
+	case err != nil:
+		return "CPU mode: not read (" + err.Error() + ")"
+	case strings.EqualFold(m, "stop") && o.start:
+		return "CPU mode: STOP (Web API). --start starts it after the load: its non-retained values start fresh, as at any start"
+	case strings.EqualFold(m, "stop"):
+		return "CPU mode: STOP (Web API). The CPU is in STOP and stays in STOP (--no-start); --start would start it, and its non-retained values would then start fresh"
+	}
+	return "CPU mode: " + strings.ToUpper(m) + " (Web API)"
+}
+
+func readCPUModeWebAPI(ctx context.Context, host, user, password, pin string) (string, error) {
+	c, err := webapi.New(host, webapi.Options{User: user, Password: password, CertSHA256: pin, Timeout: 10 * time.Second})
+	if err != nil {
+		return "", err
+	}
+	if err := c.Login(ctx); err != nil {
+		return "", err
+	}
+	return c.OperatingMode(ctx)
 }
 
 // notLoadedKinds are the agent's refusals that come before anything
@@ -1408,7 +1564,8 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 	o := d.o
 	address := st.CPU.Address
 	dec, plan := d.decisions(st, kept)
-	req := tiad.DownloadRequest{Address: address, Hardware: o.hardware, Software: true, Decisions: dec, Announced: true, DeviceAttestation: o.deviceAttestation()}
+	req := tiad.DownloadRequest{Address: address, Hardware: o.hardware, Software: true, Decisions: dec, Announced: true, DeviceAttestation: o.deviceAttestation(),
+		LayoutDigest: d.layout.Digest}
 	if sec.Protection != "" || sec.ConfigurationPassword != "" {
 		req.Secrets = &tiad.Secrets{Protection: sec.Protection, ConfigurationPassword: sec.ConfigurationPassword, FullAccessPassword: sec.FullAccessPassword}
 	} else if sec.FullAccessPassword != "" {
@@ -1482,14 +1639,8 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 					return 1
 				}
 			case tiad.QuestionReinitialize:
-				var missing []string
-				for _, db := range q.Objects {
-					if !slices.ContainsFunc(o.reinit, func(r string) bool { return strings.EqualFold(r, db) }) {
-						missing = append(missing, db)
-					}
-				}
-				if len(missing) > 0 {
-					d.fail("the dry run says TIA reinitializes %s (values back to start values, retained ones too): pass --reinit %s to let it; nothing was loaded", strings.Join(missing, ", "), strings.Join(q.Objects, ","))
+				if !o.resetData {
+					d.fail("the dry run says TIA reinitializes data blocks (values back to start values, retained ones too) although the layout check found nothing changed: a GATE MISS (#1341); nothing was loaded")
 					return 1
 				}
 			}
@@ -1674,6 +1825,12 @@ func (d *siemensDeployer) printPlan(address string, last lastDeploy, sw tiad.Sof
 	}
 	if a := d.o.deviceAttestation(); a != nil {
 		d.say("  device: you attest order %q, firmware %q, read off the CPU by %s; the agent uses it only for a pinned CPU it cannot identify online, and refuses any difference from the pin", a.Order, a.Firmware, a.By)
+	}
+	for _, line := range layoutLines(d.layout) {
+		d.say("  %s", line)
+	}
+	if d.cpuMode != "" {
+		d.say("  %s", d.cpuMode)
 	}
 	d.say("  announced: you have told everyone who shares this CPU (the download records announced: true)")
 	d.say("  the download answers:")

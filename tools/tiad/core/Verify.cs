@@ -300,6 +300,10 @@ namespace Tiad
                 changed = !equal && (o["latest"] as string) == id;
             }
             o["changedOutside"] = changed;
+            // The data layout gate's proof (#1341): the CPU holds its newest
+            // load, as this record's archive, so its recorded layout is the
+            // next download's baseline (LayoutCalls).
+            if (equal && (o["latest"] as string) == id && (int)o["unreadableLines"] == 0) MarkVerified(address, id);
             if (readFp)
             {
                 FingerprintRun fp = null;

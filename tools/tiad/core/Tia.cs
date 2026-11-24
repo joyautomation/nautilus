@@ -287,6 +287,12 @@ namespace Tiad
         // only.
         List<ProjectBlock> Types(object project);
 
+        // Layout is every program block and PLC data type the project
+        // holds, in every group, each read from its XML export
+        // (LayoutRule.FromExport); one that does not export is unreadable,
+        // never left out. It reads only (#1341).
+        List<LayoutObject> Layout(object project);
+
         // ImportBlock imports one block's SimaticML (CyclicObs.Xml) into
         // group, making the group when it is not there.
         void ImportBlock(object project, string group, string xml);
@@ -336,7 +342,13 @@ namespace Tiad
         // it whether the download logged on before TIA asks its
         // user-management check (UserManagementRule.Gate.At), and whether
         // a compare logged on (InstanceLogons).
-        DownloadOutcome Download(object project, string address, bool hardware, bool software,
+        //
+        // everyBlock loads the whole PLC program (DownloadOptions.Software),
+        // which stops the CPU and returns every data block to its start
+        // values; otherwise only what changed loads
+        // (DownloadOptions.SoftwareOnlyChanges), which keeps the CPU's data
+        // where no data block's layout changed (#1341, bench 1510SP).
+        DownloadOutcome Download(object project, string address, bool hardware, bool software, bool everyBlock,
             Secrets secrets, bool? startAfter, Func<Question, Answer> answer, LoginUse use);
 
         // Compare compares the project's PLC software with the CPU at

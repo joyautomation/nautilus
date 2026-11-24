@@ -255,9 +255,13 @@ type Deploy struct {
 	// AccessTurnOn: the download loaded a project an apply turned access
 	// control on in (accessControlTurnOn); an adopt of its archive is
 	// marked turn-on pending unless Status is loaded.
-	AccessTurnOn bool           `json:"accessTurnOn,omitempty"`
-	Outcome      *DeployOutcome `json:"outcome"`
-	Status       string         `json:"status"`
+	AccessTurnOn bool `json:"accessTurnOn,omitempty"`
+	// Layout is the data layout the download loaded (#1341): the next
+	// download's baseline once a verify finds the CPU equal to this
+	// deploy. Records made before the layout gate have none.
+	Layout  *DeployLayout  `json:"layout,omitempty"`
+	Outcome *DeployOutcome `json:"outcome"`
+	Status  string         `json:"status"`
 }
 
 // DeployList is GET /v1/deploys: the records, newest first, and how many
