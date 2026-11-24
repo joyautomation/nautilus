@@ -138,13 +138,19 @@ It reaches the CPU, so tell everyone who shares it first. In order:
 
 1. The CPU is compared with its last deploy record. A CPU that was changed
    outside nautilus is refused unless you pass `--accept-outside-changes`.
-2. The plan is printed: the verdict, the station changes, whether
+2. The data layout check (below) says whether the download keeps the
+   CPU's data. When it may reset data blocks and you did not pass
+   `--reset-data`, the deploy stops here, naming why and the data blocks,
+   and prints the command to rerun.
+3. The plan is printed: the verdict, the station changes, whether
    hardware is loaded, what happens to each OB, the program blocks
    outside nautilus's group that the download loads too (a customer's,
-   `Main` at the root), and every answer the download will give TIA, in
-   words.
-3. You type `yes`, or pass `--yes`, which answers exactly what was printed.
-4. The download runs. It counts as done only when an online compare right
+   `Main` at the root), the data layout check, the CPU's mode when the
+   project names a web user (`target.siemens.online`) and
+   `NAUTILUS_SIEMENS_PASSWORD` is set, and every answer the download will
+   give TIA, in words.
+4. You type `yes`, or pass `--yes`, which answers exactly what was printed.
+5. The download runs. It counts as done only when an online compare right
    after it is equal. The deploy record is printed and the TIA project is
    saved for the next deploy.
 
@@ -152,9 +158,8 @@ Answers are never implied. Each acting answer has its own flag:
 
 | Flag | Answer |
 |---|---|
-| `--reset-data` | required with every `--download`. You accept what a load in STOP does: **the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask.** A CPU already in STOP loads the same way, with no stop question, and today every deploy loads in STOP, so every deploy resets the CPU's data (#1341, measured on an S7-1500 with TIA V21). Without it the deploy is refused and prints the command to rerun |
-| `--allow-stop` | TIA may stop the CPU to load. Without it, a load that needs STOP is cancelled and loads nothing; a CPU already in STOP is loaded without that question |
-| `--reinit DB,...` | the DBs TIA may reinitialize if it asks. Their values go back to start values, retained ones too. On the bench TIA has not asked: a load in STOP resets the DBs without the question (see `--allow-stop`) |
+| `--reset-data` | you accept that **the load may return data blocks to their start values, retained ones included**. The data layout check says when a download needs it, and the plan names the data blocks. With `--allow-stop` too, TIA's reinitialize question, which stops the CPU, is answered yes |
+| `--allow-stop` | TIA may stop the CPU to load. Needs `--reset-data`. Without it, a load that needs STOP is cancelled and loads nothing; a CPU already in STOP is loaded without that question |
 | `--start` or `--no-start` | one of them is required: whether TIA starts the CPU after the load |
 | `--hardware` | load the hardware configuration too. Needs `--attest-hardware "<statement>"`; `--cpu-access-control disabled\|enabled` is your observation of the CPU's access control now |
 | `--turn-on-access-control` | turn on the access control of a CPU whose project has it off (below). With `--download`, needs `--hardware` and `--cpu-access-control disabled` |
@@ -210,6 +215,46 @@ loads only with `--hardware`: pass `--cpu-access-control disabled` if the
 CPU still asks no password, or `enabled` if the load went through.
 
 `--keep DIR` keeps the generated SCL sources.
+
+**Keeping the CPU's data.** A download loads only what changed. That
+keeps the values in the CPU's data blocks, retained or not, as long as no
+data block's layout changed. A layout is what TIA keeps of a block or a
+data type besides its code: its variables, their types and start values,
+its number, its retain settings. When a layout changed, TIA returns the
+data blocks it reaches to their start values. With the CPU in RUN it asks
+first. With the CPU already in STOP it does not ask (measured on an
+S7-1500 with TIA V21, #1341).
+
+So before every download tiad reads the layout of every block and data
+type in the PLC, a customer's too, and compares it with the layout it
+recorded when it loaded the deploy the CPU still holds. Step 1 proves the
+CPU holds that deploy. The plan says what it found:
+
+- `data layout: unchanged since deploy d-...`: the download needs no
+  `--reset-data`, and the CPU keeps its data. A change to code only, such
+  as a new statement, is this case.
+- `data layout: N change(s) since deploy d-...`, then each change
+  (`ADDED`, `CHANGED`, `REMOVED`, `UNREADABLE`) and `data blocks whose
+  values may be lost: ...`: the download needs `--reset-data`, and
+  `--allow-stop` when the CPU is in RUN, since TIA stops it to
+  reinitialize. A new variable in a
+  program, a new tag, a new member in a data type, a changed start value
+  and a block added or removed are all such changes. A data type's change
+  names every data block that holds it.
+- `data layout: no baseline (...)`: the download needs `--reset-data`,
+  and the whole program loads, so every data block returns to its start
+  values. This is the case for the first nautilus download to a CPU, the
+  first after `--adopt`, for a CPU changed outside nautilus, after a TIA
+  upgrade, and for any deploy recorded before this check existed.
+
+A hardware load (`--hardware`) always needs `--reset-data`. So does every
+download to a PLC that holds a technology object or a software unit: tiad
+does not read their layout yet, so it cannot say they are unchanged.
+
+`--reset-data` without `--allow-stop` lets TIA reset the named data blocks
+only when the CPU is already in STOP. With the CPU in RUN, TIA stops it to
+reinitialize them, so the download is cancelled there and loads nothing.
+Pass `--allow-stop` only when a stop is acceptable, not by habit.
 
 ### naut siemens verify
 
@@ -361,3 +406,45 @@ Only the out-of-range case differs. The rounding matches: a REAL converts
 to an integer half to even, and TRUNC goes toward zero, both as TIA's
 documentation describes. This comes from the documentation and has not
 been measured on a CPU yet.
+
+## When a deploy stops
+
+**`this download needs --reset-data`.** The data layout check found a
+change that may reset data blocks, or no baseline to compare with. The
+message names the data blocks. If losing their values is acceptable, run
+the command it prints. If not, take the change out, or move the values
+somewhere safe first.
+
+**`no layout baseline`.** tiad has nothing it trusts to compare with. The
+reason follows in brackets:
+
+| Reason | What to do |
+|---|---|
+| no verify by this agent found the CPU equal to its last deploy | tiad was restarted since the deploy compared the CPU. Run the deploy again: it compares the CPU first |
+| the verify is more than an hour old | the plan waited too long. Run the deploy again |
+| the CPU's newest load is another deploy | a download ran since the compare, from another session or machine. Run the deploy again |
+| the CPU's newest load loaded another project | the first deploy after `--adopt` (the adopted project is a new copy), or another project loaded this CPU last. Deploy once with `--reset-data` |
+| recorded no data layout | the CPU's last deploy was made by an older tiad. Deploy once with `--reset-data` |
+| a TIA upgrade, or a change of the scheme | tiad reads layouts differently now, so no recorded layout counts. Deploy once with `--reset-data` |
+| lines the agent cannot read | the deploy record is damaged. Find out why before you deploy |
+
+**`GATE MISS`.** The check found no layout change, so the download went
+ahead without `--reset-data`, and then TIA asked to stop the CPU,
+reinitialize data blocks or load every block anyway. tiad never answers
+those without your consent: it cancels the download at that question.
+When TIA asks before it loads anything, which is how it has behaved so
+far, nothing was loaded and the CPU kept its data. This catch works only
+with the CPU in RUN: with the CPU in STOP, TIA asks nothing and resets the
+changed data blocks without a word, so there the layout check is the only
+protection. Then:
+
+1. Report it on #1341 with the deploy's output. The check missed a change
+   TIA sees, and that is a bug.
+2. If the reset is acceptable, deploy again with `--reset-data`.
+
+The agent's log has one line per miss, starting `audit layout-gate-miss`,
+with the question TIA asked and the deploy the check compared with. The
+line before each download, `audit layout-gate`, records what the check
+found. If the deploy says `OUTCOME UNKNOWN` instead, tiad had already
+answered another question yes, so TIA may have loaded: compare first
+(`naut siemens verify`), as the deploy says.

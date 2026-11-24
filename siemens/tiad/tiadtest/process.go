@@ -61,6 +61,8 @@ type Script struct {
 	OBImportIgnoresClass bool `json:"obImportIgnoresClass,omitempty"`
 	// Types is SetTypes.
 	Types *TypesScript `json:"types,omitempty"`
+	// LayoutScript is SetLayout (its fields are the script's own keys).
+	LayoutScript
 	// AskFirst is how many times the fake's TIA asks its first check
 	// (nil: once, as TIA does; 0 asks nothing at all and loads; 2 asks
 	// the same configuration twice).
@@ -349,6 +351,16 @@ func (p *Process) SetTypes(t testing.TB, ts TypesScript) {
 	p.SetScript(t, s)
 }
 
+// SetLayout scripts tiad-fake's layout export (Target.SetLayout).
+func (p *Process) SetLayout(t testing.TB, ls LayoutScript) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.LayoutScript = ls
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
 // SetImportReplacesForeign makes tiad-fake's TIA replace Main [OB1] on
 // every later import (Target.SetImportReplacesForeign).
 func (p *Process) SetImportReplacesForeign(t testing.TB, on bool) {
@@ -501,12 +513,13 @@ func (p *Process) Loaded(t testing.TB) []Loaded {
 			Address            string `json:"address"`
 			Hardware, Software bool
 			State              string `json:"state"`
+			EveryBlock         bool   `json:"everyBlock"`
 		} `json:"downloads"`
 	}
 	p.controlInto(t, http.MethodGet, "/fake/downloads", nil, &out)
 	var l []Loaded
 	for _, d := range out.Downloads {
-		l = append(l, Loaded{Address: d.Address, Hardware: d.Hardware, Software: d.Software, State: d.State})
+		l = append(l, Loaded{Address: d.Address, Hardware: d.Hardware, Software: d.Software, State: d.State, EveryBlock: d.EveryBlock})
 	}
 	return l
 }

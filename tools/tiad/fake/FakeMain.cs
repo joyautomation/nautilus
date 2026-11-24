@@ -26,7 +26,10 @@
 //   GET /fake/online  {"online": ["online <address>", "offline <address>", ...]}
 //
 // PUT /fake/script also takes "questions": [{id, message, detail,
-// objects}], TIA's pre-download checks for every download.
+// objects}], TIA's pre-download checks for every download;
+// "layoutUnreadable": [name], objects the layout export fails for; and
+// "layoutEdits": [name], objects whose layout changed outside any source
+// (a customer's edit): each listed name's hash moves while it is listed.
 //
 // It exits when its standard input closes, so a test that dies leaves no
 // process behind.
@@ -245,6 +248,8 @@ namespace Tiad.Fake
         Dictionary<string, int> delays = new Dictionary<string, int>(StringComparer.Ordinal);
         Dictionary<string, string> failures = new Dictionary<string, string>(StringComparer.Ordinal);
         List<Question> questions = new List<Question>();
+        List<string> layoutUnreadable = new List<string>();
+        List<string> layoutEdits = new List<string>();
         bool loadDespiteCancel;
         bool onlineGoesOn;
         // keepsLogon makes the fake's TIA keep a logon for its instance's
@@ -564,6 +569,25 @@ namespace Tiad.Fake
                 {
                     return compareTree;
                 }
+            }
+        }
+
+        // LayoutUnreadable is whether the layout export fails for name;
+        // LayoutEdit is the salt a scripted edit adds to name's layout
+        // ("" for none).
+        public bool LayoutUnreadable(string name)
+        {
+            lock (mu)
+            {
+                return layoutUnreadable.Exists(delegate(string n) { return string.Equals(n, name, StringComparison.OrdinalIgnoreCase); });
+            }
+        }
+
+        public string LayoutEdit(string name)
+        {
+            lock (mu)
+            {
+                return layoutEdits.Exists(delegate(string n) { return string.Equals(n, name, StringComparison.OrdinalIgnoreCase); }) ? "edited" : "";
             }
         }
 
@@ -912,6 +936,8 @@ namespace Tiad.Fake
             bool seamTrust = r.Bool("seamTrustBeforeDownload");
             bool seamReserve = r.Bool("seamReserveBeforeRetire");
             bool clean = r.Bool("cleanCancel");
+            List<string> unreadable = r.Strs("layoutUnreadable");
+            List<string> edits = r.Strs("layoutEdits");
             bool differs = r.Bool("compareDiffers");
             string tree = r.Str("compareTree");
             if (tree != "" && tree != "empty" && tree != "emptyFolders" && tree != "folderDiffers" && tree != "irrelevantRoot" && tree != "dropBlock" && tree != "noBlocks")
@@ -964,6 +990,8 @@ namespace Tiad.Fake
                 delays = d;
                 failures = f;
                 questions = qs;
+                layoutUnreadable = unreadable;
+                layoutEdits = edits;
                 loadDespiteCancel = despite;
                 onlineGoesOn = goesOn;
                 keepsLogon = keeps;
@@ -1071,6 +1099,11 @@ namespace Tiad.Fake
         // check missed). Main is then an FB, still at the root.
         public Dictionary<string, string> GroupOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public bool MainReplaced;
+        // Decls is each imported block's declaration part: its source up
+        // to the first line that is BEGIN (the whole source without one).
+        // The fake's layout is made from it (FakeTia.Layout), as TIA's is
+        // from the interface a source declares: a body change leaves it.
+        public Dictionary<string, string> Decls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         // TypeModified is each data type's modified date once something
         // changed it (by name, any case; absent for one as made).
         public Dictionary<string, string> TypeModified = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1838,6 +1871,8 @@ namespace Tiad.Fake
                             throw new TiaException(src.Path + ": TIA generated data type \"" + ft.Name + "\" outside data types group \"" + group + "\", in " + (ft.Group == "" ? "the data types' root" : "\"" + ft.Group + "\"")) { OutsideGroup = true };
                         }
                     }
+                    string decl = Decl(File.ReadAllText(src.FullPath, Encoding.UTF8));
+                    foreach (var h in heads) p.Decls[h.Name] = decl;
                     foreach (var h in heads)
                     {
                         // A regenerated type of nautilus's: TIA moves its date.
@@ -1897,7 +1932,7 @@ namespace Tiad.Fake
             return res;
         }
 
-        public DownloadOutcome Download(object project, string address, bool hardware, bool software,
+        public DownloadOutcome Download(object project, string address, bool hardware, bool software, bool everyBlock,
             Secrets secrets, bool? startAfter, Func<Question, Answer> answer, LoginUse use)
         {
             script.Enter("Download");
@@ -2029,6 +2064,7 @@ namespace Tiad.Fake
                     rec["address"] = address;
                     rec["hardware"] = hardware;
                     rec["software"] = software;
+                    rec["everyBlock"] = everyBlock;
                     rec["state"] = state;
                     script.Loaded(rec);
                     loads[address] = Count(loads, address) + 1;
@@ -2264,6 +2300,83 @@ namespace Tiad.Fake
             p.Changed = true;
             p.GroupOf.Remove(name);
             p.ObInfo.Remove(name);
+        }
+
+        // Layout is the fake's data layout (#1341): each object's hash is
+        // made from its kind, name, type and declaration part, and the
+        // hashes of every project object its declaration names in quotes,
+        // however deep, as TIA's export writes a UDT's members out in each
+        // holder and an FB's statics in its instance DB. Main and the
+        // scripted customer types declare nothing.
+        public List<LayoutObject> Layout(object project)
+        {
+            script.Enter("Layout");
+            var p = (FakeProject)project;
+            var all = new List<LayoutObject>();
+            var decl = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var b in ProjectBlocks(p))
+            {
+                all.Add(new LayoutObject { Name = b.Name, Kind = "block", Type = b.Type });
+            }
+            foreach (var t in ProjectTypes(p, script))
+            {
+                all.Add(new LayoutObject { Name = t.Name, Kind = "type", Type = t.Type });
+            }
+            var byName = new Dictionary<string, LayoutObject>(StringComparer.OrdinalIgnoreCase);
+            foreach (var o in all)
+            {
+                string d;
+                p.Decls.TryGetValue(o.Name, out d);
+                decl[o.Name] = d ?? "";
+                byName[o.Name] = o;
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(d ?? "", "\"([^\"]+)\""))
+                {
+                    string r = m.Groups[1].Value;
+                    if (!string.Equals(r, o.Name, StringComparison.OrdinalIgnoreCase) && !o.Refs.Exists(delegate(string x) { return string.Equals(x, r, StringComparison.OrdinalIgnoreCase); })) o.Refs.Add(r);
+                }
+                o.Refs.Sort(StringComparer.OrdinalIgnoreCase);
+            }
+            var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var o in all)
+            {
+                o.Hash = FakeLayoutHash(o, decl, byName, hashes, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                if (script.LayoutUnreadable(o.Name))
+                {
+                    o.Hash = "";
+                    o.Unreadable = "TIA did not export it: know-how protected (fake)";
+                }
+            }
+            return all;
+        }
+
+        string FakeLayoutHash(LayoutObject o, Dictionary<string, string> decl, Dictionary<string, LayoutObject> byName, Dictionary<string, string> done, HashSet<string> visiting)
+        {
+            string h;
+            if (done.TryGetValue(o.Name, out h)) return h;
+            if (!visiting.Add(o.Name)) return "cycle";
+            var sb = new StringBuilder();
+            sb.Append(o.Kind).Append('|').Append(o.Name).Append('|').Append(o.Type).Append('|').Append(decl[o.Name]).Append('|').Append(script.LayoutEdit(o.Name));
+            foreach (string r in o.Refs)
+            {
+                LayoutObject x;
+                if (byName.TryGetValue(r, out x)) sb.Append('\n').Append(FakeLayoutHash(x, decl, byName, done, visiting));
+            }
+            h = LayoutRule.Sha256Hex(sb.ToString());
+            done[o.Name] = h;
+            return h;
+        }
+
+        // Decl is a source's declaration part: up to the first line that
+        // is BEGIN, the whole source without one, line ends as LF.
+        static string Decl(string src)
+        {
+            var sb = new StringBuilder();
+            foreach (string raw in src.Replace("\r\n", "\n").Split('\n'))
+            {
+                if (raw.Trim() == "BEGIN") break;
+                sb.Append(raw).Append('\n');
+            }
+            return sb.ToString();
         }
 
         public List<ProjectBlock> Blocks(object project)

@@ -88,7 +88,7 @@ func (s *session) snapshot() savedProject {
 	}
 	sp := savedProject{cpu: cpu, others: append([]tiad.KeptDevice(nil), s.others...), protection: s.protection, protectedWith: s.protectedWith,
 		accessControl: s.accessControl, access: s.access.clone(), webServer: s.webServer, webHTTPS: s.webHTTPS,
-		blocks: slices.Clone(s.blocks), groups: maps.Clone(s.groups), obInfo: maps.Clone(s.obInfo), node: s.node}
+		blocks: slices.Clone(s.blocks), groups: maps.Clone(s.groups), obInfo: maps.Clone(s.obInfo), decls: maps.Clone(s.decls), node: s.node}
 	if !s.changed {
 		sp.restored = s.restored
 	}

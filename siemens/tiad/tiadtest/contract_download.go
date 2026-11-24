@@ -67,10 +67,13 @@ var ResolveCases = []struct {
 	{"user-management keep no, reset no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{ResetData: tiad.Yes(), UserManagementKeepOnline: tiad.No(), UserManagementResetToProject: tiad.No()}, false, false, "", "user-management"},
 	{"start-after no is stay in STOP", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}, false, false, "", ""},
 	{"start-after unanswered", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{ResetData: tiad.Yes()}, false, false, "start-after", ""},
-	{"reinit all agreed, any case", []tiad.Question{qReinit}, tiad.Decisions{ResetData: tiad.Yes(), Reinitialize: []string{"tags", "PROG_DB"}}, false, false, "", ""},
-	{"reinit partly agreed", []tiad.Question{qReinit}, tiad.Decisions{ResetData: tiad.Yes(), Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
-	{"reinit unanswered", []tiad.Question{qReinit}, tiad.Decisions{ResetData: tiad.Yes()}, false, false, "reinitialize", ""},
-	{"reinit naming nothing is never answered", []tiad.Question{{ID: tiad.QuestionReinitialize}}, tiad.Decisions{ResetData: tiad.Yes(), Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
+	// TIA's reinitialize check names no data block (bench 1510SP,
+	// 2026-11-24): the consent to the reset answers it, whatever it
+	// names. Without the consent it is a gate miss (contractLayoutGate).
+	{"reinit with the consent and the stop", []tiad.Question{qReinit}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.Yes()}, false, false, "", ""},
+	{"reinit naming nothing, with the consent and the stop", []tiad.Question{{ID: tiad.QuestionReinitialize}}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.Yes()}, false, false, "", ""},
+	// Its yes is StopPlcAndReinitialize: never without the stop's consent.
+	{"reinit with the consent, no stop", []tiad.Question{qReinit}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No()}, false, false, "reinitialize", ""},
 	{"cert matches, any case", []tiad.Question{qCert}, tiad.Decisions{ResetData: tiad.Yes(), TrustCertificate: "ab12"}, false, false, "", ""},
 	{"cert differs", []tiad.Question{qCert}, tiad.Decisions{ResetData: tiad.Yes(), TrustCertificate: "FFFF"}, false, false, "", "certificate"},
 	{"cert unanswered", []tiad.Question{qCert}, tiad.Decisions{ResetData: tiad.Yes()}, false, false, "certificate", ""},
@@ -91,7 +94,7 @@ var ResolveCases = []struct {
 	// still clean.
 	{"start-after no first, then a refusal", []tiad.Question{{ID: tiad.QuestionStartAfter}, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}, false, false, "overwrite", ""},
 	{"all answered", []tiad.Question{qStop, qReinit, {ID: tiad.QuestionOverwrite}, {ID: tiad.QuestionStartAfter}, qCert, {ID: tiad.QuestionPassword}},
-		tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes(), Reinitialize: []string{"Tags", "Prog_DB"}, TrustCertificate: "AB12"}, true, false, "", ""},
+		tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes(), TrustCertificate: "AB12"}, true, false, "", ""},
 }
 
 var (
@@ -260,7 +263,8 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	if cmp, err := s.CompareWith(ctx, BenchCompare); err != nil || !cmp.Equal || len(cmp.Differences) != 0 {
 		t.Fatalf("compare after the download: %+v %v", cmp, err)
 	}
-	want := []Loaded{{Address: benchCPU, Hardware: true, Software: true, State: "RUN"}}
+	// A hardware load takes the whole program (#1341).
+	want := []Loaded{{Address: benchCPU, Hardware: true, Software: true, State: "RUN", EveryBlock: true}}
 	if l := a.Loaded(t); !reflect.DeepEqual(l, want) {
 		t.Fatalf("loaded %+v, want %+v", l, want)
 	}
@@ -329,20 +333,21 @@ func contractDownloadRules(t *testing.T, start Starter) {
 	// request answers; consent no is no consent.
 	for _, consent := range []*bool{nil, tiad.No()} {
 		noConsent := base
-		noConsent.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: consent, StartAfter: tiad.No(), Reinitialize: []string{"naut_Main_DB"}}
+		noConsent.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: consent, StartAfter: tiad.No()}
+		noConsent.LayoutDigest = "a digest does not stand in for the consent"
 		if _, err := s.Download(ctx, noConsent); tiad.Kind(err) != tiad.KindBadRequest ||
-			!strings.Contains(err.Error(), "decisions.stopCpu yes needs decisions.resetData yes: the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask (#1341); nothing was sent to the CPU") {
+			!strings.Contains(err.Error(), "decisions.stopCpu yes needs decisions.resetData yes: a load may return data blocks to their start values, retained ones included, and with the CPU in STOP TIA does so without asking (#1341); nothing was sent to the CPU") {
 			t.Fatalf("a stop without the reset-data consent (%v): %v", consent, err)
 		}
-		// A download that answers no stop needs it too: a CPU already in
-		// STOP loads in STOP with no stop question, and the agent reads no
-		// mode first. Before anything else is checked.
+		// A download without it needs the digest of the layout check the
+		// caller showed (contractLayoutGate), before anything else is
+		// checked.
 		for _, d := range []tiad.Decisions{{ResetData: consent, StopCPU: tiad.No(), StartAfter: tiad.No()}, {ResetData: consent}} {
 			noStop := base
 			noStop.Decisions = d
 			if _, err := s.Download(ctx, noStop); tiad.Kind(err) != tiad.KindBadRequest ||
-				!strings.Contains(err.Error(), "a download needs decisions.resetData yes: the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask, and a CPU already in STOP loads the same way, with no stop question (#1341); nothing was sent to the CPU") {
-				t.Fatalf("a download without the reset-data consent (%v, %+v): %v", consent, d, err)
+				!strings.Contains(err.Error(), "a download without decisions.resetData needs layoutDigest, the digest of the data layout check the caller showed (POST /v1/sessions/{id}/layout)") {
+				t.Fatalf("a download without the reset-data consent or a digest (%v, %+v): %v", consent, d, err)
 			}
 		}
 	}
@@ -351,6 +356,7 @@ func contractDownloadRules(t *testing.T, start Starter) {
 	}
 	// Stop answered yes, then a check the request does not answer: TIA
 	// may already have stopped the CPU, so never a clean refusal.
+	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionOverwrite, Message: "overwrite"}})
 	acted := base
 	acted.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No()}
 	_, err = s.Download(ctx, acted)
@@ -358,8 +364,9 @@ func contractDownloadRules(t *testing.T, start Starter) {
 		!strings.Contains(err.Error(), "TIA may already have stopped the CPU: check its mode and start it") || !strings.Contains(err.Error(), "compare before anything else") {
 		t.Fatalf("a cancel after an acting answer: %v, want outcome_unknown naming stop-cpu", err)
 	}
+	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionReinitialize, Message: "reinit", Objects: []string{"naut_Main_DB"}}})
 	no := base
-	no.Decisions = tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No(), Reinitialize: []string{"naut_Main_DB"}, StartAfter: tiad.No()}
+	no.Decisions = tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No(), StartAfter: tiad.No()}
 	if _, err := s.Download(ctx, no); tiad.Kind(err) != tiad.KindDeclined || questionIDs(tiad.Questions(err)) != "stop-cpu" {
 		t.Fatalf("declined stop: %v", err)
 	}
@@ -381,7 +388,7 @@ func contractDownloadRules(t *testing.T, start Starter) {
 	// Whether the CPU starts after loading is always decided before
 	// loading, even when TIA would not ask.
 	yes := base
-	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Reinitialize: []string{"naut_main_db"}}
+	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes()}
 	if _, err := s.Download(ctx, yes); tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "start-after" {
 		t.Fatalf("no startAfter decision: %v, want decision_required start-after", err)
 	}
@@ -453,12 +460,15 @@ func contractResolve(t *testing.T, start Starter) {
 			t.Fatalf("%s: %d downloads loaded, want %d (a refusal must load nothing)", rc.Name, n, loads)
 		}
 	}
-	// A partly agreed reinitialize names the DBs not agreed.
+	// decisions.reinitialize is retired (#1341): TIA names no data block,
+	// so only the reset-data consent answers its check. A request that
+	// still sends it is refused, loading nothing.
 	a.SetQuestions(t, []tiad.Question{qReinit})
+	n := len(a.Loaded(t))
 	_, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true,
 		"decisions": map[string]any{"resetData": true, "reinitialize": []string{"tags"}, "startAfter": false}, "secrets": benchLoginJSON})
-	if !strings.Contains(string(b), "(not agreed: Prog_DB)") {
-		t.Errorf("a partly agreed reinitialize: %s", b)
+	if !strings.Contains(string(b), "unknown field") || !strings.Contains(string(b), "reinitialize") || len(a.Loaded(t)) != n {
+		t.Errorf("a request that sends the retired decisions.reinitialize: %s", b)
 	}
 }
 

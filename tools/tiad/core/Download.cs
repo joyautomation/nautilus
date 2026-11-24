@@ -58,6 +58,10 @@ namespace Tiad
         // instance that has trusted a CPU's certificate blindly
         // (BlindTrustRule).
         public const string BlindTrust = "blind-trust";
+        // ResetData is the agent's own question too: a download the data
+        // layout gate says may reset data blocks (LayoutRule), answered
+        // only by decisions.resetData. Its objects are the data blocks.
+        public const string ResetData = "reset-data";
         public const string Other = "other";
     }
 
@@ -95,11 +99,12 @@ namespace Tiad
     public sealed class Decisions
     {
         public bool? StopCpu, Overwrite, ConsistentDownload, StartAfter;
-        // ResetData is the caller's consent to what a load in STOP does
-        // (#1341): every data block of the program returns to its start
-        // values, retained ones included, and TIA asks nothing about it.
-        // Every download without it is refused, a dry run too
-        // (ResetDataRule).
+        // ResetData is the caller's consent to a load that may return data
+        // blocks to their start values, retained ones included (#1341):
+        // what the data layout gate (LayoutRule) found needs it, as does
+        // decisions.stopCpu yes. With it, tiad answers TIA's reinitialize
+        // check yes; without it, TIA asking that check, the stop or a load
+        // of every block is a gate miss and cancels the download there.
         public bool? ResetData;
         public bool? AlarmTexts, AllBlocks, UserManagementKeepOnline, IdentificationDataLoadNothing;
         // UserManagementResetToProject answers UserManagement by resetting
@@ -109,7 +114,6 @@ namespace Tiad
         // project has access control off). It acts, and only
         // UserManagementRule lets it.
         public bool? UserManagementResetToProject;
-        public List<string> Reinitialize = new List<string>();
         public string TrustCertificate = "";
         // KeptDevices names every device the caller agrees to load as the
         // project keeps it; it must be exactly the kept set (KeptRule).
@@ -137,7 +141,6 @@ namespace Tiad
             d.UserManagementResetToProject = r.OptBool("userManagementResetToProject");
             d.IdentificationDataLoadNothing = r.OptBool("identificationDataLoadNothing");
             d.StartAfter = r.OptBool("startAfter");
-            d.Reinitialize = r.Strs("reinitialize");
             d.TrustCertificate = r.Str("trustCertificate");
             d.KeptDevices = r.Strs("keptDevices");
             d.AcceptUnverifiedHardware = r.OptBool("acceptUnverifiedHardware");
@@ -170,6 +173,11 @@ namespace Tiad
         // set by the agent, for the response and the deploy record.
         public DeviceAttestation DeviceAttestation;
         public DeviceAttestationRecord DeviceAttested;
+        // LayoutDigest is the digest of the data layout check the caller
+        // showed (POST /v1/sessions/{id}/layout): a download without
+        // decisions.resetData needs it, and any download that sends it is
+        // refused when the layout is no longer that one (LayoutRule).
+        public string LayoutDigest = "";
 
         public static DownloadRequest Read(Reader r)
         {
@@ -187,6 +195,7 @@ namespace Tiad
             Reader fp = r.Child("fingerprint");
             if (fp != null) d.FingerprintTrust = fp.Bool("trustUnverifiedCertificate");
             d.DeviceAttestation = DeviceAttestation.Read(r.Child("deviceAttestation"));
+            d.LayoutDigest = r.Str("layoutDigest");
             return d;
         }
 
@@ -302,25 +311,24 @@ namespace Tiad
         }
     }
 
-    // ResetDataRule is #1341's gate. Measured on an S7-1500 with TIA V21:
-    // TIA's first check is StopModules, and a load in STOP returns every
-    // data block of the program to its start values, retained ones
-    // included, with no reinitialize question. A CPU already in STOP
-    // loads the same way with no stop question, and tiad reads no mode
-    // first, so every download needs the caller's consent to that,
-    // decisions.resetData yes, a dry run too (one TIA asks nothing of may
-    // load); checked before anything reaches the CPU.
+    // ResetDataRule is #1341's request check, before anything reaches the
+    // CPU: decisions.resetData is the caller's consent to a load that may
+    // return data blocks to their start values, retained ones included.
+    // A stop needs it (a load in STOP resets, with no question, every
+    // data block whose layout changed: bench 1510SP, 2026-11-24). A
+    // download without it needs the digest of the data layout check the
+    // caller showed, which the download reads again (LayoutRule).
     public static class ResetDataRule
     {
-        public const string Sentence = "the CPU stops and every data block of the program returns to its start values, retained ones included; TIA does not ask";
-        public const string InStop = "a CPU already in STOP loads the same way, with no stop question";
+        public const string Sentence = "a load may return data blocks to their start values, retained ones included, and with the CPU in STOP TIA does so without asking";
 
         // Check is null, or why the request is refused.
-        public static string Check(Decisions d)
+        public static string Check(Decisions d, string layoutDigest)
         {
             if (d != null && d.ResetData == true) return null;
             if (d != null && d.StopCpu == true) return "decisions.stopCpu yes needs decisions.resetData yes: " + Sentence + " (#1341); nothing was sent to the CPU";
-            return "a download needs decisions.resetData yes: " + Sentence + ", and " + InStop + " (#1341); nothing was sent to the CPU";
+            if (layoutDigest == null || layoutDigest == "") return "a download without decisions.resetData needs layoutDigest, the digest of the data layout check the caller showed (POST /v1/sessions/{id}/layout): only that check says the load keeps the CPU's data, and " + Sentence + " (#1341); nothing was sent to the CPU";
+            return null;
         }
     }
 
@@ -834,17 +842,12 @@ namespace Tiad
                         if (!d.StartAfter.HasValue) unanswered.Add(q);
                         break;
                     case QuestionIds.Reinitialize:
-                        // A reset nobody named cannot be agreed to.
-                        List<string> missing = NotCovered(q.Objects, d.Reinitialize);
-                        if (d.Reinitialize.Count == 0 || q.Objects.Count == 0)
-                        {
-                            unanswered.Add(q);
-                        }
-                        else if (missing.Count > 0)
-                        {
-                            q.Message = q.Message + " (not agreed: " + string.Join(", ", missing) + ")";
-                            unanswered.Add(q);
-                        }
+                        // TIA names no data block (bench 1510SP,
+                        // 2026-11-24); the layout gate named them. Its yes
+                        // is StopPlcAndReinitialize: it stops the CPU, so
+                        // it needs the consent to the reset AND to the
+                        // stop (Fable, #1341).
+                        if (d.ResetData != true || d.StopCpu != true) unanswered.Add(q);
                         break;
                     case QuestionIds.Certificate:
                         if (d.TrustCertificate == "") unanswered.Add(q);
@@ -869,21 +872,6 @@ namespace Tiad
         {
             if (!a.HasValue) unanswered.Add(q);
             else if (!a.Value) declined.Add(q);
-        }
-
-        // NotCovered returns the names in want that agreed lacks, compared
-        // case-insensitively (TIA block names are), sorted.
-        static List<string> NotCovered(List<string> want, List<string> agreed)
-        {
-            var ok = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var a in agreed) ok.Add(a.ToLowerInvariant());
-            var outp = new List<string>();
-            foreach (var w in want)
-            {
-                if (!ok.Contains(w.ToLowerInvariant())) outp.Add(w);
-            }
-            outp.Sort(StringComparer.Ordinal);
-            return outp;
         }
     }
 

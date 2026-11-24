@@ -51,8 +51,8 @@ VS Code ── edit .st/.ld ──▶ naut check --target siemens   (one rule ta
        1. writer: project → SCL sources (.scl/.db/.udt) + tag table XML + station spec
        2. tiad: create/open project, apply station, import sources, compile
           (messages mapped back to nautilus lines)
-       3. tiad: download dry run (provisional, §3.5) → "software only, stays in RUN"
-          or "needs STOP / reinitialises DB X"; the second needs an explicit yes
+       3. tiad: data layout check (§3.5) → "unchanged, keeps the data"
+          or "may reset DB X"; the second needs an explicit yes (--reset-data)
        4. tiad: download, start; online compare (project == CPU)
                 │
                 ▼
@@ -69,7 +69,7 @@ VS Code ── edit .st/.ld ──▶ naut check --target siemens   (one rule ta
 | Live values, write, RUN/STOP, diagnostics | **Maps** via the Web API (§4) |
 | Ladder overlay | **Maps** for named operands, since values arrive by name. Power flow inside a rung is shown only if the writer keeps it in statics (an option, at a memory cost) |
 | HMI, alarms, history, Sparkplug publish | **Maps**: `naut siemens serve` hosts them against the CPU's values |
-| Download of a change | **Not yet** (#1341, measured 2026-11-23 on the bench S7-1500, TIA V21). Every deploy today regenerates every block, TIA's first check is StopModules, and the load in STOP returns every DB to its start values, retained ones included, with no reinitialize question; so `--reinit` never fires and the data is lost on every deploy. The goal stands: unchanged blocks are not regenerated, changed blocks load in RUN, and the reinitialize set is read from TIA's load preview and named in the plan. There is no warm reload with state migration |
+| Download of a change | **Keeps the data when no layout changed** (#1341, §3.5 "Data layout"). A download loads only what changed (`SoftwareOnlyChanges`): a body change loads in RUN and keeps every value, retained or not. A layout change needs `--reset-data`, and the plan names the data blocks it reaches. There is no warm reload with state migration |
 | Force | **No direct mapping** (D4). The Web API writes but does not force, and Siemens' own force is I/O-only and a TIA online function. D4: in v1 `/api/forces` answers 501, as the Logix facade does. The opt-in override layer for I/O-bound tags comes after the loop works, and it is required. A write is never called a force |
 | SFC | Not in the first writer subset. v1.x: an SCL state machine with step flags and step timers in statics, so the SFC view shows active steps live |
 | Field drivers (Modbus, OPC UA client, EtherNet/IP, MQTT, IT) | **Do not map**: they run in `naut`. `naut check --target siemens` refuses them. The CPU's I/O comes from its local modules and its PROFINET devices |
@@ -191,15 +191,14 @@ the TIA project is not saved. The steps:
    after a stop, in doubt with the CPU possibly left in STOP. The operator
    types `yes`, or passes `--yes`, which answers exactly what was printed.
    Acting answers each have a flag and are never implied:
-   - `--reset-data` (`resetData: true`, #1341), required with every
-     `--download`: the CPU stops and every data block of the program
-     returns to its start values, retained ones included; TIA does not
-     ask. A CPU already in STOP loads the same way with no stop question,
-     and nothing reads the mode first. The refusal prints the command to
-     rerun (without `--yes`). Relaxed only for loads that bench evidence
-     shows keep the data (#1341's real fix);
-   - `--allow-stop` (otherwise `stopCpu: false`);
-   - `--reinit DB,...` (otherwise none);
+   - `--reset-data` (`resetData: true`, #1341): the load may return data
+     blocks to their start values, retained ones included. The data
+     layout check (§3.5 "Data layout") says when a download needs it,
+     before the plan; the refusal names why and the data blocks, and
+     prints the command to rerun with `--reset-data --allow-stop`
+     (without `--yes`). With `--allow-stop` too, TIA's reinitialize
+     check, which stops the CPU, is answered yes;
+   - `--allow-stop` (otherwise `stopCpu: false`), only with `--reset-data`;
    - `--start` or `--no-start`, one of them always (TIA's start-after
      acts, also on a CPU that was in STOP before);
    - `--hardware` with `--attest-hardware "<statement>"`, plus
@@ -1140,7 +1139,7 @@ Request:
   "address": "192.0.2.10",
   "hardware": true, "software": true,
   "dryRun": false,
-  "decisions": { "stopCpu": true, "resetData": true, "reinitialize": ["Tags"], "overwrite": true,
+  "decisions": { "stopCpu": true, "resetData": true, "overwrite": true,
                  "consistentDownload": true, "alarmTexts": true, "allBlocks": true,
                  "identificationDataLoadNothing": true,
                  "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
@@ -1152,7 +1151,8 @@ Request:
   "source": { "commit": "<git commit id>", "hash": "sha256:<hash of the sources sent>" },
   "outsideChanges": { "by": "<who>", "verdict": "different", "deploy": "<the verified deploy's id>" },
   "fingerprint": { "trustUnverifiedCertificate": true },
-  "deviceAttestation": { "by": "<who>", "order": "<order number off the CPU>", "firmware": "<firmware off the CPU>" }
+  "deviceAttestation": { "by": "<who>", "order": "<order number off the CPU>", "firmware": "<firmware off the CPU>" },
+  "layoutDigest": "<the digest POST /v1/sessions/{id}/layout returned>"
 }
 ```
 
@@ -1402,7 +1402,9 @@ behaviour. So, until then:
   there is one). The
   `id` is one of:
   - `stop-cpu`
-  - `reinitialize` (`objects` lists the DBs)
+  - `reinitialize` (TIA names no DB. Its yes is `StopPlcAndReinitialize`,
+    so it is answered only by `resetData: true` with `stopCpu: true`;
+    without `resetData`, a gate miss)
   - `overwrite`
   - `consistent-download` (TIA's `ConsistentBlocksDownload`, "Download
     software to device": loading the PLC software as one consistent
@@ -1612,17 +1614,12 @@ behaviour. So, until then:
     `decision_required`, naming that one, and nothing is loaded; answer
     it, and TIA may ask another. After an acting answer it is
     `outcome_unknown` instead (above).
-  - A `reinitialize` answer must name every DB the check named.
-  - Every download needs `resetData: true` (#1341), a dry run too (one TIA
-    asks nothing of may load); checked before anything reaches the CPU
-    (`bad_request`, nothing sent). Measured on the bench S7-1500 with TIA
-    V21: TIA's first check is StopModules, and a load in STOP returns every
-    data block of the program to its start values, retained ones included,
-    with no reinitialize question. A CPU already in STOP loads in STOP with
-    no question at all, and tiad reads no mode first, so the consent goes
-    with every download, not only with a stop. An agent older than #1341
-    refuses the field (`decisions.resetData`), and naut says to reinstall
-    it.
+  - `stopCpu: true` needs `resetData: true`, and a download without
+    `resetData: true` needs `layoutDigest`; both checked before anything
+    reaches the CPU (`bad_request`, nothing sent). The data layout gate
+    (below) decides the rest. An agent older than #1341 refuses
+    `decisions.resetData`, one older than the gate has no layout call, and
+    naut says to reinstall it.
   - A download that loads hardware needs `acceptUnverifiedHardware: true`
     and an `attestation`, checked before anything reaches the CPU
     ("What a download verifies", above).
@@ -1633,12 +1630,9 @@ behaviour. So, until then:
   - tiad never picks a default.
   - An `other` question always refuses, so a check tiad has never seen
     cannot be answered by accident.
-  - `tiad.Openness` does not read a `reinitialize` check's DBs or a
-    `certificate` check's fingerprint yet, so on a real CPU both always
-    refuse. After a `stop-cpu` yes that refusal is `outcome_unknown` (the
-    CPU may be in STOP): until those are read, a download that would
-    reinitialize DBs cannot run, and the next bench window must not
-    expect one.
+  - `tiad.Openness` does not read a `certificate` check's fingerprint
+    yet, so on a real CPU it always refuses. TIA's `reinitialize` check
+    names no DB (bench 1510SP, 2026-11-24); the layout gate names them.
   - A password answer is passive: a decline after it is still a clean
     refusal, though TIA may already have used the password to log on to
     the CPU. That changes neither the CPU's program nor its mode.
@@ -1813,6 +1807,86 @@ record that is not `loaded` (an in-doubt one that differs may simply not
 have loaded), and while the journal has lines tiad cannot read
 (`unreadableLines`), since one of them may be a newer deploy. A changed
 `DownloadId` is reported beside it, not folded in.
+
+#### Data layout (#1341)
+
+Measured on the bench S7-1500 (FW 3.1, TIA V21, 2026-11-24):
+`DownloadOptions.Software` loads every block, and TIA's first check is
+StopModules; the load in STOP returns every data block to its start
+values, retained ones included. `SoftwareOnlyChanges` loads in RUN and
+keeps every value for an unchanged redeploy, a byte-identical re-import
+and a body change. A data block whose layout changed makes TIA ask
+`DataBlockReinitialization` in RUN, naming no block; with the CPU already
+in STOP it asks nothing and resets that block, retained values included.
+So the agent decides before anything reaches the CPU.
+
+- **Signal.** Each program block's and PLC data type's XML export
+  (`ExportOptions.WithDefaults`), the root object's `<AttributeList>` as
+  the XML parser reads it back, hashed (SHA-256) with the object's
+  Openness type. It holds the interface with every member and start
+  value, the number, memory layout and reserve, retain settings and an
+  instance DB's FB. Measured on the TIA VM (2026-11-23): stable over
+  byte-identical re-imports and a body change; it moves exactly where a
+  layout changed, a UDT's holders and an FB's instance DB included (TIA
+  writes their members out). TIA's dates are no signal: every import
+  recreates every block and moves them all. Every block and type in the
+  PLC is read, a customer's too: the download loads the whole program.
+  One that does not export is unreadable, never left out. A PLC tag
+  table's user constant (an array bound) is an object too, its data type
+  and value hashed; a data block names it in quotes, so the naming reaches
+  it. Technology objects and software units are read as unreadable (tiad
+  reads neither's layout yet): a PLC that holds one needs `resetData` on
+  every download.
+- **Baseline.** The layout is recorded in the deploy's intent line
+  (`layout: {scheme, tia, objects: [{name, kind, type, hash}]}`), from the
+  same work item that archives what loads. It is the baseline only when a
+  verify by this agent found the CPU equal to that very deploy, its newest
+  load (loaded or in doubt), within the last hour, and the journal holds no
+  line the agent cannot read, and that deploy loaded this session's
+  project (another project's layout is no baseline, an equal one too; so
+  the first deploy after an adopt has none). Any download forgets that
+  verify. The verify's age is read off a monotonic clock.
+- **Scheme and TIA version.** The record names the hashing scheme
+  (`attributes-v1`) and the TIA version that read it. A record of another
+  scheme or another TIA version is no baseline. Any change to what is
+  hashed bumps the scheme, and a TIA upgrade changes the version: either
+  invalidates every recorded layout, so the next deploy to each CPU needs
+  `resetData`, and the refusal says which of the two it was.
+- **Rule.** Any object whose hash moved, or that was added, removed or is
+  unreadable, needs `resetData`; so does a download with no baseline (the
+  whole program loads, `Software`), and one that loads hardware. Only an
+  object whose hash did not move passes, which covers a body-only change.
+  Every further exemption needs its own bench row in RUN and in STOP.
+- **Naming.** The data blocks that may be reset are each data block whose
+  own layout changed, and each whose layout uses a changed, added or
+  unreadable object, however deep, by the names its export uses (quoted
+  data types, an instance DB's FB). Holders do not carry a UDT's own start
+  values, so naming walks the names, not TIA's expansion. A new data block
+  holds nothing to lose; a removed one is named last (its values go). No
+  baseline, hardware, or any unreadable object (its layout and references
+  are unknown): every data block. Only changes that reach no data block
+  (a function's or an OB's interface, an FB with no instance, a new block,
+  a constant no data block uses) name none.
+- **Call.** `POST /v1/sessions/{id}/layout {address, hardware}` on a
+  compiled session answers `{scheme, tia, baseline, noBaseline, changes:
+  [{name, kind, type, change}], dataBlocks, allDataBlocks,
+  resetDataNeeded, why, digest}`. It reads the project only. The digest
+  names the layout, the baseline and the hardware flag. A download reads
+  the layout again in its own work item, before the deploy record: a
+  `layoutDigest` that is not the layout's, or a layout that needs
+  `resetData` the request does not give, is `decision_required` (the
+  agent's own `reset-data` question, its objects the data blocks),
+  nothing recorded, nothing sent.
+- **Options.** `Software` only with `resetData` and no baseline, or with
+  hardware; otherwise `SoftwareOnlyChanges`.
+- **RUN backstop (gate miss).** Without `resetData`, TIA asking
+  `stop-cpu`, `reinitialize` or `all-blocks` means the gate missed a
+  change: tiad never answers it, cancels the download there
+  (`decision_required`, or `outcome_unknown` after an acting answer), and
+  logs `audit layout-gate-miss`. `NoAction` is never written.
+- **Tighten later (#616).** The one-hour verify window; whether a start
+  value change alone keeps the data (hashed today, so it needs the
+  consent); whether an added block keeps its neighbours' data.
 
 ### 3.6 PROFINET's requirements (#723)
 

@@ -290,8 +290,8 @@ func contractTurnOnPending(t *testing.T, start Starter) {
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	// The stop is answered, then a reinit nobody agreed to: in doubt.
-	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionReinitialize, Message: "reinit", Objects: []string{"naut_Main_DB"}}})
+	// The stop is answered, then a check nobody answered: in doubt.
+	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionIdentificationData, Message: "identification data"}})
 	load := ResetLoad(benchCPU)
 	load.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
 	if _, err := s.Download(ctx, load); tiad.Kind(err) != tiad.KindOutcomeUnknown {
