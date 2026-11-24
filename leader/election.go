@@ -1,3 +1,10 @@
+//go:build !js
+
+// The pair election is controller-only: this file is !js so cmd/naut-wasm
+// (the playground, which runs no redundant pair) does not import quorum or
+// quorum/node (TestWasmStaysFreeOfControllerCode). Status and NewLocal, which
+// the playground uses, are in leader.go.
+
 package leader
 
 import (
