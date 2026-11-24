@@ -630,19 +630,28 @@ func TestIOWatchReCheck(t *testing.T) {
 
 	t.Run("a device that answers while the revert waits for the lock", func(t *testing.T) {
 		r := startIORig(t, base, false)
-		late := deadPort(t)
+		// The device's port is held by its own server from the start: a port
+		// picked, closed and bound again half a second later was taken by
+		// another test's connection in CI ("address already in use"). Until
+		// unit 1 exists the server answers every read with exception 0x0B,
+		// which reads as no answer: the tags stay Bad. "The device comes up"
+		// below is creating the unit.
+		srv := slave.NewServer("", nil)
+		if err := srv.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(srv.Stop)
+		late := slavePort(srv)
 		if _, err := r.io.ApplyWith(r.ctx, stage(r, withFile(base, "modbus.yaml", modbusYAML(late, slavePort(s2), "", ""))), "tester", ApplyOptions{RevertIfSilent: 300 * time.Millisecond}); err != nil {
 			t.Fatal(err)
 		}
 		r.io.applying.Lock() // an apply in progress: the watch's revert waits
 		time.Sleep(500 * time.Millisecond)
-		srv := slave.NewServer(fmt.Sprintf("127.0.0.1:%d", late), nil) // the device comes up meanwhile
-		if err := srv.Start(); err != nil {
+		if q := r.rt.TagQuality("A_In"); q.IsGood() {
 			r.io.applying.Unlock()
-			t.Fatal(err)
+			t.Fatalf("A_In reads good (%v) before the device came up: the test no longer has a silent device", q)
 		}
-		t.Cleanup(srv.Stop)
-		srv.Unit(1).SetHolding(0, 4)
+		srv.Unit(1).SetHolding(0, 4) // the device comes up meanwhile
 		// Every tag of the device, not one: the watch counts DEV_A as
 		// answering only once all its tags have read, and A_In and A_Cmd are
 		// separate poll blocks, so unlocking after the first would let the
