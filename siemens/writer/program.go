@@ -71,10 +71,12 @@ var elementary = map[string]bool{
 // takes the bare IEC name).
 var instances = map[string]string{
 	"TON": "TON_TIME", "TOF": "TOF_TIME", "TP": "TP_TIME",
-	// nautilus's counter value is its 64-bit int and keeps counting past
-	// 32767; CTU_INT would stop there. CTU_LINT matches (verify in S2b
-	// that it saturates only at the LINT maximum).
-	"CTU": "CTU_LINT", "CTD": "CTD_LINT", "CTUD": "CTUD_LINT",
+	// nautilus's counter value is its 64-bit int. TIA refuses the
+	// CTU_LINT/CTD_LINT/CTUD_LINT instances with a LINT variable as PV
+	// (TIA V21 compile, #1338, #1371); a counter object IEC_LCOUNTER,
+	// called by its CTU/CTD/CTUD method, compiles in every form
+	// (counterCall).
+	"CTU": "IEC_LCOUNTER", "CTD": "IEC_LCOUNTER", "CTUD": "IEC_LCOUNTER",
 	"R_TRIG": "R_TRIG", "F_TRIG": "F_TRIG",
 }
 
@@ -471,6 +473,14 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 	at := lineAt(s)
 	switch s := s.(type) {
 	case *st.AssignStmt:
+		// A write to a counter's member outside its call: whether TIA's
+		// IEC_LCOUNTER keeps it is not measured (#1338).
+		if m, ok := s.TargetExpr.(*st.MemberExpr); ok {
+			if _, counter := counterInputs[pw.typ(m.Object)]; counter {
+				pw.gap("siemens/member", s.Pos.Line, gapOther, "a write to "+exprShort(m)+", a member of a counter, outside its call", "set an input in the counter's call (PV := …)")
+				break
+			}
+		}
 		target, tt := s.Target, ""
 		if s.TargetExpr != nil {
 			target, tt = pw.expr(s.TargetExpr, 0), pw.typ(s.TargetExpr)
@@ -546,6 +556,22 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 			}
 		}
 		pw.emit(b, at, "%s%s;\n", in, pw.call(s.Call, true))
+		if l, ok := pw.locals[strings.ToLower(s.Call.Name)]; ok && s.Call.Callee == nil {
+			if _, counter := counterInputs[l.typ]; counter {
+				// TIA takes no output binding at a counter's method call:
+				// each is an assignment from the counter after it, in
+				// source order, under the store rules of any assignment
+				// (as a user FB's, pous.go).
+				for _, o := range s.Call.OutputBindings {
+					pos := o.Pos
+					if pos.Line == 0 {
+						pos = s.Call.Pos
+					}
+					pw.stmt(b, &st.AssignStmt{TargetExpr: o.Target, Value: &st.MemberExpr{Object: &st.IdentExpr{Name: l.name, Pos: pos}, Member: o.Name, Pos: pos}, Pos: pos}, d)
+				}
+				break
+			}
+		}
 		for _, o := range s.Call.OutputBindings {
 			pw.assigned(b, in, at, o.Target)
 		}

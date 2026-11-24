@@ -27,7 +27,7 @@ const unaryPrec = 9
 
 // required is the input TIA's instruction wants at every call (PT of a
 // timer, PV of a counter), by the IEC block.
-var required = map[string]string{"TON": "PT", "TOF": "PT", "TP": "PT", "CTU": "PV", "CTD": "PV", "CTUD": "PV"}
+var required = map[string]string{"TON": "PT", "TOF": "PT", "TP": "PT"}
 
 // mathFuncs are the one-argument REAL functions SCL spells and calls the
 // same. They take REAL or LREAL arguments only: nautilus's integer forms
@@ -87,6 +87,8 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 			if f, ok := sd.fieldOf(member); ok {
 				member = f.Name // as the TYPE spells it
 			}
+		} else if _, counter := counterInputs[ot]; counter {
+			member = counterMember(ot, member)
 		} else if p := pw.w.userFB(ot); p != nil {
 			pn, ok := p.pins()[strings.ToUpper(member)]
 			if !ok || pn.kind == "VAR_TEMP" {
@@ -312,6 +314,9 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		if len(c.Args) > 0 {
 			pw.diag("siemens/call", line, l.name+": "+gapMessage(gapOther, "positional instance arguments", "name the inputs (IN := …)"))
 			return ""
+		}
+		if ins, counter := counterInputs[l.typ]; counter {
+			return pw.counterCall(c, l, ins)
 		}
 		var parts []string
 		for _, a := range c.NamedArgs {
@@ -646,4 +651,58 @@ func exprShort(e st.Expression) string {
 		return exprShort(e.Object) + "." + e.Member
 	}
 	return "the target"
+}
+
+// counterInputs are each IEC counter's inputs, in the order its
+// IEC_LCOUNTER method takes them (#1338, #1371).
+var counterInputs = map[string][]string{
+	"CTU":  {"CU", "R", "PV"},
+	"CTD":  {"CD", "LD", "PV"},
+	"CTUD": {"CU", "CD", "R", "LD", "PV"},
+}
+
+// counterMember is the IEC_LCOUNTER member that holds a counter's pin:
+// the counter object has one output per direction, QU and QD, so CTU's Q
+// is QU and CTD's Q is QD; every other pin keeps its name.
+func counterMember(typ, pin string) string {
+	switch p := strings.ToUpper(pin); {
+	case p == "Q" && typ == "CTU":
+		return "QU"
+	case p == "Q" && typ == "CTD":
+		return "QD"
+	default:
+		return p
+	}
+}
+
+// counterCall prints a counter's call as its IEC_LCOUNTER method call,
+// #c.CTU(CU := …, R := …, PV := …): every input, in the method's order,
+// an input the call leaves out as the value the counter holds (nautilus
+// keeps an input's last value, and TIA's method takes each one). The
+// output bindings are assignments after the call (CallStmt).
+func (pw *progWriter) counterCall(c *st.CallExpr, l local, ins []string) string {
+	given := map[string]string{}
+	for _, a := range c.NamedArgs {
+		pin := strings.ToUpper(a.Name)
+		if !slices.Contains(ins, pin) {
+			// nautilus refuses an unknown pin first.
+			pw.diag("siemens/call", a.Pos.Line, fmt.Sprintf("%s has no input %s", l.typ, a.Name))
+			return ""
+		}
+		if pw.typ(a.Value) == tWide {
+			pw.wideRefused(a.Pos.Line)
+			return ""
+		}
+		given[pin] = pw.expr(a.Value, 0)
+	}
+	inst := "#" + sclName(l.name)
+	parts := make([]string, 0, len(ins))
+	for _, pin := range ins {
+		v, ok := given[pin]
+		if !ok {
+			v = inst + "." + pin
+		}
+		parts = append(parts, pin+" := "+v)
+	}
+	return inst + "." + l.typ + "(" + strings.Join(parts, ", ") + ")"
 }

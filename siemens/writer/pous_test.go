@@ -157,9 +157,33 @@ func TestOutputsAndInOuts(t *testing.T) {
 func TestTimerCallsPassPT(t *testing.T) {
 	scl, _ := write(t, "PROGRAM P\nVAR t : TON; f : TOF; p : TP; x : BOOL; END_VAR\nt(IN := x, PT := T#1s);\nt(IN := NOT x);\nf(IN := x);\np(IN := x, PT := T#2s);\nEND_PROGRAM\n")
 	wantLines(t, scl, "\t#t(IN := #x, PT := T#1s);\n", "\t#t(IN := NOT #x, PT := #t.PT);\n", "\t#f(IN := #x, PT := #f.PT);\n", "\t#p(IN := #x, PT := T#2s);\n")
-	// And PV at every call of a counter (measured on V21 too).
-	scl, _ = write(t, "PROGRAM P\nVAR c : CTU; d : CTD; ud : CTUD; x : BOOL; END_VAR\nc(CU := x);\nc(CU := x, PV := 3);\nd(CD := x, LD := x);\nud(CU := x);\nEND_PROGRAM\n")
-	wantLines(t, scl, "\t#c(CU := #x, PV := #c.PV);\n", "\t#c(CU := #x, PV := 3);\n", "\t#d(CD := #x, LD := #x, PV := #d.PV);\n", "\t#ud(CU := #x, PV := #ud.PV);\n")
+}
+
+// TestCountersAreIECLCounterMethods (#1338, #1371): TIA refuses the
+// CTU_LINT/CTD_LINT/CTUD_LINT instances with a LINT variable as PV; a
+// counter is an IEC_LCOUNTER called by its CTU/CTD/CTUD method, every
+// input in the method's order, an input left out as the value the counter
+// holds. Q is QU (CTU) or QD (CTD), and an output binding is read after
+// the call, in source order (TIA V21 compile, 2026-11-24).
+func TestCountersAreIECLCounterMethods(t *testing.T) {
+	scl, _ := write(t, "PROGRAM P\nVAR c : CTU; d : CTD; ud : CTUD; x : BOOL; y : BOOL; z : BOOL; n : LINT; END_VAR\n"+
+		"c(CU := x);\nc(CU := x, PV := 3, R := y);\nd(CD := x, LD := x);\nud(CU := x);\n"+
+		"y := c.Q AND d.Q;\nn := c.CV + d.CV + ud.CV;\nz := ud.QU OR ud.QD;\n"+
+		"c(CU := x, Q => y, CV => n);\nd(CD := y, PV := 4, Q => z);\nEND_PROGRAM\n")
+	wantLines(t, scl,
+		"      c : IEC_LCOUNTER;\n", "      d : IEC_LCOUNTER;\n", "      ud : IEC_LCOUNTER;\n",
+		"\t#c.CTU(CU := #x, R := #c.R, PV := #c.PV);\n",
+		"\t#c.CTU(CU := #x, R := #y, PV := 3);\n",
+		"\t#d.CTD(CD := #x, LD := #x, PV := #d.PV);\n",
+		"\t#ud.CTUD(CU := #x, CD := #ud.CD, R := #ud.R, LD := #ud.LD, PV := #ud.PV);\n",
+		"\t#y := #c.QU AND #d.QD;\n",
+		"\t#n := #c.CV + #d.CV + #ud.CV;\n",
+		"\t#z := #ud.QU OR #ud.QD;\n",
+		"\t#c.CTU(CU := #x, R := #c.R, PV := #c.PV);\n\t#y := #c.QU;\n\t#n := #c.CV;\n",
+		"\t#d.CTD(CD := #y, LD := #d.LD, PV := 4);\n\t#z := #d.QD;\n")
+	if strings.Contains(scl, "_LINT") {
+		t.Fatalf("a *_LINT counter instance is left:\n%s", scl)
+	}
 }
 
 // TestDoubleUnderscoreQuoted: a name with two underscores in a row is no
@@ -370,4 +394,25 @@ func TestReviewFixesD1(t *testing.T) {
 		t.Fatal(diags)
 	}
 	wantLines(t, fileOf(t, out, "naut_P.scl"), "      TOP : INT := 7;\n", "\t\"naut_Tags\".A := #TOP;\n")
+}
+
+// TestCountersInBlocksAndBindings (#1338): a counter inside a user
+// FUNCTION_BLOCK is an IEC_LCOUNTER there too, and its Q read from
+// outside is QU; an output binding is an assignment after the call under
+// the store rules, so a CV bound to an INT wraps as nautilus stores it,
+// and one bound to a shared tag counts as that tag's write.
+func TestCountersInBlocksAndBindings(t *testing.T) {
+	lib := "FUNCTION_BLOCK H\nVAR_INPUT go : BOOL; END_VAR\nVAR cnt : CTU; END_VAR\ncnt(CU := go, PV := 3);\nEND_FUNCTION_BLOCK\n"
+	out, diags := writePOU(t, "PROGRAM P\nVAR h : H; c : CTU; n : INT; END_VAR\nh(go := B);\nB := h.cnt.Q;\nc(CU := B, CV => n);\nc(CU := B, CV => A, Q => B);\nEND_PROGRAM\n", lib)
+	if len(diags) > 0 {
+		t.Fatal(diags)
+	}
+	wantLines(t, fileOf(t, out, "naut_H.scl"), "      cnt : IEC_LCOUNTER;\n", "\t#cnt.CTU(CU := #go, R := #cnt.R, PV := 3);\n")
+	wrap := func(s string) string {
+		return "LINT_TO_INT((((" + s + ") + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768)"
+	}
+	wantLines(t, fileOf(t, out, "naut_P.scl"),
+		"\t\"naut_Tags\".B := #h.cnt.QU;\n",
+		"\t#c.CTU(CU := \"naut_Tags\".B, R := #c.R, PV := #c.PV);\n\t#n := "+wrap("#c.CV")+";\n",
+		"\t#c.CTU(CU := \"naut_Tags\".B, R := #c.R, PV := #c.PV);\n\t\"naut_Tags\".A := "+wrap("#c.CV")+";\n\t\"naut_Tags\".B := #c.QU;\n")
 }

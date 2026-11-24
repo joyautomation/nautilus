@@ -13,9 +13,11 @@ The first TIA session (S2b, docs/design/siemens-ide.md §7) imports them,
 compiles them, and replaces any spelling TIA rejects with what its own
 exports show. Points marked *verify* in the brief:
 
-- the instance types `TON_TIME` and `CTU_LINT` (or whether TIA takes the
-  bare IEC names), and that `CTU_LINT` saturates only at the LINT maximum
-  (nautilus's CV is its 64-bit int and keeps counting past 32767);
+- the instance types: `TON_TIME` compiles; the counters' `CTU_LINT` does
+  not (its `.Q` is "not defined"), so a counter is an `IEC_LCOUNTER` called
+  by its method (#1338, #1371, `../instances/README.md`). Whether the
+  counter saturates only at the LINT limit is not measured (nautilus's CV
+  is its 64-bit int);
 - that S7-1500 IEC timers update `Q`/`ET` when read, not only when called,
   and whether any nautilus program can tell the difference;
 - `MIN`/`MAX`/`LIMIT`/`SEL` with named parameters;
