@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -186,5 +187,69 @@ func TestAStoppedStreamIsNotCurrent(t *testing.T) {
 	s.takeAck(7, streamAck{Epoch: 7, Seq: 1}, now)
 	if _, cur := s.syncMark(7); cur {
 		t.Fatal("an image out 2 s unacknowledged counted current: the cap took the reconnect's 60 s gap as the send-to-send time")
+	}
+}
+
+// A switchover waits for the acknowledgement of exactly its final image
+// (#710 d1c): an older image's, arriving meanwhile, is not it, and one of
+// another epoch never counts. final_ack_any_seq turns it red.
+func TestWaitAckTakesOnlyTheFinalImage(t *testing.T) {
+	s := &pairStream{}
+	now := time.Now()
+	s.noteSent(4, 10, now, true)
+	s.noteSent(4, 11, now, false)
+	got := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		got <- s.waitAck(ctx, 4, 11)
+	}()
+	for { // until the waiter is registered
+		s.markMu.Lock()
+		w := s.acks.got != nil
+		s.markMu.Unlock()
+		if w {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if ok, why := s.takeAck(4, streamAck{Epoch: 4, Seq: 10}, now); !ok {
+		t.Fatal(why)
+	}
+	select {
+	case err := <-got:
+		t.Fatalf("the wait ended (%v) on the acknowledgement of an older image", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if ok, why := s.takeAck(4, streamAck{Epoch: 4, Seq: 11}, now); !ok {
+		t.Fatal(why)
+	}
+	if err := <-got; err != nil {
+		t.Fatal(err)
+	}
+	// Already acknowledged: no wait at all.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	if err := s.waitAck(ctx, 4, 11); err != nil {
+		t.Fatalf("a wait for an image already acknowledged: %v", err)
+	}
+}
+
+// A final image waiting to go is sent at once, not after the stream's
+// interval: its wake may have come before the send loop's wait took the
+// channel (#710 d1c bench, up to 100 ms lost). Only on a connection that
+// has not sent it, and only for its own term. final_waits_interval turns
+// it red.
+func TestAFinalImageWaitingIsSentAtOnce(t *testing.T) {
+	s := &pairStream{}
+	if s.finalPending(4, 0) {
+		t.Fatal("pending with no final image")
+	}
+	s.final.Store(&finalImage{term: 4, seq: 9})
+	if !s.finalPending(4, 0) || !s.finalPending(4, 7) {
+		t.Fatal("a final image waiting to go is not sent at once (on a fresh connection, or one that sent an aborted switchover's)")
+	}
+	if s.finalPending(4, 9) || s.finalPending(5, 0) {
+		t.Fatal("pending on a connection that sent it, or for another term")
 	}
 }

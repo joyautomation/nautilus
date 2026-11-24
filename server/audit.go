@@ -165,6 +165,8 @@ var actionClass = map[string]string{
 	"redundancy.vouch": strict,
 	// Outputs to the field before the program released them (#710 (b2)).
 	"redundancy.release-hold": strict,
+	// Hands the lead to the standby (#710 d1c).
+	"redundancy.switchover": strict,
 }
 
 const (

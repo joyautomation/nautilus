@@ -336,6 +336,8 @@ type Runtime struct {
 	edges uint64
 	// imageSeq numbers the state images (image.go).
 	imageSeq imageSeqs
+	// sw is a planned switchover's state (switch.go).
+	sw switchState
 	// imgMu guards the round the state image is in (RequestImage,
 	// TakeImage): its number, its phase (0 first copies, 1 the re-copy of
 	// the faster tasks, 2 taken) and the task that copied last.
@@ -701,6 +703,9 @@ func New(o Options) (*Runtime, error) {
 		return nil, err
 	}
 	r.initParams(o.Tags)
+	for _, np := range r.namedPrograms() {
+		np.prog.switching = &tags.switching // online edits refused while switching (switch.go)
+	}
 	r.mono = monoFor(o.Clock)
 	if a, ok := o.Driver.(nio.OutputsRequester); ok {
 		r.asker = a
@@ -1425,9 +1430,10 @@ func (r *Runtime) scanTask(tr *taskRun) { r.scanTaskAt(tr, time.Time{}) }
 // scanTaskAt is scanTask with the slot the scan was due at (zero when the
 // caller is not Run's scheduler), for the lateness sample.
 func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
-	if !r.gate() {
+	if !r.gate() || !r.scanEnter() {
 		return
 	}
+	defer r.scanExit()
 	t0 := time.Now()
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	tr.mu.Lock()
@@ -1485,9 +1491,10 @@ func (r *Runtime) Scan() { r.scanAt(time.Time{}) }
 // is not Run's scheduler), for the lateness sample.
 func (r *Runtime) scanAt(due time.Time) {
 	ok, edge := r.gateEdge()
-	if !ok {
+	if !ok || !r.scanEnter() {
 		return
 	}
+	defer r.scanExit()
 	t0 := time.Now()
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	r.mu.Lock()

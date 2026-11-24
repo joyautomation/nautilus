@@ -757,6 +757,8 @@ func frontDoorStatus(err error) ua.StatusCode {
 		return ua.StatusGood
 	case errors.Is(err, runtime.ErrForced):
 		return ua.StatusBadLocked
+	case errors.Is(err, runtime.ErrSwitching):
+		return ua.StatusBadInvalidState // as a standby's: write on the new leader
 	case errors.Is(err, ir.ErrOutOfRange):
 		return ua.StatusBadOutOfRange
 	case errors.Is(err, ir.ErrTypeMismatch):

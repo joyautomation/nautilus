@@ -4,17 +4,20 @@
 // request on the same session, so it is refused, not queued, when there is
 // none, and an answer from a session that ended mid-call is an error.
 //
-// Whether a call may be made at all (a WriteISDU is a write to a device)
-// is the caller's to decide; the write gate (SetWriteGate) is not looked at
-// here.
+// Call itself does not look at the write gate (SetSendGate): a read may
+// go from a standby. A call that writes to a device (a WriteISDU) goes
+// through CallFenced, which does.
 package opcua
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/gopcua/opcua/ua"
+
+	"github.com/joyautomation/nautilus/internal/fence"
 )
 
 // ErrCallUnknown wraps the error of a call that was SENT and got no answer
@@ -98,4 +101,26 @@ func (d *Driver) Call(ctx context.Context, object, method NodeRef, args ...*ua.V
 		}
 	}
 	return res.OutputArguments, nil
+}
+
+// CallFenced is Call for a method that writes to a device (an IO-Link
+// parameter's WriteISDU, #710 d1c): it goes only while this controller's
+// write gate is open, on a pair's leader, and runs to the gate's send
+// budget like every other fenced send (design §3.4). It is counted for a
+// switchover's drain (fence.Enter before the gate read), so a call under
+// way when the gate shuts ends, or is cut, before the RESIGN leaves.
+// Outside a pair it is Call.
+func (d *Driver) CallFenced(ctx context.Context, object, method NodeRef, args ...*ua.Variant) ([]*ua.Variant, error) {
+	if mut("isdu_write_unfenced") {
+		return d.Call(ctx, object, method, args...)
+	}
+	deadline, _, ok, done := fence.Begin(d.look, time.Now())
+	defer done()
+	if !ok || !fence.Started(deadline, time.Now()) {
+		return nil, fmt.Errorf("call %s: %w", method.NodeID, fence.ErrGateClosed)
+	}
+	fctx, fcancel := fence.Context(ctx, deadline)
+	defer fcancel()
+	fence.BeforeSend()
+	return d.Call(fctx, object, method, args...)
 }

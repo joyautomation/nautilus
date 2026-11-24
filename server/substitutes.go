@@ -187,6 +187,11 @@ const substituteSaveWait = 10 * time.Second
 // standby only when no leader is known to forward it to.
 func (s *Server) refuseNotLeading(w http.ResponseWriter) bool {
 	if s.rt.Leading() {
+		if s.rt.Switching() != 0 {
+			w.Header().Set("Retry-After", "1")
+			refuse(w, runtime.ErrSwitching.Error(), http.StatusServiceUnavailable)
+			return true
+		}
 		return false
 	}
 	refuse(w, "no leader: this replica is standing by; retry once a leader is elected", http.StatusServiceUnavailable)

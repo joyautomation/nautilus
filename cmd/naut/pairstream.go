@@ -121,6 +121,9 @@ type pairStream struct {
 	// out of sync. held says a send loop saw it (no image is under way).
 	// persistHold, in tests, keeps the standby's 2 s persist from running.
 	hold, held, persistHold atomic.Bool
+	// finalAckHold, in tests, keeps a switchover from hearing its final
+	// image acknowledged (it aborts).
+	finalAckHold atomic.Bool
 	// coldWhy is why this leader's takeover was cold although an image
 	// existed: its condition, until a standby follows a hot-capable
 	// stream again (an image of the newest format sent).
@@ -156,6 +159,42 @@ type pairStream struct {
 	ackMu            sync.Mutex
 	ackWant, ackSent streamAck
 	ackBusy          bool
+	// A planned switchover's final image (pairswitch.go), once the scans
+	// stopped: every serve loop of its term sends it once. wake, under
+	// mu, is closed (and replaced) to cut the serve loops' waits short.
+	final atomic.Pointer[finalImage]
+	wake  chan struct{}
+	// switchMu: one switchover at a time (pairswitch.go).
+	switchMu sync.Mutex
+}
+
+// finalImage is a switchover's final image of term, numbered seq.
+type finalImage struct {
+	term, seq uint64
+	img       *runtime.Image
+}
+
+// finalPending reports whether a switchover's final image of term waits
+// to go on a connection that has not sent it: the send loop then sends at
+// once, whatever its interval.
+func (s *pairStream) finalPending(term, sentFinal uint64) bool {
+	f := s.final.Load()
+	return f != nil && f.term == term && f.seq != sentFinal && !mutNaut("final_waits_interval")
+}
+
+// wakeCh is the channel the next wake closes.
+func (s *pairStream) wakeCh() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.wake
+}
+
+// wakeAll cuts every serve loop's wait short.
+func (s *pairStream) wakeAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	close(s.wake)
+	s.wake = make(chan struct{})
 }
 
 // streamLoadFailed is a leader's answer, and its condition, while its
@@ -262,6 +301,7 @@ func (m *pairMember) startStream(rt *runtime.Runtime, budget int64, hotMaxAge ti
 		client: node.NewPeerClient(m.o.Dial, m.o.TLS),
 		url:    node.PeerURL(m.o.PeerAddr, m.o.TLS != nil) + streamPath(m.o.Cluster),
 		state:  "off", tookOverAge: -1,
+		wake: make(chan struct{}),
 	}
 	m.stream = s
 	rt.SetTakeoverFlush(s.takeoverFlush)
@@ -270,6 +310,9 @@ func (m *pairMember) startStream(rt *runtime.Runtime, budget int64, hotMaxAge ti
 	s.suspectEmptyFile()
 	m.q.SetStreamStatus(s.status)
 	m.q.Node().SetSyncMark(s.syncMark)
+	m.q.SetSwitchover(func(ctx context.Context, by string) (any, string, string) {
+		return s.switchover(ctx, by)
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	s.ctx = ctx
 	h := http.Handler(http.HandlerFunc(s.serve))
@@ -303,6 +346,10 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 		s.serveHandBack(w, r)
 		return
 	}
+	if r.URL.Path == switchAskPath(s.m.o.Cluster) {
+		s.serveSwitchAsk(w, r)
+		return
+	}
 	term, lead := s.rt.LeadingTerm()
 	if !lead || !s.leads(term) {
 		http.Error(w, "not leading: no state stream here", http.StatusServiceUnavailable)
@@ -325,6 +372,10 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 	var img runtime.Image
 	var buf []byte
 	sentHere := false // an image went out on this connection (noteSent)
+	// sentFinal is the seq of the last final image that went out on this
+	// connection: an aborted switchover's final must not stop the next
+	// one's (bench: every switchover after one abort aborted).
+	var sentFinal uint64
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	if !mutNaut("stream_outlives_close") {
@@ -333,12 +384,22 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	next := time.Now()
 	for {
+		// The wake channel is taken BEFORE the look at a final image: one
+		// stored after the look closes this channel. A final image already
+		// waiting is sent now (#710 d1c bench: up to a whole interval lost;
+		// Fable S3).
+		wake := s.wakeCh()
+		if s.finalPending(term, sentFinal) {
+			next = time.Now()
+		}
 		if d := time.Until(next); d > 0 {
 			t := time.NewTimer(d)
 			select {
 			case <-ctx.Done():
 				t.Stop()
 				return
+			case <-wake: // a switchover's final image is ready
+				t.Stop()
 			case <-t.C:
 			}
 		}
@@ -351,19 +412,37 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		start := time.Now()
-		if !s.capture(ctx, term, &img) {
-			return
+		out, final := &img, false
+		if f := s.final.Load(); f != nil && f.term == term && !mutNaut("final_image_unsent") {
+			sent := f.seq == sentFinal
+			if mutNaut("final_sent_once_per_connection") {
+				sent = sentFinal != 0
+			}
+			if sent {
+				next = start.Add(streamMinInterval) // nothing more: the gate shuts next
+				continue
+			}
+			out, final = f.img, true
+		} else {
+			switch s.capture(ctx, term, &img) {
+			case captureFailed:
+				return
+			case captureSwitching:
+				next = start.Add(streamMinInterval) // the final image wakes this wait
+				continue
+			}
+			img.Term, img.Build = term, s.build
+			ret, err := s.rt.RetainImage()
+			if err != nil {
+				slog.Warn("redundancy: state stream: the retain section could not be read", "err", err)
+				return
+			}
+			img.Retain = ret
 		}
-		img.Term, img.Build = term, s.build
-		ret, err := s.rt.RetainImage()
-		if err != nil {
-			slog.Warn("redundancy: state stream: the retain section could not be read", "err", err)
-			return
-		}
-		img.Retain = ret
 		var kind byte = streamImage
 		var tb *runtime.ImageTooBigError
-		buf, err = runtime.EncodeImageFormat(buf[:0], &img, format)
+		var err error
+		buf, err = runtime.EncodeImageFormat(buf[:0], out, format)
 		switch {
 		case errors.As(err, &tb):
 			kind = streamTooBig
@@ -404,9 +483,12 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		s.intervalMs, s.total = interval.Milliseconds(), s.total+uint64(len(buf))+9
 		if kind == streamImage {
-			s.sentTerm, s.sentSeq, s.sentAt, s.bytes = img.Term, img.Seq, time.Now(), len(buf)
-			s.noteSent(img.Term, img.Seq, s.sentAt, !sentHere) // markMu inside s.mu: markMu is a leaf
+			s.sentTerm, s.sentSeq, s.sentAt, s.bytes = out.Term, out.Seq, time.Now(), len(buf)
+			s.noteSent(out.Term, out.Seq, s.sentAt, !sentHere) // markMu inside s.mu: markMu is a leaf
 			sentHere = true
+			if final {
+				sentFinal = out.Seq
+			}
 			if format >= runtime.ImageFormats[len(runtime.ImageFormats)-1] && !mutNaut("hot_cold_condition_never_clears") {
 				s.coldWhy = "" // a standby follows a stream it could take over hot from
 				s.handBackWhy = ""
@@ -419,18 +501,32 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// capture's answers.
+const (
+	captured         = iota
+	captureFailed    // the stream ends
+	captureSwitching // a switchover stopped the scans: its final image comes instead
+)
+
 // capture asks every task for a frame copy and takes it once each has
-// made one, while this controller leads in term.
-func (s *pairStream) capture(ctx context.Context, term uint64, img *runtime.Image) bool {
+// made one, while this controller leads in term. A switchover of term
+// stops the scans, so no copy comes: the final image does.
+func (s *pairStream) capture(ctx context.Context, term uint64, img *runtime.Image) int {
 	s.rt.RequestImage()
 	deadline := time.Now().Add(streamCaptureWait)
 	for !s.rt.TakeImage(img) {
+		if s.rt.Switching() == term && !mutNaut("capture_ignores_switching") {
+			return captureSwitching
+		}
 		if ctx.Err() != nil || !s.leads(term) || time.Now().After(deadline) {
-			return false
+			return captureFailed
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	return true
+	if s.rt.Switching() == term && !mutNaut("capture_ignores_switching") {
+		return captureSwitching // taken as the scans stopped: the final image replaces it (Fable S1)
+	}
+	return captured
 }
 
 // mayFollow reports whether this controller follows a leader's stream:

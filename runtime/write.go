@@ -49,7 +49,22 @@ var (
 	ErrReadOnly = errors.New("read-only")
 	// ErrMoved: the tag no longer holds the value the caller expected.
 	ErrMoved = errors.New("moved")
+	// ErrSwitching: a planned switchover is moving the lead to the peer
+	// (#710 d1c, switch.go): nothing from outside the programs lands
+	// here until it ends, so the final image the standby takes over from
+	// is the whole state.
+	ErrSwitching = errors.New("switching: the lead is moving to the peer controller (a planned switchover); write on the new leader")
 )
+
+// switchingLocked is ErrSwitching while a switchover is under way, else
+// nil. Caller holds t.mu (BeginSwitch sets the flag under it, so a write
+// that took the lock first landed before the switchover's image).
+func (t *Tags) switchingLocked() error {
+	if t.switching.Load() && !mutRuntime("switch_writes_allowed") {
+		return ErrSwitching
+	}
+	return nil
+}
 
 // MovedError says what a guarded write expected and what the tag holds.
 type MovedError struct {
@@ -107,6 +122,10 @@ func (t *Tags) WriteAs(ops []WriteOp, by string) []error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for i, op := range ops {
+		if err := t.switchingLocked(); err != nil {
+			errs[i] = err
+			continue
+		}
 		if f := t.forcedOverlapLocked(op.Path); f != "" {
 			errs[i] = &ForcedError{Path: op.Path, Force: f}
 			continue
@@ -178,7 +197,9 @@ func (t *Tags) WriteSetGuarded(ops []WriteOp, expect map[string]any, by string, 
 		if cur, key, ok := t.lookupLocked(op.Path); ok {
 			out[i].From = plainNumeric(t.liveLocked(key, cur))
 		}
-		if want, guarded := expect[ir.NameKey(op.Path)]; guarded && !paramEq(out[i].From, want) {
+		if err := t.switchingLocked(); err != nil {
+			out[i].Err = err
+		} else if want, guarded := expect[ir.NameKey(op.Path)]; guarded && !paramEq(out[i].From, want) {
 			out[i].Err = &MovedError{Path: op.Path, Expected: want, Actual: out[i].From}
 		} else if f := t.forcedOverlapLocked(op.Path); f != "" {
 			out[i].Err = &ForcedError{Path: op.Path, Force: f}

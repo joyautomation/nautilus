@@ -812,6 +812,53 @@ a warning while it holds, and in the journal
 alarms at max and for a safe value not delivered are system alarms,
 raised when the project has an `alarms:` section.
 
+#### Planned switchover
+
+To move the lead to the standby on purpose (before servicing the
+leader, say), run on either controller:
+
+```sh
+naut redundancy switchover
+```
+
+The standby takes over hot from the leader's last scans, with no seam
+in the program's state, and without waiting for the leader's lease to
+run out, which is what a failover must do. In order:
+
+1. The command is refused, saying why, unless the standby is ready:
+   it is current (it has acknowledged the newest state images, as
+   `PEER_READY()` says), it may lead, and its I/O is healthy (no field
+   driver in error, degraded, offline or still connecting). The leader must hold
+   no force and no takeover hold. A switchover checks that the
+   standby's I/O is healthy, not yet that it reaches every device this
+   leader reaches.
+2. Each task on the leader finishes the scan it is in, sends that
+   scan's outputs, and stops. For that moment, writes from the HMI, the
+   API or OPC UA, forces, substitutes, SFC commands, online edits and
+   IO-Link parameter writes are refused with "switching" (HTTP 503 with
+   `Retry-After`); write again on the new leader.
+3. The leader sends a final state image of those last scans, and waits
+   for the standby to acknowledge exactly that image.
+4. The leader resigns: it stops sending, lets every write already on
+   its way finish, and tells the voters. The standby takes over at once.
+
+Until step 4 the switchover can still be called off: if the standby
+does not acknowledge the final image within a quarter lease, or a scan
+does not finish in that time, the leader goes on leading with nothing
+lost, and the command says `aborted`. Once the leader resigns there is
+no going back. If a write on its way does not finish within half a
+lease, the leader tells the voters nothing, and the standby takes over
+when the lease runs out, as after a failover; the command says
+`failover`.
+
+Alarms keep paging across a switchover: a page on its way when the
+leader resigns is sent all the same, and the new leader pages the
+alarm's level again, so a page may arrive twice, but is never lost.
+
+The command needs the redundancy permission, is journalled under your
+name (`redundancy.switchover`, with how long each step took), and a
+standby forwards it to the leader.
+
 #### Commissioning a new pair
 
 1. **Draw the pair's identity**, on any machine, before anything runs:
