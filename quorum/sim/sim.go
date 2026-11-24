@@ -536,6 +536,11 @@ func (w *World) start(n *node) {
 	n.up, n.deferred = true, nil
 	n.paused = n.pauses > 0 || n.freezes > 0
 	n.boot++
+	for k := range w.leadHeard {
+		if k.voter == n.addr {
+			delete(w.leadHeard, k) // a voter's leadSeq is memory only (Fable re-check, #1355)
+		}
+	}
 	n.sent, n.grantEnd, n.legit = nil, nil, nil
 	n.disk.queue, n.disk.busy = nil, false
 	n.spareSeq, n.spare = 0, false

@@ -401,3 +401,17 @@ func TestAResignAfterThePromiseRanOutIsRefused(t *testing.T) {
 		t.Fatal("the voter says it took a RESIGN it refused")
 	}
 }
+
+// leadSeq keeps a name's boots in the order last heard: a live boot that
+// keeps sending is never the one a full list drops.
+func TestLeadSeqDropsTheBootHeardLongestAgo(t *testing.T) {
+	v := ready("W")
+	v.noteLeadSeq(Request{From: "A", Term: 5, Nonce: 0xA, Seq: 7})
+	for i := uint64(1); i <= 2*maxLeadSeqBoots; i++ {
+		v.noteLeadSeq(Request{From: "A", Term: 5, Nonce: 0x100 + i, Seq: 1})
+		v.noteLeadSeq(Request{From: "A", Term: 5, Nonce: 0xA, Seq: 3}) // the live boot, again
+	}
+	if got := v.leadSeqOf("A", 0xA); got != 7 {
+		t.Fatalf("the live boot's Seq: %d, want 7", got)
+	}
+}

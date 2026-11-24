@@ -290,17 +290,21 @@ func (v *Voter) noteLeadSeq(r Request) {
 	if v.leadSeq == nil {
 		v.leadSeq = map[NodeID][]bootSeq{}
 	}
+	// Kept in the order last heard, so a full list drops the boot heard
+	// longest ago, never a live one (Fable re-check, #1355).
 	bs := v.leadSeq[r.From]
+	seq := r.Seq
 	for i := range bs {
 		if bs[i].nonce == r.Nonce {
-			bs[i].seq = max(bs[i].seq, r.Seq)
-			return
+			seq = max(seq, bs[i].seq)
+			bs = append(bs[:i:i], bs[i+1:]...)
+			break
 		}
 	}
 	if len(bs) >= maxLeadSeqBoots {
 		bs = bs[1:]
 	}
-	v.leadSeq[r.From] = append(bs, bootSeq{nonce: r.Nonce, seq: r.Seq})
+	v.leadSeq[r.From] = append(bs, bootSeq{nonce: r.Nonce, seq: seq})
 }
 
 // maxLeadSeqBoots bounds the boots per name noteLeadSeq keeps: a name's
