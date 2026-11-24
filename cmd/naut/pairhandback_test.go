@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/retain"
 )
 
 // The bad-retain hand-back end to end (#710 S2c-3, pairhandback.go). Each
@@ -438,18 +439,30 @@ func TestPairHandBackEndsTheResignersHold(t *testing.T) {
 // stays. An ask of the peer's new leadership ends it (#710 d1d, Fable).
 // handback_any_epoch turns it red.
 func TestPairAStaleHandBackKeepsTheResignHold(t *testing.T) {
-	r, _ := newHandBackRig(t)
+	r, dirs := newHandBackRig(t)
 	lead := r.leader()
 	stand := other(lead)
 	r.inSync(t, stand)
 	r.set(t, lead, "SP", 41.5)
 	r.imaged(t, lead)
+	// The resigner says yes to a hand-back only on a retain file that holds
+	// a place in the stream: its own save as leader records one, every 2 s
+	// (CI on #1362: asked before that save, it said no, and kept the hold).
+	pairWait(t, lead+"'s retain file to record its place", 10*time.Second, func() bool {
+		b, err := os.ReadFile(filepath.Join(dirs[lead], "retain.json"))
+		var st retain.State
+		return err == nil && json.Unmarshal(b, &st) == nil && st.Stream != nil
+	})
 	resigned := r.nodes[lead].m.q.Term()
 	before := r.nodes[stand].m.q.Node().Term()
 	if rep, err := r.nodes[lead].m.q.Resign(context.Background(), 1, false); err != nil || !rep.Resigned {
 		t.Fatalf("%s's resign: %+v %v", lead, rep, err)
 	}
 	r.wonAfter(t, stand, before)
+	pairWait(t, lead+" to stand down", 5*time.Second, func() bool {
+		_, leading := r.nodes[lead].rt.LeadingTerm()
+		return !leading && !r.nodes[lead].m.q.IsLeader()
+	})
 	ask := func(epoch uint64) handBackAnswer {
 		b, _ := json.Marshal(handBackAsk{Epoch: epoch})
 		rec := httptest.NewRecorder()
@@ -460,11 +473,15 @@ func TestPairAStaleHandBackKeepsTheResignHold(t *testing.T) {
 		}
 		return ans
 	}
-	ask(resigned)
+	if ans := ask(resigned); !ans.Good {
+		t.Fatalf("the stale ask was answered no (%s): the test needs a yes that keeps the hold", ans.Why)
+	}
 	if held, epoch := r.nodes[lead].m.q.Node().InResignHold(); !held || epoch != resigned {
 		t.Fatalf("a hand-back ask of the resigned leadership %d ended the hold (held %v, resigned %d)", resigned, held, epoch)
 	}
-	ask(r.nodes[stand].m.q.Node().Term())
+	if ans := ask(r.nodes[stand].m.q.Node().Term()); !ans.Good {
+		t.Fatalf("the peer's new leadership's ask was answered no: %s", ans.Why)
+	}
 	if held, _ := r.nodes[lead].m.q.Node().InResignHold(); held {
 		t.Fatal("a hand-back ask of the peer's new leadership left the hold")
 	}
