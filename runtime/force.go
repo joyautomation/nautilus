@@ -280,6 +280,9 @@ func (t *Tags) UnforceIf(addr string, gen uint64) bool {
 func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if err := t.switchingLocked(); err != nil {
+		return 0, "", fmt.Errorf("force %s: %w", addr, err)
+	}
 	root, path, tv, err := t.resolveForceAddr(addr)
 	if err != nil {
 		return 0, "", err

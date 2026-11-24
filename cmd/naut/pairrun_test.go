@@ -283,6 +283,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	m.setIOStatus(proj.DriverStatus(nil, nil)) // as runProject does
 	m.startStream(rt, proj.Redundancy.StreamBudgetBytes(), proj.Redundancy.HotMaxAgeOr(-1))
 	gate := gateOnLiveScans(proj, m.q, rt, localGateLease)
 	// Live I/O configuration, as runProject wires it: its edge re-applies

@@ -554,6 +554,24 @@ func auditRows() []auditRow {
 			method: "POST", path: "/api/cluster/release-hold", body: `{}`,
 			action: "redundancy.release-hold", target: "takeover hold on b", user: "anonymous", source: "api", result: "refused",
 			check: wantReason("NAUTILUS_TOKEN")},
+		{name: "switch over", pattern: "POST /api/cluster/switchover", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/switchover", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.switchover", target: "the lead of b", user: "token", source: "api", result: "ok"},
+		{name: "switch over, refused", pattern: "POST /api/cluster/switchover", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/switchover", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.switchover", target: "the lead of b", user: "token", source: "api", result: "refused",
+			check: wantReason("fake refused")},
+		{name: "switch over, fell back to a failover", pattern: "POST /api/cluster/switchover", server: pairServer("failover"),
+			method: "POST", path: "/api/cluster/switchover", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.switchover", target: "the lead of b", user: "token", source: "api", result: "error",
+			check: wantReason("fake failover")},
+		{name: "switch over, no credential configured", pattern: "POST /api/cluster/switchover", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/switchover", body: `{}`,
+			action: "redundancy.switchover", target: "the lead of b", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
 		{name: "vouch, the picture printed", pattern: "POST /api/cluster/vouch", server: pairServer("refused"),
 			method: "POST", path: "/api/cluster/vouch", body: `{}`,
 			header: map[string]string{"Authorization": "Bearer s3cret"},
@@ -1000,6 +1018,11 @@ func (f *fakePair) ReleaseHold(by string) error {
 		return runtime.ErrNotHolding
 	}
 	return nil
+}
+
+func (f *fakePair) Switchover(_ context.Context, by string) (any, string, string) {
+	f.by = append(f.by, by)
+	return map[string]any{"from": "b", "to": "a"}, f.outcome, "fake " + f.outcome
 }
 
 func (f *fakePair) ClearDuplicate(_ context.Context, name, by string) (any, string, string) {

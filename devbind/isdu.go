@@ -52,6 +52,30 @@ type Caller interface {
 	Call(ctx context.Context, object, method opcua.NodeRef, args ...*ua.Variant) ([]*ua.Variant, error)
 }
 
+// fencedCaller is a Caller that can also make a call through the write
+// gate (opcua.Driver.CallFenced).
+type fencedCaller interface {
+	CallFenced(ctx context.Context, object, method opcua.NodeRef, args ...*ua.Variant) ([]*ua.Variant, error)
+}
+
+// fenced makes a fencedCaller's calls go through the gate.
+type fenced struct{ c fencedCaller }
+
+func (f fenced) Call(ctx context.Context, object, method opcua.NodeRef, args ...*ua.Variant) ([]*ua.Variant, error) {
+	return f.c.CallFenced(ctx, object, method, args...)
+}
+
+// writeCaller is the Caller a parameter write goes through: a write to a
+// device goes only while this controller's write gate is open (on a pair's
+// leader), and a switchover's drain waits for it (#710 d1c). A Caller
+// without a gate (a test's) is used as it is.
+func writeCaller(c Caller) Caller {
+	if fc, ok := c.(fencedCaller); ok {
+		return fenced{fc}
+	}
+	return c
+}
+
 // ISDUResult is a parameter as read, and what is known of the port at the
 // time.
 type ISDUResult struct {
@@ -195,7 +219,7 @@ func (ps *ports) isduWrite(ctx context.Context, c Caller, port, ref string, v an
 	if st2, ch2 := ps.identity(p); !ch2 || !st2.Drives() {
 		return res, fmt.Errorf("%w: port device %s: the device on %s port %d is no longer the one expected (%s): a parameter would reach the wrong device", ErrISDURefused, p.Name, p.Master, p.Num, st2)
 	}
-	_, callErr := callISDU(ctx, c, p.isdu, p.isdu.write, prm, raw)
+	_, callErr := callISDU(ctx, writeCaller(c), p.isdu, p.isdu.write, prm, raw)
 	if st3, ch3 := ps.identity(p); !ch3 || st3 != st {
 		slog.Warn("iolink: the device on a port changed during a parameter write; the outcome is uncertain",
 			"port", p.Name, "master", p.Master, "number", p.Num, "variable", prm.Variable.ID, "before", st.String(), "after", st3.String())

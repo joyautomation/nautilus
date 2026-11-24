@@ -39,6 +39,10 @@ type Program struct {
 	// a takeover (a hot one): TAKEOVER_SCAN() and HOT_TAKEOVER() for that
 	// scan only (#710 (b)). A swap (an online edit, a deploy) clears them.
 	tookOver, tookOverHot bool
+	// switching is its runtime's Tags.switching (nil for a program no
+	// runtime runs): an online edit is refused while a planned switchover
+	// is under way (ErrSwitching), read under mu.
+	switching *atomic.Bool
 
 	// bootSource is what Compile was first given — the program the deployed
 	// binary embeds. A running source that differs is an online edit in
@@ -197,6 +201,15 @@ func (p *Program) Check(src string) error {
 	return err
 }
 
+// switchingLocked is ErrSwitching while its runtime switches over (an
+// online edit then would miss the final image), else nil. Under p.mu.
+func (p *Program) switchingLocked() error {
+	if p.switching != nil && p.switching.Load() && !mutRuntime("switch_writes_allowed") {
+		return ErrSwitching
+	}
+	return nil
+}
+
 // Swap replaces the running program with newly-compiled source, resetting the
 // retained frame. On a compile error the old program keeps running.
 func (p *Program) Swap(src string) error {
@@ -204,6 +217,10 @@ func (p *Program) Swap(src string) error {
 	if err == nil {
 		written := writtenOf(prog)
 		p.mu.Lock()
+		if err := p.switchingLocked(); err != nil {
+			p.mu.Unlock()
+			return err
+		}
 		p.prog, p.frame = prog, ir.NewFrame(prog)
 		p.written.Store(written)
 		p.carryIdx = p.carry.idxOf(*written)
@@ -288,6 +305,10 @@ func (p *Program) SwapWarm(src string) (SwapReport, error) {
 	if err == nil {
 		written := writtenOf(prog)
 		p.mu.Lock()
+		if err := p.switchingLocked(); err != nil {
+			p.mu.Unlock()
+			return SwapReport{}, err
+		}
 		frame, resets := ir.MigrateFrame(prog, p.prog, p.frame)
 		p.prevSource, p.prevProg, p.prevFrame = p.source, p.prog, p.frame
 		p.prog, p.frame = prog, frame
@@ -310,6 +331,9 @@ func (p *Program) SwapWarm(src string) (SwapReport, error) {
 func (p *Program) Rollback() (SwapReport, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := p.switchingLocked(); err != nil {
+		return SwapReport{}, err
+	}
 	if p.prevProg == nil {
 		return SwapReport{}, errors.New("runtime: nothing to roll back")
 	}

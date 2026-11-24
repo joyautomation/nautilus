@@ -169,6 +169,9 @@ func (s *Server) handlePutProgram(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	report, err := p.SwapWarm(req.Source)
+	if refuseSwitching(w, err) {
+		return
+	}
 	if err != nil {
 		// Compile failure: the old program is still running, untouched.
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
@@ -194,6 +197,9 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	report, err := p.Rollback()
+	if refuseSwitching(w, err) {
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return

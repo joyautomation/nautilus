@@ -61,6 +61,39 @@ type Quorum struct {
 	logStatus    func() *LogStatus     // SetLogStatus
 	streamStatus func() *StreamStatus  // SetStreamStatus
 	writesCut    func() map[string]int // SetWritesCut
+	switchover   SwitchoverFunc        // SetSwitchover
+}
+
+// The outcomes of Switchover.
+const (
+	SwitchDone     = "done"     // the RESIGN went to the voters: the standby takes over hot now
+	SwitchRefused  = "refused"  // nothing was done: this controller leads on
+	SwitchAborted  = "aborted"  // stopped before the resign: this controller leads on, in the same leadership, nothing lost
+	SwitchFailover = "failover" // past the resign, no RESIGN sent (the drain did not finish): the lease runs out as in a failover
+)
+
+// SwitchoverFunc runs a planned switchover (#710 d1c, the pair's
+// composition in cmd/naut): by is the principal. It returns the report
+// (JSON), the outcome (Switch*) and, when not done, why.
+type SwitchoverFunc func(ctx context.Context, by string) (report any, outcome, reason string)
+
+// SetSwitchover installs the pair's switchover (Switchover).
+func (q *Quorum) SetSwitchover(f SwitchoverFunc) {
+	q.mu.Lock()
+	q.switchover = f
+	q.mu.Unlock()
+}
+
+// Switchover hands the lead to the standby in a planned switchover
+// (`naut redundancy switchover`, POST /api/cluster/switchover).
+func (q *Quorum) Switchover(ctx context.Context, by string) (report any, outcome, reason string) {
+	q.mu.Lock()
+	f := q.switchover
+	q.mu.Unlock()
+	if f == nil {
+		return nil, SwitchRefused, "this controller's state stream is not running, so it cannot hand over without a seam"
+	}
+	return f(ctx, by)
 }
 
 // SetWritesCut adds the writes cut at their send deadline, by device, to

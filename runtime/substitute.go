@@ -372,6 +372,9 @@ func (r *Runtime) substitute(addr string, req SubstituteRequest) (Substitution, 
 	if req.ID == 0 && r.standby() {
 		return Substitution{}, nil, fmt.Errorf("substitute %s: this replica is not leading: start it on the leader", addr)
 	}
+	if req.ID == 0 && r.tags.switching.Load() && !mutRuntime("switch_writes_allowed") {
+		return Substitution{}, nil, fmt.Errorf("substitute %s: %w", addr, ErrSwitching)
+	}
 	root, _ := ir.SplitAddress(addr)
 	if _, _, whole := r.tags.lookupName(addr); whole {
 		root = addr
@@ -407,7 +410,15 @@ func (r *Runtime) substitute(addr string, req SubstituteRequest) (Substitution, 
 		deadline: r.mono() + req.For, timed: true,
 	}
 	r.tags.mu.Lock()
-	s, replaced, err := r.tags.substituteLocked(addr, req.Value, e)
+	var s Substitution
+	var replaced *subEntry
+	var err error
+	if req.ID == 0 {
+		err = r.tags.switchingLocked() // under the store's lock, as BeginSwitch sets it (Fable S5)
+	}
+	if err == nil {
+		s, replaced, err = r.tags.substituteLocked(addr, req.Value, e)
+	}
 	r.tags.mu.Unlock()
 	if err != nil {
 		return Substitution{}, nil, fmt.Errorf("substitute %s: %w", addr, err)
@@ -434,9 +445,16 @@ func (r *Runtime) Restore(id uint64, by string) (Substitution, bool) {
 	if r.standby() {
 		return Substitution{}, false
 	}
+	if r.tags.switching.Load() && !mutRuntime("switch_writes_allowed") {
+		return Substitution{}, false // a planned switchover is under way (ErrSwitching)
+	}
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
 	r.tags.mu.Lock()
+	if r.tags.switchingLocked() != nil {
+		r.tags.mu.Unlock()
+		return Substitution{}, false // a planned switchover is under way (ErrSwitching)
+	}
 	s, ok := r.tags.unsubstituteLocked(id)
 	r.tags.mu.Unlock()
 	if !ok {

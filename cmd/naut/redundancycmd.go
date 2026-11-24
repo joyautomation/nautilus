@@ -99,6 +99,17 @@ Usage:
       tag said they may. For a program that cannot release by itself (a
       hold at its max). Journalled under your name. On a standby it is
       forwarded to the leader.
+  naut redundancy [flags] switchover
+      hand the lead to the standby now, without a seam: each task finishes
+      its scan, the standby acknowledges the final state image, and the
+      leader resigns so the standby takes over hot at once (no waiting out
+      the lease). Refused, saying why, unless the standby is current, may
+      lead, and its inputs are live, and the leader holds no force and no
+      takeover hold. It checks that the standby's I/O is healthy, not yet
+      that it reaches every device the leader reaches. Writes to the
+      controllers are refused ("switching") for the moment it takes.
+      Journalled under your name. On a standby it is forwarded to the
+      leader.
 
 Flags:
   --url <url>         the controller's tag API (default $NAUTILUS_URL, else
@@ -117,7 +128,8 @@ Under an auth: block the commands need the redundancy permission
 (administrator by default). Without one they take only NAUTILUS_TOKEN.
 Every command but new-pair is written to the controller's audit journal
 (redundancy.commission, redundancy.recommission, redundancy.vouch,
-redundancy.clear-duplicate, redundancy.release-hold), accepted or refused,
+redundancy.clear-duplicate, redundancy.release-hold, redundancy.switchover),
+accepted or refused,
 with what was accepted.
 
 Exit status: 0 done; 1 refused, incomplete or failed; 2 usage.
@@ -370,6 +382,24 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 			} else {
 				fmt.Fprintf(stdout, "refused (%d): %s\n", code, bytes.TrimSpace(b))
 			}
+		}
+		if code != http.StatusOK {
+			return 1
+		}
+		return 0
+	case "switchover":
+		if len(pos) != 1 {
+			fmt.Fprint(stderr, redundancyUsage)
+			return 2
+		}
+		code, b, err := do(http.MethodPost, "/api/cluster/switchover", map[string]any{})
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *asJSON {
+			stdout.Write(b)
+		} else {
+			printSwitchoverAnswer(stdout, code, b)
 		}
 		if code != http.StatusOK {
 			return 1
@@ -888,4 +918,36 @@ func bootList(bs []quorum.BootSeq) string {
 		s = append(s, fmt.Sprintf("boot %x", b.Nonce))
 	}
 	return strings.Join(s, ", ")
+}
+
+// printSwitchoverAnswer says how a switchover went, in words.
+func printSwitchoverAnswer(w io.Writer, code int, b []byte) {
+	var ans struct {
+		Outcome string `json:"outcome"`
+		Error   string `json:"error"`
+		Report  struct {
+			From     string  `json:"from"`
+			To       string  `json:"to"`
+			StopMs   float64 `json:"stopMs"`
+			ImageMs  float64 `json:"imageMs"`
+			ResignMs float64 `json:"resignMs"`
+			TotalMs  float64 `json:"totalMs"`
+		} `json:"report"`
+	}
+	if json.Unmarshal(b, &ans) != nil || ans.Outcome == "" {
+		fmt.Fprintf(w, "refused (%d): %s\n", code, bytes.TrimSpace(b))
+		return
+	}
+	r := ans.Report
+	switch ans.Outcome {
+	case "done":
+		fmt.Fprintf(w, "switched over: %s handed the lead to %s, which takes over hot now (scans stopped in %.0f ms, final image acknowledged in %.0f ms, resign %.0f ms; %.0f ms in all)\n",
+			r.From, r.To, r.StopMs, r.ImageMs, r.ResignMs, r.TotalMs)
+	case "failover":
+		fmt.Fprintf(w, "switchover fell back to a failover: %s\n", ans.Error)
+	case "aborted":
+		fmt.Fprintf(w, "switchover aborted: %s\n", ans.Error)
+	default:
+		fmt.Fprintf(w, "refused (%d): %s\n", code, ans.Error)
+	}
 }

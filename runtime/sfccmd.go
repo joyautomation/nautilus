@@ -149,6 +149,9 @@ func (p *Program) SFC() (SFCInfo, error) {
 func (p *Program) SetStep(step string) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := p.switchingLocked(); err != nil {
+		return "", err
+	}
 	chart, err := p.sfcChartLocked()
 	if err != nil {
 		return "", err
@@ -175,6 +178,9 @@ func (p *Program) SetStep(step string) (string, error) {
 func (p *Program) FireTransition(id string) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := p.switchingLocked(); err != nil {
+		return "", err
+	}
 	chart, err := p.sfcChartLocked()
 	if err != nil {
 		return "", err
