@@ -361,7 +361,7 @@ func TestOIDCModulesStayInAuthOIDC(t *testing.T) {
 // way). An entry matches the package and everything below it.
 var (
 	wasmForbidden = []string{
-		module + "/quorum/node",        // redundancy: only leader's election needs it
+		module + "/quorum",             // redundancy: the vote protocol and its driver (quorum/node); leader/election.go is !js
 		module + "/alarm/channel/send", // paging senders (net/smtp); their config in alarm/channel is fine
 		"net/smtp",                     // ... and its standard-library half
 		module + "/alarm/pgjournal",    // the alarm journal in Postgres
@@ -378,7 +378,6 @@ var (
 	}
 	// wasmLeaks: today's leaks and who removes them. Keep it shrinking.
 	wasmLeaks = map[string]string{
-		module + "/quorum/node":       "leader/election.go (redundancy split)",
 		module + "/internal/webpush":  "server/push.go (server seams)",
 		module + "/auth/users":        "server/{authorize,signin,server}.go (server seams)",
 		"golang.org/x/crypto/argon2":  "via auth/users",
