@@ -577,6 +577,8 @@ namespace Tiad
                 s.AccessTurnOnTried = true;
                 Log.Line("audit access-turn-on session={0} project={1} opened turn-on pending", s.Id, Json.Quote(s.Project));
             }
+            // Opened as saved: nothing has changed it yet (#1347).
+            s.Untouched = true;
             sessions.End(s);
             var o = SessionJson(s);
             if (s.AccessTurnOn) o["notes"] = new[] { TurnOnRule.PendingNote };

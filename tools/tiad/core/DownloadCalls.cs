@@ -612,10 +612,11 @@ namespace Tiad
                     bool everyBlock = req.Hardware || (req.Decisions.ResetData == true && layout.Baseline == "");
                     bool marked = !req.DryRun && s.AccessTurnOn && !s.AccessTurnOnLoaded;
                     if (marked) MarkTurnOnPending(s, req);
-                    if (!req.DryRun) Record(t, s, req, ranWith, run, layoutNow);
+                    if (!req.DryRun) Record(t, s, req, ranWith, run, layoutNow, layout.Baseline);
                     // A download to the CPU runs: the verify that found it
                     // equal to its last deploy no longer stands.
                     if (!req.DryRun) ForgetVerified(req.Address);
+                    else BumpLoad(req.Address);
                     // Recorded: TIA's download comes next, and may load.
                     if (marked) s.AccessTurnOnTried = true;
                     try
@@ -890,6 +891,9 @@ namespace Tiad
                 var r = c.Json();
                 string password = OnlinePassword(r);
                 DeviceAttestation att = ReadDeviceAttestation(r);
+                // layoutBaseline: an equal compare of the untouched project
+                // also takes the session's adopt baseline (#1347).
+                bool wantBaseline = r.Bool("layoutBaseline");
                 r.Done();
                 // A project opened as found (no spec applied yet: an
                 // adopted one, #1272) compares with its own CPU, at the
@@ -902,6 +906,21 @@ namespace Tiad
                 }
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
                 CheckDevicePin(s, address, "compare", att);
+                // The CPU's load count and journal head before the compare
+                // goes online: a download from here on voids what it takes.
+                string baselineWhy = null;
+                long gen = 0;
+                string head = null;
+                AdoptBaseline taken = null;
+                if (wantBaseline)
+                {
+                    // Asking again drops what an earlier compare took.
+                    s.Adopted = null;
+                    s.AdoptRefused = "";
+                    gen = LoadGen(address);
+                    head = JournalHead(address, out baselineWhy);
+                    if (baselineWhy == null) baselineWhy = AdoptBaselineRefusal(s);
+                }
                 var diffs = new List<Difference>();
                 // Read on the TIA thread, where trust is recorded: what the
                 // compare rode on, also once a later close retired it.
@@ -909,7 +928,10 @@ namespace Tiad
                 bool equal = false;
                 // Journalled before it goes online, so a compare that fails
                 // is journalled as riding on the trust too.
-                OnlineCompare cmp = OnSession(s, delegate(ITia t)
+                OnlineCompare cmp;
+                try
+                {
+                cmp = OnSession(s, delegate(ITia t)
                 {
                     BlindTrust bt = blindTrust;
                     rode = bt;
@@ -917,8 +939,22 @@ namespace Tiad
                     {
                         Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
                     }
-                    return CompareOnline(t, s, address, password, bt, "compare", diffs, out equal);
+                    OnlineCompare oc = CompareOnline(t, s, address, password, bt, "compare", diffs, out equal);
+                    if (wantBaseline && baselineWhy == null)
+                    {
+                        if (!equal) baselineWhy = "the compare found the project not equal to the CPU";
+                        else taken = TakeAdoptBaseline(t, s, address, gen, head, out baselineWhy);
+                    }
+                    return oc;
                 });
+                }
+                catch
+                {
+                    if (wantBaseline) s.AdoptRefused = "the compare failed";
+                    throw;
+                }
+                if (taken != null) s.Adopted = taken;
+                else if (wantBaseline) s.AdoptRefused = baselineWhy;
                 var list = new List<object>();
                 foreach (var d in diffs)
                 {
@@ -937,6 +973,24 @@ namespace Tiad
                 // A compare asks no TLS question of its own; it may ride on
                 // the instance's blind trust.
                 o["blindTrust"] = rode == null ? null : rode.ToJson();
+                if (wantBaseline)
+                {
+                    var b = new Obj();
+                    b["taken"] = taken != null;
+                    if (taken != null)
+                    {
+                        b["id"] = taken.Id;
+                        b["objects"] = taken.Objects.Count;
+                        b["unreadable"] = taken.Unreadable;
+                    }
+                    else
+                    {
+                        b["why"] = baselineWhy;
+                    }
+                    o["layoutBaseline"] = b;
+                    Log.Line("audit adopt-baseline session={0} project={1} address={2} taken={3} {4}", s.Id, Json.Quote(s.Project), Json.Quote(address),
+                        taken != null ? "yes" : "no", taken != null ? "id=" + taken.Id + " objects=" + taken.Objects.Count + " unreadable=" + taken.Unreadable + " journalHead=" + Json.Quote(taken.JournalHead) : "why=" + Json.Quote(baselineWhy));
+                }
                 return o;
             });
         }

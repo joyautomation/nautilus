@@ -96,20 +96,48 @@ namespace Tiad
         sealed class Route
         {
             public string Method;
+            public string Text;
             public string[] Pattern;
             public Handler Handler;
         }
 
         readonly List<Route> routes = new List<Route>();
 
+        // Matched, when set, runs for every request a route takes, before
+        // its handler, with the route ("POST /v1/sessions/{id}/compare")
+        // and the request's route variables. The agent marks a session
+        // touched here (UntouchedRule), so a route added later touches it
+        // without anyone remembering to.
+        // It is set once: a second assignment would silently drop the
+        // agent's touch, so it throws.
+        public Action<string, Dictionary<string, string>> Matched
+        {
+            get { return matched; }
+            set
+            {
+                if (matched != null) throw new InvalidOperationException("Router.Matched is set already");
+                matched = value;
+            }
+        }
+
+        Action<string, Dictionary<string, string>> matched;
+
         // Add registers a handler. A pattern is "/v1/a/{name}/b" (one
         // segment) or "/v1/files/{path...}" (the rest, possibly empty).
         public void Add(string method, string pattern, Handler h)
         {
-            routes.Add(new Route { Method = method, Pattern = pattern.TrimStart('/').Split('/'), Handler = h });
+            routes.Add(new Route { Method = method, Text = method + " " + pattern, Pattern = pattern.TrimStart('/').Split('/'), Handler = h });
         }
 
-        internal Handler Match(string method, List<string> segs, out Dictionary<string, string> vars, out bool pathKnown)
+        // Routes is every route registered, "METHOD /pattern", in order.
+        public List<string> Routes()
+        {
+            var l = new List<string>();
+            foreach (var r in routes) l.Add(r.Text);
+            return l;
+        }
+
+        public Handler Match(string method, List<string> segs, out Dictionary<string, string> vars, out bool pathKnown)
         {
             pathKnown = false;
             foreach (var r in routes)
@@ -119,6 +147,7 @@ namespace Tiad
                 pathKnown = true;
                 if (r.Method != method) continue;
                 vars = v;
+                if (Matched != null) Matched(r.Text, v);
                 return r.Handler;
             }
             vars = null;

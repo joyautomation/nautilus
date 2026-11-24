@@ -1639,6 +1639,10 @@ namespace Tiad.Fake
                 p.WebServer = sp.WebServer;
                 p.WebInterface = sp.WebInterface;
                 p.WebHttpsOnly = sp.WebHttpsOnly;
+                p.Blocks = new List<Block>(sp.Blocks);
+                p.GroupOf = new Dictionary<string, string>(sp.GroupOf, StringComparer.OrdinalIgnoreCase);
+                p.ObInfo = new Dictionary<string, ProjectBlock>(sp.ObInfo, StringComparer.OrdinalIgnoreCase);
+                p.Decls = new Dictionary<string, string>(sp.Decls, StringComparer.OrdinalIgnoreCase);
                 // A project saved unchanged since a load is what that load
                 // put on the CPU.
                 if (sp.RestoredKey != "")
@@ -2769,6 +2773,10 @@ namespace Tiad.Fake
                 Obj bo = b.ToJson();
                 string g;
                 if (p.GroupOf.TryGetValue(b.Name, out g)) bo["group"] = g;
+                // Its declaration part, as a real archive keeps the
+                // block: an adopted copy has the same layout (#1347).
+                string dc;
+                if (p.Decls.TryGetValue(b.Name, out dc)) bo["decl"] = dc;
                 ProjectBlock oi;
                 if (p.ObInfo.TryGetValue(b.Name, out oi))
                 {
@@ -2890,6 +2898,8 @@ namespace Tiad.Fake
                 p.Blocks.Add(new Block { Name = (string)b["name"], Kind = (string)b["kind"] });
                 object g;
                 if (b.TryGetValue("group", out g) && g != null) p.GroupOf[(string)b["name"]] = (string)g;
+                object dc;
+                if (b.TryGetValue("decl", out dc) && dc != null) p.Decls[(string)b["name"]] = (string)dc;
                 object oc;
                 if (b.TryGetValue("obClass", out oc) && oc != null)
                     p.ObInfo[(string)b["name"]] = new ProjectBlock
@@ -2963,6 +2973,12 @@ namespace Tiad.Fake
                 RestoredKey = p.Changed ? "" : p.RestoredKey,
             };
             c.CopyAccess(p);
+            // The program, as the Go fake's save keeps it: an open of the
+            // saved project (an adopted one too) holds its blocks (#1347).
+            c.Blocks = new List<Block>(p.Blocks);
+            c.GroupOf = new Dictionary<string, string>(p.GroupOf, StringComparer.OrdinalIgnoreCase);
+            c.ObInfo = new Dictionary<string, ProjectBlock>(p.ObInfo, StringComparer.OrdinalIgnoreCase);
+            c.Decls = new Dictionary<string, string>(p.Decls, StringComparer.OrdinalIgnoreCase);
             return c;
         }
 

@@ -32,6 +32,18 @@ namespace Tiad
         // (ITia.CloseProject, which keys off the TIA side's own record).
         public string HeldOnline = "";
         public bool Compiled;           // fully compiled since the last change
+        // Untouched is set by an open (POST /v1/sessions) and cleared, for
+        // good, by the first call on the session that UntouchedRule does
+        // not keep: only an untouched project is what was opened, so only
+        // its equal compare may make an adopt baseline (#1347).
+        public volatile bool Untouched;
+        // Adopted is the data layout baseline an equal compare of the
+        // untouched project took (POST .../compare layoutBaseline), null
+        // without one (#1347).
+        public AdoptBaseline Adopted;
+        // AdoptRefused is why the last compare that asked for an adopt
+        // baseline took none, "" otherwise: the layout check's reason.
+        public string AdoptRefused = "";
         // Unclean is set while an apply or an upload runs and stays set
         // when it fails part-way: the project then matches no spec, and
         // a later apply or save refuses (CpuReuse.Unclean).
@@ -222,6 +234,17 @@ namespace Tiad
             lock (mu)
             {
                 byId.Remove(s.Id);
+            }
+        }
+
+        // Touch marks session id touched, if it is in the table: a call
+        // UntouchedRule does not keep is about to run on it.
+        public void Touch(string id)
+        {
+            lock (mu)
+            {
+                Session s;
+                if (byId.TryGetValue(id, out s)) s.Untouched = false;
             }
         }
 

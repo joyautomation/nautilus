@@ -21,10 +21,11 @@ import (
 // hashes each program block's and PLC data type's XML export (the root
 // object's attribute list: interface, start values, number, memory
 // layout, the FB an instance DB belongs to) and compares it with the
-// layout recorded with the deploy the CPU verifiably holds. Any object
-// whose hash moved, or that was added, removed or could not be read, needs
-// Decisions.ResetData; so does a download with no such baseline, or one
-// that loads hardware.
+// layout recorded with the deploy the CPU verifiably holds, or with the
+// session's adopt baseline (#1347). Any object whose hash moved, or that
+// was removed or could not be read, needs Decisions.ResetData, and so does
+// an added one of a kind LayoutAddedKeepsData does not name; so does a
+// download with no such baseline, or one that loads hardware.
 
 // LayoutScheme names how the agent hashes a layout. A baseline hashed
 // with another scheme, or read by another TIA version, is no baseline.
@@ -68,11 +69,13 @@ type LayoutChange struct {
 type Layout struct {
 	Scheme string `json:"scheme"`
 	TIA    string `json:"tia"`
-	// Baseline is the deploy compared with, "" for none (NoBaseline says
-	// why).
-	Baseline   string         `json:"baseline"`
-	NoBaseline string         `json:"noBaseline,omitempty"`
-	Changes    []LayoutChange `json:"changes"`
+	// Baseline is the deploy compared with, or the session's adopt
+	// baseline (AdoptBaselinePrefix...), "" for none (NoBaseline says
+	// why). BaselineFrom is "deploy" or "adopted".
+	Baseline     string         `json:"baseline"`
+	BaselineFrom string         `json:"baselineFrom,omitempty"`
+	NoBaseline   string         `json:"noBaseline,omitempty"`
+	Changes      []LayoutChange `json:"changes"`
 	// DataBlocks are the data blocks whose values the load may lose: each
 	// the project holds whose own layout changed, or whose layout uses a
 	// changed object, however deep; then each the load removes.
@@ -103,8 +106,73 @@ type DeployLayout struct {
 	Objects []LayoutObject `json:"objects"`
 }
 
+// UntouchedKeeps are the session calls that keep a session untouched
+// (the agent's UntouchedRule, #1347): the ones that only read the project
+// (a layout read needs a station spec, which an untouched session has
+// not, so it is not here).
+// Every other call under /v1/sessions/{id}, one added later too, touches
+// the session before it runs, failed or not, and a touched session's
+// compare takes no adopt baseline.
+var UntouchedKeeps = []string{
+	"POST /v1/sessions/{id}/compare",
+	"POST /v1/sessions/{id}/export",
+}
+
+// UntouchedTouches is whether a call on route ("METHOD /pattern") touches
+// the session it names.
+func UntouchedTouches(route string) bool {
+	return strings.Contains(route, " /v1/sessions/{id}") && !slices.Contains(UntouchedKeeps, route)
+}
+
 // LayoutConsentSentence ends every why that needs the consent.
 const LayoutConsentSentence = "decisions.resetData yes is the consent to it"
+
+// AdoptBaselinePrefix starts an adopt baseline's id: "adopted:" and 16
+// hex of LayoutObjectsHash.
+const AdoptBaselinePrefix = "adopted:"
+
+// Baseline sources (Layout.BaselineFrom).
+const (
+	BaselineFromDeploy  = "deploy"
+	BaselineFromAdopted = "adopted"
+)
+
+// LayoutAddedKeepsData are the kinds an added object of which needs no
+// consent: a load that adds one keeps the CPU's data, in RUN and in STOP
+// (bench 1510SP, #1347).
+var LayoutAddedKeepsData = []string{"OB", "FB", "FC", "GlobalDB", "InstanceDB", "PlcStruct"}
+
+// LayoutNeedsConsent is whether a change needs Decisions.ResetData.
+func LayoutNeedsConsent(c LayoutChange) bool {
+	return c.Change != LayoutAdded || !slices.Contains(LayoutAddedKeepsData, c.Type)
+}
+
+// LayoutBaselineLabel names a baseline in words: "deploy <id>", or the
+// adopted project.
+func LayoutBaselineLabel(id string) string {
+	if strings.HasPrefix(id, AdoptBaselinePrefix) {
+		return "the adopted project (" + id + ")"
+	}
+	return "deploy " + id
+}
+
+// LayoutObjectsHash is the SHA-256 of every object's name, type and hash,
+// in name order: what names an adopt baseline.
+func LayoutObjectsHash(now []LayoutObject) string {
+	sorted := append([]LayoutObject(nil), now...)
+	sort.SliceStable(sorted, func(i, j int) bool { return layoutKey(sorted[i].Name) < layoutKey(sorted[j].Name) })
+	var sb strings.Builder
+	for _, o := range sorted {
+		sb.WriteString(o.Name + "\t" + o.Type + "\t" + o.Hash + "\n")
+	}
+	sum := sha256.Sum256([]byte(sb.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// AdoptBaselineID is the id of an adopt baseline of now.
+func AdoptBaselineID(now []LayoutObject) string {
+	return AdoptBaselinePrefix + LayoutObjectsHash(now)[:16]
+}
 
 // Layout asks the agent what a download of the session's compiled project
 // to the CPU at address (with its hardware configuration, if hardware)
@@ -133,6 +201,10 @@ func DiffLayout(now []LayoutObject, base *LayoutBaseline, noBaseline, tia string
 		}
 	} else {
 		d.Baseline = base.Deploy
+		d.BaselineFrom = BaselineFromDeploy
+		if strings.HasPrefix(base.Deploy, AdoptBaselinePrefix) {
+			d.BaselineFrom = BaselineFromAdopted
+		}
 		was := map[string]LayoutObject{}
 		for _, b := range base.Objects {
 			was[layoutKey(b.Name)] = b
@@ -186,16 +258,28 @@ func DiffLayout(now []LayoutObject, base *LayoutBaseline, noBaseline, tia string
 			}
 		}
 	}
-	d.ResetDataNeeded = base == nil || hardware || len(d.Changes) > 0
+	needing := 0
+	for _, c := range d.Changes {
+		if LayoutNeedsConsent(c) {
+			needing++
+		}
+	}
+	d.ResetDataNeeded = base == nil || hardware || needing > 0
+	label := ""
+	if base != nil {
+		label = LayoutBaselineLabel(base.Deploy)
+	}
 	switch {
 	case hardware:
 		d.Why = "the download loads the hardware configuration, and what that does to the CPU's data is not measured: every data block may return to its start values, retained ones included; " + LayoutConsentSentence
 	case base == nil:
 		d.Why = "no layout baseline (" + d.NoBaseline + "), so the load replaces the whole program: every data block returns to its start values, retained ones included; " + LayoutConsentSentence
+	case needing > 0:
+		d.Why = fmt.Sprintf("the data layout changed since %s (%d object(s)): the data blocks it reaches may return to their start values, retained ones included, and with the CPU in STOP TIA resets them without asking; %s", label, needing, LayoutConsentSentence)
 	case len(d.Changes) > 0:
-		d.Why = fmt.Sprintf("the data layout changed since deploy %s (%d object(s)): the data blocks it reaches may return to their start values, retained ones included, and with the CPU in STOP TIA resets them without asking; %s", base.Deploy, len(d.Changes), LayoutConsentSentence)
+		d.Why = fmt.Sprintf("the data layout of everything the CPU holds is unchanged since %s, which the CPU compared equal to, and the load only adds %d object(s): the load keeps the CPU's data", label, len(d.Changes))
 	default:
-		d.Why = "the data layout is unchanged since deploy " + base.Deploy + ", which the CPU compared equal to: the load keeps the CPU's data"
+		d.Why = "the data layout is unchanged since " + label + ", which the CPU compared equal to: the load keeps the CPU's data"
 	}
 	var sb strings.Builder
 	hw := "software"
@@ -283,5 +367,5 @@ func LayoutGateMissQuestion(id string) bool {
 
 // LayoutGateMiss is the agent's refusal of such a download.
 func LayoutGateMiss(question, baseline string) string {
-	return fmt.Sprintf("GATE MISS: TIA asked %q although the data layout check found nothing changed since deploy %s (no decisions.resetData was given, so tiad answers no such check): the download was cancelled at that check. The check missed a change TIA sees; the CPU's data is as it was if TIA asked before loading. Report it (#1341), and load with decisions.resetData if the reset is acceptable", question, baseline)
+	return fmt.Sprintf("GATE MISS: TIA asked %q although the data layout check found no change that needs it since %s (no decisions.resetData was given, so tiad answers no such check): the download was cancelled at that check. The check missed a change TIA sees; the CPU's data is as it was if TIA asked before loading. Report it (#1341), and load with decisions.resetData if the reset is acceptable", question, LayoutBaselineLabel(baseline))
 }

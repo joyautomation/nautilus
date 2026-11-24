@@ -1020,6 +1020,20 @@ type CompareResult struct {
 	// Address is the CPU compared with: the spec's, or for a project
 	// opened as found (no spec applied yet), the project's own.
 	Address string `json:"address,omitempty"`
+	// LayoutBaseline is what became of CompareRequest.LayoutBaseline,
+	// nil when it was not asked for.
+	LayoutBaseline *AdoptBaselineResult `json:"layoutBaseline,omitempty"`
+}
+
+// AdoptBaselineResult says whether a compare took the session's adopt
+// baseline (#1347): the layout of the project as opened, which the
+// compare found equal to the CPU. Without it, Why says why not.
+type AdoptBaselineResult struct {
+	Taken      bool   `json:"taken"`
+	ID         string `json:"id,omitempty"`
+	Objects    int    `json:"objects,omitempty"`
+	Unreadable int    `json:"unreadable,omitempty"`
+	Why        string `json:"why,omitempty"`
 }
 
 // Compare compares the project with the CPU it was downloaded to.
@@ -1048,6 +1062,11 @@ type CompareRequest struct {
 	// number and firmware off the device, for a pinned CPU the agent
 	// cannot identify online (DeviceAttestation, #1325); unused otherwise.
 	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
+	// LayoutBaseline asks an equal compare of a project nothing changed
+	// since it was opened to take the session's adopt baseline: the data
+	// layout a deploy's first download onto that CPU compares with
+	// (#1347). An agent older than that refuses the field.
+	LayoutBaseline bool `json:"layoutBaseline,omitempty"`
 }
 
 // CompareWith is Compare with options.

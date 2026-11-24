@@ -200,6 +200,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("Verify", func(t *testing.T) { contractVerify(t, start) })
 	t.Run("LayoutGate", func(t *testing.T) { contractLayoutGate(t, start) })
 	t.Run("Adopt", func(t *testing.T) { contractAdopt(t, start) })
+	t.Run("AdoptBaseline", func(t *testing.T) { contractAdoptBaseline(t, start) })
 	t.Run("Show", func(t *testing.T) { contractShow(t, start) })
 	t.Run("Online", func(t *testing.T) { contractOnline(t, start) })
 	t.Run("Credentials", func(t *testing.T) { contractCredentials(t, start) })

@@ -405,6 +405,8 @@ func oldLayoutAgent(err error) bool {
 	return tiad.Kind(err) == tiad.KindNotFound && strings.Contains(err.Error(), "/layout")
 }
 
+const oldAdoptBaselineMessage = "the agent is older than this naut (its compare takes no data layout baseline of an adopted project, so the first download onto a CPU that runs a program nautilus never loaded would reset its data, #1347): reinstall tiad from this nautilus version; nothing was imported or loaded"
+
 const oldLayoutMessage = "the agent is older than this naut (it has no data layout check, which says whether a download keeps the CPU's data, #1341): reinstall tiad from this nautilus version; nothing was loaded"
 
 // The --adopt sources besides a project archive.
@@ -591,6 +593,9 @@ type siemensDeployer struct {
 	// adoptedEqual is set when this deploy compared the adopted project
 	// equal with the CPU before the import (compareAdopted).
 	adoptedEqual bool
+	// obNow is what the import made of each cyclic interrupt OB
+	// (lower-cased name: "OB30, cyclic interrupt, 100 ms"), for the plan.
+	obNow map[string]string
 	// group is the block group nautilus imports into.
 	group string
 	// layout is the agent's data layout check of the compiled project
@@ -908,8 +913,19 @@ func (d *siemensDeployer) adopt(ctx context.Context, name string, st tiad.Statio
 func (d *siemensDeployer) compareAdopted(ctx context.Context, s *tiad.Session, address string, online *tiad.OnlineSecrets) int {
 	if a := d.adoption; a != nil {
 		d.say("comparing the adopted project with the CPU before anything is imported...")
-		c, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: online, DeviceAttestation: d.o.deviceAttestation()})
+		// The compare also takes the data layout baseline of the project
+		// as adopted, which keeps the CPU's data on this first download
+		// (#1347). Not for an upload yet: a CPU last loaded by an older
+		// TIA uploads blocks that nautilus's compile may rebuild under
+		// this TIA, a change the layout's hashes do not see (Fable), and
+		// that is not measured.
+		upload := a.Source == adoptUpload
+		c, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: online, DeviceAttestation: d.o.deviceAttestation(), LayoutBaseline: !upload})
 		if err != nil {
+			if tiad.Kind(err) == tiad.KindBadRequest && strings.Contains(err.Error(), `unknown field "layoutBaseline"`) {
+				d.fail("%s", oldAdoptBaselineMessage)
+				return 1
+			}
 			return d.tiadErr("compare the adopted project with the CPU", err)
 		}
 		// Compared with the deploy's CPU, never only with the CPU the
@@ -928,6 +944,16 @@ func (d *siemensDeployer) compareAdopted(ctx context.Context, s *tiad.Session, a
 		}
 		d.say("  equal: the adopted project is what the CPU runs")
 		d.adoptedEqual = true
+		switch b := c.LayoutBaseline; {
+		case upload:
+			d.say("  data layout baseline: none (an upload's layout is not taken as a baseline yet: a CPU last loaded by an older TIA may hold blocks nautilus's compile rebuilds; the first download needs --reset-data)")
+		case b != nil && b.Taken && b.Unreadable > 0:
+			d.say("  data layout baseline: the adopted project as the CPU runs it (%d objects, %s); %d could not be read and count as changed", b.Objects, b.ID, b.Unreadable)
+		case b != nil && b.Taken:
+			d.say("  data layout baseline: the adopted project as the CPU runs it (%d objects, %s)", b.Objects, b.ID)
+		case b != nil:
+			d.say("  data layout baseline: none (%s)", b.Why)
+		}
 	}
 	return 0
 }
@@ -1043,20 +1069,26 @@ func resetDataPlan(l tiad.Layout, hardware bool) string {
 	case l.AllDataBlocks:
 		return "tiad cannot read the layout of an object that changed or is new (UNREADABLE above: a software unit, a technology object, an export that failed), so any data block may return to its start values, retained ones included"
 	case len(l.Changes) == 0:
-		return "the data layout is unchanged since deploy " + l.Baseline + ", so no data block should be reset"
+		return "the data layout is unchanged since " + tiad.LayoutBaselineLabel(l.Baseline) + ", so no data block should be reset"
+	case !l.ResetDataNeeded:
+		return "the load only adds blocks and types to what the CPU holds, whose data layout is unchanged since " + tiad.LayoutBaselineLabel(l.Baseline) + ", so no data block should be reset"
 	case len(l.DataBlocks) == 0:
 		// Only changes that reach no data block land here: a function's or
 		// an OB's interface, an FB with no instance, a new block, a
 		// constant no data block uses.
-		return "the data layout changed since deploy " + l.Baseline + ", in no data block's layout and in nothing a data block uses"
+		return "the data layout changed since " + tiad.LayoutBaselineLabel(l.Baseline) + ", in no data block's layout and in nothing a data block uses"
 	}
-	return "these data blocks may lose their values (back to start values, retained ones included, or removed): " + strings.Join(l.DataBlocks, ", ") + " (the layout changed since deploy " + l.Baseline + "; with the CPU in STOP TIA resets them without asking)"
+	return "these data blocks may lose their values (back to start values, retained ones included, or removed): " + strings.Join(l.DataBlocks, ", ") + " (the layout changed since " + tiad.LayoutBaselineLabel(l.Baseline) + "; with the CPU in STOP TIA resets them without asking)"
 }
 
 // layoutKeepsPlan is the plan's line for a download without the consent,
 // which the layout check let.
 func layoutKeepsPlan(l tiad.Layout) string {
-	return "The data layout is unchanged since deploy " + l.Baseline + ", which the CPU compared equal to: only what changed loads, and the CPU keeps its data, retained or not. If TIA asks to stop the CPU, reinitialize data blocks or load every block anyway, that is a GATE MISS: the download is cancelled there"
+	what := "The data layout is unchanged since "
+	if len(l.Changes) > 0 {
+		what = "The data layout of everything already on the CPU is unchanged since "
+	}
+	return what + tiad.LayoutBaselineLabel(l.Baseline) + ", which the CPU compared equal to: only what changed loads, and the CPU keeps its data, retained or not. If TIA asks to stop the CPU, reinitialize data blocks or load every block anyway, that is a GATE MISS: the download is cancelled there. That catch works only with the CPU in RUN: in STOP TIA asks nothing, so there this check is the only protection"
 }
 
 // layoutRefusal is the deploy's refusal of a download the layout check
@@ -1064,7 +1096,7 @@ func layoutKeepsPlan(l tiad.Layout) string {
 func (d *siemensDeployer) layoutRefusal(l tiad.Layout) string {
 	var b strings.Builder
 	b.WriteString("this download needs --reset-data: " + l.Why + ".")
-	for _, line := range layoutLines(l) {
+	for _, line := range d.layoutLines(l) {
 		b.WriteString("\n  " + line)
 	}
 	b.WriteString("\nNothing was loaded. To accept the reset, and the stop TIA needs to reinitialize a CPU in RUN, run (POSIX shell; it still asks you to confirm the plan):\n  " + d.o.rerunWith("--reset-data", "--allow-stop"))
@@ -1072,15 +1104,36 @@ func (d *siemensDeployer) layoutRefusal(l tiad.Layout) string {
 }
 
 // layoutLines are the data layout check in words, for the plan and the
-// refusal: the changes (the first 20) and the data blocks they reach.
-func layoutLines(l tiad.Layout) []string {
+// refusal: the changes (the first 20) and the data blocks they reach. A
+// load that only adds blocks and types (no consent needed) lists every
+// one it adds, by kind and name, so an operator sees exactly what goes
+// onto the CPU (#1347).
+func (d *siemensDeployer) layoutLines(l tiad.Layout) []string {
 	var out []string
+	label := tiad.LayoutBaselineLabel(l.Baseline)
 	if l.Baseline == "" {
 		out = append(out, "data layout: no baseline ("+l.NoBaseline+")")
 	} else if len(l.Changes) == 0 {
-		out = append(out, "data layout: unchanged since deploy "+l.Baseline+" (the CPU compared equal to it)")
+		out = append(out, "data layout: unchanged since "+label+" (the CPU compared equal to it)")
+	} else if !l.ResetDataNeeded {
+		out = append(out, "data layout: unchanged since "+label+" (the CPU compared equal to it)")
+		var adds []string
+		for i, c := range l.Changes {
+			if i == 30 {
+				adds = append(adds, fmt.Sprintf("and %d more", len(l.Changes)-30))
+				break
+			}
+			a := layoutKindWord(c.Type) + " " + c.Name
+			if now := d.obNow[strings.ToLower(c.Name)]; now != "" {
+				a += " (" + now + ")"
+			}
+			adds = append(adds, a)
+		}
+		out = append(out, "adds to the CPU: "+strings.Join(adds, ", "))
+		out = append(out, "nothing already on the CPU changes its data layout, so its data is kept")
+		return out
 	} else {
-		out = append(out, fmt.Sprintf("data layout: %d change(s) since deploy %s (the CPU compared equal to it):", len(l.Changes), l.Baseline))
+		out = append(out, fmt.Sprintf("data layout: %d change(s) since %s (the CPU compared equal to it):", len(l.Changes), label))
 		for i, c := range l.Changes {
 			if i == 20 {
 				out = append(out, fmt.Sprintf("  ... and %d more", len(l.Changes)-20))
@@ -1100,6 +1153,21 @@ func layoutLines(l tiad.Layout) []string {
 		out = append(out, "data blocks whose values may be lost: none (no data block holds or is a changed object)")
 	}
 	return out
+}
+
+// layoutKindWord names an Openness type in the plan's words.
+func layoutKindWord(typ string) string {
+	switch typ {
+	case "GlobalDB":
+		return "global DB"
+	case "InstanceDB":
+		return "instance DB"
+	case "ArrayDB":
+		return "array DB"
+	case "PlcStruct":
+		return "PLC data type"
+	}
+	return typ
 }
 
 // describeOB says an OB step in words.
@@ -1445,8 +1513,12 @@ func siemensDeploy(ctx context.Context, o siemensDeployOptions) int {
 		blocks = append(blocks, b.Name+" ["+b.Kind+"]")
 	}
 	d.say("blocks in group %s: %s", group, strings.Join(blocks, ", "))
+	d.obNow = map[string]string{}
 	for _, ob := range sw.OBs {
 		d.say("cyclic interrupt OB %s", describeOB(ob))
+		if ob.Now != "" {
+			d.obNow[strings.ToLower(ob.Name)] = ob.Now
+		}
 	}
 
 	// 6. Compile, every message against its nautilus line.
@@ -1826,7 +1898,7 @@ func (d *siemensDeployer) printPlan(address string, last lastDeploy, sw tiad.Sof
 	if a := d.o.deviceAttestation(); a != nil {
 		d.say("  device: you attest order %q, firmware %q, read off the CPU by %s; the agent uses it only for a pinned CPU it cannot identify online, and refuses any difference from the pin", a.Order, a.Firmware, a.By)
 	}
-	for _, line := range layoutLines(d.layout) {
+	for _, line := range d.layoutLines(d.layout) {
 		d.say("  %s", line)
 	}
 	if d.cpuMode != "" {

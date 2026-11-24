@@ -70,6 +70,9 @@ type deployRig struct {
 	oldLayout bool
 	// noResetData leaves --reset-data off a download (run adds it).
 	noResetData bool
+	// oldCompare answers a compare that asks for the adopt baseline as an
+	// agent before #1347 does: 400, unknown field.
+	oldCompare bool
 }
 
 // downloads are the downloads since the CPU ran its own project (cpuRuns).
@@ -179,6 +182,11 @@ func newDeployRig(t *testing.T) *deployRig {
 		if r.oldSoftware && strings.HasSuffix(q.URL.Path, "/software") && strings.Contains(string(body), `"prunePrefix"`) {
 			w.WriteHeader(http.StatusBadRequest)
 			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"body: json: unknown field \"prunePrefix\"","fatal":false},"events":[]}`)
+			return
+		}
+		if r.oldCompare && strings.HasSuffix(q.URL.Path, "/compare") && strings.Contains(string(body), `"layoutBaseline"`) {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"ok":false,"error":{"kind":"bad_request","message":"body: unknown field \"layoutBaseline\"","fatal":false},"events":[]}`)
 			return
 		}
 		if r.oldLayout && strings.HasSuffix(q.URL.Path, "/layout") {
@@ -884,17 +892,22 @@ func TestSiemensDeployLayoutGate(t *testing.T) {
 
 	r := newDeployRig(t)
 	r.adopt()
-	// The CPU's newest load is the customer's project, not the adopted
-	// copy: no baseline, so the consent and the whole program.
+	// A journal line the agent cannot read may be a newer load: no
+	// baseline, not even the adopted project's (#1347), so the consent and
+	// the whole program. (The adopted project's own baseline is
+	// TestSiemensDeployKeepsABrownfieldCPUsData.)
+	r.fake.SetUnreadableLines(1)
 	r.noResetData = true
 	got, code := r.run("", false, "--download", "--yes")
 	if code != 1 || len(r.downloads()) != 0 || strings.Contains(got, "PLAN") ||
-		!strings.Contains(got, "this download needs --reset-data: no layout baseline (the CPU's newest load, deploy") || !strings.Contains(got, "loaded another project (projects/customer/customer.ap21)") ||
+		!strings.Contains(got, "this download needs --reset-data: no layout baseline (the adopt compare took no baseline: the deploy journal holds 1 line(s) the agent cannot read") ||
+		!strings.Contains(got, "data layout baseline: none (the deploy journal holds 1 line(s)") ||
 		!strings.Contains(got, "data blocks whose values may be lost: every one") || !strings.Contains(got, "Nothing was loaded. To accept the reset, and the stop TIA needs") ||
 		!strings.Contains(got, "--download --reset-data --allow-stop --start") || strings.Contains(got, "--yes --") {
 		t.Fatalf("a new layout without --reset-data: exit %d, %d download(s):\n%s", code, len(r.downloads()), got)
 	}
 	got, code = r.run("", false, "--download", "--yes", "--reset-data")
+	r.fake.SetUnreadableLines(0)
 	dls := r.fake.Downloads()
 	if code != 0 || len(dls) != r.base+1 || dls[r.base].Request.Decisions.ResetData == nil || !*dls[r.base].Request.Decisions.ResetData ||
 		dls[r.base].Request.LayoutDigest == "" || !dls[r.base].EveryBlock ||
@@ -1228,6 +1241,74 @@ func TestSiemensDeployAdoptsTheCPUsProject(t *testing.T) {
 	}
 }
 
+// TestSiemensDeployKeepsABrownfieldCPUsData (#1347): the first deploy onto
+// a CPU that runs a program nautilus never loaded, built on its adopted
+// project, needs no --reset-data: the adopt compare took the project's
+// data layout, nautilus only adds blocks, and the plan lists each one;
+// only what changed loads. The next deploy builds on its own record.
+func TestSiemensDeployKeepsABrownfieldCPUsData(t *testing.T) {
+	r := newDeployRig(t)
+	f := r.cpuRuns(false)
+	r.noResetData = true
+	out, code := r.run("", false, "--download", "--yes", "--adopt", f)
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	order := []string{
+		"comparing the adopted project with the CPU before anything is imported",
+		"equal: the adopted project is what the CPU runs",
+		"data layout baseline: the adopted project as the CPU runs it (",
+		"PLAN for the CPU at 192.0.2.10",
+		"data layout: unchanged since the adopted project (adopted:",
+		"adds to the CPU: ",
+		"nothing already on the CPU changes its data layout, so its data is kept",
+		"reset the CPU's data: no. The data layout of everything already on the CPU is unchanged since the adopted project (adopted:",
+		"downloaded; the online compare right after is equal",
+	}
+	at := 0
+	for _, want := range order {
+		i := strings.Index(out[at:], want)
+		if i < 0 {
+			t.Fatalf("missing, or out of order, %q in\n%s", want, out)
+		}
+		at += i
+	}
+	// Every block nautilus adds, by kind and name; the cyclic OB with
+	// what the import made of it.
+	adds := out[strings.Index(out, "adds to the CPU: "):]
+	adds = adds[:strings.Index(adds, "\n")]
+	for _, want := range []string{"OB naut_OB_main (", "cyclic interrupt", "FB naut_main", "DB naut_main_DB", "global DB naut_Tags"} {
+		if !strings.Contains(adds, want) {
+			t.Fatalf("the plan's adds line lacks %q: %s", want, adds)
+		}
+	}
+	dl := r.downloads()
+	if len(dl) != 1 || dl[0].EveryBlock || dl[0].Request.Decisions.ResetData != nil || dl[0].Request.LayoutDigest == "" {
+		t.Fatalf("downloads: %+v", dl)
+	}
+	ds, err := tiad.New(r.url, r.token).Deploys(context.Background(), deployCPU)
+	if err != nil || len(ds.Deploys) == 0 || !strings.HasPrefix(ds.Deploys[0].LayoutBaseline, tiad.AdoptBaselinePrefix) {
+		t.Fatalf("the record names the adopt baseline: %+v %v", ds.Deploys, err)
+	}
+	// The next deploy: its own record is the baseline, no --reset-data.
+	out, code = r.run("", false, "--download", "--yes")
+	if code != 0 || strings.Contains(out, "comparing the adopted project") || !strings.Contains(out, "data layout: unchanged since deploy "+ds.Deploys[0].ID) {
+		t.Fatalf("the next deploy: exit %d:\n%s", code, out)
+	}
+}
+
+// TestSiemensDeployAdoptOnAnOldAgent: an agent before #1347 takes no adopt
+// baseline: the deploy says reinstall, before anything is imported.
+func TestSiemensDeployAdoptOnAnOldAgent(t *testing.T) {
+	r := newDeployRig(t)
+	f := r.cpuRuns(false)
+	r.oldCompare = true
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop", "--adopt", f)
+	if code != 1 || !strings.Contains(out, oldAdoptBaselineMessage) || strings.Contains(out, "PLAN for") || len(r.downloads()) != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+}
+
 // TestSiemensDeployRefusesAnAdoptedArchiveTheCPUDoesNotRun: an archive of
 // another state than the CPU's is adopted, but the download refuses it
 // before anything is imported; the adoption no download took is replaced
@@ -1310,6 +1391,11 @@ func TestSiemensDeployAdoptsAnUpload(t *testing.T) {
 	}
 	if a := r.adoption(); a == nil || a.Source != adoptUpload || !a.Complete || !a.Downloaded {
 		t.Fatalf("the adoption record: %+v", a)
+	}
+	// An upload's layout is no baseline yet (#1347, Fable): the first
+	// download needed --reset-data and loaded the whole program.
+	if !strings.Contains(out, "data layout baseline: none (an upload's layout is not taken as a baseline yet") || !strings.Contains(out, "data layout: no baseline") || !r.downloads()[0].EveryBlock {
+		t.Fatalf("an upload's first download:\n%s", out)
 	}
 }
 

@@ -257,7 +257,7 @@ namespace Tiad.Test
             True(LayoutRule.GateMissQuestion(QuestionIds.Reinitialize), "reinitialize");
             True(LayoutRule.GateMissQuestion(QuestionIds.AllBlocks), "every block");
             True(!LayoutRule.GateMissQuestion(QuestionIds.ConsistentDownload), "a consistent download is no miss (a body change asks it)");
-            Contains(LayoutRule.GateMiss("reinitialize", "d-1"), "GATE MISS: TIA asked \"reinitialize\" although the data layout check found nothing changed since deploy d-1", "the miss's words");
+            Contains(LayoutRule.GateMiss("reinitialize", "d-1"), "GATE MISS: TIA asked \"reinitialize\" although the data layout check found no change that needs it since deploy d-1", "the miss's words");
         }
     }
 }

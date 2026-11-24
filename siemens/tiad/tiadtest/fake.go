@@ -166,6 +166,12 @@ type Fake struct {
 	// found it equal to its newest load (the layout gate's proof).
 	layoutScript  LayoutScript
 	verifiedLoads map[string]verifiedLoad
+	// loadGen counts each CPU's downloads that may have reached it (the
+	// agent's loadGen): an adopt baseline stands only at its count.
+	loadGen map[string]int
+	// routes are the routes registered, "METHOD /pattern" (GET
+	// /v1/test/routes, as tiad-fake's seam).
+	routes []string
 
 	mu        sync.Mutex
 	pins      map[string]tiad.DeviceIdentity // CPU address → device pin
@@ -193,6 +199,14 @@ type session struct {
 	// heldOnline is the address an online call holds the project online
 	// to, "" when offline (the agent's Session.HeldOnline).
 	heldOnline string
+	// untouched: opened, and nothing but compare or export ran
+	// on it since (tiad.UntouchedKeeps); adopted is the adopt baseline an
+	// equal compare of it took (#1347).
+	untouched bool
+	adopted   *fakeAdopt
+	// adoptRefused is why the last compare that asked for an adopt
+	// baseline took none.
+	adoptRefused string
 	// guard is the directory a created project owns, "projects/<name>/".
 	guard   string
 	station *tiad.Station
@@ -628,7 +642,9 @@ func (f *Fake) init() {
 		f.archived = map[string]archivedProject{}
 		f.savedArchives = map[string]savedProject{}
 		f.loadedArchive = map[string]string{}
-		m := http.NewServeMux()
+		mux := http.NewServeMux()
+		m := routeList{mux: mux, f: f}
+		m.HandleFunc("GET /v1/test/routes", f.wrap(f.testRoutes, false))
 		m.HandleFunc("GET /v1/health", f.wrap(f.health, false))
 		m.HandleFunc("GET /v1/probe", f.wrap(f.probe, false))
 		m.HandleFunc("GET /v1/files", f.wrap(f.listFiles, false))
@@ -657,7 +673,7 @@ func (f *Fake) init() {
 		m.HandleFunc("GET /v1/deploys", f.wrap(f.listDeploys, false))
 		m.HandleFunc("POST /v1/deploys/verify", f.wrap(f.verifyDeploy, true))
 		m.HandleFunc("POST /v1/pins/{address}", f.wrap(f.setPin, false))
-		f.mux = m
+		f.mux = mux
 	})
 }
 
@@ -680,6 +696,13 @@ func (f *Fake) wrap(h handler, needsTIA bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		// Every session call UntouchedKeeps does not name touches the
+		// session before it runs, failed or not (#1347).
+		if id := r.PathValue("id"); id != "" && tiad.UntouchedTouches(r.Pattern) {
+			if s, ok := f.sessions[id]; ok {
+				s.untouched = false
+			}
+		}
 		if needsTIA {
 			for _, g := range f.Gates {
 				if g.Blocks() {
@@ -1159,6 +1182,8 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 		}
 		f.openRecords(s.access)
 	}
+	// Opened as saved: nothing has changed it yet (#1347).
+	s.untouched = true
 	// A project an unverified turn-on download saved stays gated.
 	if f.turnOnPending[p] {
 		s.turnOn, s.turnOnTried = true, true
@@ -1857,8 +1882,20 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			return nil, fl
 		}
 		run.Layout = tiad.LayoutRecordOf(layoutNow, fakeTIAVersion)
-		// A download to the CPU runs: the verify no longer stands.
+		run.LayoutBaseline = layout.Baseline
+		// A download to the CPU runs: the verify no longer stands, nor
+		// any adopt baseline taken for it.
 		delete(f.verifiedLoads, req.Address)
+		if f.loadGen == nil {
+			f.loadGen = map[string]int{}
+		}
+		f.loadGen[req.Address]++
+	} else {
+		// A dry run TIA may load without asking: the adopt baseline goes.
+		if f.loadGen == nil {
+			f.loadGen = map[string]int{}
+		}
+		f.loadGen[req.Address]++
 	}
 	var acting []string
 	var given string
@@ -2171,6 +2208,10 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if fl := checkDeviceAttestation(req.DeviceAttestation); fl != nil {
 		return nil, fl
 	}
+	if req.LayoutBaseline {
+		// Asking again drops what an earlier compare took.
+		s.adopted, s.adoptRefused = nil, ""
+	}
 	if f.CompareResult != nil {
 		return *f.CompareResult, nil
 	}
@@ -2197,9 +2238,23 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	}
 	if !s.changed && (f.loaded[addr] == s.id || s.restored != "" && f.loadedArchive[addr] == s.restored) {
 		f.noteCompare(addr, onlinePassword(req.Secrets), loggedOn, true)
-		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, BlindTrust: f.blindTrust, Address: addr}, nil
+		res := tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, BlindTrust: f.blindTrust, Address: addr}
+		if req.LayoutBaseline {
+			res.LayoutBaseline = f.takeAdoptBaseline(s, addr)
+			s.adoptRefused = res.LayoutBaseline.Why
+		}
+		return res, nil
 	}
-	return tiad.CompareResult{Differences: []tiad.Difference{{Object: name, State: "different"}}, BlindTrust: f.blindTrust, Address: addr}, nil
+	res := tiad.CompareResult{Differences: []tiad.Difference{{Object: name, State: "different"}}, BlindTrust: f.blindTrust, Address: addr}
+	if req.LayoutBaseline {
+		why := f.adoptBaselineRefusal(s)
+		if why == "" {
+			why = "the compare found the project not equal to the CPU"
+		}
+		res.LayoutBaseline = &tiad.AdoptBaselineResult{Why: why}
+		s.adoptRefused = why
+	}
+	return res, nil
 }
 
 func (f *Fake) export(r *http.Request) (any, *failure) {
