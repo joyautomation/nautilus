@@ -286,10 +286,12 @@ func TestPairPeerKeysShowInStatus(t *testing.T) {
 	if a.Self == "" || a.Self != b.Pinned["a"] || b.Self != a.Pinned["b"] || a.Pinned[wn] == "" || a.Pinned[wn] != b.Pinned[wn] {
 		t.Fatalf("a %+v, b %+v: each box's own key must be what the other pinned", a, b)
 	}
-	// The witness pinned the controllers' own keys too.
-	if w := witnessPinned(t, r.witDir, r.cluster()); w["a"] != a.Self || w["b"] != b.Self {
-		t.Fatalf("the witness pinned %v; a is %s, b %s", w, a.Self, b.Self)
-	}
+	// The witness pinned the controllers' own keys too, each at that
+	// controller's own first contact with it (a race with the above).
+	pairWait(t, "both controllers' keys pinned at the witness", 10*time.Second, func() bool {
+		w := witnessPinned(t, r.witDir, r.cluster())
+		return w["a"] == a.Self && w["b"] == b.Self
+	})
 	// The events from before the journal, now in it: a's new key and its
 	// pins of b and the witness.
 	var kinds []string

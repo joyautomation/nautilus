@@ -327,9 +327,11 @@ func TestUnpinThroughTheCLI(t *testing.T) {
 		newKey = k.Self
 		return newKey != "" && r.nodes["a"].m.peerTLS.Pinned("")["b"] == newKey
 	})
-	if w := witnessPinned(t, r.wdir, r.env["a"]["NAUTILUS_CLUSTER"]); w["b"] != newKey {
-		t.Fatalf("the witness pinned b as %s, want its new key %s", w["b"], newKey)
-	}
+	// The witness pins b's new key at b's own next contact with it, not
+	// when a does: the two first contacts race, so wait for this one too.
+	pairWait(t, "b's new key pinned at the witness", 15*time.Second, func() bool {
+		return witnessPinned(t, r.wdir, r.env["a"]["NAUTILUS_CLUSTER"])["b"] == newKey
+	})
 }
 
 // A lost witness answer never lifts (#710 2b, Fable): the witness applied
