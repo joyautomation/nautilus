@@ -182,7 +182,10 @@ type Candidate struct {
 	// adopted an incarnation. NewAdoption wires the three (#1029
 	// 3c-3c-1b). superseded: a voter refused this boot as fenced: its
 	// state is from before an operator replaced its name (Superseded).
-	ownGen       func() uint64
+	ownGen func() uint64
+	// ownFloor is this controller's voter's term floor (NewAdoption): a
+	// witness reply never covers an epoch at or below it (HotCheck).
+	ownFloor     func() uint64
 	commissioned func() bool
 	ownFences    func() Fences
 	fenced       func(name NodeID, gen uint64) bool

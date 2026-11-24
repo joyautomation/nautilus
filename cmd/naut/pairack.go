@@ -300,6 +300,8 @@ func coldWhy(why string) string {
 	switch why {
 	case quorum.ColdRecordsUnknown:
 		return "the voters can't vouch that no leadership came after the image (a voter lost or rebuilt its state, or runs an older release)"
+	case quorum.ColdWitnessReadopted:
+		return "the pair re-adopted its witness (a rebuilt witness, or a new adoption) since the image's leadership began, so the witness's records can't vouch for that leadership"
 	case quorum.ColdLaterLeader:
 		return "the voters granted the old leader a later leadership than the image's: the image predates it"
 	case quorum.ColdImageUnseen:

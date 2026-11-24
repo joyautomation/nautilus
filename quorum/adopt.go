@@ -183,6 +183,9 @@ func NewAdoption(v *Voter, c *Candidate, now Instant) *Adoption {
 	v.ownHeld = c.Marked            // #1113 review, rule (ii)
 	c.retiredReply = v.RetiredReply // #1029 3c-3b
 	c.ownGen = func() uint64 { return v.st.Gen }
+	if !mut("witness_floor_unwired") {
+		c.ownFloor = func() uint64 { return v.st.Floor } // #710 S2c-1 residual S3
+	}
 	c.commissioned = func() bool { return v.st.Incarnation != 0 }
 	c.ownFences = v.Fences
 	c.fenced = v.Fenced // #1029 3c-3c-1b

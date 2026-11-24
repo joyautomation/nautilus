@@ -463,7 +463,12 @@ older release, a standby that was behind, or no word from the old leader
 at all. Both voters that elect the standby must know its position. A
 restarted voter learns it again only once its restart wait is over and
 it grants the leader's next renewal, about a lease and a quarter after
-it starts; a takeover before that goes cold.
+it starts; a takeover before that goes cold. After the controllers
+re-adopt their witness (a rebuilt witness, or a re-adoption of the same
+one), the witness can't vouch for a leadership that began before that:
+until the next election, a takeover goes cold unless both controllers'
+voters elect the standby (the warning says the pair re-adopted its
+witness, or that the voters can't vouch for the image).
 
 hot-max-age is judged on the image; each task's state is at most one of
 its own scan periods older than the image. The journal entry and `GET /api/cluster`

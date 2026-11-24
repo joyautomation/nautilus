@@ -104,7 +104,7 @@ func (h HotCheck) HandBackFloor() (floor uint64, ok bool, why string) {
 		second := max(h.LedBefore, nth(peer, 1), nth(own, 1))
 		all := true
 		for _, w := range h.Won {
-			all = all && Covers(w.RecordsFrom, second)
+			all = all && Covers(h.recordsFrom(w), second)
 		}
 		if all {
 			floor = second
@@ -115,7 +115,7 @@ func (h HotCheck) HandBackFloor() (floor uint64, ok bool, why string) {
 	}
 	covering := 0
 	for _, w := range h.Won {
-		cov := Covers(w.RecordsFrom, floor)
+		cov := Covers(h.recordsFrom(w), floor)
 		if cov || mut("handback_unknown_counts") {
 			covering++
 		}

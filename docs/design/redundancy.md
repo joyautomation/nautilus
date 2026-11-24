@@ -1660,14 +1660,29 @@ voters vouch too:
   and the pair test of the ruling-B sequence.
 - **Cold cases left:** a takeover within about `lease/4` of a takeover, or within about a lease
   and a quarter of a voter's restart (no mark yet), a voter on an older release, a rebuilt
-  witness until it grants a campaign.
+  witness until it grants a campaign, and an image whose leadership began before the witness's
+  current incarnation was adopted (`witness-readopted`, below).
 - **Residuals (Fable, #1345).** The floor-derived `RecordsFrom` inherits the adoption's own
   residuals: an operator's `Recommission` with a floor set too low, and
   `EventReadoptOverSwitch`. A rebuilt witness's first campaign grant may reach it before the
   adoption that raises the controllers' floors, setting its `RecordsFrom` at or below a
-  leadership its old incarnation granted; a wrong hot from it needs that compound history and
-  stays within `hot-max-age`. The simulator's oracle checks epochs only: it sets every mark
-  current.
+  leadership its old incarnation granted. **Closed (#710 S3), within adoption's own
+  residuals above:** the witness's records speak only for its own incarnation. A rebuilt one
+  starts them at its first campaign grant, or above the `Promised` of renewals it granted: it
+  grants a leader's renewals before either controller counts it, and keeps that leader's
+  current mark, so the marks rule alone does not save the verdict (Fable on #1365). An earlier
+  incarnation may have granted any term up to the floor of the adoption that made the current
+  one count. So the check (`HotCheck.recordsFrom`) never lets the witness's reply cover an epoch
+  below the controller's own voter's term floor, which that adoption raised and which only
+  rises; it is read when the check is made, so a later rise (a recommission) errs cold. A
+  `RecordsFrom` of 0 stays 0. The hot verdict and the hand-back floor (both of its paths) read
+  coverage only through it: both were open on main, unreleased. The cost: a leadership that
+  began before the pair's last adoption (a rebuilt witness, or a new adoption generation of the
+  same one) gets no coverage from the witness, so a failover before the next election is cold
+  unless both controllers' voters elect the standby (`witness-readopted` when the witness's
+  coverage would have made the majority, else `records-unknown`). The simulator's oracle
+  checks epochs only: it sets every mark current, and it does not run the hand-back, so the
+  unit and candidate tests carry this.
 
 **The new leader, in order:**
 
