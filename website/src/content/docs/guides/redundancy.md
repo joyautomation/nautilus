@@ -476,7 +476,11 @@ your process than a cold start; 0 makes every takeover cold.
 stream interval before it crashed (about 100 ms) never reached the
 standby. When the leader is cut off rather than killed, it keeps
 scanning, and accepting writes, until its lease ends, so up to a lease
-of writes is lost on an isolation. A standby that fell behind (a slow
+of writes is lost on an isolation. Counts go the same way: a hot
+takeover after an isolation resumes from an image about one lease old,
+so the counts taken in that window are lost (5 to 7 pulses of a 5 Hz
+input with a 1 s lease on a test pair). A shorter lease narrows the
+window. A standby that fell behind (a slow
 link, a leader whose image is over the size limit) takes over with the
 last image it kept: it logs how old that image is, and
 `GET /api/cluster` shows it (`stream.takeoverImageAgeMs`).
