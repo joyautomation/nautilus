@@ -504,7 +504,7 @@ func TestProgramTypeGapKeepsChecking(t *testing.T) {
 func TestInstanceInVarRetain(t *testing.T) {
 	src := "PROGRAM P\nVAR RETAIN h : H; END_VAR\nVAR w : W; END_VAR\nh(io := w);\nEND_PROGRAM\n"
 	_, diags := writeStructs(src, nil, d1bLib)
-	if len(diags) == 0 || diags[0].Line != 2 || !strings.Contains(diags[0].Message, "an instance of FUNCTION_BLOCK H in VAR RETAIN (h) yet (#1301)") {
+	if len(diags) == 0 || diags[0].Line != 2 || !strings.Contains(diags[0].Message, "an instance of FUNCTION_BLOCK H in VAR RETAIN (h) yet (#1305)") {
 		t.Errorf("%v", diags)
 	}
 }

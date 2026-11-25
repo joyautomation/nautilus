@@ -321,16 +321,16 @@ The rules:
   yet (#N)", N the issue that closes it. B #1299 enums and arrays (structs and
   their start values are written, the library is in scope); C #1300
   more than one task (written since C: per-task copies of shared tags);
-  D #1301 an instance of the project's block in a program's VAR RETAIN
-  (the project's FUNCTIONs, FUNCTION_BLOCKs, dialect blocks such as TONR
-  and VAR CONSTANT are written since D1, STRUCT pins and results as PLC
-  data types since D1b, nautilus's PID since D2); E #1302 SFC (an SCL state machine first; GRAPH
+  D #1301 (closed: the project's FUNCTIONs, FUNCTION_BLOCKs, dialect
+  blocks such as TONR and VAR CONSTANT are written since D1, STRUCT pins
+  and results as PLC data types since D1b, nautilus's PID since D2); E #1302 SFC (an SCL state machine first; GRAPH
   maybe later as an option, James 11-23); F #1303 STRING and the string
   functions (written since F; a WSTRING or a non-ASCII literal is still a
   gap there), #1375 the conversions to and from STRING it cannot write yet
   (REAL and LREAL text, TIME, bit strings, STRING_TO_BOOL); G #1304 TIME arithmetic, LTIME and dates (64-bit milliseconds against
   TIA's 32-bit TIME and nanosecond LTIME); #1305 the rest (ULINT and LWORD
-  arithmetic, ATAN2, integer ABS, …). Real limits keep their own words (a
+  arithmetic, ATAN2, integer ABS, an instance of the project's block in a
+  program's VAR RETAIN, which could hold a PID, …). Real limits keep their own words (a
   task interval over 60 s, a block name collision).
 - **Coverage PR A (#789)** writes:
   - bitwise AND/OR/XOR of one integer or bit string type on the bit string

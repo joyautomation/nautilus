@@ -362,7 +362,7 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 					// a RETAIN section whole too (it compiles, V21), a
 					// PID inside it included, which nautilus never keeps:
 					// lifting this needs pid.go's rule first.
-					pw.gap("siemens/var", v.Pos.Line, gapPOUs, "an instance of "+p.what()+" in VAR RETAIN ("+v.Name+")", "")
+					pw.gap("siemens/var", v.Pos.Line, gapOther, "an instance of "+p.what()+" in VAR RETAIN ("+v.Name+")", "")
 					continue
 				}
 				if !static {
