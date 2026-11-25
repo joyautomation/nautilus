@@ -1067,7 +1067,17 @@ redundancy:
   term extends the lease, and the old lease keeps running until then. Once the standby's
   promise to itself runs out, its voter grants the leader again. Without this, the pair
   runs on {leader, witness} alone and a witness blip ends a healthy lease (found by the
-  simulator, test plan F13 and F19).
+  simulator, test plan F13 and F19). **Except** a refusal at exactly the leader's term from a
+  voter that already granted this boot that term (#1120): it promised the term to this
+  leader, so it refuses for another reason (its restart wait, a promise relayed to it, a
+  floor at the term). That one re-terms only once the latest renewal has no majority. A
+  re-term needs a write at every voter, and on a slow disk the write outlasted the lease
+  while the other two still granted the old term. A witness adoption raises the floor to
+  exactly the term promised, at the leader's own voter too, which leaves no majority, so
+  it re-terms as before. The leader knows a voter promised the term only from a grant it
+  heard, so for about one write and one look after a new term (a voter whose grant of it
+  timed out on a slow disk) it still re-terms as before; closing that needs the refusal to
+  say the promise is the asker's own, a wire change (#616).
 - **Every request is named, and its grant answers only it.** A request carries a per-boot
   random nonce and an id; a grant echoes both and names the controller it was granted to. A
   grant counts only toward the request it answers: addressed to this controller, from this

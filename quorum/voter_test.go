@@ -247,3 +247,48 @@ func TestVoterRefusesANameUnderAnotherBootNonce(t *testing.T) {
 		t.Fatal("a restarted A (new nonce) refused after the old promise ran out")
 	}
 }
+
+// A re-ask that reaches a voter while its write for that term is still in
+// flight gets no grant before the write is durable (#710, the renewal
+// re-ask; naut-lead's check 4): the in-memory promise is not a grant. A
+// renewal at a new term (a re-term) needs the write, and its re-ask (same
+// term, a new id) waits for the same write; a failed write releases
+// neither. held_promise_answers turns it red.
+func TestVoterReaskWhileItsWriteIsInFlightWaitsForIt(t *testing.T) {
+	v := NewVoter("W", lease, VoterState{}, 0)
+	if !grant(t, v, at(lease), Request{From: "A", Term: 1, ID: 1}) {
+		t.Fatal("campaign refused")
+	}
+	now := at(lease + 100*time.Millisecond)
+	p, out := v.Handle(now, Request{From: "A", Term: 2, ID: 2, Renewal: true})
+	if p == nil || len(out) != 0 {
+		t.Fatalf("the re-term renewal: persist %v, replies %v; want it held for its write", p, out)
+	}
+	for i, ok := range []bool{false, true} {
+		id := uint64(3 + i)
+		q, out := v.Handle(now.Add(time.Duration(10+i)*time.Millisecond), Request{From: "A", Term: 2, ID: id, Renewal: true})
+		if len(out) != 0 {
+			t.Fatalf("the re-ask (id %d) was answered %+v with the term's write still in flight", id, out)
+		}
+		if q == nil {
+			t.Fatalf("the re-ask (id %d) asked for no write and is held on none", id)
+		}
+		got := v.Persisted(q.Seq, ok)
+		if !ok {
+			if len(got) != 0 {
+				t.Fatalf("a failed write released %+v", got)
+			}
+			continue
+		}
+		ids := map[uint64]bool{}
+		for _, r := range got {
+			if !r.Granted || r.Term != 2 {
+				t.Fatalf("after the durable write: %+v", got)
+			}
+			ids[r.ID] = true
+		}
+		if !ids[id] {
+			t.Fatalf("after the durable write the re-ask (id %d) is not answered: %+v", id, got)
+		}
+	}
+}

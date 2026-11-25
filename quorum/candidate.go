@@ -194,6 +194,17 @@ type Candidate struct {
 	pending *round
 	// reaskAt is when the pending campaign is next asked again (reask).
 	reaskAt Instant
+	// renewing is the latest renewal round. grantedTerm is, per voter, the
+	// highest term it granted this boot; never reset: a term only rises, a
+	// new leadership's is above every earlier one, and a voter never
+	// promises one term to two grantees (a wiped one comes back with a
+	// floor above it). retermOwn: a voter that granted
+	// this boot the term renewals go out at refused it at that very term
+	// (its restart wait, a promise relayed to it, a floor at the term): a
+	// re-term only if the latest renewal has no majority (Tick, #1120).
+	renewing    *round
+	grantedTerm map[NodeID]uint64
+	retermOwn   bool
 
 	// countInc is the witness incarnation whose grants count (0: none),
 	// and countFrom when they start to: a newly adopted incarnation is
@@ -411,10 +422,10 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 		return nil
 	}
 	if c.Leading(now) {
-		if c.reterm {
-			c.reterm = false
+		if c.reterm || (c.retermOwn && c.renewLacksMajority()) {
 			c.renewTerm = above(c.maxSeen)
 		}
+		c.reterm, c.retermOwn = false, false
 		return c.send(now, c.renewTerm) // renewal
 	}
 	// A standby campaigns once the lease its own voter last saw another
@@ -492,6 +503,28 @@ func (c *Candidate) reask(now Instant, seenFrom NodeID, seenUntil Instant, healt
 	c.seq++
 	return &Request{From: c.cfg.Self, Term: rd.term, Nonce: c.cfg.Nonce, ID: c.nextID, Seq: c.seq, Gen: c.gen(), Fences: c.fences(),
 		Uncommissioned: c.commissioned != nil && !c.commissioned()}
+}
+
+// renewLacksMajority reports whether the latest renewal at the term
+// renewals go out at has no majority of grants: a refusal from a voter that
+// promised this boot that term (retermOwn) re-terms only then. A re-term
+// needs a write at every voter, which on a slow disk can outlast the lease
+// (#1120: a restarted standby in its restart wait refuses the term it
+// promised this leader, and the re-term's witness write lost the lease).
+// While the other two grant, a re-term wins nothing a voter refusing its
+// own promise for another reason would grant; once they don't (a witness
+// adoption raised the floor to the term promised, which refuses it at this
+// controller's own voter), it is needed, as before.
+//
+// The rule knows a voter promised the term only from a grant it heard:
+// for about one write and one look after a new term (a win, a re-term),
+// a voter whose grant of it timed out (a slow disk) refuses as one that
+// never granted it, and the leader re-terms as before. Closing that
+// window needs the refusal to say the promise is the asker's own, a wire
+// change (#616).
+func (c *Candidate) renewLacksMajority() bool {
+	rd := c.renewing
+	return rd == nil || rd.term != c.renewTerm || len(rd.grants) < 2 || mut("reterm_with_majority")
 }
 
 // reasks reports whether a campaign is pending that reask may ask again:
@@ -754,6 +787,9 @@ func (c *Candidate) send(now Instant, term uint64) *Request {
 	}
 	rd := &round{id: c.nextID, term: term, sent: now, asked: now, asks: map[uint64]Instant{c.nextID: now},
 		grants: map[NodeID]bool{}, grantSent: map[NodeID]Instant{}, replies: map[NodeID]bool{}, campaign: !c.leading}
+	if !rd.campaign {
+		c.renewing = rd
+	}
 	if rd.campaign {
 		c.term = term
 		c.pending = rd
@@ -850,6 +886,10 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	}
 	if r.Granted {
 		if !quiet {
+			if c.grantedTerm == nil {
+				c.grantedTerm = map[NodeID]uint64{}
+			}
+			c.grantedTerm[r.From] = max(c.grantedTerm[r.From], rd.term)
 			rd.grants[r.From] = true
 			sent, ok := rd.asks[r.ID]
 			if !ok { // match_by_term only
@@ -873,7 +913,15 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		// or stragglers would re-term us without end. Nor does a grant
 		// discounted above: re-terming would not change it, and a voter
 		// marked for good would re-term every renewal (#1029 3c).
-		c.reterm = !mut("no_reterm")
+		switch {
+		case mut("no_reterm"):
+		case r.Promised == rd.term && (c.grantedTerm[r.From] == rd.term || mut("own_promise_unchecked")) && !mut("reterm_on_own_promise"):
+			// It promised this boot this very term: refused for another
+			// reason. A re-term only if the term stops renewing (Tick).
+			c.retermOwn = true
+		default:
+			c.reterm = true
+		}
 	}
 	if (!r.Granted || (len(rd.replies) == 2 && !mut("retry_after_refusal_only"))) && !c.leading && len(rd.replies) >= 2 && len(rd.grants) < 2 {
 		// Heard, and refused by a majority: retry on a later look, after
@@ -929,7 +977,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		c.epoch, c.renewTerm = rd.term, rd.term
 		c.markSeq, c.markCurrent = 0, false
 		c.won = c.wonFrom(rd)
-		c.reterm = false // a refusal from before this lease means nothing to it
+		c.reterm, c.retermOwn = false, false // a refusal from before this lease means nothing to it
 		// Renew at once, not at the next look: a slow vote (a voter's
 		// fsync, a long link) may have left less of this lease than a look.
 		// The renewal changes nothing durable at a voter (same term, same
@@ -959,7 +1007,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 func (c *Candidate) expire(now Instant) {
 	if c.leading && now >= c.leaseEnd {
 		c.leading = false
-		c.reterm = false
+		c.reterm, c.retermOwn = false, false
 		switch {
 		case mut("no_backoff"):
 		case mut("one_lease_backoff"):

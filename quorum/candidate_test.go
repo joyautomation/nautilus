@@ -532,3 +532,56 @@ func TestQuietReplyIsHeardNotCounted(t *testing.T) {
 		t.Fatal("no retry at 300 ms: the refusal in the quiet period was not heard")
 	}
 }
+
+// A refusal at the term a leader renews at, from a voter that granted
+// this boot that very term (a restarted voter in its restart wait, a
+// promise relayed to it, a floor at the term), re-terms only once the term
+// stops renewing: while the other two grant it, a re-term would cost a
+// write at every voter (#1120: on a slow disk it lost the lease) and win
+// nothing. Once they don't (a witness adoption raised the floor to the
+// term at this controller's own voter), it re-terms as before.
+// reterm_on_own_promise and reterm_with_majority turn it red.
+func TestCandidateOwnPromiseRefusalReTermsOnlyWithoutAMajority(t *testing.T) {
+	c := newC(t, cfgA(), 0, 0)
+	r := c.Tick(0, "", 0, true)
+	c.OnReply(at(10*ms), granted("A", r, 0))
+	c.OnReply(at(10*ms), granted("B", r, 0)) // B promised term 1 to this boot
+	r2 := c.Tick(at(500*ms), "", 0, true)
+	if r2 == nil || !r2.Renewal || r2.Term != 1 {
+		t.Fatalf("renewal: %+v", r2)
+	}
+	c.OnReply(at(510*ms), granted("A", r2, 0))
+	c.OnReply(at(510*ms), granted("W", r2, 42))
+	c.OnReply(at(510*ms), refused("B", r2, 1, 0)) // its restart wait
+	r3 := c.Tick(at(time.Second), "", 0, true)
+	if r3 == nil || r3.Term != 1 {
+		t.Fatalf("with A and W granting, the next renewal %+v; want term 1 still (no re-term)", r3)
+	}
+	// Now the witness is silent: term 1 no longer renews.
+	c.OnReply(at(1010*ms), granted("A", r3, 0))
+	c.OnReply(at(1010*ms), refused("B", r3, 1, 0))
+	r4 := c.Tick(at(1500*ms), "", 0, true)
+	if r4 == nil || !r4.Renewal || r4.Term <= 1 {
+		t.Fatalf("with no majority at term 1, the next renewal %+v; want a re-term", r4)
+	}
+}
+
+// A refusal at the leader's term from a voter that never granted this
+// boot that term promised it elsewhere (a standby that won its own voter
+// in a contested cold start): it re-terms at once, majority or not, or that
+// voter is never won back (F13, TestStandbyRejoinsTheLeader).
+// own_promise_unchecked turns it red.
+func TestCandidateRefusalFromAVoterThatNeverGrantedTheTermReTerms(t *testing.T) {
+	c := newC(t, cfgA(), 0, 0)
+	r := c.Tick(0, "", 0, true)
+	c.OnReply(at(10*ms), granted("A", r, 0))
+	c.OnReply(at(10*ms), granted("W", r, 42))
+	r2 := c.Tick(at(500*ms), "", 0, true)
+	c.OnReply(at(510*ms), granted("A", r2, 0))
+	c.OnReply(at(510*ms), granted("W", r2, 42))
+	c.OnReply(at(510*ms), refused("B", r2, 1, 0)) // B promised term 1 to itself
+	r3 := c.Tick(at(time.Second), "", 0, true)
+	if r3 == nil || !r3.Renewal || r3.Term <= 1 {
+		t.Fatalf("the next renewal %+v; want a re-term above 1", r3)
+	}
+}

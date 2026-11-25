@@ -1836,7 +1836,10 @@ a takeover.
 **Rebuilding the witness loses nothing while both controllers are up**:
 `naut witness --rebuild`, or a fresh state directory, is a new
 incarnation that both controllers adopt after a quiet period, and the
-leader then copies the log to it again. **Never restore the witness's
+leader then copies the log to it again. Adopt or rebuild a witness while
+the controllers' storage writes quickly: the adoption needs a write at
+both, and on slow storage (a state write slower than about a quarter of
+the lease, as on some SD cards) expect one failover during it. **Never restore the witness's
 state directory from a backup**: an older copy of the log under the same
 incarnation can't be told from a current one, and could cost an
 acknowledgement. Rebuild it instead. **Upgrade the witness first**: a
