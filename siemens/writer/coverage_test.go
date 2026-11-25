@@ -316,23 +316,6 @@ func TestBitStringArithmetic(t *testing.T) {
 		"#w := UINT_TO_WORD(LINT_TO_UINT(((UINT_TO_LINT(WORD_TO_UINT(#w AND #v)) + 1) MOD LINT#65536 + LINT#65536) MOD LINT#65536));")
 }
 
-// TestSFCIsAGap: an SFC program is the writer's gap (#1302), not a parse
-// error, and its PROGRAM name still reads for the task.
-func TestSFCIsAGap(t *testing.T) {
-	src := "PROGRAM Seq\nVAR_EXTERNAL Go : BOOL; END_VAR\nSFC\n  INITIAL_STEP Idle:\n  END_STEP\nEND_SFC\nEND_PROGRAM\n"
-	p := Program{Path: "seq.sfc", Source: src}
-	if name, err := ProgramName(p); err != nil || name != "Seq" {
-		t.Fatalf("ProgramName = %q, %v", name, err)
-	}
-	_, diags, err := Write(Input{Programs: []Program{p}, Tasks: []Task{{Name: "main", Program: "Seq", Interval: time.Second}}})
-	if err != nil || len(diags) == 0 || diags[0].Rule != "siemens/sfc" || !strings.Contains(diags[0].Message, "(#1302)") {
-		t.Fatalf("%v %v", diags, err)
-	}
-	if got := ExternalTypes([]Program{p}); got["go"] != "BOOL" {
-		t.Errorf("ExternalTypes = %v", got)
-	}
-}
-
 // TestExternalTypes: the type each program binds a tag as, from VAR_EXTERNAL
 // and VAR_GLOBAL, ladder included.
 func TestExternalTypes(t *testing.T) {
@@ -382,7 +365,7 @@ func TestLibraryNamesAreWritten(t *testing.T) {
 // collision, a task TIA cannot run) keep their wording.
 func TestEveryGapNamesItsIssue(t *testing.T) {
 	// The writer-coverage issues filed for #789, B to G and the rest.
-	issues := map[string]bool{"#1299": true, "#1300": true, "#1301": true, "#1302": true, "#1303": true, "#1304": true, "#1305": true, "#1375": true}
+	issues := map[string]bool{"#1299": true, "#1300": true, "#1301": true, "#1303": true, "#1304": true, "#1305": true, "#1375": true}
 	ref := regexp.MustCompile(`yet \((#\d+)(?:, (#\d+))?\)`)
 	notGaps := map[string]bool{"siemens/nautilus": true, "siemens/name": true, "siemens/program": true}
 	var diags []Diag
@@ -539,4 +522,39 @@ func TestReviewFixes(t *testing.T) {
 	if len(diags) != 1 || !strings.Contains(diags[0].Message, "MAX of bit strings yet (#1305)") {
 		t.Errorf("MAX of WORDs: %v", diags)
 	}
+}
+
+// TestRealTimeConversionsGoThroughDINT: TIA V21 has no REAL or LREAL
+// conversion to or from TIME (lift-station's PumpSequence hit it), so the
+// writer goes through DINT, TIA's TIME being a DINT of milliseconds. A
+// REAL into TIME is warned (the CPU's TIME is 32-bit) unless it is a
+// constant that fits.
+func TestRealTimeConversionsGoThroughDINT(t *testing.T) {
+	scl, out := write(t, "PROGRAM P\nVAR r : REAL; l : LREAL; t : TIME; END_VAR\nt := REAL_TO_TIME(r * 1000.0);\nt := LREAL_TO_TIME(l);\nr := TIME_TO_REAL(t);\nl := TIME_TO_LREAL(t);\nt := TO_TIME(r);\nt := REAL_TO_TIME(1500.0);\nEND_PROGRAM\n")
+	wantLines(t, scl,
+		"#t := DINT_TO_TIME(REAL_TO_DINT(#r * 1000.0));",
+		"#t := DINT_TO_TIME(LREAL_TO_DINT(#l));",
+		"#r := DINT_TO_REAL(TIME_TO_DINT(#t));",
+		"#l := DINT_TO_LREAL(TIME_TO_DINT(#t));",
+		"#t := DINT_TO_TIME(REAL_TO_DINT(#r));",
+		"#t := DINT_TO_TIME(REAL_TO_DINT(1500.0));")
+	var lines []int
+	for _, w := range out.Warnings {
+		if w.Rule == ConversionRangeRule && strings.Contains(w.Message, "32-bit milliseconds") {
+			lines = append(lines, w.Line)
+		}
+	}
+	if fmt.Sprint(lines) != "[3 4 7]" {
+		t.Errorf("TIME range warnings on lines %v, want [3 4 7]: %v", lines, out.Warnings)
+	}
+	// A constant beyond the CPU's 32-bit TIME is refused, as T#35d is:
+	// nautilus has the right TIME and the CPU cannot hold it.
+	for _, c := range []string{"3.0E9", "-2147483649.0"} {
+		_, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR t : TIME; END_VAR\nt := REAL_TO_TIME(" + c + ");\nEND_PROGRAM\n"}}, BlockPrefix: "naut_"})
+		if err != nil || len(diags) == 0 || diags[0].Rule != "siemens/time" || !strings.Contains(diags[0].Message, "(#1304)") {
+			t.Errorf("REAL_TO_TIME(%s): %v %v", c, diags, err)
+		}
+	}
+	scl, _ = write(t, "PROGRAM P\nVAR t : TIME; END_VAR\nt := REAL_TO_TIME(-2147483648.0);\nEND_PROGRAM\n")
+	wantLines(t, scl, "#t := DINT_TO_TIME(REAL_TO_DINT(-2147483648.0));")
 }

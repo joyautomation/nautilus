@@ -1,0 +1,69 @@
+FUNCTION_BLOCK "naut_SfcStepT"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      _S_Idle_X : BOOL := TRUE;
+      _S_Wait_X : BOOL;
+      _S_Wait_t : TON_TIME;
+      "naut__S_Wait_t_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _S_Done_X : BOOL;
+      _en_t_go : BOOL;
+      _f_t_go : BOOL;
+      _en_t_wait : BOOL;
+      _f_t_wait : BOOL;
+      _en_t_back : BOOL;
+      _f_t_back : BOOL;
+      _act_Observe_prev : BOOL;
+      _act_sfc_Wait_lvl : BOOL;
+      _act_sfc_Done_lvl : BOOL;
+   END_VAR
+
+BEGIN
+	#_en_t_go := #_S_Idle_X AND "naut_Tags".go;
+	#_en_t_wait := #_S_Wait_X AND #"naut__S_Wait_t_last".ET >= T#100ms;
+	#_en_t_back := #_S_Done_X AND "naut_Tags".back;
+	#_f_t_go := #_en_t_go;
+	#_f_t_wait := #_en_t_wait;
+	#_f_t_back := #_en_t_back;
+	IF #_f_t_go THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_wait THEN
+		#_S_Wait_X := FALSE;
+	END_IF;
+	IF #_f_t_back THEN
+		#_S_Done_X := FALSE;
+	END_IF;
+	IF #_f_t_go THEN
+		#_S_Wait_X := TRUE;
+	END_IF;
+	IF #_f_t_wait THEN
+		#_S_Done_X := TRUE;
+	END_IF;
+	IF #_f_t_back THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	#_S_Wait_t(IN := #_S_Wait_X, PT := T#86400000ms, Q => #"naut__S_Wait_t_last".Q, ET => #"naut__S_Wait_t_last".ET);
+	IF #_S_Wait_X OR #_act_Observe_prev THEN
+		"naut_Tags".sfc_t := #"naut__S_Wait_t_last".ET;
+		"naut_Tags".sfc_x := #_S_Wait_X;
+	END_IF;
+	#_act_Observe_prev := #_S_Wait_X;
+	IF #_act_sfc_Wait_lvl AND NOT #_S_Wait_X THEN
+		"naut_Tags".sfc_wait := FALSE;
+	END_IF;
+	IF #_S_Wait_X THEN
+		"naut_Tags".sfc_wait := TRUE;
+	END_IF;
+	#_act_sfc_Wait_lvl := #_S_Wait_X;
+	IF #_act_sfc_Done_lvl AND NOT #_S_Done_X THEN
+		"naut_Tags".sfc_done := FALSE;
+	END_IF;
+	IF #_S_Done_X THEN
+		"naut_Tags".sfc_done := TRUE;
+	END_IF;
+	#_act_sfc_Done_lvl := #_S_Done_X;
+END_FUNCTION_BLOCK

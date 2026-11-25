@@ -11,7 +11,6 @@ type gap int
 
 const (
 	gapStructured gap = iota // enums, arrays, what structs.go does not write
-	gapSFC                   // SFC programs
 	gapString                // STRING and the string functions
 	gapStringConv            // conversions to and from STRING
 	gapTime                  // TIME arithmetic, LTIME, dates
@@ -21,7 +20,6 @@ const (
 // gapIssue is the tracking issue of each kind of gap.
 var gapIssue = map[gap]int{
 	gapStructured: 1299,
-	gapSFC:        1302,
 	gapString:     1303,
 	gapStringConv: 1375,
 	gapTime:       1304,

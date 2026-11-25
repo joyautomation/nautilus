@@ -1,0 +1,49 @@
+FUNCTION_BLOCK "naut_SfcFinalScan"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      tmr : TON_TIME;
+      naut_tmr_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _S_Idle_X : BOOL := TRUE;
+      _S_Run_X : BOOL;
+      _S_Run_prev : BOOL;
+      _en_t_go : BOOL;
+      _f_t_go : BOOL;
+      _en_t_stop : BOOL;
+      _f_t_stop : BOOL;
+      _act_Level_prev : BOOL;
+   END_VAR
+
+BEGIN
+	#_en_t_go := #_S_Idle_X AND "naut_Tags".go;
+	#_en_t_stop := #_S_Run_X AND "naut_Tags".stop;
+	#_f_t_go := #_en_t_go;
+	#_f_t_stop := #_en_t_stop;
+	IF #_f_t_go THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_stop THEN
+		#_S_Run_X := FALSE;
+	END_IF;
+	IF #_f_t_go THEN
+		#_S_Run_X := TRUE;
+	END_IF;
+	IF #_f_t_stop THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	IF #_S_Run_X OR #_act_Level_prev THEN
+		"naut_Tags".sfc_runs := LINT_TO_INT((((INT_TO_LINT("naut_Tags".sfc_runs) + 1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+		"naut_Tags".sfc_inx := #_S_Run_X;
+		#tmr(IN := #_S_Run_X, PT := T#50ms, Q => #naut_tmr_last.Q, ET => #naut_tmr_last.ET);
+		"naut_Tags".sfc_q := #naut_tmr_last.Q;
+		"naut_Tags".sfc_et := #naut_tmr_last.ET;
+	END_IF;
+	#_act_Level_prev := #_S_Run_X;
+	IF #_S_Run_X AND NOT #_S_Run_prev THEN
+		"naut_Tags".sfc_pulseruns := LINT_TO_INT((((INT_TO_LINT("naut_Tags".sfc_pulseruns) + 1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	END_IF;
+	#_S_Run_prev := #_S_Run_X;
+END_FUNCTION_BLOCK
