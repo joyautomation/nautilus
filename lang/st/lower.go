@@ -1618,10 +1618,15 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		if err != nil {
 			return nil, fmt.Errorf("FB %s output %q target: %w", def.Name, ob.Name, err)
 		}
-		// out => o stores the output into o: the same rule as o := fb.out
-		// (#782). The output already holds its own type's width.
+		// out => o stores the output into o: the same rules, in the same
+		// order and words, as o := fb.out (#782, #1378: a REAL output into
+		// an INT is refused, not stored as a REAL). The output already
+		// holds its own type's width.
 		if ot := def.OutputType(idx); ot != nil {
 			err := realRule(target.ExprType(), &ir.Lit{T: ot})
+			if err == nil && !assignable(target.ExprType(), ot) {
+				err = fmt.Errorf("cannot assign %s to %s", ot, target.ExprType())
+			}
 			if err == nil {
 				_, err = storeRule(target.ExprType(), &ir.Lit{T: ot}, nil)
 			}

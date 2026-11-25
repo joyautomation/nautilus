@@ -250,11 +250,12 @@ claims:
     claim: >-
       The standard's output binding (inst:TON(PT := T#5S, ET => Elapsed))
       stores an FB output into a variable at the call site, in ladder, FBD
-      and ST.
+      and ST, and is refused where the assignment would be.
     source: "#ladder-power-flow"
     tests:
       - go ./lang/conformance TestConformance/ld-coils/FB-only rung (no coil) still runs, its outputs read elsewhere
       - go ./lang/st TestUserFB_OutputBinding
+      - go ./lang/st TestOutputBindingFollowsTheAssignmentRule
       - go ./lang/fbd TestOutputBinding
       - go ./lang/ld TestLadderOutputBinding
     note: >-

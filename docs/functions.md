@@ -161,6 +161,9 @@ of the previous scan, and a rung below reads this scan's, as on any PLC. To capt
 variable** at the call site, use the standard's output binding:
 `t2:TON(PT := T#5S, ET => Elapsed)` — the one way ladder stores a
 non-BOOL (coils only assign BOOL). `=>` works in ST and FBD calls too.
+`ET => Elapsed` stores exactly as `Elapsed := t2.ET` would, so it follows the
+assignment's type rules and is refused where the assignment is: a REAL output
+bound to an INT names the same error as `MyInt := pid1.CV`.
 
 An instance is a local of its program, so **another task's program cannot
 name it**: tasks share only tags. `t2.Q` there — or `Owner.t2.Q` through
