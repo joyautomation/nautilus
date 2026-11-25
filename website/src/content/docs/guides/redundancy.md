@@ -609,6 +609,11 @@ ends.
   answers at once. So each voter's write, with any write waiting ahead
   of it, must finish within three quarters of a lease (750 ms at 1 s),
   or no controller wins a vote, after a failover or a switchover alike.
+- **A controller that can send but not hear** (a one-way link fault):
+  it keeps asking for a vote it never hears answered, for three quarters
+  of a lease, and each ask holds the voters to it for a lease. So the
+  controller that can reach both voters takes over within about 1.75
+  leases of that controller's first ask (1.75 s at 1 s), not one.
 
 Choose 2 s for:
 

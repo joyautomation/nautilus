@@ -476,6 +476,9 @@ type Elector struct {
 	gate    atomic.Pointer[gateState]
 	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
 	adopted atomic.Uint64 // the witness incarnation this controller adopted (AdoptedIncarnation)
+	// unboundNext is the earliest quorum.Instant unboundWitnessReply may
+	// close the kept connections again (0: any time): once a lease.
+	unboundNext atomic.Int64
 	wake    chan struct{}
 	// helloNow asks the hello loop for a hello at once, from the fast
 	// start: the link to the peer came up, or the peer's votes carry a new
@@ -1140,16 +1143,7 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 	go func() {
 		body, hdr, cn, err := e.call.callCert(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
 		if to == e.o.Witness && e.call.tls && !witnessOpOK(cn, e.adopted.Load()) && !mut("witness_refusals_unbound") {
-			// A refusal or a reply under witness@0, or under an incarnation
-			// this controller does not count, raises and clears nothing
-			// (#710 2b): only a reply bound to its certificate goes on, to
-			// witnessBound and, unadopted, to the adoption alone.
-			if err == nil && body != nil {
-				var rep quorum.Reply
-				if rep.UnmarshalBinary(body) == nil && rep.From == to {
-					e.witnessReplyCounts(to, cn, rep)
-				}
-			}
+			e.unboundWitnessReply(to, cn, body, err)
 			return
 		}
 		var se *statusError
@@ -1209,6 +1203,44 @@ func (e *Elector) witnessReplyCounts(to quorum.NodeID, cn string, rep quorum.Rep
 	}
 	e.unadoptedWitness(rep)
 	return false
+}
+
+// unboundWitnessReply takes a vote's answer from the witness under
+// witness@0, or under an incarnation this controller does not count: it
+// raises and clears nothing (#710 2b). Only a reply bound to its
+// certificate goes on, to witnessBound and, unadopted, to the adoption
+// alone; witnessBound closes the kept connections when it is not bound.
+// Any other answer that came under a certificate (a refusal by status, a
+// 409 lease or term-jump, or a body that does not parse as the witness's
+// reply) has nothing to bind, and closes them too: a kept connection
+// would otherwise keep the uncounted certificate for as long as the
+// witness only refuses, and its refusals would never be heard (#1120: a
+// renewal in flight across CloseIdleConnections kept a connection under
+// another incarnation's certificate, and the lease report was never
+// raised).
+//
+// No answer at all (a timeout, a reset, a refused dial: no certificate)
+// closes nothing: there is no certificate to drop, and a witness having
+// trouble must not turn every vote into new handshakes. And it closes at
+// most once a lease: the client is shared with the peer's votes, and a
+// witness that really runs another incarnation refuses every vote until
+// an operator acts, for hours maybe. Its own call's connection is back in
+// the pool by now, so one close is the new handshake the next vote needs.
+func (e *Elector) unboundWitnessReply(to quorum.NodeID, cn string, body []byte, err error) {
+	if err == nil && body != nil {
+		var rep quorum.Reply
+		if rep.UnmarshalBinary(body) == nil && rep.From == to {
+			e.witnessReplyCounts(to, cn, rep)
+			return
+		}
+	}
+	if mut("unbound_refusal_keeps_conn") || (cn == "" && !mut("unbound_close_on_no_answer")) {
+		return
+	}
+	now, next := int64(e.now()), e.unboundNext.Load()
+	if mut("unbound_close_uncapped") || (now >= next && e.unboundNext.CompareAndSwap(next, now+int64(e.o.Lease))) {
+		e.call.client.CloseIdleConnections() // the next vote dials again
+	}
 }
 
 // unadoptedWitness hands a reply from a witness incarnation this

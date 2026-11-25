@@ -127,6 +127,61 @@ func TestLoopbackAnUnboundWitnessRefusalRaisesNothing(t *testing.T) {
 	}
 }
 
+// A refusal by status under an uncounted witness certificate closes the
+// kept connections too (#1120, the unbound refusal): it has no reply to
+// bind, and a kept connection would keep that certificate for as long as
+// the witness only refuses, so the controller would never hear the
+// refusal under the right one. A refusal under witness@0 and a body that
+// is not the witness's reply close them the same way. At most once a
+// lease (the client is shared with the peer's votes, and a witness at
+// another incarnation refuses every vote until an operator acts), and
+// never on no answer at all (a timeout: no certificate to drop).
+func TestAnUnboundWitnessRefusalClosesTheConnections(t *testing.T) {
+	newE := func(now *quorum.Instant) (*Elector, *closeSpy) {
+		spy := &closeSpy{}
+		e := &Elector{o: Options{Witness: WitnessID, Lease: loopLease}, log: slog.Default(), now: func() quorum.Instant { return *now },
+			call: caller{tls: true, client: &http.Client{Transport: spy}}}
+		e.adopted.Store(7)
+		return e, spy
+	}
+	lease409 := &statusError{code: http.StatusConflict, reason: "lease"}
+	for _, c := range []struct {
+		name string
+		cn   string
+		body []byte
+		err  error
+	}{
+		{"a 409 lease under another incarnation", "witness@8", nil, lease409},
+		{"a 409 term-jump under witness@0", "witness@0", nil, &statusError{code: http.StatusConflict, reason: "term-jump"}},
+		{"a body that is not a reply", "witness@8", []byte("not a reply"), nil},
+	} {
+		now := quorum.Instant(0)
+		e, spy := newE(&now)
+		e.unboundWitnessReply(WitnessID, c.cn, c.body, c.err)
+		if spy.closed != 1 {
+			t.Errorf("%s: %d closes, want 1", c.name, spy.closed)
+		}
+	}
+
+	now := quorum.Instant(0)
+	e, spy := newE(&now)
+	e.unboundWitnessReply(WitnessID, "", nil, context.DeadlineExceeded)
+	if spy.closed != 0 {
+		t.Fatalf("no answer (a timeout): %d closes, want none", spy.closed)
+	}
+	e.unboundWitnessReply(WitnessID, "witness@8", nil, lease409)
+	now = now.Add(loopLease - time.Millisecond)
+	e.unboundWitnessReply(WitnessID, "witness@8", nil, lease409)
+	if spy.closed != 1 {
+		t.Fatalf("two refusals inside a lease: %d closes, want 1", spy.closed)
+	}
+	now = now.Add(time.Millisecond)
+	e.unboundWitnessReply(WitnessID, "witness@8", nil, lease409)
+	if spy.closed != 2 {
+		t.Fatalf("a refusal a lease after the close: %d closes, want 2", spy.closed)
+	}
+}
+
 // closeSpy counts CloseIdleConnections.
 type closeSpy struct {
 	http.RoundTripper
