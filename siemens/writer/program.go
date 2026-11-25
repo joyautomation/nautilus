@@ -242,6 +242,9 @@ type section struct {
 func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 	w := pw.w
 	var sections []section
+	// unretained are the PIDs a program declares VAR RETAIN, written in
+	// its plain VAR section.
+	var unretained []string
 	typeRefused := map[string]bool{}
 	block := pw.kind != kindProgram
 	for _, vb := range vbs {
@@ -342,10 +345,23 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 				continue
 			}
 			if p := w.userFB(u); p != nil {
+				if vb.Retain && isPID(p) && static && v.Initial == nil {
+					// nautilus never keeps a PID across a restart (it starts
+					// every clock block over: runtime/retainlocals.go), and TIA
+					// would keep one held in a RETAIN section: it goes in the
+					// plain VAR section instead (pid.go).
+					pw.need(p, v.Pos.Line)
+					pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
+					pw.statics[strings.ToLower(v.Name)] = w.fbShape(v.Name, p, map[string]bool{})
+					unretained = append(unretained, fmt.Sprintf("      %s : %s;   // VAR RETAIN in nautilus, which starts a PID over after a restart", sclName(v.Name), quote(w.prefix+p.name)))
+					continue
+				}
 				if vb.Retain {
 					// Not in any example (#1301 D1b): nautilus retains
-					// the whole instance, and how TIA keeps a
-					// multi-instance in a RETAIN section is unmeasured.
+					// the whole instance. TIA keeps a multi-instance in
+					// a RETAIN section whole too (it compiles, V21), a
+					// PID inside it included, which nautilus never keeps:
+					// lifting this needs pid.go's rule first.
 					pw.gap("siemens/var", v.Pos.Line, gapPOUs, "an instance of "+p.what()+" in VAR RETAIN ("+v.Name+")", "")
 					continue
 				}
@@ -415,6 +431,15 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 		if len(lines) > 0 {
 			sections = append(sections, section{header, lines})
 		}
+	}
+	if len(unretained) > 0 {
+		for i := range sections {
+			if sections[i].header == "VAR" {
+				sections[i].lines = append(sections[i].lines, unretained...)
+				return sections
+			}
+		}
+		sections = append(sections, section{"VAR", unretained})
 	}
 	return sections
 }

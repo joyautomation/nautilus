@@ -286,6 +286,7 @@ Native LAD (SimaticML FlgNet) is D3.
 | User FB / function | The project's FUNCTION_BLOCK → FB `"naut_<Name>"`, each instance a multi-instance in the block that declares it (`m101 : "naut_MotorStarter";`, `#m101(...)`), so its data lives inside the caller's as in nautilus. FUNCTION → FC with its return type; the body works on a temp named like the function, sets every local first (an FC's temps start undefined, nautilus starts each call afresh) and copies the result to the return value at the end and at each RETURN. Only the blocks a program reaches are written, callees first (TIA generates a block only once those it instantiates exist, measured on V21). Arguments are stored as nautilus stores them (store rule, `=>` as an assignment after the call); a VAR_IN_OUT is TIA's InOut. `VAR CONSTANT` → SCL `VAR CONSTANT`; a library's global constant → a `VAR CONSTANT` copy, same name, in each block that names it (a PLC constant tag table is the later native form) (#1301, D1) |
 | TON TOF TP R_TRIG F_TRIG | The IEC instructions as multi-instances (`TON_TIME`, …); the members already match (`.Q` `.ET`) |
 | CTU CTD CTUD | An `IEC_LCOUNTER` multi-instance (nautilus's counter value is its 64-bit int), called by its method: `#c.CTU(CU := …, R := …, PV := …)`, `#c.CTD(CD, LD, PV)`, `#c.CTUD(CU, CD, R, LD, PV)`, every input in that order, one the call leaves out as the counter's own member (`R := #c.R`), which keeps its last value as nautilus does. CTU's `Q` is `.QU`, CTD's `.QD`; an `=>` binding is read after the call (TIA takes none at the method). TIA V21 refuses `CTU_LINT`/`CTD_LINT` (their `.Q` is "not defined", and a LINT variable as PV is an "invalid data type"); the method form compiles, and on the bench 1510SP behaves as nautilus's counters do (#1338, #1371; `siemens/writer/testdata/instances`) |
+| PID | nautilus's own PID as an SCL FB `"naut_PID"` (`siemens/writer/pid.scl`, a line-by-line twin of `lang/ir/builtins_pid.go`; TIA's PID_Compact and CONT_C behave otherwise), each instance a multi-instance like a user FB's. Pins as nautilus names them, LREAL where nautilus's are REAL (nautilus's REAL is 64-bit), `"DT"`/`"DB"` quoted; dt when DT is 0 from RUNTIME on the instance's own MEM. Never retained: a program's `VAR RETAIN` PID goes in its plain VAR section, as nautilus starts every clock block over. Proven on the bench CPU (D2, #1301; "PID" below) |
 | SR RS | Written inline as set/reset logic on a static, since they are believed to be LAD/FBD boxes that SCL cannot call *(verify)* |
 | Elementary types, arrays, structs | Direct. DT becomes one of DT, LDT or DTL, chosen and documented *(verify each on FW 3.1)* |
 | `VAR RETAIN` | Retentive members *(verify the SCL source syntax for per-member retain)* |
@@ -320,9 +321,10 @@ The rules:
   yet (#N)", N the issue that closes it. B #1299 enums and arrays (structs and
   their start values are written, the library is in scope); C #1300
   more than one task (written since C: per-task copies of shared tags);
-  D #1301 nautilus's PID (D2; the project's FUNCTIONs, FUNCTION_BLOCKs,
-  dialect blocks such as TONR and VAR CONSTANT are written since D1, STRUCT
-  pins and results as PLC data types since D1b); E #1302 SFC (an SCL state machine first; GRAPH
+  D #1301 an instance of the project's block in a program's VAR RETAIN
+  (the project's FUNCTIONs, FUNCTION_BLOCKs, dialect blocks such as TONR
+  and VAR CONSTANT are written since D1, STRUCT pins and results as PLC
+  data types since D1b, nautilus's PID since D2); E #1302 SFC (an SCL state machine first; GRAPH
   maybe later as an option, James 11-23); F #1303 STRING and the string
   functions (written since F; a WSTRING or a non-ASCII literal is still a
   gap there), #1375 the conversions to and from STRING it cannot write yet
@@ -372,6 +374,61 @@ The rules:
     BOOL_TO_STRING as `SEL(G := b, IN0 := 'FALSE', IN1 := 'TRUE')`;
   - a literal over 254 bytes is refused (TIA's limit), a non-ASCII one is
     a gap until the code page is measured.
+- **PID (D2, #1301).** `"naut_PID"` is `siemens/writer/pid.scl`, a
+  line-by-line twin of nautilus's PID, written when a program reaches one.
+  Measured on TIA V21 and the bench 1510SP (FW 3.1), 2026-11-25:
+  - TIA refuses `DT` and `DB` as names unquoted ("The specified value "DT"
+    is invalid"); quoted, as pins and as named arguments, they compile.
+    SCL names are case-insensitive, so the twin's temps are `t_…` (a temp
+    `pv` is the pin `PV`).
+  - An FB's SCL source has no NON_RETAIN section ("The specified value
+    "NON_RETAIN" is invalid"): a multi-instance keeps its data with the
+    caller's section, and one in a RETAIN section compiles (and would be
+    kept). nautilus keeps no clock block across a restart
+    (`runtime/retainlocals.go`), so a program's `VAR RETAIN` PID is written
+    in its plain VAR section, with a comment saying why, and a project
+    block's instance in `VAR RETAIN` stays refused (it could hold a PID).
+    On the CPU a STOP to RUN (Web API mode request, no reset) started
+    every PID over, nested and moved ones included, while a `VAR RETAIN`
+    DINT in the same program kept its value.
+  - LREAL pins: with REAL ones, a program binding LREAL tags (booster-1)
+    compiled with a "sign or accuracy may be lost" warning per argument;
+    with LREAL pins it compiles 0/0, and a REAL tag reading CV gets that
+    warning instead, as any LREAL stored into a REAL does.
+  - **The trace compare** (the proof `TestPIDTwinMatchesNautilus` asks
+    for again whenever `lang/ir/builtins_pid.go` changes): a hand-written
+    SCL harness in a cyclic OB (50 ms) takes one row per scan from a DB of
+    inputs (400 scans that hit every branch: the first call, MANUAL
+    tracking and the scan into AUTO, both anti-windup freezes, DIRECT,
+    deadband, RESET, KP 0, KI 0, KD > 0, CV_MIN/CV_MAX 0/0 and swapped),
+    feeds three instances of `pid.scl`, and logs every scan's outputs into
+    an LREAL array DB, read over the Web API afterwards (the Web API's
+    text for a REAL carries 7 significant digits, too few to compare a
+    32-bit value exactly; an LREAL comes back whole). The same rows go
+    through nautilus's PID `Step` in Go. With DT given, all 400 scans were
+    equal, every output to the last bit. With DT 0, the instance measures
+    its own dt, which the harness cannot read (RUNTIME's MEM reads back
+    null over the Web API), so the replay takes the harness's own RUNTIME
+    just before the call: CV within 2.7e-4 relative, and 1.4e-3 on one
+    D_TERM near zero, the difference being the microseconds between the
+    two RUNTIME calls; SAT_HI/SAT_LO equal on every scan. An instance
+    called every third scan agreed the same way (CV within 6.5e-5), and
+    replaying it with one scan's dt instead put I_TERM off by 200%: dt is
+    the time since the instance's own last call, as in nautilus
+    (`TestPIDConditionalCallDtIsSinceLastCall`). A nautilus project
+    through the writer (`naut siemens deploy`; a PID with DT bound, one
+    nested in a user FB, one declared `VAR RETAIN`) ended with the same
+    values as `naut run` gave.
+  - Where it differs, by design: with DT 0, nautilus measures dt in whole
+    milliseconds of the host's wall clock, RUNTIME continuously. Two calls
+    of one instance less than a millisecond apart get dt 0 in nautilus (no
+    integral step, the derivative reset) and a few microseconds on the
+    CPU; a wall clock stepped forward gives nautilus one long dt, which the
+    CPU never sees. Bind DT to a task's dt-tag, as the examples do, to
+    have neither. "Bit for bit" was measured against nautilus on amd64;
+    Go may fuse a multiply and add on arm64, which moves the last bit.
+    Not measured on the CPU: NaN or Inf inputs, a KP*KI that underflows
+    to 0 in MANUAL.
 - **Known divergences, documented rather than refused:** where nautilus
   faults the scan the CPU sets ENO FALSE and carries on. Each is a
   `naut check --target siemens` (and deploy) **warning**, never silent

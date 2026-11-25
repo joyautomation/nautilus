@@ -1,0 +1,19 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      Auto : BOOL;
+      Every3 : BOOL;
+      Heat : REAL;
+      Held : REAL;
+      High : BOOL;
+      Level : REAL;
+      LevelDtS : REAL;
+      LevelSP : REAL;
+      Pump : REAL;
+      Valve : REAL;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

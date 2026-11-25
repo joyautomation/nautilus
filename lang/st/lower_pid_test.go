@@ -339,6 +339,46 @@ func TestPIDDTZeroUsesScanDt(t *testing.T) {
 	}
 }
 
+// pidSrcEvery calls its PID only on the scans the go tag allows, DT
+// unbound.
+const pidSrcEvery = `
+PROGRAM p
+VAR_GLOBAL
+    go       : BOOL;
+    iTermOut : REAL;
+END_VAR
+VAR
+    pid1 : PID;
+END_VAR
+IF go THEN
+    pid1(AUTO := TRUE, PV := 0.0, SP := 10.0, KP := 1.0, KI := 1.0, CV_MIN := -1000000.0, CV_MAX := 1000000.0);
+END_IF;
+iTermOut := pid1.I_TERM;
+END_PROGRAM`
+
+// TestPIDConditionalCallDtIsSinceLastCall: a PID called only on some
+// scans, DT unbound, integrates over the time since its own last call,
+// the skipped scans included, not over one scan. The Siemens writer's
+// twin measures the same way, with a RUNTIME of the instance's own
+// (siemens/writer/pid.go), and the bench trace compare checks it on the
+// CPU.
+func TestPIDConditionalCallDtIsSinceLastCall(t *testing.T) {
+	host := newFakeHost()
+	irProg, frame := compilePID(t, pidSrcEvery)
+	nowMs := int64(0)
+	for scan := 0; scan < 10; scan++ {
+		nowMs += 100 // 100 ms scans, virtual
+		host.now = nowMs
+		host.vals["go"] = ir.BoolVal(scan%3 == 0) // called on scans 0, 3, 6, 9
+		runPID(t, irProg, frame, host)
+	}
+	// The first call has dt 0; the three after it are 300 ms apart each:
+	// error 10 over 0.9 s.
+	if got, want := host.vals["iTermOut"].F, 10.0*0.9; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("I_TERM = %.6f, want %.6f: dt is the time since the instance's own last call", got, want)
+	}
+}
+
 // TestPIDDefaultClampRange checks that leaving both CV_MIN and CV_MAX
 // unbound (both at their IEC zero default) falls back to the IEC 0..100
 // range instead of clamping every output to zero.

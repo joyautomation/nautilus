@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -73,6 +74,8 @@ type pou struct {
 	lines    []int
 	lib      bool
 	libLines bool
+	// builtin is nautilus's PID (pid.go): its body is fixed SCL.
+	builtin bool
 }
 
 // what names the block in a message.
@@ -141,7 +144,24 @@ func (lib *library) addPOU(p *pou) {
 
 // userFB is the project's FUNCTION_BLOCK a declared type names, or nil.
 func (w *writer) userFB(typ string) *pou {
-	if c := w.lib.pous[strings.ToLower(strings.TrimSpace(typ))]; len(c) > 0 && c[0].kind == kindFB {
+	k := strings.ToLower(strings.TrimSpace(typ))
+	if _, _, ok := ir.Lookup(ir.FBs, k); ok {
+		// nautilus resolves its own blocks (TON, PID, …) before the
+		// project's (lang/st resolveType), so a project block of such a
+		// name is never the instance's type. PID is written as a block of
+		// its own (pid.go), registered on its first use in place of any
+		// project block of that name; the rest are TIA instructions.
+		if k != strings.ToLower(pidName) {
+			return nil
+		}
+		if c := w.lib.pous[k]; len(c) == 1 && isPID(c[0]) {
+			return c[0]
+		}
+		p := pidPOU()
+		w.lib.pous[k] = []*pou{p}
+		return p
+	}
+	if c := w.lib.pous[k]; len(c) > 0 && c[0].kind == kindFB {
 		return c[0]
 	}
 	return nil
@@ -256,7 +276,10 @@ func (w *writer) writePOUs(out *Output, claim func(name, what string) bool) (ord
 		pf := written[k]
 		p := w.lib.pous[k][0]
 		what := "the project's function block " + p.name
-		if p.kind == kindFC {
+		switch {
+		case p.builtin:
+			what = "nautilus's " + p.name
+		case p.kind == kindFC:
 			what = "the project's function " + p.name
 		}
 		if !claim(strings.TrimSuffix(pf.file.Path, ".scl"), what) {
@@ -366,6 +389,9 @@ func where(p *pou) string {
 // own line in a program file; a library block's at the use, naming the
 // block and its library line.
 func (w *writer) writeOne(p *pou, s site) *pouFile {
+	if p.builtin {
+		return w.pidFile(p, s)
+	}
 	path := p.path
 	if p.lib {
 		path = s.path

@@ -334,6 +334,7 @@ refused at check time, with one exception, the table below.
 | STRUCT types, in a library file or the program | a PLC data type each (`naut_Motor`), in the PLC data types group named like the block group, written only when something uses it (declared but unused types are not written). The type carries the TYPE's initial values; a tag's `init:` map is written as start values in `naut_Tags`. Your blocks can take a STRUCT as an input, output or in-out, and a function can return one. A whole struct is copied whole |
 | TON, TOF, TP, R_TRIG, F_TRIG, CTU, CTD, CTUD | the IEC instructions as multi-instances; counters are 64-bit |
 | SR, RS | written inline on a static |
+| PID | nautilus's own PID, as an FB `naut_PID` written line for line from nautilus's (on a CPU, fed the same inputs with DT set, every output matched nautilus's exactly). Its REAL pins are LREAL, since a nautilus REAL holds 64 bits; a REAL tag that reads CV gets TIA's "accuracy may be lost" warning. A PID declared `VAR RETAIN` starts over after a restart, as in nautilus |
 | bitwise AND/OR/XOR/NOT, bit access `.3`, shifts and rotates | written on the bit string of the operand's width |
 | integer arithmetic | 64-bit, wrapped at the store, as nautilus does |
 | division and MOD by anything but a non-zero constant | through a generated function that answers 0 for a zero divisor, as nautilus does |
@@ -400,12 +401,11 @@ that closes it.
 | Issue | Not translated yet |
 |---|---|
 | #1299 | enums, arrays, a function writing its own STRUCT input (TIA hands a function a STRUCT input by reference, so the write would reach the caller's variable) |
-| #1301 | nautilus's `PID` |
 | #1302 | SFC. It will be written as an SCL state machine first |
 | #1303 | WSTRING, and a STRING literal with characters outside ASCII |
 | #1375 | the conversions to and from STRING TIA has no match for: REAL and LREAL to STRING (TIA writes `+2.150000E+1` where nautilus writes `21.5`), TIME, BYTE, WORD, DWORD, LWORD, and STRING_TO_BOOL |
 | #1304 | TIME arithmetic, LTIME, dates |
-| #1301 | (also) an instance of your own block in a program's `VAR RETAIN` |
+| #1301 | an instance of your own block in a program's `VAR RETAIN` |
 | #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, reading or writing an instance's in-out from outside it, a manifest tag named inside a block when the project has several tasks, and more |
 
 Real limits keep their own words, such as a task interval over 60 s or a

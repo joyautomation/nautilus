@@ -1,0 +1,14 @@
+DATA_BLOCK "naut_Clock"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+   VAR 
+      "main" : Struct
+         mem : LReal;
+         started : Bool;
+      END_STRUCT;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK
