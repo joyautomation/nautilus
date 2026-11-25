@@ -60,6 +60,12 @@ type Image struct {
 	// inherits the hold, age and all. Format 3 on.
 	Holding bool
 	HoldAge time.Duration
+	// EdgeSession is the leader's edge node session as its standby must
+	// know it (#798): the bdSeq of its Sparkplug session plus one, 0 when
+	// it has none. A standby that takes over starts its own session with
+	// another bdSeq, so a late will of this one is never taken for its
+	// death. Set by the stream, not by the runtime. Format 4 on.
+	EdgeSession uint64
 }
 
 // TaskImage is one task's program frame. Experimental, like Image.

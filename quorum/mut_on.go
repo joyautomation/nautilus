@@ -657,6 +657,14 @@ var Mutations = []string{
 	"backoff_from_first_send",           // quorum: an unheard campaign backs off from its first send, not its last re-ask (#710 lost campaign, advisor)
 	"reask_declined_stays",              // quorum: a declined re-ask leaves its look in the past, so a driver's timer spins (#710 lost campaign, sim hang)
 	"grant_sent_last_reply",             // quorum: a voter's grant of an earlier ask, landing last, moves the lease's start back (#710 lost campaign, Fable)
+	"spark_ungated",                     // naut: the Sparkplug edge node's session runs on every replica, not only the leader (#798)
+	"spark_no_death_on_stepdown",        // naut: a switchover resigns before its edge node session has ended, so the new leader can birth before the old one's NDEATH (#798)
+	"spark_bdseq_clash",                 // sparkplug: a new edge node session's bdSeq may be the peer's last (#798)
+	"spark_publish_after_gate",          // sparkplug: the edge node's publish gate is always open, so a session the gate closed on births, publishes and buffers until its stop (#798)
+	"spark_death_watch_off",             // sparkplug: the edge node does not listen to its own NDEATH topic, so a late will of the old leader's session leaves it offline at a host that ignores bdSeq (#798)
+	"spark_send_uncounted",              // sparkplug: a fenced edge node publish is not counted for a switchover's drain (#798)
+	"spark_gate_unlatched",              // naut: an edge node session's gate opens again in its term after reading closed, so a rebirth caught in the gap leaves the session silent (#798, Fable)
+	"spark_step_unfenced",               // naut: a switchover's step-down fences the session only once the supervisor's goroutine gets to it, not during a blocked Start (#798, Fable)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

@@ -132,17 +132,23 @@ func TestPairFenceMarginLoads(t *testing.T) {
 	}
 }
 
-// #798: a pair can't run a Sparkplug edge node yet (both members would
-// publish as the same edge node), so a pair with sparkplug: is refused at
-// load, naming the issue. The Kubernetes Lease mode is left as it was.
-func TestPairRefusesASparkplugEdge(t *testing.T) {
+// A pair with a Sparkplug edge loads (#798: only the leader holds the
+// session, naut run's supervisor), and each replica's MQTT client id is
+// its own: the manifest's, or "<group>-<edge>", then "-<member>".
+func TestPairRunsASparkplugEdgeUnderItsOwnClientID(t *testing.T) {
 	edge := "sparkplug:\n  broker: tcp://broker:1883\n  group-id: plant\n"
-	_, err := Load(pairFS(edge+pairOK), "")
-	if err == nil || !strings.Contains(err.Error(), "#798") {
-		t.Fatalf("a pair with a Sparkplug edge: %v; want refused naming #798", err)
+	if _, err := Load(pairFS(edge+pairOK), ""); err != nil {
+		t.Fatalf("a pair with a Sparkplug edge: %v; want it loaded", err)
 	}
-	if _, err := Load(pairFS(edge+"redundancy:\n  lease: plant-a\n"), ""); err != nil {
-		t.Fatalf("the Kubernetes Lease mode with a Sparkplug edge: %v; want it loaded as before", err)
+	for _, c := range []struct{ id, member, want string }{
+		{"", "", ""},
+		{"", "a", "plant-line1-a"},
+		{"spb-edge", "b", "spb-edge-b"},
+		{"spb-edge", "", "spb-edge"},
+	} {
+		if got := sparkplugClientID(c.id, "plant", "line1", c.member); got != c.want {
+			t.Errorf("client id %q member %q: %q, want %q", c.id, c.member, got, c.want)
+		}
 	}
 }
 

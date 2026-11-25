@@ -86,7 +86,11 @@ type pairMember struct {
 	// ioStatus is the field drivers' status (GET /api/drivers' rows): a
 	// switchover's standby must have healthy I/O (pairswitch.go). Set by
 	// setIOStatus; none reads as healthy.
-	ioStatus   atomic.Pointer[func() []server.DriverStatus]
+	ioStatus atomic.Pointer[func() []server.DriverStatus]
+	// peerEdge is the last edge node session the peer's images named
+	// (runtime.Image.EdgeSession: its Sparkplug bdSeq plus one), 0 before
+	// one did (#798).
+	peerEdge   atomic.Uint64
 	stream     *pairStream
 	streamStop context.CancelFunc
 	streamDone chan struct{}

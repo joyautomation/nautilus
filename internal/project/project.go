@@ -1972,10 +1972,6 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			return nil, errors.New("redundancy.failback needs a retain: section: whether failback is suspended (and by whom) is kept in the retain store, so a takeover keeps an operator's suspend")
 		}
 	}
-	if m.Redundancy.Pair() && m.Sparkplug != nil {
-		// #798: both controllers would publish as the same edge node.
-		return nil, errors.New("sparkplug: a redundant pair can't run a Sparkplug edge node yet: both controllers would publish as the same edge node, fighting over its session (#798). Remove sparkplug: from this project, or run the edge on one controller outside the pair")
-	}
 	if opts.Channels, err = buildChannels(m); err != nil {
 		return nil, err
 	}

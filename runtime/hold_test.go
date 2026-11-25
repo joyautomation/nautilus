@@ -557,8 +557,8 @@ func TestTakeoverHoldRidesInTheImage(t *testing.T) {
 	if err := DecodeImage(b2, &back); err != nil || back.Holding {
 		t.Fatalf("format 2: holding %v, err %v; want no hold", back.Holding, err)
 	}
-	if !slices.Contains(ImageFormats, 3) || ImageFormatFor(ImageFormats) != 3 {
-		t.Fatalf("formats %v: a leader of this build sends 3 to a standby of this build", ImageFormats)
+	if !slices.Contains(ImageFormats, 3) || ImageFormatFor(ImageFormats) != imageFormat {
+		t.Fatalf("formats %v: a leader of this build sends %d to a standby of this build", ImageFormats, imageFormat)
 	}
 }
 

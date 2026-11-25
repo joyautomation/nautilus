@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -169,6 +170,18 @@ type Node struct {
 	// sequence; the count is what tells the two apart.
 	births uint64
 
+	// A redundant pair's edge node (redundant.go, #798).
+	gate       atomic.Pointer[func() bool] // SetPublishGate; nil = open
+	avoidPeer  func() (uint64, bool)       // WithBdSeqAvoid
+	deathWatch bool                        // WithDeathWatch
+	extra      func() []Metric             // WithNodeMetrics
+	extraLast  map[string]any              // under mu: each extra metric's last published value
+	extraSet   map[string]bool             // under mu: the extra metrics' names, as of the last birth
+	sendCount  func() (done func())        // WithSendCount; nil = not counted
+	// started: a Start has run. Without a bdseq-file the next Start goes
+	// on from the bdSeq the last Stop moved to, not from 0 again.
+	started bool
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -184,6 +197,11 @@ const (
 	// write, so a token still pending after this long belongs to a link that
 	// is dead, not slow.
 	tokenTimeout = 10 * time.Second
+	// tokenLeak bounds how long a publish whose wait timed out stays
+	// counted for a switchover's drain (WithSendCount): well past paho's
+	// 30 s queue timeout, as sparkplug/host's, so a token paho never
+	// completes does not hold every later drain.
+	tokenLeak = 2 * time.Minute
 )
 
 var (
@@ -193,6 +211,8 @@ var (
 	// errConnectionLost: paho reported the connection the token was issued on
 	// lost before the token completed.
 	errConnectionLost = errors.New("sparkplug: publish abandoned, connection lost")
+	// errFenced: the publish gate is closed (redundant.go).
+	errFenced = errors.New("sparkplug: not published, this controller does not lead its redundant pair")
 )
 
 // Option configures a Node.
@@ -318,7 +338,11 @@ func (n *Node) Start(ctx context.Context) error {
 	// bdSeq for this session: (persisted+1)%256. The will and the NBIRTH
 	// must carry the same value, so load it before building the will.
 	n.mu.Lock()
-	n.bdSeq = n.loadBdSeq()
+	if n.cfg.BdSeqFile != "" || !n.started {
+		n.bdSeq = n.loadBdSeq()
+	}
+	n.bdSeq = n.avoidBdSeq(n.bdSeq)
+	n.started = true
 	n.stopping = false // clear any stop from a previous session (Node is reused across Start/Stop)
 	n.ownsClient = true
 	n.mu.Unlock()
@@ -333,22 +357,41 @@ func (n *Node) Start(ctx context.Context) error {
 
 	opts, err := n.clientOptions()
 	if err != nil {
-		n.closeStoreForward()
-		return err
+		return n.failStart(err)
 	}
-	n.cli = mqtt.NewClient(opts)
-	tok := n.cli.Connect()
+	cli := mqtt.NewClient(opts)
+	n.mu.Lock()
+	n.cli = cli
+	n.mu.Unlock()
+	tok := cli.Connect()
 	if !tok.WaitTimeout(connectTimeout) {
-		n.closeStoreForward()
-		return fmt.Errorf("sparkplug: connect %s: timed out", n.cfg.BrokerURL)
+		return n.failStart(fmt.Errorf("sparkplug: connect %s: timed out", n.cfg.BrokerURL))
 	}
 	if tok.Error() != nil {
-		n.closeStoreForward()
-		return fmt.Errorf("sparkplug: connect %s: %w", n.cfg.BrokerURL, tok.Error())
+		return n.failStart(fmt.Errorf("sparkplug: connect %s: %w", n.cfg.BrokerURL, tok.Error()))
 	}
 
 	go n.run(ctx)
 	return nil
+}
+
+// failStart undoes a Start that did not connect, so the node can be
+// started again and a Stop is a no-op (it would otherwise wait for a tick
+// loop that never ran): the context is cancelled, the client (one that
+// connects late would subscribe and birth) disconnected, and the
+// store-and-forward file closed.
+func (n *Node) failStart(err error) error {
+	n.mu.Lock()
+	n.stopping = true // a late connect's birth is a no-op (beginInflight)
+	cli := n.cli
+	n.mu.Unlock()
+	n.cancel()
+	n.cancel = nil
+	if cli != nil {
+		cli.Disconnect(0)
+	}
+	n.closeStoreForward()
+	return err
 }
 
 // clientOptions builds the MQTT options for one session: its will is the
@@ -451,7 +494,8 @@ func (n *Node) closeStoreForward() {
 func (n *Node) onConnect(c mqtt.Client) {
 	c.Subscribe(n.topic("NCMD"), 1, n.handleCommand)
 	c.Subscribe(n.deviceTopic("DCMD", "+"), 1, n.handleCommand)
-	n.subscribeHost(c) // no-op when no primary host configured
+	n.subscribeHost(c)   // no-op when no primary host configured
+	n.subscribeDeaths(c) // no-op without WithDeathWatch
 	if n.cfg.PrimaryHostID != "" && !n.primaryOnline() {
 		n.log.Info("sparkplug: waiting for primary host before birth", "host", n.cfg.PrimaryHostID)
 		return // birth deferred until STATE=ONLINE (see host.go)
@@ -561,7 +605,7 @@ func (n *Node) newSession(old mqtt.Client, sayDeath bool) {
 	// bdSeq, once it notices.
 
 	n.mu.Lock()
-	n.bdSeq = (n.bdSeq + 1) % 256
+	n.bdSeq = n.avoidBdSeq((n.bdSeq + 1) % 256)
 	retry := n.retryInterval
 	n.mu.Unlock()
 	opts, err := n.clientOptions()
@@ -635,6 +679,17 @@ func (n *Node) run(ctx context.Context) {
 // So the wait also watches the lost signal captured before the token was
 // issued.
 func (n *Node) publish(topic string, qos byte, retained bool, payload []byte) error {
+	// Every session message but an NDEATH is fenced (redundant.go): counted
+	// for a switchover's drain from before the gate is read until it has
+	// left, and not sent at all once the gate is closed.
+	done := func() {}
+	if topic != n.topic("NDEATH") {
+		done = n.countSend()
+		if !n.gateOpen() {
+			done()
+			return errFenced
+		}
+	}
 	n.mu.Lock()
 	lost := n.lost
 	n.mu.Unlock()
@@ -643,8 +698,12 @@ func (n *Node) publish(topic string, qos byte, retained bool, payload []byte) er
 	defer timer.Stop()
 	select {
 	case <-tok.Done():
+		done()
 		return tok.Error()
 	case <-lost:
+		// The connection it was handed to is gone, and its client with it
+		// (a new session is a new client): it cannot leave later.
+		done()
 		// The connection went between the capture above and the publish,
 		// and the token may have completed on its successor: a completed
 		// token is the truth, and a message that did go out must not hand
@@ -656,6 +715,17 @@ func (n *Node) publish(topic string, qos byte, retained bool, payload []byte) er
 			return errConnectionLost
 		}
 	case <-timer.C:
+		// It may still leave from paho's queue: counted until its token
+		// completes, at most tokenLeak more (as the host's commands are,
+		// sparkplug/host).
+		go func() {
+			select {
+			case <-tok.Done():
+			case <-lost: // its client is gone: it cannot leave now
+			case <-time.After(tokenLeak):
+			}
+			done()
+		}()
 		return errPublishTimeout
 	}
 }
@@ -761,6 +831,9 @@ type Status struct {
 	PrimaryHostSeen bool   `json:"primaryHostSeen"`
 	HostOnline      bool   `json:"hostOnline"`
 
+	// Standby: the publish gate is closed (a redundant pair's controller
+	// that does not lead): no session, by design.
+	Standby   bool   `json:"standby,omitempty"`
 	BdSeq     uint64 `json:"bdSeq"`
 	Seq       uint64 `json:"seq"`
 	Msgs      uint64 `json:"msgs"`      // DATA messages published this session
@@ -817,6 +890,7 @@ func (n *Node) Status() Status {
 		BornMs:          n.bornMs,
 		LastPubMs:       n.lastPubMs,
 		CommandsRefused: n.cmdRefused,
+		Standby:         n.gate.Load() != nil && !n.gateOpen(),
 	}
 	s.DeviceDeathDelayMs = n.cfg.DeviceDeathDelay.Milliseconds()
 	if n.sf != nil {
