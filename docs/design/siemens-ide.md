@@ -71,7 +71,7 @@ VS Code ── edit .st/.ld ──▶ naut check --target siemens   (one rule ta
 | HMI, alarms, history, Sparkplug publish | **Maps**: `naut siemens serve` hosts them against the CPU's values |
 | Download of a change | **Keeps the data when no layout changed** (#1341, §3.5 "Data layout"). A download loads only what changed (`SoftwareOnlyChanges`): a body change loads in RUN and keeps every value, retained or not. A layout change needs `--reset-data`, and the plan names the data blocks it reaches. There is no warm reload with state migration |
 | Force | **No direct mapping** (D4). The Web API writes but does not force, and Siemens' own force is I/O-only and a TIA online function. D4: in v1 `/api/forces` answers 501, as the Logix facade does. The opt-in override layer for I/O-bound tags comes after the loop works, and it is required. A write is never called a force |
-| SFC | Not in the first writer subset. v1.x: an SCL state machine with step flags and step timers in statics, so the SFC view shows active steps live |
+| SFC | **Maps** (#1302): the chart is written as the ST state machine nautilus runs (`sfc.TranspileWithLines`), so step flags, `Step.T` and the timed qualifiers' timers are statics and TONs of the program's FB, named as in nautilus (`_S_<Step>_X`). A body-only edit loads in RUN and keeps the active step; adding a step changes the FB's layout and needs `--reset-data`, which restarts the chart. GRAPH may come later as an option |
 | Field drivers (Modbus, OPC UA client, EtherNet/IP, MQTT, IT) | **Do not map**: they run in `naut`. `naut check --target siemens` refuses them. The CPU's I/O comes from its local modules and its PROFINET devices |
 | Tests | `naut test` runs on nautilus in virtual time. `naut test --target siemens` replays the same scenarios on the CPU in real time |
 
@@ -323,8 +323,8 @@ The rules:
   more than one task (written since C: per-task copies of shared tags);
   D #1301 (closed: the project's FUNCTIONs, FUNCTION_BLOCKs, dialect
   blocks such as TONR and VAR CONSTANT are written since D1, STRUCT pins
-  and results as PLC data types since D1b, nautilus's PID since D2); E #1302 SFC (an SCL state machine first; GRAPH
-  maybe later as an option, James 11-23); F #1303 STRING and the string
+  and results as PLC data types since D1b, nautilus's PID since D2); E #1302 SFC (written since E as the ST state machine
+  nautilus runs; GRAPH maybe later as an option, James 11-23); F #1303 STRING and the string
   functions (written since F; a WSTRING or a non-ASCII literal is still a
   gap there), #1375 the conversions to and from STRING it cannot write yet
   (REAL and LREAL text, TIME, bit strings, STRING_TO_BOOL); G #1304 TIME arithmetic, LTIME and dates (64-bit milliseconds against
@@ -429,6 +429,51 @@ The rules:
     Go may fuse a multiply and add on arm64, which moves the last bit.
     Not measured on the CPU: NaN or Inf inputs, a KP*KI that underflows
     to 0 in MANUAL.
+- **SFC (E, #1302).** A chart goes through `toST` like LD and FBD: its
+  ST is `sfc.TranspileWithLines`, the state machine the runtime itself
+  runs (`runtime/program.go`), so the CPU runs the same per-scan
+  evolution: transitions from the scan's starting step flags, clears
+  before sets, step timers, then actions. Every hidden slot is a plain
+  static of the program's FB under nautilus's own name (`_S_Fill_X`,
+  `_S_Fill_t`, `_q_<Step>_<Target>_<Q>_tmr`); TIA accepts the leading
+  underscore. A diagnostic names the `.sfc` line through the transpile's
+  line map. `Step.T`, MAXTIME and the timed qualifiers read a TON's `ET`
+  or `Q` before its call in the scan, which is exactly what the #1385
+  latch makes read as nautilus does. Measured on TIA V21 and the bench
+  1510SP (FW 3.1), 2026-11-25 (`siemens/writer/testdata/sfc/README.md`):
+  - the nine `lang/conformance/sfc-*` charts compile 0/0;
+  - lift-station (five tasks, the chart PumpSequence) compiles with 0
+    errors once REAL and LREAL to and from TIME, which TIA V21 lacks ("Tag
+    REAL_TO_TIME not defined"; every integer and bit-string conversion
+    with TIME compiles), go through DINT: `DINT_TO_TIME(REAL_TO_DINT(x))`.
+    Compiled only: no trace covers the conversion; that REAL_TO_DINT rounds
+    half to even, as nautilus does, is TIA's documentation. A constant
+    beyond 32-bit milliseconds is refused, a variable warned (what the CPU
+    stores then is not measured);
+  - **trace compare**: all nine in one load, each its own writer output
+    (block prefix per chart), a hand-written harness in a cyclic OB at
+    40 ms (no chart time constant, 100 ms or 50 ms, is a multiple of it,
+    so no timed transition sits on a scan boundary) drives each chart's
+    BOOL inputs from a table of 300 scans and logs step flags, BOOL, INT
+    and TIME outputs every scan; nautilus runs the same conformance
+    projects at 40 ms on the virtual clock (`acceptance`) with the same
+    inputs. All 300 scans of all nine charts were equal, TIME outputs to
+    the millisecond. The same compare shifted by one scan fails on every
+    chart, on the CPU's own log;
+  - STOP to RUN (Web API mode request, no reset), with seven charts away
+    from their initial step: every chart started over at its initial
+    step and the rerun was again equal on every scan, as nautilus starts
+    a chart over (its step flags are plain VAR);
+  - online edit: a chart held in a step, then a change to one
+    transition's condition only (the FB's VAR section unchanged): the
+    deploy loaded in RUN with neither `--reset-data` nor `--allow-stop`,
+    the step stayed active, its P1 action did not run again, and the new
+    condition took effect. Whatever adds or renames a static (a step, a
+    qualifier or timed association, a first `Step.T` read, a line added
+    above an unnamed transition, whose `_en_t<line>`/`_f_t<line>` carry
+    its line) changes the layout, so the check asks for `--reset-data` and
+    the chart restarts at its initial step, where nautilus keeps it live
+    (documented, not measured; `_en_`/`_f_` could become temps, #616).
 - **Known divergences, documented rather than refused:** where nautilus
   faults the scan the CPU sets ENO FALSE and carries on. Each is a
   `naut check --target siemens` (and deploy) **warning**, never silent

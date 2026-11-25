@@ -1,0 +1,130 @@
+FUNCTION_BLOCK "naut_SfcAssocForms"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      _S_Idle_X : BOOL := TRUE;
+      _S_A_X : BOOL;
+      _q_A_sfc_L1_L_tmr : TON_TIME;
+      "naut__q_A_sfc_L1_L_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_L2_L_tmr : TON_TIME;
+      "naut__q_A_sfc_L2_L_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_L3_L_tmr : TON_TIME;
+      "naut__q_A_sfc_L3_L_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_L4_L_tmr : TON_TIME;
+      "naut__q_A_sfc_L4_L_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_D1_D_tmr : TON_TIME;
+      "naut__q_A_sfc_D1_D_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_D2_D_tmr : TON_TIME;
+      "naut__q_A_sfc_D2_D_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _en_t_go : BOOL;
+      _f_t_go : BOOL;
+      _en_t_next : BOOL;
+      _f_t_next : BOOL;
+      _act_sfc_N1_lvl : BOOL;
+      _act_sfc_N2_lvl : BOOL;
+      _act_sfc_L1_lvl : BOOL;
+      _act_sfc_L2_lvl : BOOL;
+      _act_sfc_L3_lvl : BOOL;
+      _act_sfc_L4_lvl : BOOL;
+      _act_sfc_D1_lvl : BOOL;
+      _act_sfc_D2_lvl : BOOL;
+   END_VAR
+
+BEGIN
+	#_en_t_go := #_S_Idle_X AND "naut_Tags".go;
+	#_en_t_next := #_S_A_X AND "naut_Tags".next;
+	#_f_t_go := #_en_t_go;
+	#_f_t_next := #_en_t_next;
+	IF #_f_t_go THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_next THEN
+		#_S_A_X := FALSE;
+	END_IF;
+	IF #_f_t_go THEN
+		#_S_A_X := TRUE;
+	END_IF;
+	IF #_f_t_next THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	#_q_A_sfc_L1_L_tmr(IN := #_S_A_X, PT := T#100ms, Q => #"naut__q_A_sfc_L1_L_tmr_last".Q, ET => #"naut__q_A_sfc_L1_L_tmr_last".ET);
+	#_q_A_sfc_L2_L_tmr(IN := #_S_A_X, PT := T#100ms, Q => #"naut__q_A_sfc_L2_L_tmr_last".Q, ET => #"naut__q_A_sfc_L2_L_tmr_last".ET);
+	#_q_A_sfc_L3_L_tmr(IN := #_S_A_X, PT := "naut_Tags".dur, Q => #"naut__q_A_sfc_L3_L_tmr_last".Q, ET => #"naut__q_A_sfc_L3_L_tmr_last".ET);
+	#_q_A_sfc_L4_L_tmr(IN := #_S_A_X, PT := "naut_Tags".dur, Q => #"naut__q_A_sfc_L4_L_tmr_last".Q, ET => #"naut__q_A_sfc_L4_L_tmr_last".ET);
+	#_q_A_sfc_D1_D_tmr(IN := #_S_A_X, PT := T#100ms, Q => #"naut__q_A_sfc_D1_D_tmr_last".Q, ET => #"naut__q_A_sfc_D1_D_tmr_last".ET);
+	#_q_A_sfc_D2_D_tmr(IN := #_S_A_X, PT := "naut_Tags".dur, Q => #"naut__q_A_sfc_D2_D_tmr_last".Q, ET => #"naut__q_A_sfc_D2_D_tmr_last".ET);
+	IF #_act_sfc_N1_lvl AND NOT #_S_A_X THEN
+		"naut_Tags".sfc_n1 := FALSE;
+	END_IF;
+	IF #_S_A_X THEN
+		"naut_Tags".sfc_n1 := TRUE;
+	END_IF;
+	#_act_sfc_N1_lvl := #_S_A_X;
+	IF #_act_sfc_N2_lvl AND NOT #_S_A_X THEN
+		"naut_Tags".sfc_n2 := FALSE;
+	END_IF;
+	IF #_S_A_X THEN
+		"naut_Tags".sfc_n2 := TRUE;
+	END_IF;
+	#_act_sfc_N2_lvl := #_S_A_X;
+	IF #_act_sfc_L1_lvl AND NOT (#_S_A_X AND NOT #"naut__q_A_sfc_L1_L_tmr_last".Q) THEN
+		"naut_Tags".sfc_l1 := FALSE;
+	END_IF;
+	IF #_S_A_X AND NOT #"naut__q_A_sfc_L1_L_tmr_last".Q THEN
+		"naut_Tags".sfc_l1 := TRUE;
+	END_IF;
+	#_act_sfc_L1_lvl := #_S_A_X AND NOT #"naut__q_A_sfc_L1_L_tmr_last".Q;
+	IF #_act_sfc_L2_lvl AND NOT (#_S_A_X AND NOT #"naut__q_A_sfc_L2_L_tmr_last".Q) THEN
+		"naut_Tags".sfc_l2 := FALSE;
+	END_IF;
+	IF #_S_A_X AND NOT #"naut__q_A_sfc_L2_L_tmr_last".Q THEN
+		"naut_Tags".sfc_l2 := TRUE;
+	END_IF;
+	#_act_sfc_L2_lvl := #_S_A_X AND NOT #"naut__q_A_sfc_L2_L_tmr_last".Q;
+	IF #_act_sfc_L3_lvl AND NOT (#_S_A_X AND NOT #"naut__q_A_sfc_L3_L_tmr_last".Q) THEN
+		"naut_Tags".sfc_l3 := FALSE;
+	END_IF;
+	IF #_S_A_X AND NOT #"naut__q_A_sfc_L3_L_tmr_last".Q THEN
+		"naut_Tags".sfc_l3 := TRUE;
+	END_IF;
+	#_act_sfc_L3_lvl := #_S_A_X AND NOT #"naut__q_A_sfc_L3_L_tmr_last".Q;
+	IF #_act_sfc_L4_lvl AND NOT (#_S_A_X AND NOT #"naut__q_A_sfc_L4_L_tmr_last".Q) THEN
+		"naut_Tags".sfc_l4 := FALSE;
+	END_IF;
+	IF #_S_A_X AND NOT #"naut__q_A_sfc_L4_L_tmr_last".Q THEN
+		"naut_Tags".sfc_l4 := TRUE;
+	END_IF;
+	#_act_sfc_L4_lvl := #_S_A_X AND NOT #"naut__q_A_sfc_L4_L_tmr_last".Q;
+	IF #_act_sfc_D1_lvl AND NOT #"naut__q_A_sfc_D1_D_tmr_last".Q THEN
+		"naut_Tags".sfc_d1 := FALSE;
+	END_IF;
+	IF #"naut__q_A_sfc_D1_D_tmr_last".Q THEN
+		"naut_Tags".sfc_d1 := TRUE;
+	END_IF;
+	#_act_sfc_D1_lvl := #"naut__q_A_sfc_D1_D_tmr_last".Q;
+	IF #_act_sfc_D2_lvl AND NOT #"naut__q_A_sfc_D2_D_tmr_last".Q THEN
+		"naut_Tags".sfc_d2 := FALSE;
+	END_IF;
+	IF #"naut__q_A_sfc_D2_D_tmr_last".Q THEN
+		"naut_Tags".sfc_d2 := TRUE;
+	END_IF;
+	#_act_sfc_D2_lvl := #"naut__q_A_sfc_D2_D_tmr_last".Q;
+END_FUNCTION_BLOCK

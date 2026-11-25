@@ -538,6 +538,30 @@ func (pw *progWriter) conversion(name, from, to string, arg st.Expression, args 
 		}
 		return wrap(toLINT(from, args[0]), to)
 	}
+	// TIA V21 has no REAL or LREAL conversion to or from TIME (compiled
+	// 2026-11-25: "Tag REAL_TO_TIME not defined"; every integer and bit
+	// string one compiles). Its TIME is a DINT of milliseconds, so the
+	// conversion goes through DINT. REAL_TO_DINT rounds half to even, as
+	// nautilus's REAL_TO_TIME does (TIA's documentation; the rounding is
+	// not measured on the CPU). The REAL side is TIA's 32-bit REAL, as for
+	// every REAL the writer declares. Beyond 32-bit milliseconds nautilus
+	// still has the right TIME and the CPU cannot hold it: a constant is
+	// refused like a time literal that does not fit, anything else warned.
+	if isReal(from) && to == "TIME" {
+		if isNumberConst(arg) {
+			if !realConstFits(arg, "DINT", math.RoundToEven) {
+				pw.gap("siemens/time", line, gapTime, name+" of a value beyond the CPU's TIME", "TIA's TIME holds 32-bit milliseconds, about 24.8 days either way")
+				return ""
+			}
+		} else {
+			pw.w.warnings = append(pw.w.warnings, Diag{Rule: ConversionRangeRule, Path: pw.path, Line: line,
+				Message: fmt.Sprintf("%s can differ if the value is beyond the CPU's TIME (32-bit milliseconds, about 24.8 days either way): nautilus stores up to 64-bit milliseconds (and faults the scan on NaN or beyond); on Siemens %s_TO_DINT sets ENO FALSE, the scan carries on, and what it stores is not measured", name, from)})
+		}
+		return "DINT_TO_TIME(" + from + "_TO_DINT(" + args[0] + "))"
+	}
+	if from == "TIME" && isReal(to) {
+		return "DINT_TO_" + to + "(TIME_TO_DINT(" + args[0] + "))"
+	}
 	// Both round half to even (lang/ir conversions.go; TIA's CONVERT and
 	// ROUND by its documentation): only the out-of-range case differs.
 	if isReal(from) && isInt(to) && !realConstFits(arg, to, math.RoundToEven) {
@@ -552,6 +576,16 @@ func first(args []st.Expression) st.Expression {
 		return nil
 	}
 	return args[0]
+}
+
+// isNumberConst reports a decimal number literal, signed or not: what
+// realConstFits can judge.
+func isNumberConst(e st.Expression) bool {
+	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
+		e = u.Operand
+	}
+	n, ok := e.(*st.NumberLit)
+	return ok && (n.Base == 10 || n.Base == 0)
 }
 
 // realConstFits reports a REAL constant that round takes into integer

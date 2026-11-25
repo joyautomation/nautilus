@@ -276,9 +276,6 @@ func Write(in Input) (Output, []Diag, error) {
 				libs = append(libs, l)
 			}
 		}
-		if isSFC(p) {
-			continue
-		}
 		if src, _, err := toST(p); err == nil {
 			if prog, err := st.Parse(src); err == nil {
 				own = append(own, prog)
@@ -305,10 +302,6 @@ func Write(in Input) (Output, []Diag, error) {
 
 	var ready []parsed
 	for _, p := range in.Programs {
-		if isSFC(p) {
-			w.diag("siemens/sfc", p.Path, 1, gapMessage(gapSFC, "SFC programs", "they will be written as SCL state machines"))
-			continue
-		}
 		src, lines, err := toST(p)
 		if err != nil {
 			return Output{}, nil, fmt.Errorf("%s: %w", p.Path, err)
@@ -746,12 +739,6 @@ func ExternalTypes(progs []Program) map[string]string {
 		}
 	}
 	for _, p := range progs {
-		if isSFC(p) {
-			if prog, err := sfc.Parse(p.Source); err == nil {
-				add(prog.VarBlocks)
-			}
-			continue
-		}
 		src, _, err := toST(p)
 		if err != nil {
 			continue
@@ -763,11 +750,12 @@ func ExternalTypes(progs []Program) map[string]string {
 	return out
 }
 
-// isSFC reports an SFC program, which the writer does not translate yet.
-func isSFC(p Program) bool { return strings.EqualFold(path.Ext(p.Path), ".sfc") }
-
 // toST returns a program's source as ST, with lines[i] the original line
-// of ST line i+1 (nil when the source is ST already).
+// of ST line i+1 (nil when the source is ST already). A chart is the ST
+// state machine nautilus itself runs (sfc.TranspileWithLines, as the
+// runtime's program loader), so the CPU runs the same per-scan evolution:
+// step flags, Step.T and the timed qualifiers are plain statics and TONs
+// of that ST (#1302).
 func toST(p Program) (string, []int, error) {
 	switch strings.ToLower(path.Ext(p.Path)) {
 	case ".ld":
@@ -786,6 +774,8 @@ func toST(p Program) (string, []int, error) {
 		return s, out, nil
 	case ".fbd":
 		return fbd.TranspileWithLines(p.Source)
+	case ".sfc":
+		return sfc.TranspileWithLines(p.Source)
 	}
 	return p.Source, nil, nil
 }
@@ -807,16 +797,6 @@ func mapLine(lines []int, l int) int {
 // same lowering Write uses, so a caller can name a Task's Program from
 // the file a manifest's task points at.
 func ProgramName(p Program) (string, error) {
-	if isSFC(p) {
-		prog, err := sfc.Parse(p.Source)
-		if err != nil {
-			return "", fmt.Errorf("%s: %w", p.Path, err)
-		}
-		if prog.Name == "" {
-			return "", fmt.Errorf("%s: the source declares no PROGRAM", p.Path)
-		}
-		return prog.Name, nil
-	}
 	src, _, err := toST(p)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", p.Path, err)
