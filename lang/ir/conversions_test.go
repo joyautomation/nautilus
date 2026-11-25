@@ -124,6 +124,17 @@ func TestConversionSemantics(t *testing.T) {
 		{"TIME_TO_INT", TimeVal(70000), IntVal(4464)},
 		{"UDINT_TO_TIME", IntVal(1500), TimeVal(1500)},
 		{"LREAL_TO_TIME", RealVal(1500.5), TimeVal(1500)},
+		// REAL → TIME reads the REAL as milliseconds and rounds half to
+		// even both ways, as TIA's REAL_TO_DINT does: the Siemens writer
+		// writes REAL_TO_TIME as DINT_TO_TIME(REAL_TO_DINT(x)) (#1389).
+		{"LREAL_TO_TIME", RealVal(1501.5), TimeVal(1502)},
+		{"REAL_TO_TIME", RealVal(2.5), TimeVal(2)},
+		{"REAL_TO_TIME", RealVal(3.5), TimeVal(4)},
+		{"REAL_TO_TIME", RealVal(-2.5), TimeVal(-2)},
+		{"REAL_TO_TIME", RealVal(-3.5), TimeVal(-4)},
+		{"REAL_TO_TIME", RealVal(1500.4), TimeVal(1500)},
+		{"TIME_TO_REAL", TimeVal(1500), RealVal(1500)},
+		{"TIME_TO_LREAL", TimeVal(-2), RealVal(-2)},
 		{"TIME_TO_LTIME", TimeVal(42), TimeVal(42)},
 		{"LTIME_TO_LREAL", TimeVal(250), RealVal(250)},
 		// REAL / LREAL share float64
