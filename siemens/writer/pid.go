@@ -36,7 +36,7 @@ import (
 // NON_RETAIN section of its own: measured on V21, "The specified value
 // "NON_RETAIN" is invalid"). So a PID a program declares in VAR RETAIN is
 // written in the program's plain VAR section (declare), and the writer
-// refuses any other block's instance in a RETAIN section (gapPOUs), which
+// refuses any other block's instance in a RETAIN section (#1305), which
 // keeps a PID nested in one non-retained too.
 //
 // Proof (2026-11-25, TIA V21 and the bench S7-1500, FW 3.1): compiled

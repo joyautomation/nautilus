@@ -298,7 +298,7 @@ func (w *writer) sclType(t string) (string, string) {
 		// A block of nautilus's library where the writer has no form for
 		// it (nautilus's PID is written as a block of its own, pid.go,
 		// where a variable declares it).
-		return "", gapMessage(gapPOUs, "nautilus's function block "+strings.ToUpper(strings.TrimSpace(t))+" here", "")
+		return "", gapMessage(gapOther, "nautilus's function block "+strings.ToUpper(strings.TrimSpace(t))+" here", "")
 	}
 	return "", why
 }

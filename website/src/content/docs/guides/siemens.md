@@ -405,8 +405,7 @@ that closes it.
 | #1303 | WSTRING, and a STRING literal with characters outside ASCII |
 | #1375 | the conversions to and from STRING TIA has no match for: REAL and LREAL to STRING (TIA writes `+2.150000E+1` where nautilus writes `21.5`), TIME, BYTE, WORD, DWORD, LWORD, and STRING_TO_BOOL |
 | #1304 | TIME arithmetic, LTIME, dates |
-| #1301 | an instance of your own block in a program's `VAR RETAIN` |
-| #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, reading or writing an instance's in-out from outside it, a manifest tag named inside a block when the project has several tasks, and more |
+| #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, an instance of your own block in a program's `VAR RETAIN`, reading or writing an instance's in-out from outside it, a manifest tag named inside a block when the project has several tasks, and more |
 
 Real limits keep their own words, such as a task interval over 60 s or a
 block name collision.
