@@ -647,6 +647,13 @@ var Mutations = []string{
 	"save_waits_on_edge",                // runtime: a retain save during a takeover edge's flush wait parks the saver on leadMu, holding the flush's carry (#710 d1e, CI on #1359)
 	"edge_wait_blocks_others",           // runtime: other tasks' ticks queue on leadMu while a takeover edge waits for its step (#710 d1e)
 	"final_waits_interval",              // naut: a final image waits out the stream's interval when its wake came first (#710 d1c bench)
+	"no_reask",                          // quorum: a pending campaign is never asked again, so on a slow disk no campaign hears its grants (#710 lost campaign)
+	"reask_new_term",                    // quorum: a campaign's re-ask asks a new term, which needs a new write at each voter (#710 lost campaign)
+	"reask_lease_from_first_send",       // quorum: a campaign won on a re-ask's grants leases from its first send, so on a slow link its first renewal lands after the lease (#710 lost campaign, sim seeds)
+	"reask_lease_from_last_ask",         // quorum: a campaign's lease runs from its latest ask, though a grant answers an earlier one (#710 lost campaign)
+	"backoff_from_first_send",           // quorum: an unheard campaign backs off from its first send, not its last re-ask (#710 lost campaign, advisor)
+	"reask_declined_stays",              // quorum: a declined re-ask leaves its look in the past, so a driver's timer spins (#710 lost campaign, sim hang)
+	"grant_sent_last_reply",             // quorum: a voter's grant of an earlier ask, landing last, moves the lease's start back (#710 lost campaign, Fable)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

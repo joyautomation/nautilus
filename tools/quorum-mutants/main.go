@@ -621,6 +621,19 @@ var table = []mutation{
 	{"switch_ignores_standby_io", []string{"TestPairSwitchoverRefusedForAStandbyWithBadIO"}},
 	{"abort_keeps_final", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"final_waits_interval", []string{"TestAFinalImageWaitingIsSentAtOnce"}},
+	// #710, the lost switchover campaign: a pending campaign is asked
+	// again, same term and id. With every write past lease/8 the pair
+	// never elects under no_reask or reask_new_term: the rig's slow-disk
+	// test shows it through naut run, and TestLoopbackEveryWriteSlowStill
+	// ElectsAndSwitches too, but the loopback tests skip under a core
+	// mutation (QUORUM_LOOPBACK=1 runs them).
+	{"no_reask", []string{"TestCandidateBackOffWhenUnheard", "TestTargetedDeafCandidateReasksAndStillLoses", "TestPairSlowDisksStillSwitchAndFailOver"}},
+	{"reask_new_term", []string{"TestCandidateBackOffWhenUnheard", "TestTargetedDeafCandidateReasksAndStillLoses", "TestPairSlowDisksStillSwitchAndFailOver"}},
+	{"reask_lease_from_last_ask", []string{"TestCandidateLeaseFromTheAskItsGrantsAnswer"}},
+	{"reask_lease_from_first_send", []string{"TestCandidateLeaseFromTheAskItsGrantsAnswer", "TestASingleRestartRaisesNoDuplicate"}},
+	{"backoff_from_first_send", []string{"TestCandidateBackOffWhenUnheard", "TestTargetedDeafCandidateReasksAndStillLoses"}},
+	{"reask_declined_stays", []string{"TestCandidateNextLookNeverPastWhenAReaskIsDeclined"}},
+	{"grant_sent_last_reply", []string{"TestCandidateLeaseFromTheAskItsGrantsAnswer"}},
 	{"flush_next_tick", []string{"TestATakeoverTakesAQuickFlushInItsFirstTick"}},
 	{"catchup_next_tick", []string{"TestATakeoverTakesAQuickCatchUpInItsFirstTick"}},
 	{"edge_wait_blocks_others", []string{"TestOtherTasksDoNotWaitOnATakeoverEdge"}},
@@ -1190,6 +1203,13 @@ var rowPkgs = map[string][]string{
 	"abort_keeps_final":                 {"./cmd/naut"},
 	"handback_any_epoch":                {"./quorum", "./cmd/naut"},
 	"final_waits_interval":              {"./cmd/naut"},
+	"no_reask":                          {"./quorum/...", "./cmd/naut"},
+	"reask_new_term":                    {"./quorum/...", "./cmd/naut"},
+	"reask_lease_from_last_ask":         {"./quorum/..."},
+	"reask_lease_from_first_send":       {"./quorum/..."},
+	"backoff_from_first_send":           {"./quorum/..."},
+	"reask_declined_stays":              {"./quorum/..."},
+	"grant_sent_last_reply":             {"./quorum/..."},
 	"flush_next_tick":                   {"./runtime"},
 	"catchup_next_tick":                 {"./runtime"},
 	"edge_wait_blocks_others":           {"./runtime"},

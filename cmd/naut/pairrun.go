@@ -173,6 +173,12 @@ type pairDeps struct {
 // the controller down for good (#1230 review).
 const bindEveryDefault = time.Second
 
+// testStateWrite, when set, writes every voter state file of this
+// process, the controller's and the witness's, before its fsync: a test's
+// slow disk (#710, the lost switchover campaign), or a bench build's
+// (mut_on.go, QUORUM_WRITE_DELAY). Nil in a release.
+var testStateWrite func(*os.File, []byte) (int, error)
+
 func osPairDeps() pairDeps {
 	return pairDeps{getenv: os.Getenv, listen: func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) }, box: hostBox}
 }
@@ -535,6 +541,8 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 		// The peer's tag API is the one its hello announces, never this
 		// port on its host: the two need not match (#710 demo finding 1).
 		SelfAPI: apiOn(r.Peers[self], apiAddr),
+		// Nil but in tests and bench builds of a slow disk.
+		StateWrite: testStateWrite,
 	}
 	var pto *peertls.Options
 	if !peerTLSIsOff(r.PeerTLS) {

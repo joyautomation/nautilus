@@ -143,7 +143,7 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 	if pt == nil {
 		fmt.Fprintln(stderr, "naut witness: warning: "+peerTLSOff)
 	}
-	w, err := node.NewWitness(node.WitnessOptions{Dir: *state, Token: token, Lease: *lease, Rebuild: *rebuild})
+	w, err := node.NewWitness(node.WitnessOptions{Dir: *state, Token: token, Lease: *lease, Rebuild: *rebuild, StateWrite: testStateWrite})
 	if err != nil {
 		fmt.Fprintln(stderr, "naut witness:", err)
 		return 1

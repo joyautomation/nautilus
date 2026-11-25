@@ -41,6 +41,8 @@ type WitnessOptions struct {
 	// MaxPairs caps how many pairs one witness serves (default 64).
 	MaxPairs int
 	Log      *slog.Logger
+	// StateWrite is Options.StateWrite, for the witness's pair files.
+	StateWrite func(*os.File, []byte) (int, error)
 
 	clock func() quorum.Instant
 	draw  func() uint64
@@ -345,7 +347,7 @@ func (w *Witness) pair(name, members string) (*witnessPair, error) {
 	case err != nil:
 		return nil, err
 	}
-	file := &State{Path: filepath.Join(w.o.Dir, name+stateSuffix), Owner: w.o.Self, Cluster: name, write: w.o.write}
+	file := &State{Path: filepath.Join(w.o.Dir, name+stateSuffix), Owner: w.o.Self, Cluster: name, write: firstWrite(w.o.write, w.o.StateWrite)}
 	st, err := file.Load()
 	if err != nil && !errors.Is(err, ErrNoState) {
 		// Unreadable since the start checked it: never redrawn quietly.

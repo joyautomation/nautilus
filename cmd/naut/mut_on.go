@@ -2,7 +2,25 @@
 
 package main
 
-import "os"
+import (
+	"os"
+	"time"
+)
+
+// A bench build's slow disk (#710, the lost switchover campaign): with
+// QUORUM_WRITE_DELAY set (a Go duration), every voter state write of this
+// process waits that long before its fsync, the controller's and the
+// witness's. Only in a quorum_mut build, never a release.
+func init() {
+	d, err := time.ParseDuration(os.Getenv("QUORUM_WRITE_DELAY"))
+	if err != nil || d <= 0 {
+		return
+	}
+	testStateWrite = func(f *os.File, b []byte) (int, error) {
+		time.Sleep(d)
+		return f.Write(b)
+	}
+}
 
 // Mutations of the pair's wiring of its operator-intent log with the
 // witness as the third replica (#710 PR 3b-4b), switched on like package

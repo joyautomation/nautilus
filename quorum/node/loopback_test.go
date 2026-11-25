@@ -91,6 +91,24 @@ type cluster struct {
 	// nodes on different releases is refused as the receiver refuses
 	// another version (409 "version"). Unset: one release for all.
 	release map[quorum.NodeID]int
+	// slowWrite delays every state write, the witness's and both
+	// controllers', by this much (a slow eMMC or SD card); writes counts
+	// them. Set before the start.
+	slowWrite time.Duration
+	writes    atomic.Int64
+}
+
+// writeFn is the state write every member starts with: the file's own,
+// after slowWrite.
+func (c *cluster) writeFn() func(*os.File, []byte) (int, error) {
+	if c.slowWrite == 0 {
+		return nil
+	}
+	return func(f *os.File, b []byte) (int, error) {
+		c.writes.Add(1)
+		time.Sleep(c.slowWrite)
+		return f.Write(b)
+	}
 }
 
 type sentVote struct {
@@ -251,7 +269,7 @@ func (c *cluster) clientTLS(id quorum.NodeID) TLSWrap {
 
 func (c *cluster) startWitness() {
 	c.t.Helper()
-	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: c.leaseFor(WitnessID)})
+	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: c.leaseFor(WitnessID), write: c.writeFn()})
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -285,7 +303,7 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 	}
 	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
 		Lease: c.leaseFor(id), StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
-		SelfAPI: apiAddr(id), TLS: c.clientTLS(id),
+		SelfAPI: apiAddr(id), TLS: c.clientTLS(id), write: c.writeFn(),
 		client: &http.Client{Transport: &faultRT{c: c, from: id, base: c.transportFor(id)}},
 		OnEvent: func(ev Event) {
 			c.evMu.Lock()

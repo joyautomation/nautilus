@@ -64,18 +64,56 @@ func (c Config) leaseFor() time.Duration {
 
 func (c Config) look() time.Duration { return c.Lease / 4 }
 
+// reaskEvery is how often a campaign no majority has answered is asked
+// again (Candidate.reask): a vote's own timeout at the driver, lease/8.
+func (c Config) reaskEvery() time.Duration { return c.Lease / 8 }
+
+// reaskFor is how long after its first send a campaign is asked again:
+// three quarters of a lease. A later grant of an early ask would leave its
+// lease (from that ask's send) too short to renew, and each re-ask a voter takes keeps its
+// promise alive for a lease from there (expire backs off from the last).
+func (c Config) reaskFor() time.Duration { return c.Lease * 3 / 4 }
+
 // round is one request sent to every voter: a campaign or a renewal.
 type round struct {
-	id      uint64
-	term    uint64
-	sent    Instant
-	grants  map[NodeID]bool
-	replies map[NodeID]bool
+	id   uint64
+	term uint64
+	sent Instant
+	// asked is when the round was last sent: its first send, or a
+	// campaign's latest re-ask (reask). A voter's promise to it may run
+	// from there, so an unheard campaign backs off from there (expire).
+	asked Instant
+	// asks is, per request id, when it was sent: the round's own id, and
+	// each re-ask's (a campaign asked again goes under a new id, same
+	// term). A grant answers one of them, and is timed from its send.
+	asks   map[uint64]Instant
+	grants map[NodeID]bool
+	// grantSent is, per voter that granted, when the request its grant
+	// answers was sent: the lease runs from there (OnReply).
+	grantSent map[NodeID]Instant
+	replies   map[NodeID]bool
 	// campaign: a request for a new term, not a renewal.
 	campaign bool
 	// recs: each reply's records, by voter (#710 S2c): a campaign that
 	// wins hands its own round's to the takeover (HotCheck).
 	recs map[NodeID]WonReply
+}
+
+// leaseFrom is when a lease this round's majority won starts: the send of
+// the request each grant answers, the earlier of the two latest (#710).
+// A voter promises from when it took the request it grants, so each grant
+// holds from that request's send; two of them hold from the earlier. A
+// round asked once (every renewal) is its one send.
+func (rd *round) leaseFrom() Instant {
+	ts := make([]Instant, 0, len(rd.grants))
+	for v := range rd.grants {
+		ts = append(ts, rd.grantSent[v])
+	}
+	slices.Sort(ts)
+	if len(ts) < 2 {
+		return rd.sent // no majority: never asked (OnReply checks first)
+	}
+	return ts[len(ts)-2]
 }
 
 // Candidate is a controller's campaign and lease state machine (design
@@ -154,6 +192,8 @@ type Candidate struct {
 	// pending is the campaign in flight: no new campaign starts until a
 	// majority has answered it or a lease has passed (expire).
 	pending *round
+	// reaskAt is when the pending campaign is next asked again (reask).
+	reaskAt Instant
 
 	// countInc is the witness incarnation whose grants count (0: none),
 	// and countFrom when they start to: a newly adopted incarnation is
@@ -289,7 +329,11 @@ func (c *Candidate) Observe(term uint64) {
 // timer for it (and ticks again after any reply).
 func (c *Candidate) NextLook() Instant {
 	if !c.leading {
-		return max(c.nextLook, c.backoffUntil, c.holdUntil)
+		next := max(c.nextLook, c.backoffUntil, c.holdUntil)
+		if c.reasks() {
+			next = min(next, max(c.reaskAt, c.backoffUntil, c.holdUntil))
+		}
+		return next
 	}
 	return max(c.nextLook, c.backoffUntil)
 }
@@ -309,7 +353,7 @@ func (c *Candidate) yield(now Instant) bool {
 	}
 	for _, rd := range c.rounds {
 		if rd.campaign && len(rd.replies) < 2 {
-			c.backoffUntil = max(c.backoffUntil, rd.sent.Add(2*c.cfg.Lease))
+			c.backoffUntil = max(c.backoffUntil, rd.asked.Add(2*c.cfg.Lease))
 		}
 	}
 	c.rounds = c.rounds[:0]
@@ -356,6 +400,9 @@ func (c *Candidate) LeaseEnd() Instant { return c.leaseEnd }
 // send to every voter (self included), or nil.
 func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, healthy bool) *Request {
 	c.expire(now)
+	if q := c.reask(now, seenFrom, seenUntil, healthy); q != nil {
+		return q
+	}
 	if now < c.nextLook || now < c.backoffUntil {
 		return nil
 	}
@@ -389,6 +436,68 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 		return nil // a state from before an operator replaced this name (#1029 3c-3c-1b)
 	}
 	return c.send(now, above(c.maxSeen))
+}
+
+// reask asks the pending campaign again (#710, the lost switchover
+// campaign): the same term, under a new id and Seq. A grant leaves a voter
+// only after its write, so on a slow disk (a write longer than a vote's
+// timeout, lease/8) the first ask times out at the driver though the
+// voter granted. Asked again, a voter that already promised this term to
+// this boot answers at once: a promise it holds needs no new write (the
+// id is no part of it). A new campaign would ask a new term, which does,
+// and would time out again. A voter that has since promised another, or a
+// higher term, refuses it as it would the first ask arriving late.
+//
+// Each grant is timed from the send of the request it answers, by its id
+// (round.leaseFrom): a voter promises from when it took that request, so
+// a re-ask lengthens no lease beyond the voters' promises, and a campaign
+// won on a re-ask is not left a lease shorter than its renewal's round
+// trip. A voter's promise runs a lease from when it took the latest ask,
+// so an unheard campaign backs off two leases from the last (expire,
+// yield), as from the one send before: the other controller still gets
+// the lease of silence it campaigns in (design §3.1, one-way partitions).
+// Asked every lease/8 while no majority has answered, up to three
+// quarters of a lease after the first send (reaskFor); with the same
+// guards as a new campaign. nil otherwise.
+func (c *Candidate) reask(now Instant, seenFrom NodeID, seenUntil Instant, healthy bool) *Request {
+	if !c.reasks() || now < c.reaskAt || now < c.backoffUntil || now < c.holdUntil {
+		return nil
+	}
+	// The next re-ask's look moves on whether this one asks or not:
+	// NextLook names it, and a look left in the past would fire a driver's
+	// timer at once, again and again, until the round expired.
+	if !mut("reask_declined_stays") {
+		c.reaskAt = now.Add(c.cfg.reaskEvery())
+	}
+	rd := c.pending
+	if !healthy || now >= rd.sent.Add(c.cfg.reaskFor()) {
+		return nil
+	}
+	if seenFrom != "" && seenFrom != c.cfg.Self && now < seenUntil.Add(time.Duration(c.cfg.Rho*float64(c.cfg.Lease))) {
+		return nil // its own voter took another leader's lease since
+	}
+	if (c.Marked() && !mut("marked_still_campaigns")) || c.fencedHold() {
+		return nil
+	}
+	if mut("reask_declined_stays") {
+		c.reaskAt = now.Add(c.cfg.reaskEvery())
+	}
+	if mut("reask_new_term") {
+		c.pending = nil
+		return c.send(now, above(c.maxSeen))
+	}
+	rd.asked = now
+	c.nextID++
+	rd.asks[c.nextID] = now
+	c.seq++
+	return &Request{From: c.cfg.Self, Term: rd.term, Nonce: c.cfg.Nonce, ID: c.nextID, Seq: c.seq, Gen: c.gen(), Fences: c.fences(),
+		Uncommissioned: c.commissioned != nil && !c.commissioned()}
+}
+
+// reasks reports whether a campaign is pending that reask may ask again:
+// not leading, no majority has answered it yet.
+func (c *Candidate) reasks() bool {
+	return c.pending != nil && !c.leading && len(c.pending.replies) < 2 && !mut("no_reask")
 }
 
 // Probe returns a probe for the witness, a term-0 request (id ProbeID) it
@@ -643,11 +752,12 @@ func (c *Candidate) send(now Instant, term uint64) *Request {
 	if term > c.maxSeen {
 		c.maxSeen = term
 	}
-	rd := &round{id: c.nextID, term: term, sent: now,
-		grants: map[NodeID]bool{}, replies: map[NodeID]bool{}, campaign: !c.leading}
+	rd := &round{id: c.nextID, term: term, sent: now, asked: now, asks: map[uint64]Instant{c.nextID: now},
+		grants: map[NodeID]bool{}, grantSent: map[NodeID]Instant{}, replies: map[NodeID]bool{}, campaign: !c.leading}
 	if rd.campaign {
 		c.term = term
 		c.pending = rd
+		c.reaskAt = now.Add(c.cfg.reaskEvery())
 		c.campaigns = append(c.campaigns, term)
 		if len(c.campaigns) > maxCampaigns {
 			c.campaigns = slices.Delete(c.campaigns, 0, len(c.campaigns)-maxCampaigns)
@@ -719,7 +829,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	}
 	var rd *round
 	for _, x := range c.rounds {
-		if (x.id == r.ID || mut("match_by_term")) && x.term == r.Term {
+		if _, asked := x.asks[r.ID]; (asked || mut("match_by_term")) && x.term == r.Term {
 			rd = x
 		}
 	}
@@ -741,6 +851,18 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	if r.Granted {
 		if !quiet {
 			rd.grants[r.From] = true
+			sent, ok := rd.asks[r.ID]
+			if !ok { // match_by_term only
+				sent = rd.sent
+			}
+			// The later of a voter's grants: its promise runs from the
+			// latest ask it took, so a grant of an earlier ask arriving
+			// last never moves the lease's start back (Fable review).
+			if mut("grant_sent_last_reply") {
+				rd.grantSent[r.From] = sent
+			} else {
+				rd.grantSent[r.From] = max(rd.grantSent[r.From], sent)
+			}
 		}
 	} else if !discounted && c.leading && !rd.campaign && rd.term == c.renewTerm && r.Promised >= rd.term {
 		// A voter refused our renewal at the term we renew at now: it
@@ -782,7 +904,13 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	if !c.leading && now < c.backoffUntil {
 		return // a lapse is final: no lease from a late majority in the back-off
 	}
-	end := rd.sent.Add(c.cfg.leaseFor())
+	end := rd.leaseFrom().Add(c.cfg.leaseFor())
+	if mut("reask_lease_from_last_ask") {
+		end = rd.asked.Add(c.cfg.leaseFor())
+	}
+	if mut("reask_lease_from_first_send") {
+		end = rd.sent.Add(c.cfg.leaseFor())
+	}
 	if mut("lease_from_reply") {
 		end = now.Add(c.cfg.leaseFor())
 	}
@@ -847,7 +975,11 @@ func (c *Candidate) expire(now Instant) {
 			continue
 		}
 		if rd.campaign && len(rd.replies) < 2 && !mut("no_backoff") {
-			if b := rd.sent.Add(2 * c.cfg.Lease); b > c.backoffUntil {
+			from := rd.asked
+			if mut("backoff_from_first_send") {
+				from = rd.sent
+			}
+			if b := from.Add(2 * c.cfg.Lease); b > c.backoffUntil {
 				c.backoffUntil = b
 			}
 		}
