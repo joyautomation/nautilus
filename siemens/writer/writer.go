@@ -631,12 +631,17 @@ func (w *writer) globalDB() ([]byte, bool) {
 		line := fmt.Sprintf("      %s : %s", sclName(g.Name), typ)
 		if g.Init != "" {
 			init, why := literal(g.Init)
+			if w.enumOf(g.Type) != nil {
+				init, why = w.enumInit(g.Type, g.Init)
+			}
 			if why != "" {
 				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
 				ok = false
 				continue
 			}
 			line += " := " + init
+		} else if n, isEnum := w.enumStart(g.Type); isEnum {
+			line += " := " + n
 		}
 		line += ";"
 		if g.Retain {

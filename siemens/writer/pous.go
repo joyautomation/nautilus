@@ -530,7 +530,11 @@ func (pw *progWriter) fbCall(b *strings.Builder, c *st.CallExpr, l local, p *pou
 			pw.diag("siemens/call", line, fmt.Sprintf("%s has no input %s", p.what(), a.Name))
 			return
 		case pn.kind == "VAR_INPUT":
+			// An argument is hinted by its pin's type, as nautilus
+			// lowers it, never by the enclosing assignment.
+			restore := pw.hint(pn.typ)
 			v := pw.store(a.Value, pn.typ, line)
+			restore()
 			if v == "" {
 				return
 			}
@@ -603,7 +607,9 @@ func (pw *progWriter) fcCall(c *st.CallExpr, p *pou, stmt bool) string {
 			pw.diag("siemens/call", line, fmt.Sprintf("%s takes %d inputs", p.what(), len(ins)))
 			return ""
 		}
+		restore := pw.hint(pn.typ)
 		v := pw.store(args[i], pn.typ, line)
+		restore()
 		if v == "" {
 			return ""
 		}
@@ -645,8 +651,11 @@ func (pw *progWriter) constants(vb st.VarBlock) {
 // when it has none, the value of another constant it names, or the
 // literal it is.
 func (pw *progWriter) constInit(e st.Expression, typ string, seen map[string]bool) (string, string) {
+	if v, ok := pw.w.enumValue(typ, e); ok {
+		return v, ""
+	}
 	if e == nil {
-		z, ok := zero(typ)
+		z, ok := pw.w.zeroOf(typ)
 		if !ok {
 			return "", gapMessage(gapOther, "a "+typ+" constant", "")
 		}

@@ -51,10 +51,12 @@ type library struct {
 	// each name with every declaration of it (pous.go).
 	constDecls map[string]st.VarDecl
 	pous       map[string][]*pou
-	// enumMembers are the enumerations' member names, each with its
-	// type's name: a bare member (Idle) is an enumeration value, the
-	// writer's gap until enums are written.
-	enumMembers map[string]string
+	// enumMembers are the enumerations' member names, each with the
+	// names of the types that declare it: a bare member (Idle) is an
+	// enumeration value (enums.go). enumBases are the base integer types
+	// enumerations declare (`(A, B) INT`), by lower-cased type name.
+	enumMembers map[string][]string
+	enumBases   map[string]string
 	// types is nautilus's own resolution of every TYPE, for seeding a start
 	// value the way the runtime does (nil when the TYPEs do not resolve:
 	// nautilus's lowering then refuses the program anyway).
@@ -115,7 +117,7 @@ func libraryParts(libs []string) []libSource {
 // blocks.
 func loadLibrary(libs []string, own []*st.Program) *library {
 	lib := &library{structs: map[string]*structDef{}, otherTypes: map[string]string{}, conflicts: map[string]string{},
-		fbs: map[string]string{}, funcs: map[string]string{}, consts: map[string]string{}, enumMembers: map[string]string{},
+		fbs: map[string]string{}, funcs: map[string]string{}, consts: map[string]string{}, enumMembers: map[string][]string{}, enumBases: map[string]string{},
 		constDecls: map[string]st.VarDecl{}, pous: map[string][]*pou{}}
 	parts := libraryParts(libs)
 	var srcs []string
@@ -192,7 +194,11 @@ func loadLibrary(libs []string, own []*st.Program) *library {
 		lib.otherTypes[k] = td.Name
 		if e, ok := td.Type.(*st.EnumType); ok {
 			for _, m := range e.Members {
-				lib.enumMembers[strings.ToLower(m.Name)] = td.Name
+				km := strings.ToLower(m.Name)
+				lib.enumMembers[km] = append(lib.enumMembers[km], td.Name)
+			}
+			if e.Base != "" {
+				lib.enumBases[k] = e.Base
 			}
 		}
 	}
@@ -269,7 +275,7 @@ func (w *writer) typeRefusal(typ string, seen map[string]bool) string {
 			return fmt.Sprintf("member %s: %s", f.Name, gapMessage(gapStructured, "a struct member's initializer", ""))
 		}
 		if f.Initial != nil {
-			if _, why := constValue(w.lib, f.Initial); why != "" {
+			if _, why := w.memberInit(f); why != "" {
 				return fmt.Sprintf("member %s: its initial value: %s", f.Name, why)
 			}
 		}
@@ -291,8 +297,15 @@ func (w *writer) sclType(t string) (string, string) {
 	if name, ok := w.lib.fbs[k]; ok {
 		return "", gapMessage(gapOther, "the project's function block "+name+" here", "")
 	}
+	if en := w.enumOf(t); en != nil {
+		base, why := w.enumBase(en)
+		if why != "" {
+			return "", why
+		}
+		return sclType(base)
+	}
 	if name, ok := w.lib.otherTypes[k]; ok {
-		return "", gapMessage(gapStructured, "the type "+name, "enumerations and type aliases")
+		return "", gapMessage(gapOther, "the type alias "+name, "")
 	}
 	if fb := ir.LookupFBType(t); fb != nil && fb.Kind == ir.TypeFB && !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(t)), "ARRAY") {
 		// A block of nautilus's library where the writer has no form for
@@ -337,6 +350,13 @@ func (w *writer) typeName(sd *structDef, path string) string {
 // never dropped.
 func (w *writer) overrides(typ, path string, start any) ([]string, string) {
 	sd := w.structOf(typ)
+	if sd == nil && w.enumOf(typ) != nil {
+		v, why := w.enumInit(typ, fmt.Sprint(start))
+		if why != "" {
+			return nil, why
+		}
+		return []string{path + " := " + v + ";"}, ""
+	}
 	if sd == nil {
 		lit, err := InitLiteral(start, typ)
 		if err != nil {
@@ -462,11 +482,13 @@ func (w *writer) udtSource(sd *structDef) ([]byte, string) {
 		}
 		line := "      " + sclName(f.Name) + " : " + t
 		if f.Initial != nil {
-			v, why := constValue(w.lib, f.Initial)
+			v, why := w.memberInit(f)
 			if why != "" {
 				return nil, fmt.Sprintf("member %s: its initial value: %s", f.Name, why)
 			}
 			line += " := " + v
+		} else if n, ok := w.enumStart(f.Datatype); ok {
+			line += " := " + n
 		}
 		b.WriteString(line + ";\n")
 	}
@@ -486,7 +508,7 @@ func (w *writer) leaves(typ, path string) ([]leaf, string) {
 	sd := w.structOf(typ)
 	if sd == nil {
 		u := strings.ToUpper(strings.TrimSpace(typ))
-		init, ok := zero(u)
+		init, ok := w.zeroOf(u)
 		if !ok {
 			return nil, gapMessage(gapStructured, "a "+typ+" member here", "")
 		}
@@ -499,7 +521,7 @@ func (w *writer) leaves(typ, path string) ([]leaf, string) {
 			return nil, why
 		}
 		if f.Initial != nil && len(ls) == 1 {
-			v, why := constValue(w.lib, f.Initial)
+			v, why := w.memberInit(f)
 			if why != "" {
 				return nil, fmt.Sprintf("member %s: its initial value: %s", f.Name, why)
 			}
