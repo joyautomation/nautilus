@@ -13,6 +13,15 @@ re=$("$here/naut-rig.sh" regex)
 [ "$(printf '%s' "$re" | tr -cd '|' | wc -c)" -eq $((n - 1)) ] || { echo "FAIL the regex does not hold $n names"; fail=1; }
 case $re in '^('*')$') ;; *) echo "FAIL the regex is not anchored: $re"; fail=1 ;; esac
 
+# Shards: together they hold every name exactly once, and the shard regexes
+# are the same anchored shape.
+for N in 2 3; do
+  got=$(for i in $(seq 1 $N); do "$here/naut-rig.sh" regex $i $N | sed -E 's/^\^\((.*)\)\$$/\1/' | tr '|' '\n'; done | sort)
+  [ "$got" = "$("$here/naut-rig.sh" names | sort)" ] || { echo "FAIL $N shards do not hold every name exactly once"; fail=1; }
+done
+"$here/naut-rig.sh" regex 3 2 >/dev/null 2>&1 && { echo "FAIL shard 3 of 2 was accepted"; fail=1; }
+"$here/naut-rig.sh" regex 0 2 >/dev/null 2>&1 && { echo "FAIL shard 0 of 2 was accepted"; fail=1; }
+
 # The checker itself: a name that is not a test, one a second package has, a
 # duplicate.
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT

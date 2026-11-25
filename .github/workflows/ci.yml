@@ -533,9 +533,15 @@ jobs:
   go-naut-rig:
     needs: changes
     if: needs.changes.outputs.full != 'false'
-    name: Go — naut rig tests (redundancy pairs and clones)
+    name: Go — naut rig tests (redundancy pairs and clones, shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Two shards of the list on two hosted runners, in parallel: the job was
+    # the CI long pole at ~700 s (each shard ~350 s). Round-robin by list order.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -567,7 +573,7 @@ jobs:
           for n in $(.github/scripts/naut-rig.sh names); do
             grep -qx "$n" "$RUNNER_TEMP/all-tests.txt" || { echo "::error::naut-rig-tests.txt lists $n, which is not a test in cmd/naut"; exit 1; }
           done
-          rig=$(.github/scripts/naut-rig.sh regex)
+          rig=$(.github/scripts/naut-rig.sh regex ${{ matrix.shard }} 2)
           [ -n "$rig" ] || { echo "::error::naut-rig.sh gave no regex"; exit 1; }
           go test -json -count=1 -timeout 20m -coverprofile=evidence/cover.out -run "$rig" ./cmd/naut | tee evidence/go-test.json | go run ./tools/evidence cat
       - name: Save the Go build cache (main, once a day)
@@ -581,7 +587,7 @@ jobs:
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-go-naut-rig
+          name: evidence-go-naut-rig-${{ matrix.shard }}
           path: evidence/
           retention-days: 14
 
@@ -1392,9 +1398,9 @@ jobs:
           mkdir -p runtime-evidence
           base=()
           [ -f "$RUNNER_TEMP/base/evidence.json" ] && base=(-baseline "$RUNNER_TEMP/base/evidence.json")
-          # cmd/naut's coverage is in two profiles (the Go job and the rig job);
+          # cmd/naut's coverage is in two profiles (the Go job and the two rig shards);
           # quorum/node's is a third, from its own step in the Go job.
-          .github/scripts/merge-cover.sh "$RUNNER_TEMP/cover.out" evidence/evidence-go/cover.out evidence/evidence-go/cover-node.out evidence/evidence-go-naut-rig/cover.out
+          .github/scripts/merge-cover.sh "$RUNNER_TEMP/cover.out" evidence/evidence-go/cover.out evidence/evidence-go/cover-node.out evidence/evidence-go-naut-rig-1/cover.out evidence/evidence-go-naut-rig-2/cover.out
           go run ./tools/evidence build -in evidence -cover "$RUNNER_TEMP/cover.out" -release "$RUNNER_TEMP/release" \
             -o runtime-evidence/evidence.json "${base[@]}" -summary "$RUNNER_TEMP/claims.md"
           cat "$RUNNER_TEMP/claims.md" >> "$GITHUB_STEP_SUMMARY"
