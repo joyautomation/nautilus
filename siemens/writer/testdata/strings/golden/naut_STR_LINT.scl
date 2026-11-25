@@ -1,0 +1,17 @@
+FUNCTION "naut_STR_LINT" : String
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      A : LINT;
+   END_VAR
+   VAR_TEMP 
+      s : String;
+   END_VAR
+
+BEGIN
+	#s := LINT_TO_STRING(#A);
+	IF LEFT(IN := #s, L := 1) = '+' THEN
+		#s := DELETE(IN := #s, L := 1, P := 1);
+	END_IF;
+	#naut_STR_LINT := #s;
+END_FUNCTION

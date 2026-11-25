@@ -175,7 +175,7 @@ func TestRefusals(t *testing.T) {
 		name, decls, body, rule string
 		line                    int
 	}{
-		{"string", "s : STRING;", "", "siemens/type", 2},
+		{"string", "s : WSTRING;", "", "siemens/type", 2},
 		{"mod of reals", "r, q : REAL;", "r := r MOD q;", "siemens/division", 3},
 		{"an sr outside VAR", "", "", "siemens/var", 0},
 		{"overloaded conversion of a literal", "r : REAL;", "r := TO_REAL(5);", "siemens/conversion", 3},
@@ -382,7 +382,7 @@ func TestLadderDiagnosticPointsAtTheLadderLine(t *testing.T) {
 }
 
 func TestGlobalTypeRefusedInTheTagsDB(t *testing.T) {
-	_, diags, err := Write(Input{Globals: []Global{{Name: "Name", Type: "STRING"}}})
+	_, diags, err := Write(Input{Globals: []Global{{Name: "Name", Type: "WSTRING"}}})
 	if err != nil || len(diags) != 1 || diags[0].Rule != "siemens/type" {
 		t.Fatalf("%v %v", err, diags)
 	}

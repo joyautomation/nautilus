@@ -323,9 +323,10 @@ The rules:
   D #1301 nautilus's PID (D2; the project's FUNCTIONs, FUNCTION_BLOCKs,
   dialect blocks such as TONR and VAR CONSTANT are written since D1, STRUCT
   pins and results as PLC data types since D1b); E #1302 SFC (an SCL state machine first; GRAPH
-  maybe later as an option, James 11-23); F #1303 STRING (TIA's holds 254
-  characters, a nautilus STRING has no length) and the string functions;
-  G #1304 TIME arithmetic, LTIME and dates (64-bit milliseconds against
+  maybe later as an option, James 11-23); F #1303 STRING and the string
+  functions (written since F; a WSTRING or a non-ASCII literal is still a
+  gap there), #1375 the conversions to and from STRING it cannot write yet
+  (REAL and LREAL text, TIME, bit strings, STRING_TO_BOOL); G #1304 TIME arithmetic, LTIME and dates (64-bit milliseconds against
   TIA's 32-bit TIME and nanosecond LTIME); #1305 the rest (ULINT and LWORD
   arithmetic, ATAN2, integer ABS, …). Real limits keep their own words (a
   task interval over 60 s, a block name collision).
@@ -351,6 +352,26 @@ The rules:
     latch inline.
   - An untyped manifest tag takes the type a program's VAR_EXTERNAL binds
     it as, as the runtime does (it used to take its init's REAL).
+- **Coverage PR F (#1303)** writes STRING as TIA's `String` (254 bytes;
+  both count bytes). Measured offline (TIA V21) and on the bench 1510SP
+  (FW 3.1), 2026-11-25:
+  - the string functions with formal parameters (TIA refuses positional
+    ones, LEN aside); CONCAT of up to 32 inputs, a chain of CONCATs as one
+    call, since TIA refuses calls nested 8 deep (the general case is
+    #1374);
+  - a clamp only where the CPU differs: MID, DELETE and REPLACE with a
+    position below 1, INSERT with one below 0, DELETE and REPLACE with a
+    negative length give an empty string on the CPU, where nautilus clamps
+    the argument. The writer clamps it first (`MAX(IN1 := #p, IN2 := 1)`),
+    a constant at write time; a length or position wider than INT is
+    computed at 64 bits and clamped before it narrows. LEFT, RIGHT, FIND,
+    LEN, CONCAT, a position or length past the end, and empty strings
+    agree as they are;
+  - the integer conversions to STRING through `"naut_STR_LINT"` /
+    `"naut_STR_ULINT"`, which drop the `+` TIA writes before a value >= 0;
+    BOOL_TO_STRING as `SEL(G := b, IN0 := 'FALSE', IN1 := 'TRUE')`;
+  - a literal over 254 bytes is refused (TIA's limit), a non-ASCII one is
+    a gap until the code page is measured.
 - **Known divergences, documented rather than refused:** where nautilus
   faults the scan the CPU sets ENO FALSE and carries on. Each is a
   `naut check --target siemens` (and deploy) **warning**, never silent
@@ -365,6 +386,8 @@ The rules:
   | `SHL`/`SHR`/`ROL`/`ROR` | the count N is unsigned or a constant | a negative N faults the scan | N is converted to TIA's unsigned count, beyond the width |
   | `TRUNC`, `TRUNC_<int>` (summarized per program) | the argument is a constant in range | a value beyond the integer (or NaN) faults the scan | the conversion sets ENO FALSE, the scan carries on |
   | `REAL_TO_<int>`, `TO_<int>` of a REAL (summarized per program) | the same | the same | the same |
+  | `CONCAT`, `INSERT`, `REPLACE` (summarized per program, `[siemens/string-length]`) | the operands are literals of 254 bytes or fewer in all | the result keeps every byte | the result keeps the first 254 bytes, the scan carries on |
+  | `STRING_TO_<int>`, `STRING_TO_REAL`/`LREAL` (`[siemens/string-parse]`) | never | text that is not a number (or out of range) faults the scan | the PLC silently uses 0 or a partial number (`'4x'` reads as 4, `'2,5'` as 25.0) |
 
   Only the out-of-range case differs: the rounding is the same (REAL →
   integer half to even in nautilus, as TIA documents CONVERT and ROUND;

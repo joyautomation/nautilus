@@ -208,6 +208,12 @@ func (pw *progWriter) typ(e st.Expression) string {
 			return "BOOL"
 		}
 		args, _ := pw.positional(e)
+		if _, ok := stringFuncs[name]; ok {
+			if name == "LEN" || name == "FIND" {
+				return "INT" // 0 … 254: TIA's Int holds every value
+			}
+			return "STRING"
+		}
 		if _, to, ok := strings.Cut(name, "_TO_"); ok {
 			return to
 		}

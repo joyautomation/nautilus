@@ -181,11 +181,11 @@ func TestManyTasksNumberTheirOBs(t *testing.T) {
 // the writer does not translate; the copy does not say it again.
 func TestSharedTagOfARefusedTypeIsReportedOnce(t *testing.T) {
 	prog := func(name string) Program {
-		return Program{Path: name + ".st", Source: "PROGRAM " + name + "\nVAR_EXTERNAL Msg : STRING; END_VAR\nMsg := 'x';\nEND_PROGRAM\n"}
+		return Program{Path: name + ".st", Source: "PROGRAM " + name + "\nVAR_EXTERNAL Msg : WSTRING; END_VAR\nMsg := \"x\";\nEND_PROGRAM\n"}
 	}
 	_, diags, err := Write(Input{
 		Programs: []Program{prog("A"), prog("B")},
-		Globals:  []Global{{Name: "Msg", Type: "STRING"}},
+		Globals:  []Global{{Name: "Msg", Type: "WSTRING"}},
 		Tasks:    []Task{{Name: "main", Program: "A", Interval: time.Second}, {Name: "b", Program: "B", Interval: time.Second}},
 	})
 	if err != nil {
@@ -193,7 +193,7 @@ func TestSharedTagOfARefusedTypeIsReportedOnce(t *testing.T) {
 	}
 	n := 0
 	for _, d := range diags {
-		if strings.Contains(d.Message, "STRING") {
+		if strings.Contains(d.Message, "WSTRING") {
 			n++
 		}
 	}

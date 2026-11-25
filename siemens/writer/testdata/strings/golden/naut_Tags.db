@@ -1,0 +1,12 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      Go : BOOL;
+      Msg : String := 'hi';
+      N : DINT;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

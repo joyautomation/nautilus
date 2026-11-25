@@ -89,8 +89,14 @@ func sclType(t string) (string, string) {
 		}
 		return u, ""
 	}
+	if u == "STRING" {
+		// TIA's String holds 254 bytes, a nautilus STRING any number: a
+		// literal longer is refused, a result that grows past it warned
+		// (strings.go).
+		return "String", ""
+	}
 	if strings.HasPrefix(u, "STRING") || strings.HasPrefix(u, "WSTRING") {
-		return "", gapMessage(gapString, "STRING", "TIA's STRING holds at most 254 characters; a nautilus STRING has no such length")
+		return "", gapMessage(gapString, t, "")
 	}
 	if u == "LTIME" {
 		return "", gapMessage(gapTime, "LTIME", "nautilus's LTIME is milliseconds, TIA's nanoseconds")

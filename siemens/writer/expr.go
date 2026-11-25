@@ -57,7 +57,7 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 		}
 		return "FALSE"
 	case *st.StringLit:
-		return st.QuoteString(e.Value)
+		return pw.stringLit(e.Value, e.Pos.Line)
 	case *st.TimeLit:
 		return pw.timeLit(e.Raw, e.Pos.Line)
 	case *st.TypedLit:
@@ -361,6 +361,11 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		pw.gap("siemens/call", line, gapOther, c.Name+" with named arguments other than its IEC inputs ("+strings.Join(ir.FormalNames(name, len(c.NamedArgs)), ", ")+")", "")
 		return ""
 	}
+	if _, ok := stringFuncs[name]; ok {
+		// Before the wide check: a length or position may be integer
+		// arithmetic, which strArg computes at 64 bits.
+		return pw.stringCall(c, name, argExprs)
+	}
 	for _, a := range argExprs {
 		if pw.typ(a) == tWide {
 			pw.wideRefused(line)
@@ -461,6 +466,9 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		if from == to {
 			return args[0]
 		}
+		if (from == "STRING" || to == "STRING") && from != "" {
+			return pw.conversion(from+"_TO_"+to, from, to, argExprs[0], args, line)
+		}
 		if !elementary[from] {
 			if from == "STRING" || to == "STRING" {
 				pw.gap("siemens/function", line, gapString, name, "")
@@ -484,6 +492,13 @@ func (pw *progWriter) conversion(name, from, to string, arg st.Expression, args 
 	if from == "LTIME" || to == "LTIME" {
 		pw.gap("siemens/ltime", line, gapTime, "LTIME conversions", "nautilus's LTIME is milliseconds, TIA's nanoseconds")
 		return ""
+	}
+	if (from == "STRING" || to == "STRING") && (elementary[from] || elementary[to] || from == to) {
+		if len(args) != 1 {
+			pw.diag("siemens/call", line, fmt.Sprintf("%s takes one argument", name))
+			return ""
+		}
+		return pw.stringConversion(name, from, to, args, line)
 	}
 	if !elementary[from] || !elementary[to] {
 		pw.gap("siemens/function", line, functionGap(name), name, "")

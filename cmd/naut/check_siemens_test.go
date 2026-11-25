@@ -421,3 +421,36 @@ func TestCheckSiemensTargetSummarizesConversions(t *testing.T) {
 		t.Errorf("the constant 2.5 warned:\n%s", out)
 	}
 }
+
+// TestCheckSiemensTargetSummarizesStringGrowth: string results that may
+// pass TIA's 254 bytes are one summary line per program too (#1303), and
+// a STRING_TO_ number of bad text keeps its own line.
+func TestCheckSiemensTargetSummarizesStringGrowth(t *testing.T) {
+	prog := "PROGRAM main\nVAR s, t : STRING; i : INT; END_VAR\ns := CONCAT(s, t);\nt := INSERT(t, s, 2);\ns := CONCAT('a', 'b');\ni := STRING_TO_INT(s);\nEND_PROGRAM\n"
+	files := map[string]string{"nautilus.yaml": goodSiemensManifest, "main.st": prog}
+	out, code := checkIn(t, files)
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"main.st: warning: siemens target: 2 string results can differ on Siemens if they grow past 254 bytes (TIA keeps the first 254 bytes; nautilus keeps them all): see the Siemens target guide; -v lists them [siemens/string-length]",
+		"main.st:6:1: warning: siemens target: STRING_TO_INT can differ if the text is not a plain decimal number in INT's range: nautilus stops the program (the scan faults); the PLC silently uses 0 or a partial number ('4x' reads as 4) and carries on [siemens/string-parse]",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	dir := writeProject(t, files)
+	out, code = capture(t, func() int { return runCheck([]string{"-v", dir}) })
+	if code != 0 {
+		t.Fatalf("-v exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{"main.st:3:1: warning: siemens target: CONCAT here can differ", "main.st:4:1: warning: siemens target: INSERT here can differ"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("-v: missing %q in\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "main.st:5:1") {
+		t.Errorf("CONCAT of two short literals warned:\n%s", out)
+	}
+}
