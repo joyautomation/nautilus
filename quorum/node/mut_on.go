@@ -47,6 +47,9 @@ var mutations = []string{
 	"reply_inc_unbound",              // a witness vote reply counts whatever incarnation its certificate names (#710 2b)
 	"witness_ops_any_inc",            // a witness answer to a call that is not a vote counts under any incarnation's certificate (#710 2b)
 	"bound_reply_keeps_conn",         // a reply refused by its certificate keeps its connection (#710 2b)
+	"unbound_refusal_keeps_conn",     // a witness refusal under an uncounted certificate keeps its connection (#1120)
+	"unbound_close_uncapped",         // an unbound witness refusal closes on every vote, not once a lease (#1384 review)
+	"unbound_close_on_no_answer",     // a witness call with no answer closes the connections (#1384 review)
 	"unadopted_reply_heard",          // a reply from a witness incarnation not adopted counts in full (#710 2b, Fable)
 	"witness_refusals_unbound",       // a witness refusal under an incarnation the pair does not count raises conditions (#710 2b, Fable)
 	"witness_unlocked",               // the witness's state directory isn't locked to one process
