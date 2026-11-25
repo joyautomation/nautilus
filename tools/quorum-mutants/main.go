@@ -52,6 +52,14 @@ var table = []mutation{
 	// catches this one (test plan §3.3).
 	{"renewals_unseen", []string{"TestVoterLeaderSeen"}},
 	{"no_reterm", []string{"TestStandbyRejoinsTheLeader", "TestMatrix", "TestSeeds"}},
+	// #1120: a re-term on a refusal from a voter that promised this leader
+	// its term only once the term stops renewing. The loopback regression
+	// (TestLoopbackSlowWritesAndAStandbyRestartKeepTheLease) skips under a
+	// core mutation, so the unit tests carry these rows.
+	{"reterm_with_majority", []string{"TestCandidateOwnPromiseRefusalReTermsOnlyWithoutAMajority"}},
+	{"reterm_on_own_promise", []string{"TestCandidateOwnPromiseRefusalReTermsOnlyWithoutAMajority"}},
+	{"own_promise_unchecked", []string{"TestCandidateRefusalFromAVoterThatNeverGrantedTheTermReTerms", "TestStandbyRejoinsTheLeader"}},
+	{"held_promise_answers", []string{"TestVoterReaskWhileItsWriteIsInFlightWaitsForIt"}},
 	// Since the handshake (H2) the two livelock seeds re-adopt the witness
 	// and elect with three voters, so only T1 pins the yield.
 	{"no_yield", []string{"TestTwoCountedVotersElect", "TestYieldCancelsOpenRounds"}},

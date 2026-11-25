@@ -1152,6 +1152,7 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 		return nil, refuse // promised to another, and not run out
 	}
 	// Grant. The promise runs from when the request was RECEIVED.
+	promisedBefore := mut("held_promise_answers") && r.Term == v.st.Promised && r.From == v.st.GrantedTo
 	v.promiseUntil = now.Add(v.lease)
 	v.grantNonce = r.Nonce
 	// A campaign's grant records its epoch, in the grant's own write and
@@ -1173,6 +1174,9 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 	need := v.need
 	if mut("mark_write_on_grant_path") {
 		need = v.dirty
+	}
+	if promisedBefore {
+		need = v.durable // a re-ask takes the in-memory promise as given, its write in flight or not
 	}
 	if v.durable >= need {
 		v.setMark(r)

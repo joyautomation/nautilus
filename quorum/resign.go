@@ -182,7 +182,7 @@ func (c *Candidate) resign(now Instant, hold time.Duration) *Request {
 	}
 	c.drainKeep = c.leaseEnd // until the drain is proven (ResignDrained)
 	c.resignedEpoch = c.epoch
-	c.leading, c.leaseEnd, c.reterm = false, now, false
+	c.leading, c.leaseEnd, c.reterm, c.retermOwn = false, now, false, false
 	if !mut("resign_keeps_rounds") {
 		// A late grant of a renewal sent before the resign matches no round,
 		// so it can never re-lead this boot on promises the voters dropped.
