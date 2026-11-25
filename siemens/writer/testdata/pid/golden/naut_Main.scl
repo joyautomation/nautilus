@@ -1,0 +1,27 @@
+FUNCTION_BLOCK "naut_Main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      lic : "naut_PID";
+      pic : "naut_PID";
+      heater : "naut_Loop";
+      hold : "naut_PID";   // VAR RETAIN in nautilus, which starts a PID over after a restart
+   END_VAR
+   VAR RETAIN 
+      starts : DINT;
+   END_VAR
+
+BEGIN
+	#lic(AUTO := "naut_Tags".Auto, PV := "naut_Tags".Level, SP := "naut_Tags".LevelSP, KP := 1.5, KI := 0.2, KD := 0.5, CV_MAN := 10.0, CV_MIN := 0.0, CV_MAX := 100.0, DIRECT := TRUE, "DT" := "naut_Tags".LevelDtS, "DB" := 0.25, RESET := FALSE);
+	"naut_Tags".Valve := #lic.CV;
+	"naut_Tags".High := #lic.SAT_HI;
+	IF "naut_Tags".Every3 THEN
+		#pic(AUTO := TRUE, PV := "naut_Tags".Level, SP := 40.0, KP := 1.0, KI := 0.1);
+	END_IF;
+	"naut_Tags".Pump := #pic.CV;
+	#heater(Enable := "naut_Tags".Auto, Meas := "naut_Tags".Level, Target := "naut_Tags".LevelSP);
+	"naut_Tags".Heat := #heater.Out;
+	#hold(AUTO := "naut_Tags".Auto, PV := "naut_Tags".Level, SP := "naut_Tags".LevelSP, KP := 1.0, KI := 1.0);
+	"naut_Tags".Held := #hold.CV;
+	#starts := LINT_TO_DINT((((DINT_TO_LINT(#starts) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+END_FUNCTION_BLOCK

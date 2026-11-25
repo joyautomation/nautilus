@@ -348,8 +348,8 @@ func TestExternalTypes(t *testing.T) {
 // TestLibraryNamesAreWritten: the writer lowers a program with the
 // project's library ahead of it, as naut check does, so a function, block
 // or constant the library declares compiles, and the writer writes it
-// (#1301); nautilus's PID, which has no TIA instruction, is still its gap;
-// a name no source declares is nautilus's own refusal.
+// (#1301), nautilus's PID too (D2: its own SCL block, pid.go); a name no
+// source declares is nautilus's own refusal.
 func TestLibraryNamesAreWritten(t *testing.T) {
 	src := "PROGRAM P\nVAR a : REAL; END_VAR\na := Scale(a);\nEND_PROGRAM\n"
 	lib := "FUNCTION Scale : REAL\nVAR_INPUT x : REAL; END_VAR\nScale := x * 2.0;\nEND_FUNCTION\n"
@@ -365,9 +365,9 @@ func TestLibraryNamesAreWritten(t *testing.T) {
 	if _, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR h : Hold; END_VAR\nh(x := TRUE);\nEND_PROGRAM\n", Libs: []string{fb}}}}); len(diags) != 0 {
 		t.Errorf("a library block: %v", diags)
 	}
-	// A block of nautilus's own library with no TIA instruction (#1301, D2).
-	_, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR c : PID; END_VAR\nEND_PROGRAM\n"}}})
-	if len(diags) != 1 || diags[0].Line != 2 || !strings.Contains(diags[0].Message, "nautilus's function block PID yet (#1301)") {
+	// nautilus's PID, which TIA has no instruction for: its own block (D2).
+	out, diags, _ := Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR c : PID; END_VAR\nEND_PROGRAM\n"}}})
+	if len(diags) != 0 || !strings.Contains(fileOf(t, out, "P.scl"), "      c : \"PID\";\n") {
 		t.Errorf("PID: %v", diags)
 	}
 	_, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: src, Libs: []string{"(* Scale is mentioned here *)\nFUNCTION Scaled : REAL\nVAR_INPUT Scale : REAL; END_VAR\nScaled := Scale;\nEND_FUNCTION\n"}}}})

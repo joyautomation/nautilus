@@ -295,9 +295,10 @@ func (w *writer) sclType(t string) (string, string) {
 		return "", gapMessage(gapStructured, "the type "+name, "enumerations and type aliases")
 	}
 	if fb := ir.LookupFBType(t); fb != nil && fb.Kind == ir.TypeFB && !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(t)), "ARRAY") {
-		// A block of nautilus's library with no TIA instruction to map
-		// to (PID, TONR, …).
-		return "", gapMessage(gapPOUs, "nautilus's function block "+strings.ToUpper(strings.TrimSpace(t)), "it has no TIA instruction of the same behaviour")
+		// A block of nautilus's library where the writer has no form for
+		// it (nautilus's PID is written as a block of its own, pid.go,
+		// where a variable declares it).
+		return "", gapMessage(gapPOUs, "nautilus's function block "+strings.ToUpper(strings.TrimSpace(t))+" here", "")
 	}
 	return "", why
 }

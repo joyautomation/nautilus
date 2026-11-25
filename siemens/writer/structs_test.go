@@ -496,8 +496,11 @@ func TestProgramTypeGapKeepsChecking(t *testing.T) {
 }
 
 // TestInstanceInVarRetain: an instance of the project's block in a
-// program's VAR RETAIN is refused (unused in every example; how TIA
-// retains a multi-instance is unmeasured) (#1301 D1b fold c).
+// program's VAR RETAIN is refused (unused in every example) (#1301 D1b
+// fold c). Keep it so, or revisit pid.go first: TIA keeps a multi-instance
+// in a RETAIN section (it compiles, V21), so a PID inside such a block
+// would be kept across a restart, which nautilus never does
+// (TestPIDNeverRetained).
 func TestInstanceInVarRetain(t *testing.T) {
 	src := "PROGRAM P\nVAR RETAIN h : H; END_VAR\nVAR w : W; END_VAR\nh(io := w);\nEND_PROGRAM\n"
 	_, diags := writeStructs(src, nil, d1bLib)

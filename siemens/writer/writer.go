@@ -14,7 +14,7 @@
 //
 // What it does not translate yet it refuses with a rule-tagged
 // diagnostic, never a guess, worded as the writer's gap with the issue
-// that closes it (gaps.go): nautilus's PID, enums, arrays, STRING,
+// that closes it (gaps.go): enums, arrays, WSTRING,
 // LTIME, TIME arithmetic, SFC, and every builtin outside the table in
 // expr.go. The project's FUNCTION_BLOCKs and FUNCTIONs are written as FBs
 // (multi-instances in their callers) and FCs (pous.go). Each task is its
