@@ -1541,7 +1541,9 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 			}
 			slotT := def.Slot(idx).Type
 			// An ANY in-out (READ's RD_1) takes the bound variable as it is.
-			if !ir.IsAny(slotT) && !slotT.Equal(target.ExprType()) {
+			// Equal compares kinds only, so the width is compared too: an
+			// INT pin cannot hold a reference to a DINT (#1382).
+			if !ir.IsAny(slotT) && (!slotT.Equal(target.ExprType()) || !sameWidth(slotT, target.ExprType())) {
 				return nil, errNode(na.Value, fmt.Errorf("FB %s VAR_IN_OUT %q: needs a %s variable, got %s "+
 					"(an IN_OUT is passed by reference, so no conversion happens)",
 					def.Name, na.Name, slotT, target.ExprType()))
@@ -1583,7 +1585,10 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 			}
 		}
 		v = coerce(v, def.Inputs[idx].Type)
-		if !assignable(def.Inputs[idx].Type, v.ExprType()) && (def.Inputs[idx].Type.Enum != nil || v.ExprType().Enum != nil) {
+		// An input follows a FUNCTION argument's rule, in its words (#1382:
+		// a REAL or a BOOL into an INT input passed). An integer into a
+		// TIME input is read as milliseconds with a warning, as before.
+		if !assignable(def.Inputs[idx].Type, v.ExprType()) && !intAsTime(def.Inputs[idx].Type, v.ExprType()) {
 			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
 		}
 		l.warnIntAsTime(na.Value, def.Inputs[idx].Type, v, fmt.Sprintf("%s input %s", def.Name, def.Inputs[idx].Name))
@@ -2413,6 +2418,32 @@ func coerce(e ir.Expr, want *ir.Type) ir.Expr {
 		return intToReal(e)
 	}
 	return e
+}
+
+// intAsTime reports an integer bound to a TIME input: read as milliseconds,
+// with a warning (warnIntAsTime), not refused.
+func intAsTime(want, got *ir.Type) bool {
+	return want != nil && got != nil && want.Kind == ir.TypeTime && got.IsInteger() && got.Enum == nil
+}
+
+// sameWidth reports whether two types of the same kind (Type.Equal) also
+// have the same width, element by element in an array: an INT and a DINT,
+// or a REAL and an LREAL, are Equal but cannot stand in for each other by
+// reference. An integer of no declared width matches any.
+func sameWidth(a, b *ir.Type) bool {
+	for a != nil && b != nil && a.Kind == ir.TypeArray && b.Kind == ir.TypeArray {
+		a, b = a.Elem, b.Elem
+	}
+	if a == nil || b == nil || a.Kind != b.Kind {
+		return true
+	}
+	switch a.Kind {
+	case ir.TypeInt:
+		return a.Enum != nil || a.Name == "" || b.Name == "" || a.Name == b.Name
+	case ir.TypeReal:
+		return (a.Name == "LREAL") == (b.Name == "LREAL")
+	}
+	return true
 }
 
 func assignable(lhs, rhs *ir.Type) bool {
