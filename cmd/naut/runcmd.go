@@ -515,8 +515,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// users in and journals their writes.
 	}
 
-	// Sparkplug B retransmission, when the manifest asks for it.
-	spNode, err := proj.Sparkplug(rt)
+	// Sparkplug B retransmission, when the manifest asks for it. Under
+	// redundancy only the leader holds the edge node's session (#798,
+	// sparkplugpair.go).
+	spNode, err := proj.Sparkplug(rt, sparkplugPairOptions(el, pair, rt)...)
 	if err != nil {
 		// Its errors name sparkplug already ("sparkplug: …"); add it only
 		// to one that does not.
@@ -765,11 +767,20 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		if id := sparkplugIdentity(proj, srv); id != nil {
 			spNode.SetIdentity(id)
 		}
-		if err := spNode.Start(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "sparkplug:", err, "(continuing without it)")
-		} else {
-			defer spNode.Stop()
+		switch {
+		case el != nil:
+			// Started and stopped with the leadership; stopped (its NDEATH
+			// out) before the gate is released, as the defer above runs
+			// after this one.
+			defer startSparkplugLeader(spNode, el, pair, rt)()
 			sparkplugUp = true
+		default:
+			if err := spNode.Start(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, "sparkplug:", err, "(continuing without it)")
+			} else {
+				defer spNode.Stop()
+				sparkplugUp = true
+			}
 		}
 	}
 
@@ -820,7 +831,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		warnStaleHMI("naut run", fsys, proj, os.Stderr)
 	}
 	if sparkplugUp {
-		banner += " — sparkplug up"
+		if el != nil {
+			banner += " — sparkplug on the leader"
+		} else {
+			banner += " — sparkplug up"
+		}
 	}
 	if opc != nil && opc.Status().Listening {
 		banner += " — opc ua on " + opc.URL()

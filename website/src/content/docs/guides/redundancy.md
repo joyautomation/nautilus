@@ -710,10 +710,38 @@ redundancy:
   send-margin: 20ms       # default: 20 ms, less on a lease under 320 ms
 ```
 
-**No Sparkplug edge node on a pair yet.** Both controllers would publish
-as the same edge node (#798), so a pair whose project has `sparkplug:`
-is refused at load. Run the edge on a controller outside the pair until
-#798 lands.
+**A Sparkplug edge node on a pair.** Only the controller that leads
+holds the edge node's MQTT session. The standby does not connect at all,
+so it publishes nothing and takes no commands. A switchover or a failover
+is a plain death and birth, not a seamless handover:
+
+- On a switchover the old leader sends its NDEATH and disconnects before
+  the standby takes over (it waits at most a quarter lease for that, then
+  goes on, silent). After a failover the broker sends the old leader's
+  NDEATH itself, once it notices the connection is gone (up to one and a
+  half keepalives, 45 s by default). A leader cut off from its peer and
+  witness but not from the broker stops publishing when its lease runs
+  out, and sends its own NDEATH.
+- The new leader connects once its takeover is done and sends an NBIRTH
+  with a bdSeq that differs from the old leader's last one. The standby
+  learns that number from the leader's state images, so a host that
+  matches deaths by bdSeq ignores the old leader's late NDEATH.
+- A host that ignores bdSeq would mark the edge node offline on that late
+  NDEATH. The leader watches its own NDEATH topic and sends its NBIRTH
+  again when one arrives, so the node ends up online.
+- Each controller connects with its own MQTT client id: the `client-id:`
+  (default `<group-id>-<edge-node>`) followed by `-a` or `-b`. Allow both
+  on the broker.
+- The leader publishes the pair's state in a `Redundancy/` folder of node
+  metrics: `Role`, `PeerState` (the state stream: `sending`, `no-standby`),
+  `Takeover` (`hot`, `cold` or `none`), `Hold/Active` and `Hold/Until`
+  (the takeover hold), `LastSwitchoverAt` and `LastSwitchoverReason`.
+  They are in every NBIRTH, and in an NDATA when one changes. A tag of the
+  same name is not published.
+- Store-and-forward stays on each controller. Values the old leader
+  buffered while the broker was down are sent only if that controller
+  leads again. `bdseq-file` and `store-forward-file` are on each
+  controller's own disk.
 
 Each controller also needs, in its environment (`/etc/nautilus/env`
 under `naut deploy`):

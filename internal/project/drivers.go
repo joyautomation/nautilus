@@ -691,6 +691,10 @@ func sparkplugStatus(st sparkplug.Status) server.DriverStatus {
 	// State machine over the real Sparkplug flags — the human sentence
 	// mirrors tentacle's store-forward banner reasoning.
 	switch {
+	case st.Standby && !st.Connected:
+		s.State = "offline"
+		s.Message = "Standby: only the redundant pair's leader holds the edge node session"
+		s.SinceMs = 0
 	case !st.Connected:
 		s.State = "error"
 		s.Message = "Broker unreachable"

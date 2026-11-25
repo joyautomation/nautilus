@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/joyautomation/nautilus/checkout"
+	"github.com/joyautomation/nautilus/sparkplug"
 	"io"
 	"maps"
 	"net"
@@ -198,6 +199,7 @@ type pairNode struct {
 	rt     *runtime.Runtime
 	cancel context.CancelFunc
 	done   chan struct{}
+	sp     *sparkplug.Node // nil without a sparkplug: section
 }
 
 func startPairNode(t *testing.T, files fstest.MapFS, env map[string]string, ln net.Listener) *pairNode {
@@ -250,6 +252,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		t.Fatal(err)
 	}
 	wireRedundancy(proj, m.q)
+	proj.Member = string(m.o.Self) // as electorFor does
 	if testWantCheckout {
 		m.wantCheckout = true
 		os.Chmod(filepath.Dir(m.o.StatePath), 0o700) // the checkout's signing key is made there
@@ -300,6 +303,15 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &pairNode{m: m, rt: rt, cancel: cancel, done: make(chan struct{}), eng: eng, al: al}
+	// The Sparkplug edge node, when the project has one, as runProject
+	// wires it under redundancy (#798).
+	stopSP := func() {}
+	if sp, err := proj.Sparkplug(rt, sparkplugPairOptions(m.q, m, rt)...); err != nil {
+		t.Fatal(err)
+	} else if sp != nil {
+		n.sp = sp
+		stopSP = startSparkplugLeader(sp, m.q, m, rt)
+	}
 	if api != nil {
 		sopts := proj.Server
 		sopts.AuthToken = env["NAUTILUS_TOKEN"] // as runProject takes it from the environment
@@ -319,6 +331,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		go func() { rt.Run(ctx); close(ran) }()
 		gate.Run(ctx)
 		<-ran
+		stopSP()
 		close(n.done)
 	}()
 	t.Cleanup(n.crash)

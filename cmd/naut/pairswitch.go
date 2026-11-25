@@ -172,6 +172,7 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 		return abort("the final image could not be made: " + err.Error())
 	}
 	img.Build = s.build
+	img.EdgeSession = s.edgeSession()
 	rep.FinalSeq = img.Seq
 	s.final.Store(&finalImage{term: term, seq: img.Seq, img: img})
 	s.wakeAll()
@@ -192,6 +193,14 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 	}
 	if (s.rt.Switching() != term || !s.leads(term)) && !mutNaut("resign_unchecked") {
 		return abort("the switching state or the leadership ended before the resign")
+	}
+	// The edge node's session ends first (#798): its NDEATH, and its
+	// DISCONNECT, go out before the standby can take over and birth its
+	// own. Bounded, as the drain is: one that does not finish in time is
+	// fenced all the same (the gate shuts below), and the broker's will
+	// or the late NDEATH is the death a host sees.
+	if f := s.stepDown.Load(); f != nil && !mutNaut("spark_no_death_on_stepdown") {
+		(*f)(term, lease/4)
 	}
 	resigning = true
 	t = time.Now()

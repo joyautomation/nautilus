@@ -344,8 +344,8 @@ The replica counts as a standby until the first scan of its own leadership
 has read its inputs. That covers a takeover still waiting for live inputs,
 one whose first read is in flight, and a leader whose lease has already
 passed on before its next scan. Then quality is the drivers' again. The
-Sparkplug edge publishes no quality, and an ungated standby edge still
-publishes its values (#798).
+Sparkplug edge publishes no quality, and on a pair only the leader holds
+the edge node's session, so a standby publishes nothing.
 
 A failed output **write** deliberately does not do this. An actuator
 refusing a command says nothing about how old the readings are, and marking

@@ -11,7 +11,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/ir"
 )
 
-// The wire form of an Image (EncodeImage, DecodeImage), version 3:
+// The wire form of an Image (EncodeImage, DecodeImage), version 4:
 //
 //	"nsi" format
 //	uvarint term, uvarint seq, str build, bytes retain
@@ -21,6 +21,7 @@ import (
 //	  (format 2) str source, tags
 //	(format 2) str tagsLayout, varint tagsNowMs, tags
 //	(format 3) uvarint hold: 0 none, else the takeover hold's age in ms + 1
+//	(format 4) uvarint edge session: Image.EdgeSession
 //	uint32 CRC-32C (Castagnoli) of everything before it, little endian
 //
 // tags is a uvarint count, then per tag a uvarint place in the carried set
@@ -29,7 +30,8 @@ import (
 // standby that does not ask for 2, so a pair mid rolling update still
 // carries its retained values; such an image is never taken over hot.
 // Format 2 is format 3 without the hold (#710 (b2)): a hot takeover needs
-// the same build anyway, so a format 2 image inherits no hold.
+// the same build anyway, so a format 2 image inherits no hold. Format 3 is
+// format 4 without the edge session (#798): its standby learns none.
 //
 // A str or bytes is a uvarint length and the bytes. A leaf's payload by
 // kind: BOOL one byte (0 or 1); an integer a varint and a str (an
@@ -40,12 +42,12 @@ import (
 // The checksum is end to end, over what the leader encoded: peer TLS
 // already protects the link, so a mismatch means a bug or a torn buffer,
 // and the standby asks for a full image again.
-const imageFormat = 3
+const imageFormat = 4
 
 // ImageFormats are the wire formats this build reads, oldest first; a
 // standby names them when it asks for the stream, and the leader sends
 // the newest one both read (ImageFormatFor).
-var ImageFormats = []byte{1, 2, imageFormat}
+var ImageFormats = []byte{1, 2, 3, imageFormat}
 
 // ImageFormatFor is the format a leader of this build sends a standby that
 // reads formats (as its stream request names them): the newest both read,
@@ -150,6 +152,9 @@ func EncodeImageFormat(dst []byte, img *Image, format byte) ([]byte, error) {
 			hold = uint64(img.HoldAge.Milliseconds()) + 1
 		}
 		dst = binary.AppendUvarint(dst, hold)
+	}
+	if format >= 4 {
+		dst = binary.AppendUvarint(dst, img.EdgeSession)
 	}
 	if n := len(dst) - start + 4; n > MaxImageBytes && !mutRuntime("image_size_unbounded") {
 		return dst[:start], &ImageTooBigError{What: "the image", Bytes: n, Limit: MaxImageBytes}
@@ -271,6 +276,7 @@ func DecodeImage(b []byte, img *Image) error {
 	img.TagsLayout, img.TagsNowMs = "", 0
 	img.Tags.reset()
 	img.Holding, img.HoldAge = false, 0
+	img.EdgeSession = 0
 	img.Term = d.uvarint()
 	img.Seq = d.uvarint()
 	img.Build = d.str()
@@ -339,6 +345,9 @@ func DecodeImage(b []byte, img *Image) error {
 				img.Holding, img.HoldAge = true, time.Duration(hold-1)*time.Millisecond
 			}
 		}
+	}
+	if format >= 4 {
+		img.EdgeSession = d.uvarint()
 	}
 	if d.err == nil && len(d.b) != 0 {
 		d.fail("%d bytes after the last task", len(d.b))

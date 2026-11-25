@@ -127,6 +127,12 @@ type pairStream struct {
 	// beforeResign, in tests, runs just before a switchover's last look
 	// at the switching state and the leadership.
 	beforeResign atomic.Pointer[func()]
+	// edge, while this controller leads, is its edge node session as its
+	// images carry it (runtime.Image.EdgeSession): naut run sets it when
+	// the project has a Sparkplug edge node. stepDown ends that session
+	// before a switchover's RESIGN (#798).
+	edge     atomic.Pointer[func() uint64]
+	stepDown atomic.Pointer[func(term uint64, within time.Duration)]
 	// coldWhy is why this leader's takeover was cold although an image
 	// existed: its condition, until a standby follows a hot-capable
 	// stream again (an image of the newest format sent).
@@ -169,6 +175,14 @@ type pairStream struct {
 	wake  chan struct{}
 	// switchMu: one switchover at a time (pairswitch.go).
 	switchMu sync.Mutex
+}
+
+// edgeSession is the edge node session an image carries: 0 for none.
+func (s *pairStream) edgeSession() uint64 {
+	if f := s.edge.Load(); f != nil {
+		return (*f)()
+	}
+	return 0
 }
 
 // finalImage is a switchover's final image of term, numbered seq.
@@ -463,6 +477,7 @@ func (s *pairStream) serve(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			img.Term, img.Build = term, s.build
+			img.EdgeSession = s.edgeSession()
 			ret, err := s.rt.RetainImage()
 			if err != nil {
 				slog.Warn("redundancy: state stream: the retain section could not be read", "err", err)
@@ -801,6 +816,12 @@ func (s *pairStream) take(img *runtime.Image, now time.Time, intervalMs int64, n
 	if ok, why := s.m.q.Node().ImageTermOK(img.Term, ownLed, seen); !ok && !mutNaut("stream_old_term_applied") {
 		s.set("refused", fmt.Sprintf("an image of term %d: %s", img.Term, why))
 		return
+	}
+	// The leader's edge session, kept beside the shadow (a takeover empties
+	// that): the last one it named, so a session this controller starts
+	// when it takes over never has its bdSeq (#798).
+	if img.EdgeSession != 0 {
+		s.m.peerEdge.Store(img.EdgeSession)
 	}
 	rep, err := s.shadow.Apply(img)
 	if err != nil && len(rep.Applied) == 0 && len(rep.LayoutDiffers) == 0 {

@@ -62,8 +62,16 @@ func (n *Node) applyCommand(device string, payload Payload) {
 	// is written to that member of the UDT tag; a name that resolves to
 	// nothing is refused rather than stored, so a host's typo cannot create
 	// a junk top-level tag that the next NBIRTH would publish back at it.
+	gated := !n.gateOpen()
 	for _, m := range payload.Metrics {
 		if m.Name == "" || m.IsNull || m.Name == "Node Control/Rebirth" {
+			continue
+		}
+		if gated {
+			// A pair's controller that does not lead (or is stepping down)
+			// writes nothing: its scan does not run, and the leader's
+			// session is the one a host should be talking to.
+			n.refuseCommand(j, notLeaderRefusal, m.Name)
 			continue
 		}
 		if n.flatten {

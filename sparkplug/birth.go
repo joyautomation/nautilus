@@ -40,10 +40,11 @@ func (n *Node) birth() error {
 		ready = ready && n.hostOnline
 	}
 	n.mu.Unlock()
-	if !ready {
+	if !ready || !n.gateOpen() {
 		return nil
 	}
 
+	extra := n.extraMetrics() // outside n.mu: it reads the pair's status
 	snap := n.rt.Tags().Snapshot()
 
 	n.mu.Lock()
@@ -72,11 +73,17 @@ func (n *Node) birth() error {
 	if !n.flatten {
 		nbirth = append(nbirth, n.templateDefs(snap, ts)...)
 	}
+	n.extraSet = extraNames(extra)
 	for _, name := range nodeTags {
+		if n.extraSet[name] {
+			n.warnShadowLocked(name) // the node's own metric of that name wins
+			continue
+		}
 		if m, ok := n.birthMetric(name, snap[name], ts); ok {
 			nbirth = append(nbirth, n.expand(m)...)
 		}
 	}
+	nbirth = append(nbirth, n.birthExtraLocked(extra, ts)...)
 	nbirthSeq := n.seq
 
 	// Build DBIRTH payloads for healthy devices.
@@ -115,6 +122,11 @@ func (n *Node) birth() error {
 			return err
 		}
 		dbirthPayloads[b.device] = p
+	}
+	if !n.gateOpen() {
+		// The gate closed while the birth was built: nothing goes out.
+		n.mu.Unlock()
+		return nil
 	}
 	n.born = true
 	n.rebirthPending = false // this NBIRTH answers any rebirth requested before now

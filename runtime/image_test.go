@@ -794,3 +794,26 @@ func TestImageOfTwoTasksNeverTakesAnEarlierRoundsCopies(t *testing.T) {
 		}
 	}
 }
+
+// The leader's edge session rides in a format 4 image, and in no older
+// format (#798): a standby that reads only 3 learns none.
+func TestImageCarriesTheEdgeSessionFromFormat4(t *testing.T) {
+	img := &Image{Term: 3, Seq: 9, Build: "b", EdgeSession: 201}
+	for _, format := range ImageFormats {
+		b, err := EncodeImageFormat(nil, img, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Image
+		if err := DecodeImage(b, &back); err != nil {
+			t.Fatalf("format %d: %v", format, err)
+		}
+		want := uint64(0)
+		if format >= 4 {
+			want = img.EdgeSession
+		}
+		if back.EdgeSession != want {
+			t.Errorf("format %d: edge session %d, want %d", format, back.EdgeSession, want)
+		}
+	}
+}
