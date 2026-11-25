@@ -3,8 +3,20 @@ FUNCTION_BLOCK "naut_main"
 VERSION : 0.1
    VAR 
       t1 : TON_TIME;
+      naut_t1_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
       t2 : TOF_TIME;
+      naut_t2_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
       t3 : TP_TIME;
+      naut_t3_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
       cu : IEC_LCOUNTER;
       cd : IEC_LCOUNTER;
       cud : IEC_LCOUNTER;
@@ -38,13 +50,14 @@ VERSION : 0.1
 BEGIN
 	#a := "naut_Tags".Go;
 	#b := NOT "naut_Tags".Go;
-	#t1(IN := #a, PT := T#2s);
-	#t1(IN := #b, PT := #t1.PT);
-	#q1 := #t1.Q;
-	#e1 := #t1.ET;
-	#t2(IN := #a, PT := T#1s, Q => #q2);
-	#t3(IN := #a, PT := T#500ms);
-	#q3 := #t3.Q;
+	#t1(IN := #a, PT := T#2s, Q => #naut_t1_last.Q, ET => #naut_t1_last.ET);
+	#t1(IN := #b, PT := #t1.PT, Q => #naut_t1_last.Q, ET => #naut_t1_last.ET);
+	#q1 := #naut_t1_last.Q;
+	#e1 := #naut_t1_last.ET;
+	#t2(IN := #a, PT := T#1s, Q => #naut_t2_last.Q, ET => #naut_t2_last.ET);
+	#q2 := #naut_t2_last.Q;
+	#t3(IN := #a, PT := T#500ms, Q => #naut_t3_last.Q, ET => #naut_t3_last.ET);
+	#q3 := #naut_t3_last.Q;
 	#cu.CTU(CU := #a, R := #b, PV := 10);
 	#cu.CTU(CU := #a, R := #cu.R, PV := #cu.PV);
 	#q4 := #cu.QU;

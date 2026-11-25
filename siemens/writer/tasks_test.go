@@ -123,7 +123,7 @@ func TestTasksShareAsNautilusCommits(t *testing.T) {
 	// whole Pump, so a Speed the scan did not assign is left alone.
 	has("naut_Main.scl", "\"naut_Scan_main\".assigned.Pump.Run := TRUE;\n")
 	// An output binding (a timer's, a latch's) is a write too.
-	has("naut_Main.scl", "Q => \"naut_Scan_main\".tags.Done);\n\t\"naut_Scan_main\".assigned.Done := TRUE;\n")
+	has("naut_Main.scl", "Q => #naut_dwell_last.Q, ET => #naut_dwell_last.ET);\n\t\"naut_Scan_main\".tags.Done := #naut_dwell_last.Q;\n\t\"naut_Scan_main\".assigned.Done := TRUE;\n")
 	has("naut_Main.scl", "\t\"naut_Scan_main\".tags.Alarm := #latch.Q1;\n\t\"naut_Scan_main\".assigned.Alarm := TRUE;\n")
 	// A bit write flags its bit; a whole write every bit; the commit
 	// lands the word only when every bit is flagged, else bit by bit.

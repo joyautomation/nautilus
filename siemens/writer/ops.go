@@ -303,6 +303,9 @@ func (pw *progWriter) latch(b *strings.Builder, c *st.CallExpr, l local, def lat
 			pw.diag("siemens/call", line, fmt.Sprintf("%s has no output %s", l.typ, o.Name))
 			return
 		}
+		if pw.refusedTimerWrite(o.Target, line) {
+			return
+		}
 		pw.emit(b, at, "%s%s := %s;\n", in, pw.expr(o.Target, 0), q)
 		pw.assigned(b, in, at, o.Target)
 	}

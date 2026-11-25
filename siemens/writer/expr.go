@@ -83,6 +83,10 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 		}
 		member := e.Member
 		ot := pw.typ(e.Object)
+		if timers[ot] && timerOut(member) {
+			// The latch, never the timer itself (timers.go).
+			return pw.widen(pw.typ(e), pw.lastPath(e))
+		}
 		if sd := pw.w.structOf(ot); sd != nil {
 			if f, ok := sd.fieldOf(member); ok {
 				member = f.Name // as the TYPE spells it
@@ -328,6 +332,13 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			parts = append(parts, fmt.Sprintf("%s := %s", pin, pw.expr(a.Value, 0)))
 		}
 		for _, o := range c.OutputBindings {
+			if timers[l.typ] {
+				// Assignments from the latch after the call (CallStmt).
+				break
+			}
+			if pw.refusedTimerWrite(o.Target, line) {
+				return ""
+			}
 			pin := strings.ToUpper(o.Name)
 			if src, dst := members[pin], pw.typ(o.Target); src == "LINT" && narrow(dst) {
 				pw.gap("siemens/int-width", line, gapOther, fmt.Sprintf("%s => %s", pin, exprShort(o.Target)), fmt.Sprintf("the counter's %s is nautilus's 64-bit int; until then, bind it to a LINT, or assign it in a statement so it wraps as nautilus stores it", pin))
@@ -341,6 +352,12 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			// used"); nautilus keeps the value the instance holds, which
 			// is what this passes.
 			parts = append(parts, pin+" := #"+sclName(l.name)+"."+pin)
+		}
+		if timers[l.typ] {
+			// The call itself fills the latch: Q and ET as this call
+			// computed them, read nowhere else (timers.go).
+			last := "#" + sclName(pw.last[strings.ToLower(l.name)])
+			parts = append(parts, "Q => "+last+".Q", "ET => "+last+".ET")
 		}
 		return "#" + sclName(l.name) + "(" + strings.Join(parts, ", ") + ")"
 	}

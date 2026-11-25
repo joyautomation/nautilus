@@ -53,6 +53,7 @@ func TestPOUsGolden(t *testing.T) {
 		"Main.st1.High":    `"naut_Main_DB".st1.High`,
 		"Main.st1.db.Q":    `"naut_Main_DB".st1."db".Q`,
 		"Main.st1.db.t.ET": `"naut_Main_DB".st1."db".t.ET`,
+		"Main.st1.db.t.IN": `"naut_Main_DB".st1."db".t.IN`,
 		"main.ST2.total":   `"naut_Main_DB".st2.Total`,
 	} {
 		if got, ok := out.Symbol(path); !ok || got != want {
@@ -156,7 +157,7 @@ func TestOutputsAndInOuts(t *testing.T) {
 // instance holds, which is what nautilus keeps.
 func TestTimerCallsPassPT(t *testing.T) {
 	scl, _ := write(t, "PROGRAM P\nVAR t : TON; f : TOF; p : TP; x : BOOL; END_VAR\nt(IN := x, PT := T#1s);\nt(IN := NOT x);\nf(IN := x);\np(IN := x, PT := T#2s);\nEND_PROGRAM\n")
-	wantLines(t, scl, "\t#t(IN := #x, PT := T#1s);\n", "\t#t(IN := NOT #x, PT := #t.PT);\n", "\t#f(IN := #x, PT := #f.PT);\n", "\t#p(IN := #x, PT := T#2s);\n")
+	wantLines(t, scl, "\t#t(IN := #x, PT := T#1s, Q => #naut_t_last.Q, ET => #naut_t_last.ET);\n", "\t#t(IN := NOT #x, PT := #t.PT, Q => #naut_t_last.Q, ET => #naut_t_last.ET);\n", "\t#f(IN := #x, PT := #f.PT, Q => #naut_f_last.Q, ET => #naut_f_last.ET);\n", "\t#p(IN := #x, PT := T#2s, Q => #naut_p_last.Q, ET => #naut_p_last.ET);\n")
 }
 
 // TestCountersAreIECLCounterMethods (#1338, #1371): TIA refuses the

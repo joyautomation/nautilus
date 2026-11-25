@@ -97,9 +97,10 @@ func TestGolden(t *testing.T) {
 		t.Errorf("OBs: %+v", out.OBs)
 	}
 	for path, want := range map[string]string{
-		"Level":        `"naut_Tags".Level`,
-		"Main.count":   `"naut_Main_DB".count`,
-		"main.dwell.Q": `"naut_Main_DB".dwell.Q`,
+		"Level":         `"naut_Tags".Level`,
+		"Main.count":    `"naut_Main_DB".count`,
+		"main.dwell.Q":  `"naut_Main_DB".dwell.Q`,
+		"main.dwell.IN": `"naut_Main_DB".dwell.IN`,
 	} {
 		if got, ok := out.Symbol(path); !ok || got != want {
 			t.Errorf("Symbol(%q) = %q, want %q", path, got, want)

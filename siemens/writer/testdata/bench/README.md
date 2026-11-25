@@ -18,8 +18,9 @@ exports show. Points marked *verify* in the brief:
   by its method (#1338, #1371, `../instances/README.md`). Whether the
   counter saturates only at the LINT limit is not measured (nautilus's CV
   is its 64-bit int);
-- that S7-1500 IEC timers update `Q`/`ET` when read, not only when called,
-  and whether any nautilus program can tell the difference;
+- ~~that S7-1500 IEC timers update `Q`/`ET` when read~~: they do, on
+  every read (bench 1510SP, #1385), so a timer's `Q`/`ET` are latched in
+  a static after each call and every read reads the latch;
 - `MIN`/`MAX`/`LIMIT`/`SEL` with named parameters;
 - `VAR RETAIN` sections in an FB and a global DB;
 - the cyclic interrupt OB: that an `ORGANIZATION_BLOCK` source becomes a
