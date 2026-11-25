@@ -9,6 +9,9 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	mqttsrv "github.com/mochi-mqtt/server/v2"
+	"github.com/mochi-mqtt/server/v2/packets"
+
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
 )
@@ -241,7 +244,8 @@ func TestANodeStartedAgainGoesOnFromItsLastBdSeq(t *testing.T) {
 // a host that matches deaths without their bdSeq ends with the node
 // online. spark_death_watch_off turns it red.
 func TestALateDeathOfAnotherSessionBirthsAgain(t *testing.T) {
-	broker := "tcp://" + testBroker(t)
+	order := &brokerOrder{}
+	broker := "tcp://" + testBroker(t, order)
 	w := watchWire(t, broker)
 	n := newRedundantNode(t, broker, WithDeathWatch())
 	if err := n.Start(t.Context()); err != nil {
@@ -258,19 +262,17 @@ func TestALateDeathOfAnotherSessionBirthsAgain(t *testing.T) {
 	w.cli.Publish("spBv1.0/Plant/NDEATH/Edge1", 1, false, will).WaitTimeout(time.Second)
 	w.waitCount(t, "NBIRTH", 2)
 
-	// A host that ignores bdSeq: online is whatever came last.
-	online := false
+	// A host that ignores bdSeq: online is whatever came last, in the
+	// order the broker took them (the watcher hears its own NDEATH back on
+	// its own delivery path, which can trail the rebirth: CI on #1386).
+	if k := order.last(); k != "NBIRTH" {
+		t.Fatalf("a host ignoring bdSeq sees the node offline: the broker took %v", order.all())
+	}
 	var last Payload
 	for _, m := range w.all() {
-		switch m.kind {
-		case "NBIRTH":
-			online, last = true, m.p
-		case "NDEATH":
-			online = false
+		if m.kind == "NBIRTH" {
+			last = m.p
 		}
-	}
-	if !online {
-		t.Fatalf("a host ignoring bdSeq sees the node offline: %v", w.kinds())
 	}
 	if got := bdSeqOf(t, last); got != bd {
 		t.Fatalf("the rebirth's bdSeq %d, want the session's %d", got, bd)
@@ -373,4 +375,45 @@ func TestFencedPublishesAreCountedForTheDrain(t *testing.T) {
 	if entered.Load() != e {
 		t.Fatalf("the stop's NDEATH was counted (%d, then %d)", e, entered.Load())
 	}
+}
+
+// brokerOrder records, in the order the broker took them, the NBIRTH and
+// NDEATH messages of the Plant/Edge1 node: what a host behind that broker
+// is handed, in that order.
+type brokerOrder struct {
+	mqttsrv.HookBase
+	mu    sync.Mutex
+	kinds []string
+}
+
+func (o *brokerOrder) ID() string           { return "broker-order" }
+func (o *brokerOrder) Provides(b byte) bool { return b == mqttsrv.OnPublished }
+
+func (o *brokerOrder) OnPublished(_ *mqttsrv.Client, pk packets.Packet) {
+	var kind string
+	switch pk.TopicName {
+	case "spBv1.0/Plant/NBIRTH/Edge1":
+		kind = "NBIRTH"
+	case "spBv1.0/Plant/NDEATH/Edge1":
+		kind = "NDEATH"
+	default:
+		return
+	}
+	o.mu.Lock()
+	o.kinds = append(o.kinds, kind)
+	o.mu.Unlock()
+}
+
+func (o *brokerOrder) all() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.kinds...)
+}
+
+func (o *brokerOrder) last() string {
+	k := o.all()
+	if len(k) == 0 {
+		return ""
+	}
+	return k[len(k)-1]
 }
