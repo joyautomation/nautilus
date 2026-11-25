@@ -94,6 +94,16 @@ func initLiteral(v any, typ string) (string, error) {
 		}
 		return s, nil
 	case string:
+		if u == "STRING" {
+			// Before the TIME spellings: 'T#5s' is text in a STRING.
+			if len(x) > maxString {
+				return "", fmt.Errorf("init is %d bytes; TIA's String holds at most %d", len(x), maxString)
+			}
+			if !ascii(x) {
+				return "", fmt.Errorf("init %q: %s", x, gapMessage(gapString, "a STRING with characters outside ASCII", "how TIA stores them is not measured yet"))
+			}
+			return st.QuoteString(x), nil
+		}
 		t := strings.ToUpper(strings.TrimSpace(x))
 		if strings.HasPrefix(t, "T#") || strings.HasPrefix(t, "TIME#") {
 			return strings.TrimSpace(x), nil

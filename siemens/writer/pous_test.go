@@ -250,7 +250,7 @@ func TestENOnABlockCall(t *testing.T) {
 // written, and what it uses that the writer does not translate refuses
 // nothing.
 func TestOnlyReachedBlocksAreWritten(t *testing.T) {
-	lib := "FUNCTION_BLOCK Used\nVAR_OUTPUT o : BOOL; END_VAR\no := TRUE;\nEND_FUNCTION_BLOCK\nFUNCTION_BLOCK Unused\nVAR s : STRING; END_VAR\ns := 'x';\nEND_FUNCTION_BLOCK\n"
+	lib := "FUNCTION_BLOCK Used\nVAR_OUTPUT o : BOOL; END_VAR\no := TRUE;\nEND_FUNCTION_BLOCK\nFUNCTION_BLOCK Unused\nVAR s : WSTRING; END_VAR\ns := \"x\";\nEND_FUNCTION_BLOCK\n"
 	out, diags := writePOU(t, "PROGRAM P\nVAR u : Used; END_VAR\nu();\nB := u.o;\nEND_PROGRAM\n", lib)
 	if len(diags) > 0 {
 		t.Fatal(diags)
@@ -266,7 +266,7 @@ func TestOnlyReachedBlocksAreWritten(t *testing.T) {
 // TestProgramFileBlocks: a block declared in the program's own file is
 // written like a library one, its diagnostics at its own lines.
 func TestProgramFileBlocks(t *testing.T) {
-	src := "PROGRAM P\nFUNCTION_BLOCK Own\nVAR s : STRING; END_VAR\ns := 'x';\nEND_FUNCTION_BLOCK\nVAR h : Own; END_VAR\nh();\nEND_PROGRAM\n"
+	src := "PROGRAM P\nFUNCTION_BLOCK Own\nVAR s : WSTRING; END_VAR\ns := \"x\";\nEND_FUNCTION_BLOCK\nVAR h : Own; END_VAR\nh();\nEND_PROGRAM\n"
 	_, diags := writePOU(t, src)
 	if len(diags) == 0 || diags[0].Path != "p.st" || diags[0].Line != 3 || !strings.Contains(diags[0].Message, "STRING yet (#1303)") {
 		t.Errorf("own block: %v", diags)
@@ -284,9 +284,9 @@ func TestProgramFileBlocks(t *testing.T) {
 // refuses is reported where the program first uses the block, naming the
 // block and its line in the library.
 func TestLibraryBlockDiagnostics(t *testing.T) {
-	lib := "(* a library *)\nFUNCTION_BLOCK Lib\nVAR s : STRING; END_VAR\ns := 'x';\nEND_FUNCTION_BLOCK\n"
+	lib := "(* a library *)\nFUNCTION_BLOCK Lib\nVAR s : WSTRING; END_VAR\ns := \"x\";\nEND_FUNCTION_BLOCK\n"
 	_, diags := writePOU(t, "PROGRAM P\nVAR\n  h : Lib;\nEND_VAR\nh();\nEND_PROGRAM\n", lib)
-	if len(diags) == 0 || diags[0].Path != "p.st" || diags[0].Line != 3 || !strings.Contains(diags[0].Message, "in FUNCTION_BLOCK Lib (the project's library, line 3): s: the Siemens writer doesn't translate STRING yet (#1303)") {
+	if len(diags) == 0 || diags[0].Path != "p.st" || diags[0].Line != 3 || !strings.Contains(diags[0].Message, "in FUNCTION_BLOCK Lib (the project's library, line 3): s: the Siemens writer doesn't translate WSTRING yet (#1303)") {
 		t.Errorf("library block: %v", diags)
 	}
 }

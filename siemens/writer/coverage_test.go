@@ -382,18 +382,19 @@ func TestLibraryNamesAreWritten(t *testing.T) {
 // collision, a task TIA cannot run) keep their wording.
 func TestEveryGapNamesItsIssue(t *testing.T) {
 	// The writer-coverage issues filed for #789, B to G and the rest.
-	issues := map[string]bool{"#1299": true, "#1300": true, "#1301": true, "#1302": true, "#1303": true, "#1304": true, "#1305": true}
+	issues := map[string]bool{"#1299": true, "#1300": true, "#1301": true, "#1302": true, "#1303": true, "#1304": true, "#1305": true, "#1375": true}
 	ref := regexp.MustCompile(`yet \((#\d+)(?:, (#\d+))?\)`)
 	notGaps := map[string]bool{"siemens/nautilus": true, "siemens/name": true, "siemens/program": true}
 	var diags []Diag
 	for _, src := range []string{
-		"PROGRAM P\nVAR s : STRING; t : LTIME; x : ARRAY[1..2] OF INT; d : DT; END_VAR\nEND_PROGRAM\n",
+		"PROGRAM P\nVAR s : WSTRING; t : LTIME; x : ARRAY[1..2] OF INT; d : DT; END_VAR\nEND_PROGRAM\n",
 		"PROGRAM P\nFUNCTION_BLOCK H\nVAR RETAIN n : INT; END_VAR\nEND_FUNCTION_BLOCK\nVAR h : H; END_VAR\nh();\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a, b : TIME; r, q : REAL; u : ULINT; END_VAR\na := a + b;\nr := r MOD q;\nu := u + 1;\na := T#1500us;\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a : INT; r : REAL; t : TON; END_VAR\nr := ATAN2(r, r);\nt(IN := TRUE, PT := INT_TO_TIME(a + 1));\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a : LTIME; END_VAR\nEND_PROGRAM\n",
 		"TYPE Mode : (Run, Stop); END_TYPE\nPROGRAM P\nVAR a : INT; END_VAR\nEND_PROGRAM\n",
 		"FUNCTION F : INT\nF := 1;\nEND_FUNCTION\nPROGRAM P\nVAR a : INT; END_VAR\na := F();\nEND_PROGRAM\n",
+		"PROGRAM P\nVAR r : REAL; s : STRING; END_VAR\ns := REAL_TO_STRING(r);\nEND_PROGRAM\n",
 	} {
 		_, d, err := Write(Input{Programs: []Program{{Path: "p.st", Source: src}}, Tasks: []Task{{Name: "main", Program: "P", Interval: time.Second}}})
 		if err != nil {
@@ -401,7 +402,7 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 		}
 		diags = append(diags, d...)
 	}
-	_, d, _ := Write(Input{Globals: []Global{{Name: "Name", Type: "STRING"}}})
+	_, d, _ := Write(Input{Globals: []Global{{Name: "Name", Type: "WSTRING"}}})
 	diags = append(diags, d...)
 	_, d, _ = Write(Input{Globals: []Global{{Name: "A", Type: "ARRAY[1..2] OF REAL", Start: []any{1.0, 2.0}}}})
 	diags = append(diags, d...)
@@ -426,7 +427,7 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 		}
 		gaps++
 	}
-	if gaps < 11 {
+	if gaps < 12 {
 		t.Errorf("only %d gaps exercised: %v", gaps, diags)
 	}
 }

@@ -14,6 +14,7 @@ const (
 	gapPOUs                  // nautilus's blocks with no TIA instruction (PID)
 	gapSFC                   // SFC programs
 	gapString                // STRING and the string functions
+	gapStringConv            // conversions to and from STRING
 	gapTime                  // TIME arithmetic, LTIME, dates
 	gapOther                 // the rest
 )
@@ -24,6 +25,7 @@ var gapIssue = map[gap]int{
 	gapPOUs:       1301,
 	gapSFC:        1302,
 	gapString:     1303,
+	gapStringConv: 1375,
 	gapTime:       1304,
 	gapOther:      1305,
 }

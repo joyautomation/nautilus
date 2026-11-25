@@ -338,6 +338,8 @@ refused at check time, with one exception, the table below.
 | integer arithmetic | 64-bit, wrapped at the store, as nautilus does |
 | division and MOD by anything but a non-zero constant | through a generated function that answers 0 for a zero divisor, as nautilus does |
 | TRUNC, `TO_<type>`, MIN, MAX, MUX | written as the explicit conversion or instruction |
+| STRING, LEN, LEFT, RIGHT, MID, CONCAT, INSERT, DELETE, REPLACE, FIND | TIA's `String` and string instructions. A String holds 254 bytes, so a literal longer than that is refused, and a result that may grow longer is warned (see below). Where the CPU would return an empty string for a position below 1 (or a negative length), the writer clamps the argument first, as nautilus does |
+| integer and BOOL conversions to STRING, `STRING_TO_` an integer, REAL or LREAL | the same text as nautilus (`42`, not TIA's `+42`; `TRUE`/`FALSE`), through a generated function `naut_STR_LINT` where needed |
 
 Field drivers (Modbus, OPC UA client, EtherNet/IP, MQTT, IT) do not run
 on a Siemens target. They run in `naut`.
@@ -400,7 +402,8 @@ that closes it.
 | #1299 | enums, arrays, a function writing its own STRUCT input (TIA hands a function a STRUCT input by reference, so the write would reach the caller's variable) |
 | #1301 | nautilus's `PID` |
 | #1302 | SFC. It will be written as an SCL state machine first |
-| #1303 | STRING and the string functions |
+| #1303 | WSTRING, and a STRING literal with characters outside ASCII |
+| #1375 | the conversions to and from STRING TIA has no match for: REAL and LREAL to STRING (TIA writes `+2.150000E+1` where nautilus writes `21.5`), TIME, BYTE, WORD, DWORD, LWORD, and STRING_TO_BOOL |
 | #1304 | TIME arithmetic, LTIME, dates |
 | #1301 | (also) an instance of your own block in a program's `VAR RETAIN` |
 | #1305 | the rest: ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, reading or writing an instance's in-out from outside it, a manifest tag named inside a block when the project has several tasks, and more |
@@ -410,15 +413,20 @@ block name collision.
 
 ## Where the CPU behaves differently
 
-In a few cases nautilus faults the scan and the CPU does not. The CPU
-sets ENO to FALSE and carries on. These are not refused. `naut check
---target siemens` and `naut siemens deploy` warn about them, in two ways:
+In a few cases nautilus and the CPU part ways: nautilus faults the scan
+where the CPU carries on (it sets ENO to FALSE, or uses 0), or a string
+grows past the 254 bytes the CPU holds. These are not refused. `naut check
+--target siemens` and `naut siemens deploy` warn about them:
 
 - A MUX or a shift is warned at its own line with `[siemens/divergence]`.
 - REAL to integer conversions and TRUNC are common and seldom provably in
   range, so they are one summary line per program, `[siemens/conversion-range]`:
   "N REAL → integer conversions can differ on Siemens if a value exceeds
   its range". `naut check -v` and `naut siemens deploy -v` list the sites.
+- A CONCAT, INSERT or REPLACE whose result may grow past 254 bytes is one
+  summary line per program too, `[siemens/string-length]`: TIA keeps the
+  first 254 bytes, nautilus keeps them all.
+- A `STRING_TO_` number is warned at its line with `[siemens/string-parse]`.
 
 A constant that is provably in range never warns.
 
@@ -428,8 +436,10 @@ A constant that is provably in range never warns.
 | `SHL`, `SHR`, `ROL`, `ROR` | the count is unsigned or a constant | a negative count faults the scan | the count is converted to TIA's unsigned count, beyond the width |
 | `TRUNC`, `TRUNC_<int>` (summary line) | the argument is a constant in range | a value beyond the integer (or NaN) faults the scan | the conversion sets ENO FALSE, the scan carries on |
 | `REAL_TO_<int>`, `TO_<int>` of a REAL (summary line) | the same | the same | the same |
+| `CONCAT`, `INSERT`, `REPLACE` (summary line) | the operands are literals of 254 bytes or fewer in all | the result keeps every byte | the result keeps the first 254 bytes |
+| `STRING_TO_INT` and the other `STRING_TO_` numbers | never | text that is not a number, or is out of range, stops the program (the scan faults) | the PLC silently uses 0 or a partial number (`'4x'` reads as 4, `'2,5'` as 25.0) and carries on |
 
-Only the out-of-range case differs. The rounding matches: a REAL converts
+For the conversions, only the out-of-range case differs. The rounding matches: a REAL converts
 to an integer half to even, and TRUNC goes toward zero, both as TIA's
 documentation describes. This comes from the documentation and has not
 been measured on a CPU yet.

@@ -367,9 +367,10 @@ func Write(in Input) (Output, []Diag, error) {
 	// The project's blocks the programs reach, callees first.
 	pouOrder := w.writePOUs(&out, claim)
 
-	// The guarded division functions the programs call. Files come out
-	// with these first (the sort below), so tiad, which generates the
-	// sources in the order given, has each FC before an FB that calls it.
+	// The helper functions the programs call: the guarded divisions and
+	// the conversions to STRING. Files come out with these first (the
+	// sort below), so tiad, which generates the sources in the order
+	// given, has each FC before an FB that calls it.
 	fns := make([]string, 0, len(w.guarded))
 	for fn := range w.guarded {
 		fns = append(fns, fn)
@@ -377,10 +378,14 @@ func Write(in Input) (Output, []Diag, error) {
 	sort.Strings(fns)
 	for _, fn := range fns {
 		name := prefix + fn
-		if !claim(name, "the guarded division function "+fn) {
+		src, what := guardedSource, "the guarded division function "
+		if _, ok := stringHelpers[fn]; ok {
+			src, what = stringHelperSource, "the STRING conversion function "
+		}
+		if !claim(name, what+fn) {
 			continue
 		}
-		out.Files = append(out.Files, File{Path: name + ".scl", Data: guardedSource(prefix, fn)})
+		out.Files = append(out.Files, File{Path: name + ".scl", Data: src(prefix, fn)})
 		out.Sources[name+".scl"] = Source{Path: w.guarded[fn]}
 	}
 

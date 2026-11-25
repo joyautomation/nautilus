@@ -95,7 +95,7 @@ func writeStructs(src string, globals []Global, libs ...string) (Output, []Diag)
 	return out, diags
 }
 
-const motorLib = "TYPE\n  Motor : STRUCT\n    Run : BOOL;\n    Speed : REAL;\n    Tag : STRING;\n  END_STRUCT;\n  Pump : STRUCT\n    Run : BOOL;\n    Count : UINT;\n  END_STRUCT;\nEND_TYPE\n"
+const motorLib = "TYPE\n  Motor : STRUCT\n    Run : BOOL;\n    Speed : REAL;\n    Tag : WSTRING;\n  END_STRUCT;\n  Pump : STRUCT\n    Run : BOOL;\n    Count : UINT;\n  END_STRUCT;\nEND_TYPE\n"
 
 // TestStructFromLibrary: a library's TYPE types a tag and a program's
 // variable, as nautilus composes the library ahead of the program.
@@ -128,7 +128,7 @@ func TestStructFromLibrary(t *testing.T) {
 func TestStructRefusals(t *testing.T) {
 	src := "PROGRAM P\nVAR_EXTERNAL M1, M2, M3 : Motor; END_VAR\nM1.Run := TRUE;\nEND_PROGRAM\n"
 	_, diags := writeStructs(src, []Global{{Name: "M1", Type: "Motor"}, {Name: "M2", Type: "Motor"}, {Name: "M3", Type: "Motor"}}, motorLib)
-	if len(diags) != 1 || diags[0].Rule != "siemens/type" || !strings.Contains(diags[0].Message, "tag M1: the type Motor: member Tag: the Siemens writer doesn't translate STRING yet (#1303)") {
+	if len(diags) != 1 || diags[0].Rule != "siemens/type" || !strings.Contains(diags[0].Message, "tag M1: the type Motor: member Tag: the Siemens writer doesn't translate WSTRING yet (#1303)") {
 		t.Errorf("STRING member: %v", diags)
 	}
 	src = "PROGRAM P\nVAR_EXTERNAL P1 : Pump; END_VAR\nP1.Run := TRUE;\nEND_PROGRAM\n"
@@ -301,7 +301,7 @@ func paths(out Output) []string {
 const d1bLib = `TYPE
   M : STRUCT run : BOOL; speed : REAL := 50.0; END_STRUCT;
   W : STRUCT pump : M; depth : REAL; END_STRUCT;
-  Unused : STRUCT label : STRING; END_STRUCT;
+  Unused : STRUCT label : WSTRING; END_STRUCT;
 END_TYPE
 FUNCTION_BLOCK H
 VAR_INPUT i : M; END_VAR
@@ -487,10 +487,10 @@ func TestInOutFromOutside(t *testing.T) {
 // refused, and the rest of the program is still checked in the same run
 // (#1301 D1b fold b).
 func TestProgramTypeGapKeepsChecking(t *testing.T) {
-	src := "PROGRAM P\nTYPE Mode : (Idle, Run); END_TYPE\nVAR s : STRING; END_VAR\nEND_PROGRAM\n"
+	src := "PROGRAM P\nTYPE Mode : (Idle, Run); END_TYPE\nVAR s : WSTRING; END_VAR\nEND_PROGRAM\n"
 	_, diags := writeStructs(src, nil)
 	got := fmt.Sprint(diags)
-	if !strings.Contains(got, "the type Mode yet (#1299)") || !strings.Contains(got, "STRING yet (#1303)") {
+	if !strings.Contains(got, "the type Mode yet (#1299)") || !strings.Contains(got, "WSTRING yet (#1303)") {
 		t.Errorf("%v", diags)
 	}
 }
