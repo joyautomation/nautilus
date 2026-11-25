@@ -664,6 +664,8 @@ var Mutations = []string{
 	"spark_death_watch_off",             // sparkplug: the edge node does not listen to its own NDEATH topic, so a late will of the old leader's session leaves it offline at a host that ignores bdSeq (#798)
 	"spark_send_uncounted",              // sparkplug: a fenced edge node publish is not counted for a switchover's drain (#798)
 	"spark_gate_unlatched",              // naut: an edge node session's gate opens again in its term after reading closed, so a rebirth caught in the gap leaves the session silent (#798, Fable)
+	"cause_resign_unnoted",              // node: a leadership taken from the peer's RESIGN is not noted as one, so a planned switchover reads as a failover (#798 follow-up)
+	"switch_by_dropped",                 // naut: a switch-ask's by label is not kept, so a failback reads as a switchover (#798 follow-up)
 	"spark_step_unfenced",               // naut: a switchover's step-down fences the session only once the supervisor's goroutine gets to it, not during a blocked Start (#798, Fable)
 }
 

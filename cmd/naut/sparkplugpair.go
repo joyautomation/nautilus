@@ -226,6 +226,7 @@ type redundancyMetrics struct {
 	role     func() string
 	peer     func() string
 	takeover func() runtime.TakeoverReport
+	cause    func() string // the last takeover's cause (takeoverCause), "" before one
 	hold     func() (holding bool, age, max time.Duration)
 	now      func() time.Time
 
@@ -245,14 +246,18 @@ func (r *redundancyMetrics) metrics() []sparkplug.Metric {
 	}
 	tr := r.takeover()
 	kind, reason := "none", ""
-	switch {
-	case tr.At.IsZero():
-	case tr.Hot:
-		kind, reason = "hot", "hot takeover"
-	default:
-		kind, reason = "cold", "cold takeover"
-		if tr.Reason != "" {
-			reason += ": " + tr.Reason
+	if !tr.At.IsZero() {
+		// switchover, failback, hand-back, failover or start, then a cold
+		// takeover's reason: an operator alarms on a failover.
+		kind, reason = "hot", r.cause()
+		if reason == "" {
+			reason = causeStart
+		}
+		if !tr.Hot {
+			kind = "cold"
+			if tr.Reason != "" {
+				reason += " (cold: " + tr.Reason + ")"
+			}
 		}
 	}
 	var lastAt int64
@@ -307,6 +312,12 @@ func sparkplugPairOptions(el runtime.Coordinator, pair *pairMember, rt *runtime.
 			return pair.stream.status().State
 		},
 		takeover: rt.LastTakeover,
+		cause: func() string {
+			if pair.stream == nil {
+				return ""
+			}
+			return pair.stream.takeoverCauseNow()
+		},
 		hold: func() (bool, time.Duration, time.Duration) {
 			h := pair.hold
 			if h == nil {

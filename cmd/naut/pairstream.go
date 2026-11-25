@@ -131,8 +131,14 @@ type pairStream struct {
 	// images carry it (runtime.Image.EdgeSession): naut run sets it when
 	// the project has a Sparkplug edge node. stepDown ends that session
 	// before a switchover's RESIGN (#798).
-	edge     atomic.Pointer[func() uint64]
-	stepDown atomic.Pointer[func(term uint64, within time.Duration)]
+	// askedBy is the label of the last switch-ask this standby accepted,
+	// for the leadership askedEpoch (switchAsk.By); cause is the last
+	// takeover's cause (takeoverCause). Under mu.
+	askedBy    string
+	askedEpoch uint64
+	cause      string
+	edge       atomic.Pointer[func() uint64]
+	stepDown   atomic.Pointer[func(term uint64, within time.Duration)]
 	// coldWhy is why this leader's takeover was cold although an image
 	// existed: its condition, until a standby follows a hot-capable
 	// stream again (an image of the newest format sent).
@@ -1024,12 +1030,16 @@ func (s *pairStream) takeoverFlush() (*runtime.HotImage, error) {
 // follows again.
 func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
 	from := s.handBackTaken(rep.Term)
+	q := s.m.q
+	fromResign, takeover := q.Node().FromResign(), q.IsTakeover()
 	s.mu.Lock()
 	if rep.At.Before(s.lastReport) {
 		s.mu.Unlock()
 		return // a newer takeover reported already
 	}
 	s.lastReport = rep.At
+	s.cause = takeoverCause(from != nil, fromResign, takeover, s.askedBy, s.askedEpoch, rep.Term)
+	s.askedBy, s.askedEpoch = "", 0
 	s.flushTook = false // the edge is taken
 	s.coldWhy, s.handBackWhy = "", ""
 	if !rep.Hot && rep.Image {
@@ -1043,7 +1053,7 @@ func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
 	if j == nil {
 		return
 	}
-	detail := map[string]any{"term": rep.Term, "hot": rep.Hot}
+	detail := map[string]any{"term": rep.Term, "hot": rep.Hot, "cause": s.takeoverCauseNow()}
 	if !rep.Hot {
 		detail["reason"] = rep.Reason
 	}
@@ -1074,6 +1084,43 @@ func (s *pairStream) tookOver(rep runtime.TakeoverReport) {
 	})
 }
 
+// Takeover causes (takeoverCause), for operators: Redundancy/
+// LastSwitchoverReason, the takeover's journal entry, /api/cluster.
+const (
+	causeStart      = "start"      // the pair's first leadership: no peer led before
+	causeSwitchover = "switchover" // the peer resigned: a planned switchover
+	causeFailback   = "failback"   // the peer resigned for failback
+	causeHandBack   = "hand-back"  // the peer handed the lead back (its retain store unreadable)
+	causeFailover   = "failover"   // the peer's lease ran out: it died or was cut off
+)
+
+// takeoverCause names why this controller took the lead: handBack (the
+// peer's hand-back was taken), fromResign (the elector's leadership began
+// from the peer's RESIGN), takeover (from the peer at all), and the label
+// of the last switch-ask accepted (askedBy, for leadership askedEpoch)
+// against term, the new leadership's. A label only.
+func takeoverCause(handBack, fromResign, takeover bool, askedBy string, askedEpoch, term uint64) string {
+	switch {
+	case handBack:
+		return causeHandBack
+	case fromResign:
+		if askedBy == switchByFailback && askedEpoch < term {
+			return causeFailback
+		}
+		return causeSwitchover
+	case takeover:
+		return causeFailover
+	}
+	return causeStart
+}
+
+// takeoverCauseNow is the last takeover's cause, "" before one.
+func (s *pairStream) takeoverCauseNow() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cause
+}
+
 // status is the stream's block of /api/cluster.
 func (s *pairStream) status() *leader.StreamStatus {
 	now := time.Now()
@@ -1085,6 +1132,7 @@ func (s *pairStream) status() *leader.StreamStatus {
 	if s.tookOverAge >= 0 {
 		st.TakeoverImageAgeMs = s.tookOverAge.Milliseconds()
 	}
+	st.TakeoverCause = s.cause
 	if tr := s.rt.LastTakeover(); !tr.At.IsZero() {
 		st.Takeover, st.TakeoverCold = "cold", tr.Reason
 		if tr.Hot {

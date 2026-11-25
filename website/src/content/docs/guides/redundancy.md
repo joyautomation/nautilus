@@ -736,8 +736,13 @@ is a plain death and birth, not a seamless handover:
   metrics: `Role`, `PeerState` (the state stream: `sending`, `no-standby`),
   `Takeover` (`hot`, `cold` or `none`), `Hold/Active` and `Hold/Until`
   (the takeover hold), `LastSwitchoverAt` and `LastSwitchoverReason`.
-  They are in every NBIRTH, and in an NDATA when one changes. A tag of the
-  same name is not published.
+  The reason is `switchover` (an operator's), `failback`, `hand-back`
+  (the other controller could not read its retained values and handed
+  the lead back), `failover` (the other controller died or was cut off:
+  the one to alarm on) or `start`, followed by `(cold: why)` when the
+  takeover was cold. `naut redundancy status` and the takeover's audit
+  entry name the same cause. These metrics are in every NBIRTH, and in an
+  NDATA when one changes. A tag of the same name is not published.
 - Store-and-forward stays on each controller. Values the old leader
   buffered while the broker was down are sent only if that controller
   leads again. `bdseq-file` and `store-forward-file` are on each
