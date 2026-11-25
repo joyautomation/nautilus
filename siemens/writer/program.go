@@ -27,6 +27,9 @@ type progWriter struct {
 	// below it; temps are not.
 	statics map[string]*shape
 	temps   []st.VarDecl
+	// last names the latch of each timer instance the block declares,
+	// by lower-cased instance name (timers.go).
+	last map[string]string
 	// lines is the source line (of the parsed ST) of each line written
 	// after BEGIN, in order.
 	lines []int
@@ -247,6 +250,7 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 	var unretained []string
 	typeRefused := map[string]bool{}
 	block := pw.kind != kindProgram
+	pw.last = w.lastNames(vbs)
 	for _, vb := range vbs {
 		kind := vb.Kind
 		if vb.Constant && kind != "VAR_EXTERNAL" {
@@ -377,6 +381,27 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
 				pw.statics[strings.ToLower(v.Name)] = w.fbShape(v.Name, p, map[string]bool{})
 				lines = append(lines, fmt.Sprintf("      %s : %s;", sclName(v.Name), quote(w.prefix+p.name)))
+				continue
+			}
+			if timers[u] && static {
+				if v.Initial != nil {
+					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "an instance initializer", ""))
+					continue
+				}
+				last := pw.last[strings.ToLower(v.Name)]
+				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
+				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name, instance: true}
+				decl := []string{fmt.Sprintf("      %s : %s;", sclName(v.Name), instances[u]), lastDecl(last)}
+				if vb.Retain {
+					// nautilus never keeps a timer across a restart (it
+					// starts every clock block over: runtime/retainlocals.go),
+					// and TIA would keep one held in a RETAIN section: the
+					// timer and its latch go in the plain VAR section.
+					decl[0] = strings.TrimSuffix(decl[0], ";") + ";   // VAR RETAIN in nautilus, which starts a timer over after a restart"
+					unretained = append(unretained, decl...)
+					continue
+				}
+				lines = append(lines, decl...)
 				continue
 			}
 			if inst, ok := instances[u]; ok {
@@ -512,6 +537,9 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 				break
 			}
 		}
+		if pw.refusedTimerWrite(s.TargetExpr, s.Pos.Line) || pw.refusedTimerCopy(s) {
+			break
+		}
 		target, tt := s.Target, ""
 		if s.TargetExpr != nil {
 			target, tt = pw.expr(s.TargetExpr, 0), pw.typ(s.TargetExpr)
@@ -588,11 +616,13 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		}
 		pw.emit(b, at, "%s%s;\n", in, pw.call(s.Call, true))
 		if l, ok := pw.locals[strings.ToLower(s.Call.Name)]; ok && s.Call.Callee == nil {
-			if _, counter := counterInputs[l.typ]; counter {
+			if _, counter := counterInputs[l.typ]; counter || timers[l.typ] {
 				// TIA takes no output binding at a counter's method call:
 				// each is an assignment from the counter after it, in
 				// source order, under the store rules of any assignment
-				// (as a user FB's, pous.go).
+				// (as a user FB's, pous.go). A timer's call binds its Q
+				// and ET to its latch (timers.go): each of its bindings is
+				// an assignment from the latch after the call.
 				for _, o := range s.Call.OutputBindings {
 					pos := o.Pos
 					if pos.Line == 0 {

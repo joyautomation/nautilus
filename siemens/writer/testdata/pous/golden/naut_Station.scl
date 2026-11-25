@@ -18,6 +18,10 @@ VERSION : 0.1
       edge : R_TRIG;
       i : INT;
       hold : TON_TIME;
+      naut_hold_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
    END_VAR
    VAR_TEMP 
       scratch : INT;
@@ -49,5 +53,5 @@ BEGIN
 			#Total := #LOW;
 	END_CASE;
 	#scratch := LINT_TO_INT((((INT_TO_LINT(#scratch) + INT_TO_LINT(#Total)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
-	#hold(IN := #High, PT := #hold.PT);
+	#hold(IN := #High, PT := #hold.PT, Q => #naut_hold_last.Q, ET => #naut_hold_last.ET);
 END_FUNCTION_BLOCK

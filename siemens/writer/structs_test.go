@@ -172,8 +172,8 @@ func TestReservedNamesQuotedEverywhere(t *testing.T) {
 		"      \"Name\" : INT;\n", "      \"Static\" : TON_TIME;\n", "      \"Title\" : BOOL;\n",
 		"\t#\"Title\" := FALSE;\n",
 		"\t#\"Name\" := LINT_TO_INT(",
-		"\t#\"Static\"(IN := TRUE, PT := T#1s);\n",
-		"\t#\"Title\" := #\"Static\".Q;\n",
+		"\t#\"Static\"(IN := TRUE, PT := T#1s, Q => #naut_Static_last.Q, ET => #naut_Static_last.ET);\n",
+		"\t#\"Title\" := #naut_Static_last.Q;\n",
 		"\t\"naut_Tags\".P1.Count := 2;\n",
 		"\t#\"Author\".S1 := #\"Title\";\n",
 	} {

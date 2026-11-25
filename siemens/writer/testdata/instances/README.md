@@ -19,6 +19,16 @@ rising edges only, Q thresholds, counting below zero, R first, and an input
 left out of a call keeping its last value through the counter's member):
 it matches nautilus's `lang/ir/builtins_fb.go`.
 
+Since #1385 each timer has a latch static beside it (`naut_t1_last`), its
+call binds `Q =>`/`ET =>` into it, and reads of `t1.Q`/`t1.ET` read the
+latch: an S7-1500 IEC timer updates `Q`/`ET` whenever it is read. These
+exact files compiled 0/0 on TIA V21 through tiad (offline), 2026-11-25. On
+the bench 1510SP the writer's output of a 200-scan timer program read each
+timer before and after its call exactly as nautilus does (every
+pre-call read equal to the last call's values, two reads in a scan equal,
+TON's Q and ET from one call), where the writer before the fix differed on
+about 30 scans of each timer.
+
 Change the writer's instance spelling, or add an instance type, only with
 a new TIA compile of this golden. `TestInstancesGolden` fails when a type
 in the writer's maps is missing from `main.st`.
