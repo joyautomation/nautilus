@@ -602,6 +602,13 @@ ends.
   again only at the next quarter lease, so an outage of just over half
   the lease (0.5 s at 1 s, 1 s at 2 s) can cost the lease. A vote round
   trip longer than an eighth of the lease always fails.
+- **A slow disk** at the voters: a voter answers a vote only once it has
+  written its grant to disk, and a vote waits an eighth of the lease for
+  the answer. A slower write still counts: the controller asks the same
+  vote again every eighth of a lease, and a voter that already granted it
+  answers at once. So each voter's write, with any write waiting ahead
+  of it, must finish within three quarters of a lease (750 ms at 1 s),
+  or no controller wins a vote, after a failover or a switchover alike.
 
 Choose 2 s for:
 
@@ -870,7 +877,10 @@ or eMMC), so the disk the voters write to shows in the gap. On a bench pair of c
 one host, with a 20 ms main task, 100 switchovers at each of a 500 ms
 and a 1 s lease measured a gap of 74 ms at best, about 94 ms typically
 and 126 ms at worst (113 ms at 1 s); a device that hangs on a write
-adds a few milliseconds. The acceptance target is a quarter lease for
+adds a few milliseconds. On a slow disk the election waits for the
+standby to ask again: with every voter write slowed past an eighth of
+the lease (94 ms at 500 ms, 188 ms at 1 s), 100 switchovers at each
+measured a gap of 169 to 193 ms at 500 ms and 268 to 307 ms at 1 s. The acceptance target is a quarter lease for
 that bench program: met at a 1 s lease; at a 500 ms lease (target
 125 ms) missed by up to 1 ms on the bench program, once in 100 runs on
 a heavily loaded host, still far below a failover, which waits out the

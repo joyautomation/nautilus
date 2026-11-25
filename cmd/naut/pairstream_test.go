@@ -417,12 +417,17 @@ func writeRetain(t *testing.T, path string, st retain.State) {
 	}
 }
 
-// inSync waits for member n's stream to be in sync.
+// inSync waits for member n's stream to be in sync, and for its first
+// save of an image to its retain file. In sync is no saved file yet: the
+// standby saves on a 2 s tick from when it began to follow, and a pair
+// that elects at once (a campaign asked again, #710) is in sync before
+// that tick. A test that then reads, rewrites or corrupts the file would
+// have it written over by that first save.
 func (r *pairRig) inSync(t *testing.T, n string) {
 	t.Helper()
-	pairWait(t, n+"'s stream in sync", 10*time.Second, func() bool {
+	pairWait(t, n+"'s stream in sync and saved", 10*time.Second, func() bool {
 		s := r.streamStatus(n)
-		return s != nil && s.State == "in-sync"
+		return s != nil && s.State == "in-sync" && s.PersistedTerm != 0
 	})
 }
 

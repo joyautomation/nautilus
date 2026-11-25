@@ -113,6 +113,10 @@ type Options struct {
 	Log *slog.Logger
 	// OnEvent, when set, gets every Event, in order, from one goroutine.
 	OnEvent func(Event)
+	// StateWrite, when set, writes the state file's bytes in place of
+	// (*os.File).Write, before its fsync: for tests of a slow disk (#710,
+	// the lost switchover campaign). Nil in every build that runs a plant.
+	StateWrite func(*os.File, []byte) (int, error)
 
 	// For tests: the clock (quorum.Now), the HTTP client, and the state
 	// file's write.
@@ -550,7 +554,7 @@ func New(o Options) (*Elector, error) {
 	}
 	e := &Elector{
 		o: o, log: o.Log.With("cluster", o.Cluster, "node", string(o.Self)), now: now,
-		file: &State{Path: o.StatePath, Owner: o.Self, Cluster: o.Cluster, Box: o.Box, write: o.write},
+		file: &State{Path: o.StatePath, Owner: o.Self, Cluster: o.Cluster, Box: o.Box, write: firstWrite(o.write, o.StateWrite)},
 		call: caller{client: client, token: o.Token, lease: o.Lease, members: members(o.Self, o.Peer)},
 		peer: baseURL(o.PeerAddr, o.TLS != nil), wit: baseURL(o.WitnessAddr, o.TLS != nil), nonce: drawNonce(),
 		waiters: map[waitKey]chan quorum.Reply{}, written: make(chan struct{}), mismatch: map[string]string{}, links: map[string]string{},

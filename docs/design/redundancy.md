@@ -1092,6 +1092,25 @@ redundancy:
   controllers started together would retry in lockstep. A campaign asks for one more than the
   highest term this controller has heard of, **including the terms its own voter was asked
   for by the other controller**, so two campaigners don't keep landing on equal terms.
+- **Asking a campaign again** (#710, the lost switchover campaign). A grant leaves a voter only
+  after its fsync, and a vote waits `lease/8` for its answer. On a disk slower than that (an
+  eMMC or SD card, or a write queued behind another), the campaign's first ask times out at
+  the candidate though the voters granted it. A new campaign would ask a new term, which needs
+  a new write, and time out again: with every write that slow no campaign could ever win,
+  failover included. A switchover lost this way left nobody leading until the old leader's
+  resign hold ran out, and the old leader led again (CI on #1372). So while no majority has
+  answered a campaign, the candidate asks **the same term** again (a new id and Seq) every
+  `lease/8`, up to `3·lease/4` after its first send. A voter that promised that term
+  to that boot grants it again with no write, at once, or once the write it already started
+  lands. A voter that has since promised another, or a higher term, refuses it as it would the
+  first ask arriving late. A grant's reply names the request it answers, and a voter promises
+  from when it took that request, so the lease runs from the send of the request each grant
+  answers (a voter's later one, if it granted two), the earlier of the two latest. A lease from the first send would be safe too, but a
+  campaign won on a late re-ask would keep too little of it: on a slow link its first renewal
+  landed after the lease (found by the simulator). A voter's promise runs a lease from the latest ask it took, so an unheard campaign
+  backs off from its **last** ask (below), and a reachable controller still gets a lease of
+  silence. The working condition: a voter's write, with any write queued ahead of it, must
+  finish within about `3·lease/4` of the campaign's first send (375 ms at a 500 ms lease).
 - **Yield to a higher term.** A failed campaign leaves the candidate's own voter promised to
   it for a lease, and that refuses the other controller. With only the two controllers
   counted (the witness down, or at an incarnation not yet adopted, or a controller that lost
@@ -1130,7 +1149,8 @@ redundancy:
   voters' promises alive with renewals it never hears answered, so nobody else can be elected.
   A leader whose lease has lapsed without a confirmed majority therefore **sends nothing to the
   voters for two leases** after its lease ended before it campaigns again. A campaign that no
-  majority even answered within a lease backs off for two leases from its send. The voters'
+  majority even answered within a lease backs off for two leases from its last ask (its send,
+  or its latest re-ask, above). The voters'
   promises run out and a reachable controller wins first. Two, not one: the standby campaigns
   up to `lease + ρ·lease + lease/4` after the last renewal it saw. A leader back after one
   lease would campaign at about the same moment, win the standby's voter with a campaign it
