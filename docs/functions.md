@@ -249,7 +249,10 @@ Logix controller scope is.
 - **Its type** is the tag's `type:` (any elementary type, a project `TYPE`,
   or an `ARRAY` of either), else the type its `init:` implies (`TRUE` BOOL,
   a number REAL, `T#5s` TIME, other text STRING). A tag with neither cannot
-  be typed; naming it is an error that says to give it a `type:`.
+  be typed; naming it is an error that says to give it a `type:`. A tag
+  typed only by a number `init:` is a REAL, so passing it to an INT input of
+  a block is refused, and the error says so: `tag In has no type:, so it
+  is REAL; give it type: INT`.
 - **`VAR_EXTERNAL` stays legal**, as IEC's explicit form, and must agree with
   a stated `type:` (an error at the declaration otherwise). Two programs
   binding one untyped tag with different types is an error naming both.

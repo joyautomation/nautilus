@@ -1589,7 +1589,8 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		// a REAL or a BOOL into an INT input passed). An integer into a
 		// TIME input is read as milliseconds with a warning, as before.
 		if !assignable(def.Inputs[idx].Type, v.ExprType()) && !intAsTime(def.Inputs[idx].Type, v.ExprType()) {
-			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
+			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: cannot pass %s as %s%s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type,
+				l.inferredTagHint(na.Value, v.ExprType(), def.Inputs[idx].Type)))
 		}
 		l.warnIntAsTime(na.Value, def.Inputs[idx].Type, v, fmt.Sprintf("%s input %s", def.Name, def.Inputs[idx].Name))
 		if v, err = storeInput(def.Inputs[idx].Type, v, na.Value); err != nil {
@@ -2418,6 +2419,24 @@ func coerce(e ir.Expr, want *ir.Type) ir.Expr {
 		return intToReal(e)
 	}
 	return e
+}
+
+// inferredTagHint names the fix when a refused value is a project tag
+// whose type was only inferred from its init: (a number is REAL): the
+// tag needs a type:, which the author may not know it lacks (#1382).
+func (l *lowerer) inferredTagHint(src Expression, got, want *ir.Type) string {
+	id, ok := src.(*IdentExpr)
+	if !ok || got == nil || want == nil {
+		return ""
+	}
+	sym, ok := l.lookup(id.Name)
+	if !ok || !sym.implicit {
+		return ""
+	}
+	if _, _, stated := ir.Lookup(l.tagTypes, sym.global); stated {
+		return ""
+	}
+	return fmt.Sprintf("; tag %s has no type:, so it is %s; give it type: %s", sym.global, got, want)
 }
 
 // intAsTime reports an integer bound to a TIME input: read as milliseconds,
