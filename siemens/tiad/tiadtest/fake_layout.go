@@ -129,9 +129,125 @@ func (f *Fake) layoutObjects(s *session) []tiad.LayoutObject {
 	return all
 }
 
-// layoutBaseline is the agent's Baseline: the layout of the deploy the
-// CPU at address verifiably holds, or why there is none.
-func (f *Fake) layoutBaseline(address, project string) (*tiad.LayoutBaseline, string) {
+// fakeAdopt is the agent's AdoptBaseline: a session's layout as opened,
+// which an equal compare proved is what the CPU at address runs (#1347).
+type fakeAdopt struct {
+	address, id, journalHead string
+	objects                  []tiad.LayoutObject
+	gen                      int
+	at                       time.Time
+}
+
+// routeList registers routes on a mux and keeps their list.
+type routeList struct {
+	mux *http.ServeMux
+	f   *Fake
+}
+
+func (m routeList) HandleFunc(pattern string, h http.HandlerFunc) {
+	m.mux.HandleFunc(pattern, h)
+	m.f.routes = append(m.f.routes, pattern)
+}
+
+// testRoutes is GET /v1/test/routes: every route, as tiad-fake's seam.
+func (f *Fake) testRoutes(*http.Request) (any, *failure) {
+	return map[string]any{"routes": slices.Clone(f.routes)}, nil
+}
+
+// journalHead is the agent's JournalHead: the id of the CPU's newest
+// journal line, any status, "" for none; ok false when the journal
+// cannot be read whole (why).
+func (f *Fake) journalHead(address string) (string, string) {
+	if f.unreadableLines > 0 {
+		return "", "the deploy journal holds " + strconv.Itoa(f.unreadableLines) + " line(s) the agent cannot read, which may be a newer load"
+	}
+	for i := len(f.deployRecs) - 1; i >= 0; i-- {
+		if f.deployRecs[i].Address == address {
+			return f.deployRecs[i].ID, ""
+		}
+	}
+	return "", ""
+}
+
+// adoptBaselineRefusal is the agent's AdoptBaselineRefusal, "" when the
+// agent and the session allow an adopt baseline.
+func (f *Fake) adoptBaselineRefusal(s *session) string {
+	if f.UI {
+		return "the agent runs with TIA's window (TIAD_UI), where a person can change the project by hand: an adopt baseline needs a project only tiad changes"
+	}
+	if !s.untouched {
+		return "the session is not untouched: a call that may change the project ran on it since it was opened (only compare and export keep it); open the project again and compare first"
+	}
+	return ""
+}
+
+// takeAdoptBaseline is the agent's TakeAdoptBaseline, after an equal
+// compare with the CPU at address.
+func (f *Fake) takeAdoptBaseline(s *session, address string) *tiad.AdoptBaselineResult {
+	head, why := f.journalHead(address)
+	if why == "" {
+		why = f.adoptBaselineRefusal(s)
+	}
+	if why != "" {
+		return &tiad.AdoptBaselineResult{Why: why}
+	}
+	now := f.layoutObjects(s)
+	a := &fakeAdopt{address: address, id: tiad.AdoptBaselineID(now), journalHead: head, objects: now, gen: f.loadGen[address], at: time.Now()}
+	s.adopted = a
+	n := 0
+	for _, o := range now {
+		if o.Hash == "" {
+			n++
+		}
+	}
+	return &tiad.AdoptBaselineResult{Taken: true, ID: a.id, Objects: len(now), Unreadable: n}
+}
+
+// adoptedValid is the agent's AdoptedValid: the session's adopt baseline
+// for address while it stands, or why not ("" and nil: none).
+func (f *Fake) adoptedValid(s *session, address string) (*fakeAdopt, string) {
+	a := s.adopted
+	switch {
+	case a == nil && s.adoptRefused != "":
+		// A compare asked for one and took none: its reason.
+		return nil, "the adopt compare took no baseline: " + s.adoptRefused
+	case a == nil:
+		return nil, ""
+	case a.address != address:
+		return nil, "the session's adopt baseline was taken for the CPU at " + a.address + ", not " + address
+	case time.Since(a.at) > tiad.LayoutVerifyMaxAge:
+		return nil, "the compare that took the session's adopt baseline is more than an hour old: open the project again and compare"
+	case f.loadGen[address] != a.gen:
+		return nil, "a download reached the CPU since the compare that took the session's adopt baseline"
+	}
+	head, why := f.journalHead(address)
+	if why != "" {
+		return nil, why
+	}
+	if head != a.journalHead {
+		return nil, "the CPU's deploy journal has a newer line (" + head + ") than when the session's adopt baseline was taken"
+	}
+	return a, ""
+}
+
+// layoutBaseline is the agent's Baseline: the session's adopt baseline
+// while it stands, else the layout of the deploy the CPU at address
+// verifiably holds, or why there is none.
+func (f *Fake) layoutBaseline(s *session, address string) (*tiad.LayoutBaseline, string) {
+	a, adoptWhy := f.adoptedValid(s, address)
+	if a != nil {
+		return &tiad.LayoutBaseline{Deploy: a.id, Scheme: tiad.LayoutScheme, TIA: fakeTIAVersion, Objects: slices.Clone(a.objects)}, ""
+	}
+	b, why := f.journalBaseline(address, s.project)
+	if b == nil && adoptWhy != "" {
+		why = adoptWhy
+	}
+	return b, why
+}
+
+// journalBaseline is the agent's JournalBaseline: the layout of the
+// deploy the CPU at address verifiably holds, or why there is none.
+func (f *Fake) journalBaseline(address, project string) (*tiad.LayoutBaseline, string) {
 	v, ok := f.verifiedLoads[address]
 	if !ok {
 		return nil, "no verify by this agent, since it started, found the CPU equal to its last deploy (a deploy runs one before every download)"
@@ -168,7 +284,7 @@ const fakeTIAVersion = "V21"
 // readLayout is the agent's ReadLayout.
 func (f *Fake) readLayout(s *session, address string, hardware bool) (tiad.Layout, []tiad.LayoutObject) {
 	now := f.layoutObjects(s)
-	b, why := f.layoutBaseline(address, s.project)
+	b, why := f.layoutBaseline(s, address)
 	return tiad.DiffLayout(now, b, why, fakeTIAVersion, hardware), now
 }
 

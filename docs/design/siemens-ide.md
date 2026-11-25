@@ -1843,20 +1843,56 @@ So the agent decides before anything reaches the CPU.
   verify by this agent found the CPU equal to that very deploy, its newest
   load (loaded or in doubt), within the last hour, and the journal holds no
   line the agent cannot read, and that deploy loaded this session's
-  project (another project's layout is no baseline, an equal one too; so
-  the first deploy after an adopt has none). Any download forgets that
-  verify. The verify's age is read off a monotonic clock.
+  project (another project's layout is no baseline, an equal one too).
+  Any download forgets that verify. The verify's age is read off a
+  monotonic clock.
+- **Adopt baseline (#1347).** The first deploy after an adopt has no
+  record of its own project on the CPU, so the session can hold its own
+  baseline: `POST /v1/sessions/{id}/compare {layoutBaseline: true}` reads
+  the layout of the project as opened, in the compare's own TIA work item,
+  right after the compare found it equal to the CPU. tiad takes it only
+  when the session is untouched, the compare was equal, the agent has no
+  UI (a person could change the project in TIA's window) and the CPU's
+  journal reads whole; the answer says `taken` with an id
+  (`adopted:<16 hex of the objects' hash>`), or why not, and the layout
+  check gives that reason as its `noBaseline`. Untouched is default-deny:
+  the router marks a session touched before any call under
+  `/v1/sessions/{id}` runs, failed or not, except compare and export,
+  which only read (`UntouchedRule`; a contract test walks every
+  route the agent registers, so a route added later touches it unless
+  someone puts it on that list). The baseline stands for the hour, while
+  no download reached that CPU since (a per-CPU load count every download
+  bumps, the session's own included) and the CPU's journal head is the one
+  it was taken at. It wins over the journal's baseline; the record names
+  what the gate compared with (`layoutBaseline`), and later deploys use
+  the journal as before. Measured on the TIA VM (2026-11-24): an adopted
+  project's layout reads with nothing compiled in the session, the same
+  hashes as the source project compiled, stable over reads and the
+  station apply; after nautilus's import and full compile no customer
+  object moved (8 and 308 objects), about 10 s for 308. An object archived
+  inconsistent does not export: unreadable, so changed.
+- **Read after the compile.** Blocks just imported are inconsistent until
+  the full compile, and TIA exports no inconsistent object, so a layout
+  read between import and compile finds nautilus's own blocks unreadable
+  (TIA VM, 2026-11-24). The layout check and the download's read stay
+  after the compile; never move them earlier.
 - **Scheme and TIA version.** The record names the hashing scheme
   (`attributes-v1`) and the TIA version that read it. A record of another
   scheme or another TIA version is no baseline. Any change to what is
   hashed bumps the scheme, and a TIA upgrade changes the version: either
   invalidates every recorded layout, so the next deploy to each CPU needs
   `resetData`, and the refusal says which of the two it was.
-- **Rule.** Any object whose hash moved, or that was added, removed or is
+- **Rule.** Any object whose hash moved, or that was removed or is
   unreadable, needs `resetData`; so does a download with no baseline (the
-  whole program loads, `Software`), and one that loads hardware. Only an
-  object whose hash did not move passes, which covers a body-only change.
-  Every further exemption needs its own bench row in RUN and in STOP.
+  whole program loads, `Software`), and one that loads hardware. An object
+  whose hash did not move passes, which covers a body-only change. So
+  does an added object of a kind in `AddedKeepsData` (OB, FB, FC, global
+  DB, instance DB, PLC data type, #1347): no unchanged object can use it
+  (its own hash would have moved), and a new data block holds nothing to
+  lose; each kind is there because a bench row in RUN and in STOP showed a
+  load adding it keeps the CPU's data. Any other kind added needs
+  `resetData`. Every further exemption needs its own bench row in RUN and
+  in STOP.
 - **Naming.** The data blocks that may be reset are each data block whose
   own layout changed, and each whose layout uses a changed, added or
   unreadable object, however deep, by the names its export uses (quoted
@@ -1886,7 +1922,7 @@ So the agent decides before anything reaches the CPU.
   logs `audit layout-gate-miss`. `NoAction` is never written.
 - **Tighten later (#616).** The one-hour verify window; whether a start
   value change alone keeps the data (hashed today, so it needs the
-  consent); whether an added block keeps its neighbours' data.
+  consent).
 
 ### 3.6 PROFINET's requirements (#723)
 

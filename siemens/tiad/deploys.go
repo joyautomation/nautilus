@@ -259,9 +259,13 @@ type Deploy struct {
 	// Layout is the data layout the download loaded (#1341): the next
 	// download's baseline once a verify finds the CPU equal to this
 	// deploy. Records made before the layout gate have none.
-	Layout  *DeployLayout  `json:"layout,omitempty"`
-	Outcome *DeployOutcome `json:"outcome"`
-	Status  string         `json:"status"`
+	Layout *DeployLayout `json:"layout,omitempty"`
+	// LayoutBaseline is what the download's layout gate compared with: a
+	// deploy id, or the session's adopt baseline ("adopted:...", #1347);
+	// "" for none.
+	LayoutBaseline string         `json:"layoutBaseline,omitempty"`
+	Outcome        *DeployOutcome `json:"outcome"`
+	Status         string         `json:"status"`
 }
 
 // DeployList is GET /v1/deploys: the records, newest first, and how many

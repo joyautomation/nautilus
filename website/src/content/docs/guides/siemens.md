@@ -188,6 +188,21 @@ project comes from. It is never guessed:
 project, later deploys build on it and `--adopt` is refused. Blocks,
 users and devices that are not nautilus's stay as found.
 
+The first download keeps the CPU's data. Before anything is imported, the
+deploy compares the adopted project with the CPU. When they are equal,
+tiad records the data layout of the project as found (the deploy prints
+`data layout baseline: the adopted project as the CPU runs it`), and the
+first download compares with that. Nautilus only adds its own blocks, so
+that download needs no `--reset-data`: it loads only what changed, the
+CPU stays in RUN, and the plan lists every block it adds (see **Keeping
+the CPU's data** below). A block of the adopted project that tiad cannot
+read (know-how protected, or not compiled when it was archived) counts as
+changed, and then that first download needs `--reset-data`. So does every
+download to a PLC that holds a technology object or a software unit (see
+below). With `--adopt upload` the first download needs `--reset-data`
+too, for now: a CPU last loaded by an older TIA version may hold blocks
+that this TIA rebuilds when nautilus compiles, and tiad cannot see that.
+
 **Turning access control on for an adopted CPU.** If the adopted
 project's access control is off, the default `access-control` is refused,
 and the refusal names the flag. `--turn-on-access-control` turns it on:
@@ -228,24 +243,36 @@ S7-1500 with TIA V21, #1341).
 So before every download tiad reads the layout of every block and data
 type in the PLC, a customer's too, and compares it with the layout it
 recorded when it loaded the deploy the CPU still holds. Step 1 proves the
-CPU holds that deploy. The plan says what it found:
+CPU holds that deploy. On the first deploy after `--adopt` it compares
+with the adopted project instead, which the deploy compared equal to the
+CPU before the import. The plan says what it found:
 
-- `data layout: unchanged since deploy d-...`: the download needs no
-  `--reset-data`, and the CPU keeps its data. A change to code only, such
-  as a new statement, is this case.
+- `data layout: unchanged since deploy d-...` (or `since the adopted
+  project (adopted:...)`): the download needs no `--reset-data`, and the
+  CPU keeps its data. A change to code only, such as a new statement, is
+  this case.
+- the same line, then `adds to the CPU: OB naut_OB_main (OB30, cyclic
+  interrupt, 100 ms), FB naut_main, ...` and `nothing already on the CPU
+  changes its data layout, so its data is kept`: the download only adds
+  blocks and data types (OBs, FBs, FCs, data blocks, PLC data types). It
+  needs no `--reset-data`: a new block holds no data the CPU has, and
+  nothing already on the CPU uses it yet. Check the list: it is exactly
+  what goes onto the CPU besides the code changes.
 - `data layout: N change(s) since deploy d-...`, then each change
   (`ADDED`, `CHANGED`, `REMOVED`, `UNREADABLE`) and `data blocks whose
   values may be lost: ...`: the download needs `--reset-data`, and
   `--allow-stop` when the CPU is in RUN, since TIA stops it to
   reinitialize. A new variable in a
   program, a new tag, a new member in a data type, a changed start value
-  and a block added or removed are all such changes. A data type's change
-  names every data block that holds it.
+  and a block removed are all such changes. An added block is listed with
+  them when something else changed too. A data type's change names every
+  data block that holds it.
 - `data layout: no baseline (...)`: the download needs `--reset-data`,
   and the whole program loads, so every data block returns to its start
-  values. This is the case for the first nautilus download to a CPU, the
-  first after `--adopt`, for a CPU changed outside nautilus, after a TIA
-  upgrade, and for any deploy recorded before this check existed.
+  values. This is the case for the first nautilus download to a CPU
+  without `--adopt`, for an adopted project the compare took no layout
+  of (the deploy prints why), for a CPU changed outside nautilus, after a
+  TIA upgrade, and for any deploy recorded before this check existed.
 
 A hardware load (`--hardware`) always needs `--reset-data`. So does every
 download to a PLC that holds a technology object or a software unit: tiad
@@ -423,7 +450,9 @@ reason follows in brackets:
 | no verify by this agent found the CPU equal to its last deploy | tiad was restarted since the deploy compared the CPU. Run the deploy again: it compares the CPU first |
 | the verify is more than an hour old | the plan waited too long. Run the deploy again |
 | the CPU's newest load is another deploy | a download ran since the compare, from another session or machine. Run the deploy again |
-| the CPU's newest load loaded another project | the first deploy after `--adopt` (the adopted project is a new copy), or another project loaded this CPU last. Deploy once with `--reset-data` |
+| the CPU's newest load loaded another project | another project loaded this CPU last. Deploy once with `--reset-data`. (The first deploy after `--adopt` compares with the adopted project instead: see the next line) |
+| the adopt compare took no baseline | the deploy's compare of the adopted project took no layout; the reason follows (a call changed the project first, an agent with TIA's window, a deploy record line tiad cannot read). Fix that and run the deploy again, or deploy once with `--reset-data` |
+| a download reached the CPU since the compare that took the session's adopt baseline, or the CPU's deploy journal has a newer line | something loaded the CPU after the deploy compared it. Run the deploy again |
 | recorded no data layout | the CPU's last deploy was made by an older tiad. Deploy once with `--reset-data` |
 | a TIA upgrade, or a change of the scheme | tiad reads layouts differently now, so no recorded layout counts. Deploy once with `--reset-data` |
 | lines the agent cannot read | the deploy record is damaged. Find out why before you deploy |

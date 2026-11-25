@@ -124,6 +124,13 @@ namespace Tiad
 
         public void Register(Router r)
         {
+            // Every session call UntouchedRule does not keep marks the
+            // session touched before it runs, failed or not (#1347).
+            r.Matched = delegate(string route, Dictionary<string, string> vars)
+            {
+                string id;
+                if (vars.TryGetValue("id", out id) && UntouchedRule.Touches(route)) sessions.Touch(id);
+            };
             r.Add("GET", "/v1/health", Health);
             r.Add("GET", "/v1/probe", Probe);
             r.Add("GET", "/v1/files", ListFiles);
@@ -139,6 +146,15 @@ namespace Tiad
             RegisterShow(r);
             RegisterOnline(r);
             RegisterLayout(r);
+#if TIAD_TEST_SEAMS
+            // Every route, for the contract test that walks them (#1347).
+            r.Add("GET", "/v1/test/routes", delegate(Call c)
+            {
+                var o = new Obj();
+                o["routes"] = r.Routes().ToArray();
+                return o;
+            });
+#endif
         }
 
         object Health(Call c)

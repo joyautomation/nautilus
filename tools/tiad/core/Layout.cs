@@ -19,13 +19,23 @@
 // signal: every import recreates every block and moves them all.
 //
 // The rule: any object of the PLC, nautilus's or not, whose hash moved,
-// or that was added, removed or could not be read, needs the caller's
-// consent (decisions.resetData). Only an object whose hash did not move
-// passes, which covers a body-only change. The baseline is the layout
-// recorded with the deploy the CPU verifiably holds (its record is the
-// newest load for the CPU, and a verify by this agent found it equal);
+// or that was removed or could not be read, needs the caller's consent
+// (decisions.resetData). An object whose hash did not move passes, which
+// covers a body-only change. So does an added object of a kind
+// AddedKeepsData names (#1347): no object that is unchanged can use it
+// (its own hash would have moved), and a new data block holds no values
+// to lose; each kind is there only once the bench showed a load that
+// adds it keeps the CPU's data with the CPU in RUN and in STOP. The
+// baseline is the layout recorded with the deploy the CPU verifiably
+// holds (its record is the newest load for the CPU, and a verify by this
+// agent found it equal), or the session's adopt baseline (LayoutCalls.cs);
 // without one, or after a TIA upgrade or a change of this hashing scheme,
 // every download needs the consent.
+//
+// The layout is read after the full compile, never earlier: blocks just
+// imported are inconsistent until then, and TIA exports no inconsistent
+// object (TIA VM, 2026-11-24), so a read between import and compile finds
+// nautilus's own blocks unreadable.
 
 using System;
 using System.Collections.Generic;
@@ -71,7 +81,8 @@ namespace Tiad
         }
     }
 
-    // LayoutBaseline is the layout a deploy record holds.
+    // LayoutBaseline is the layout a deploy record holds, or a session's
+    // adopt baseline (Deploy is then its AdoptBaseline id).
     public sealed class LayoutBaseline
     {
         public string Deploy = "", Scheme = "", Tia = "";
@@ -86,6 +97,9 @@ namespace Tiad
         // Baseline is the deploy whose layout was compared, "" for none;
         // NoBaseline then says why.
         public string Baseline = "", NoBaseline = "";
+        // BaselineFrom is "deploy" (a deploy record's layout) or "adopted"
+        // (the session's adopt baseline), "" for none.
+        public string BaselineFrom = "";
         public bool Hardware;
         public List<LayoutChange> Changes = new List<LayoutChange>();
         // DataBlocks are the data blocks whose values a load may lose: each
@@ -108,6 +122,7 @@ namespace Tiad
             o["tia"] = Tia;
             o["baseline"] = Baseline == "" ? null : Baseline;
             if (NoBaseline != "") o["noBaseline"] = NoBaseline;
+            if (BaselineFrom != "") o["baselineFrom"] = BaselineFrom;
             var cs = new List<object>();
             foreach (var c in Changes) cs.Add(c.ToJson());
             o["changes"] = cs;
@@ -132,6 +147,37 @@ namespace Tiad
         public static readonly TimeSpan VerifyMaxAge = TimeSpan.FromHours(1);
 
         public const string ConsentSentence = "decisions.resetData yes is the consent to it";
+
+        // AddedKeepsData are the kinds (Openness type names) an added
+        // object of which needs no consent: a load that adds one keeps the
+        // CPU's data, in RUN and in STOP (bench 1510SP, #1347). Any other
+        // kind added needs the consent.
+        public static readonly string[] AddedKeepsData = { "OB", "FB", "FC", "GlobalDB", "InstanceDB", "PlcStruct" };
+
+        // NeedsConsent is whether a change needs decisions.resetData.
+        public static bool NeedsConsent(LayoutChange c)
+        {
+            return !(c.Change == LayoutChange.Added && Array.IndexOf(AddedKeepsData, c.Type) >= 0);
+        }
+
+        // BaselineLabel names a baseline in words: "deploy <id>", or the
+        // adopted project.
+        public static string BaselineLabel(string id)
+        {
+            if (id != null && id.StartsWith(AdoptBaseline.IdPrefix, StringComparison.Ordinal)) return "the adopted project (" + id + ")";
+            return "deploy " + id;
+        }
+
+        // ObjectsHash is the SHA-256 of every object's name, type and hash,
+        // in name order: what names an adopt baseline.
+        public static string ObjectsHash(List<LayoutObject> now)
+        {
+            var sorted = new List<LayoutObject>(now);
+            sorted.Sort(delegate(LayoutObject a, LayoutObject b) { return string.CompareOrdinal(Key(a.Name), Key(b.Name)); });
+            var sb = new StringBuilder();
+            foreach (var o in sorted) sb.Append(o.Name).Append('\t').Append(o.Type).Append('\t').Append(o.Hash).Append('\n');
+            return Sha256Hex(sb.ToString());
+        }
 
         // SoftwareOption is the DownloadOptions member a software load
         // uses: Software loads every block (TIA stops the CPU and resets
@@ -242,6 +288,7 @@ namespace Tiad
             else
             {
                 d.Baseline = baseline.Deploy;
+                d.BaselineFrom = baseline.Deploy.StartsWith(AdoptBaseline.IdPrefix, StringComparison.Ordinal) ? "adopted" : "deploy";
                 var was = new Dictionary<string, LayoutObject>();
                 foreach (var b in baseline.Objects) was[Key(b.Name)] = b;
                 var seen = new HashSet<string>();
@@ -279,11 +326,14 @@ namespace Tiad
                     if (c.Change == LayoutChange.Removed && c.Kind == "block" && IsDataBlock(c.Type)) d.DataBlocks.Add(c.Name);
                 }
             }
-            d.ResetDataNeeded = baseline == null || hardware || d.Changes.Count > 0;
+            int needing = d.Changes.FindAll(NeedsConsent).Count;
+            d.ResetDataNeeded = baseline == null || hardware || needing > 0;
+            string label = baseline == null ? "" : BaselineLabel(baseline.Deploy);
             if (hardware) d.Why = "the download loads the hardware configuration, and what that does to the CPU's data is not measured: every data block may return to its start values, retained ones included; " + ConsentSentence;
             else if (baseline == null) d.Why = "no layout baseline (" + d.NoBaseline + "), so the load replaces the whole program: every data block returns to its start values, retained ones included; " + ConsentSentence;
-            else if (d.Changes.Count > 0) d.Why = "the data layout changed since deploy " + baseline.Deploy + " (" + d.Changes.Count + " object(s)): the data blocks it reaches may return to their start values, retained ones included, and with the CPU in STOP TIA resets them without asking; " + ConsentSentence;
-            else d.Why = "the data layout is unchanged since deploy " + baseline.Deploy + ", which the CPU compared equal to: the load keeps the CPU's data";
+            else if (needing > 0) d.Why = "the data layout changed since " + label + " (" + needing + " object(s)): the data blocks it reaches may return to their start values, retained ones included, and with the CPU in STOP TIA resets them without asking; " + ConsentSentence;
+            else if (d.Changes.Count > 0) d.Why = "the data layout of everything the CPU holds is unchanged since " + label + ", which the CPU compared equal to, and the load only adds " + d.Changes.Count + " object(s): the load keeps the CPU's data";
+            else d.Why = "the data layout is unchanged since " + label + ", which the CPU compared equal to: the load keeps the CPU's data";
             d.Digest = Digest(d, sorted);
             return d;
         }
@@ -425,7 +475,7 @@ namespace Tiad
         // change, so the download is cancelled at that check.
         public static string GateMiss(string question, string baseline)
         {
-            return "GATE MISS: TIA asked " + Json.Quote(question) + " although the data layout check found nothing changed since deploy " + baseline +
+            return "GATE MISS: TIA asked " + Json.Quote(question) + " although the data layout check found no change that needs it since " + BaselineLabel(baseline) +
                 " (no decisions.resetData was given, so tiad answers no such check): the download was cancelled at that check. The check missed a change TIA sees; the CPU's data is as it was if TIA asked before loading. Report it (#1341), and load with decisions.resetData if the reset is acceptable";
         }
 

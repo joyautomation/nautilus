@@ -1,6 +1,7 @@
 package tiad
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -127,5 +128,57 @@ func TestLayoutBaselineOf(t *testing.T) {
 	}
 	if !LayoutGateMissQuestion(QuestionStopCPU) || !LayoutGateMissQuestion(QuestionReinitialize) || !LayoutGateMissQuestion(QuestionAllBlocks) || LayoutGateMissQuestion(QuestionConsistentDownload) {
 		t.Error("gate miss questions")
+	}
+}
+
+// TestLayoutAddedKindsNeedNoConsent (#1347): an added OB, FB, FC, data
+// block or PLC data type needs no consent; any other kind added, and any
+// changed, removed or unreadable object, does; the why counts only what
+// needs it; an adopt baseline names itself.
+func TestLayoutAddedKindsNeedNoConsent(t *testing.T) {
+	was := []LayoutObject{{Name: "Main", Kind: "block", Type: "OB", Hash: "m"}, {Name: "Cust_DB", Kind: "block", Type: "GlobalDB", Hash: "c"}}
+	base := &LayoutBaseline{Deploy: AdoptBaselineID(was), Objects: was}
+	now := append(slices.Clone(was),
+		LayoutObject{Name: "naut_OB", Kind: "block", Type: "OB", Hash: "o"},
+		LayoutObject{Name: "naut_FB", Kind: "block", Type: "FB", Hash: "f"},
+		LayoutObject{Name: "naut_FB_DB", Kind: "block", Type: "InstanceDB", Hash: "i", Refs: []string{"naut_FB"}},
+		LayoutObject{Name: "naut_FC", Kind: "block", Type: "FC", Hash: "x"},
+		LayoutObject{Name: "naut_T", Kind: "block", Type: "GlobalDB", Hash: "t", Refs: []string{"naut_U"}},
+		LayoutObject{Name: "naut_U", Kind: "type", Type: "PlcStruct", Hash: "u"})
+	l := DiffLayout(now, base, "", "V21", false)
+	if l.ResetDataNeeded || len(l.Changes) != 6 || len(l.DataBlocks) != 0 || l.BaselineFrom != BaselineFromAdopted ||
+		!strings.Contains(l.Why, "unchanged since the adopted project ("+base.Deploy+")") || !strings.Contains(l.Why, "only adds 6 object(s)") {
+		t.Fatalf("added only: %+v", l)
+	}
+	arr := append(slices.Clone(was), LayoutObject{Name: "naut_A", Kind: "block", Type: "ArrayDB", Hash: "a"})
+	if l := DiffLayout(arr, base, "", "V21", false); !l.ResetDataNeeded {
+		t.Fatalf("an added ArrayDB needs the consent: %+v", l)
+	}
+	for _, k := range LayoutAddedKeepsData {
+		for _, ch := range []string{LayoutChanged, LayoutRemoved, LayoutUnreadable} {
+			if !LayoutNeedsConsent(LayoutChange{Type: k, Change: ch}) {
+				t.Fatalf("%s %s needs the consent", k, ch)
+			}
+		}
+		if LayoutNeedsConsent(LayoutChange{Type: k, Change: LayoutAdded}) {
+			t.Fatalf("%s added needs none", k)
+		}
+	}
+	if got := strings.Join(LayoutAddedKeepsData, ","); got != "OB,FB,FC,GlobalDB,InstanceDB,PlcStruct" {
+		t.Fatalf("the kinds the bench proved: %s", got)
+	}
+	changed := slices.Clone(now)
+	changed[1].Hash = "c2"
+	if l := DiffLayout(changed, base, "", "V21", false); !l.ResetDataNeeded || !strings.Contains(l.Why, "(1 object(s))") || strings.Join(l.DataBlocks, ",") != "Cust_DB" {
+		t.Fatalf("added beside a change: %+v", l)
+	}
+	if l := DiffLayout(was, &LayoutBaseline{Deploy: "d-1", Objects: was}, "", "V21", false); l.BaselineFrom != BaselineFromDeploy || !strings.Contains(l.Why, "since deploy d-1") {
+		t.Fatalf("a deploy's baseline: %+v", l)
+	}
+	if !strings.Contains(LayoutGateMiss("stop-cpu", base.Deploy), "since the adopted project ("+base.Deploy+")") {
+		t.Fatal("the gate miss names the adopt baseline")
+	}
+	if UntouchedTouches("POST /v1/sessions/{id}/compare") || !UntouchedTouches("POST /v1/sessions/{id}/software") || UntouchedTouches("GET /v1/sessions") {
+		t.Fatal("UntouchedTouches")
 	}
 }
