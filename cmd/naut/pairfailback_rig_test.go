@@ -90,6 +90,10 @@ func TestPairFailbackIsHotAndAManualSwitchoverSuspends(t *testing.T) {
 		t.Fatalf("switchover: %d %+v", code, ans)
 	}
 	r.waitNewLeader(t, "b", 5*time.Second)
+	pairWait(t, "b's takeover cause", 5*time.Second, func() bool { return r.streamStatus("b").TakeoverCause != "" })
+	if c := r.streamStatus("b").TakeoverCause; c != causeSwitchover {
+		t.Errorf("b's takeover cause after the manual switchover %q, want %q", c, causeSwitchover)
+	}
 	pairWait(t, "b's failback status", 5*time.Second, func() bool {
 		s := r.streamStatus("b")
 		return s != nil && s.Failback != nil
@@ -123,6 +127,9 @@ func TestPairFailbackIsHotAndAManualSwitchoverSuspends(t *testing.T) {
 	})
 	if s := r.streamStatus("a"); s.Takeover != "hot" {
 		t.Fatalf("failback takeover %q (%s), want hot", s.Takeover, s.TakeoverCold)
+	}
+	if c := r.streamStatus("a").TakeoverCause; c != causeFailback {
+		t.Errorf("a's takeover cause after the failback %q, want %q (switch_by_dropped)", c, causeFailback)
 	}
 	if got := r.get("a", "Mode"); got != "5" {
 		t.Errorf("Mode after the failback = %s, want the operator's 5", got)

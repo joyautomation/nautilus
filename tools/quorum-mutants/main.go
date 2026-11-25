@@ -596,6 +596,8 @@ var table = []mutation{
 	{"spark_send_uncounted", []string{"TestFencedPublishesAreCountedForTheDrain"}},
 	{"spark_gate_unlatched", []string{"TestSparkplugSessionGateLatchesAndTheSessionRestarts"}},
 	{"spark_step_unfenced", []string{"TestSparkplugStepDownFencesASessionStillStarting"}},
+	{"cause_resign_unnoted", []string{"TestPairSparkplugOneSessionThroughSwitchoverFailoverAndBack", "TestPairFailbackIsHotAndAManualSwitchoverSuspends"}},
+	{"switch_by_dropped", []string{"TestPairFailbackIsHotAndAManualSwitchoverSuspends"}},
 	// #710 d1c: the planned switchover.
 	{"switch_writes_allowed", []string{"TestSwitchingStopsTheScansAndRefusesWrites"}},
 	{"switch_scans_on", []string{"TestSwitchingStopsTheScansAndRefusesWrites"}},
@@ -1192,6 +1194,8 @@ var rowPkgs = map[string][]string{
 	"spark_send_uncounted":              {"./sparkplug"},
 	"spark_gate_unlatched":              {"./cmd/naut"},
 	"spark_step_unfenced":               {"./cmd/naut"},
+	"cause_resign_unnoted":              {"./quorum/...", "./cmd/naut"},
+	"switch_by_dropped":                 {"./cmd/naut"},
 	"switch_writes_allowed":             {"./runtime"},
 	"switch_scans_on":                   {"./runtime"},
 	"switch_no_wait":                    {"./runtime"},

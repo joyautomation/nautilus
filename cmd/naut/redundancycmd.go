@@ -674,6 +674,9 @@ func streamLine(s *leader.StreamStatus) string {
 	case s.Takeover != "":
 		line += "; last takeover cold (" + s.TakeoverCold + ")"
 	}
+	if s.TakeoverCause != "" {
+		line += ", by " + s.TakeoverCause
+	}
 	if s.RetainInMemory {
 		line += "; retained values only in memory: no retain save has succeeded since the takeover"
 	}

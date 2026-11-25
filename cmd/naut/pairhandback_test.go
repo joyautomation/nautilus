@@ -118,6 +118,9 @@ func TestPairHandBackToAGoodPeer(t *testing.T) {
 		t.Errorf("SP on %s = %s, want its own file's 41.5", lead, got)
 	}
 	pairWait(t, "the hand-back condition on "+lead, 5*time.Second, func() bool { return r.hasWarning(lead, "took the lead from "+stand+"'s hand-back") })
+	if c := r.streamStatus(lead).TakeoverCause; c != causeHandBack {
+		t.Errorf("%s's takeover cause %q, want %q", lead, c, causeHandBack)
+	}
 	if !r.hasWarning(lead, "at term ") {
 		t.Error("the condition does not give the file's place")
 	}

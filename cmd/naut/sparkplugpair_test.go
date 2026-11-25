@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -254,6 +257,7 @@ func TestRedundancyMetrics(t *testing.T) {
 		role:     func() string { return "leader" },
 		peer:     func() string { return "sending" },
 		takeover: func() runtime.TakeoverReport { return runtime.TakeoverReport{At: at, Reason: "the image is too old"} },
+		cause:    func() string { return causeFailover },
 		hold:     func() (bool, time.Duration, time.Duration) { return holding, age, 10 * time.Second },
 		now:      func() time.Time { return now },
 	}
@@ -269,7 +273,7 @@ func TestRedundancyMetrics(t *testing.T) {
 	ms := r.metrics()
 	for name, want := range map[string]any{
 		"Role": "leader", "PeerState": "sending", "Takeover": "cold",
-		"LastSwitchoverReason": "cold takeover: the image is too old",
+		"LastSwitchoverReason": "failover (cold: the image is too old)",
 		"LastSwitchoverAt":     at.UnixMilli(), "Hold/Active": true,
 		"Hold/Until": now.Add(8 * time.Second).UnixMilli(),
 	} {
@@ -519,6 +523,7 @@ func TestPairSparkplugOneSessionThroughSwitchoverFailoverAndBack(t *testing.T) {
 	if m, ok := spMetric(nb.p, "Redundancy/LastSwitchoverAt"); !ok || m.IsNull {
 		t.Errorf("the new leader's NBIRTH Redundancy/LastSwitchoverAt = %+v, want a time", m)
 	}
+	obs.waitReason(t, spClient(stby), causeSwitchover)
 	obs.onePublisher(t)
 
 	// 2. Failover: the new leader dies (its broker link cut, so its will
@@ -545,6 +550,7 @@ func TestPairSparkplugOneSessionThroughSwitchoverFailoverAndBack(t *testing.T) {
 	if sb.bdSeq == killedBd {
 		t.Fatalf("the survivor births with bdSeq %d, the killed leader's will's", sb.bdSeq)
 	}
+	obs.waitReason(t, spClient(survivor), causeFailover)
 	obs.onePublisher(t)
 
 	// The killed leader's will, arriving late (as a broker fires it once
@@ -587,6 +593,85 @@ func TestPairSparkplugOneSessionThroughSwitchoverFailoverAndBack(t *testing.T) {
 		t.Fatalf("back on the restarted box: bdSeq %d, the survivor's", bd)
 	}
 	obs.onePublisher(t)
+}
+
+// waitReason waits for client's latest Redundancy/LastSwitchoverReason
+// (an NBIRTH's, or an NDATA's since) to be want, a cold takeover's reason
+// after it or not: the takeover's report,
+// which names the cause, can land just after the birth.
+func (o *spObserver) waitReason(t *testing.T, client, want string) {
+	t.Helper()
+	var last any
+	ok := spWaitFor(5*time.Second, func() bool {
+		for _, e := range o.all() {
+			if e.client != client {
+				continue
+			}
+			if m, ok := spMetric(e.p, "Redundancy/LastSwitchoverReason"); ok {
+				last = m.Value
+			}
+		}
+		r, _ := last.(string)
+		return r == want || strings.HasPrefix(r, want+" (cold: ")
+	})
+	if !ok {
+		t.Fatalf("%s's Redundancy/LastSwitchoverReason %v, want %q", client, last, want)
+	}
+}
+
+// What a takeover is called, from what the new leader knows (#798
+// follow-up): an operator alarms on a failover, not on a switchover.
+func TestTakeoverCause(t *testing.T) {
+	for _, c := range []struct {
+		handBack, fromResign, takeover bool
+		by                             string
+		askedEpoch, term               uint64
+		want                           string
+	}{
+		{false, false, false, "", 0, 1, causeStart},
+		{false, false, true, "", 0, 5, causeFailover},
+		{false, true, true, "", 0, 5, causeSwitchover}, // a leader before the label
+		{false, true, true, switchByOperator, 4, 5, causeSwitchover},
+		{false, true, true, switchByFailback, 4, 5, causeFailback},
+		{false, true, true, "something new", 4, 5, causeSwitchover},  // unknown: a switchover
+		{false, true, true, switchByFailback, 5, 5, causeSwitchover}, // an ask of this very term: not the one resigned
+		{true, true, true, switchByFailback, 4, 5, causeHandBack},
+		{false, false, true, switchByFailback, 4, 5, causeFailover}, // no RESIGN: the label says nothing
+	} {
+		if got := takeoverCause(c.handBack, c.fromResign, c.takeover, c.by, c.askedEpoch, c.term); got != c.want {
+			t.Errorf("%+v: %q, want %q", c, got, c.want)
+		}
+	}
+}
+
+// The switch-ask's by is a label only: a standby answers an ask that
+// carries by=failback exactly as one without it (#798 follow-up).
+func TestPairSwitchAskByIsOnlyALabel(t *testing.T) {
+	r := newSwitchRig(t)
+	lead := r.leader()
+	stby := other(lead)
+	r.switchReady(t, lead)
+	ask := func(body string) switchAnswer {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.nodes[stby].m.stream.serveSwitchAsk(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
+		var a switchAnswer
+		if err := json.Unmarshal(w.Body.Bytes(), &a); err != nil {
+			t.Fatalf("%s: %d %s", body, w.Code, w.Body.String())
+		}
+		return a
+	}
+	term := r.nodes[lead].m.q.Term()
+	plain := ask(fmt.Sprintf(`{"epoch":%d}`, term))
+	for _, by := range []string{switchByFailback, switchByOperator, "something new"} {
+		got := ask(fmt.Sprintf(`{"epoch":%d,"by":%q}`, term, by))
+		if !reflect.DeepEqual(got, plain) {
+			t.Errorf("by=%q answered %+v, without it %+v", by, got, plain)
+		}
+	}
+	if !plain.Good {
+		t.Fatalf("a ready standby refused: %+v", plain)
+	}
 }
 
 // spWaitFor waits up to d for ok.

@@ -158,6 +158,9 @@ type StreamStatus struct {
 	// empty before its first. TakeoverCold says why it was cold.
 	Takeover     string `json:"takeover,omitempty"`
 	TakeoverCold string `json:"takeoverCold,omitempty"`
+	// TakeoverCause is why this controller last took the lead: start,
+	// switchover, failback, hand-back or failover (#798 follow-up).
+	TakeoverCause string `json:"takeoverCause,omitempty"`
 	// TakeoverOldestFrameMs is, after a hot takeover, how old the oldest
 	// task's frame was at the install (a fast task's state can be older
 	// than the image by up to the slowest task's period).

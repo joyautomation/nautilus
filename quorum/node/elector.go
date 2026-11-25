@@ -472,6 +472,14 @@ type Elector struct {
 	// tookOver: the last leadership acquired is a takeover (IsTakeover).
 	peerLeaseSeen bool
 	tookOver      atomic.Bool
+	// resignAt: when this controller's voter last took its peer's RESIGN
+	// afresh (serveVote), resignHeard once it has; byResign: the last
+	// leadership acquired began within resignWindow of one, so it is a
+	// planned switchover's, not a failover's (FromResign). A note beside
+	// the vote path, never read by it (#798 follow-up).
+	resignAt    quorum.Instant
+	resignHeard bool
+	byResign    atomic.Bool
 
 	gate    atomic.Pointer[gateState]
 	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
@@ -804,6 +812,18 @@ func (e *Elector) Term() uint64 { return e.gate.Load().epoch }
 // runtime.TakeoverKnower). FALSE before any.
 func (e *Elector) IsTakeover() bool { return e.tookOver.Load() }
 
+// resignWindow, in leases, is how soon after its voter took the peer's
+// RESIGN a leadership this controller acquires counts as the planned
+// switchover's: the campaign is at once and wins within a lease or so; a
+// lead taken later is a failover's.
+const resignWindow = 2
+
+// FromResign reports whether the leadership acquired last began from its
+// peer's RESIGN (a planned switchover, a failback or a hand-back), not
+// from a lease that ran out (a failover). A label for operators: nothing
+// decides on it (#798 follow-up).
+func (e *Elector) FromResign() bool { return e.byResign.Load() }
+
 // Decided is closed once this controller leads, or has seen the peer
 // leading.
 func (e *Elector) Decided() <-chan struct{} { return e.decided }
@@ -1026,6 +1046,8 @@ func (e *Elector) after(now quorum.Instant) {
 		// a whole-pair power-up starts, a standby that followed a live
 		// leader takes over.
 		e.tookOver.Store(e.acquired > 1 || e.peerLeaseSeen || mut("every_acquisition_a_takeover"))
+		e.byResign.Store(e.resignHeard && now.Sub(e.resignAt) <= resignWindow*e.o.Lease && !mut("cause_resign_unnoted"))
+		e.resignHeard = false // one RESIGN names one leadership
 		e.log.Info("redundancy: this controller leads", "term", t)
 	}
 	e.publish(now)
@@ -1617,6 +1639,7 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	if req.Resign && e.v.ResignTook() && !mut("resign_waits_for_look") {
 		// The peer resigned and this voter took it afresh (a duplicate's
 		// answer does nothing): campaign at this very poke (#710 d1).
+		e.resignAt, e.resignHeard = now, true // only noted: FromResign
 		e.c.LookNow(now)
 		if !mut("resign_keeps_own_hold") {
 			// A switchover back: this controller's own resign hold was

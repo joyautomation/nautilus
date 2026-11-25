@@ -51,7 +51,19 @@ func switchAskPath(cluster string) string { return streamPath(cluster) + "/switc
 // switchAsk is the question's body: the leadership asking.
 type switchAsk struct {
 	Epoch uint64 `json:"epoch"`
+	// By labels the switchover for the standby's operators: "failback"
+	// when failback runs it, "operator" otherwise (#798 follow-up). A
+	// LABEL ONLY: judgeSwitch never reads it, and nothing it decides
+	// (accept or refuse, hold, timing) depends on it. Missing (a leader
+	// before this field) or unknown reads as a plain switchover.
+	By string `json:"by,omitempty"`
 }
+
+// Switch-ask labels (switchAsk.By).
+const (
+	switchByFailback = "failback"
+	switchByOperator = "operator"
+)
 
 // switchAnswer is the standby's answer: good, or why not.
 type switchAnswer struct {
@@ -116,7 +128,7 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 	}
 	rep.Epoch = term
 	lease := s.m.o.Lease
-	if why := s.switchRefusal(term, ""); why != "" {
+	if why := s.switchRefusalBy(term, "", by == failbackBy); why != "" {
 		return refuse(why)
 	}
 	if f := s.m.failback; f != nil && by == failbackBy && f.suspended() && !mutNaut("failback_ignores_suspend") {
@@ -234,6 +246,13 @@ func (s *pairStream) switchover(ctx context.Context, by string) (switchReport, s
 // manifest rolled out to one controller only would otherwise fail back
 // on every after (Fable on d2). A manual switchover passes "".
 func (s *pairStream) switchRefusal(term uint64, prefer string) string {
+	return s.switchRefusalBy(term, prefer, prefer != "")
+}
+
+// switchRefusalBy is switchRefusal with the switch-ask's label given:
+// failback when failback runs it (switchAsk.By). The label decides
+// nothing here or at the standby.
+func (s *pairStream) switchRefusalBy(term uint64, prefer string, failback bool) string {
 	if s.hotMaxAge == 0 {
 		return "redundancy.hot-max-age is 0, so every takeover is cold: a switchover could not hand over without a seam"
 	}
@@ -246,7 +265,7 @@ func (s *pairStream) switchRefusal(term uint64, prefer string) string {
 	if _, current := s.syncMark(term); !current && !mutNaut("switch_unready_target") {
 		return "the standby is not current: it has not acknowledged the newest state images (see the state-stream condition in naut redundancy status)"
 	}
-	ans, err := s.askSwitch(term)
+	ans, err := s.askSwitch(term, failback)
 	switch {
 	case err != nil:
 		return "the standby did not answer whether it may take over: " + err.Error()
@@ -311,10 +330,18 @@ func (m *pairMember) ioRows() []switchDriver {
 }
 
 // askSwitch asks the standby whether it may take over now.
-func (s *pairStream) askSwitch(term uint64) (switchAnswer, error) {
+//
+// failback labels the ask (switchAsk.By): a failback's ask, its readiness
+// looks included, says so. A switchover's own ask is the last before its
+// RESIGN, so the label the standby keeps is that switchover's.
+func (s *pairStream) askSwitch(term uint64, failback bool) (switchAnswer, error) {
 	ctx, cancel := context.WithTimeout(s.ctx, s.handBackDeadline())
 	defer cancel()
-	b, _ := json.Marshal(switchAsk{Epoch: term})
+	label := switchByOperator
+	if failback {
+		label = switchByFailback
+	}
+	b, _ := json.Marshal(switchAsk{Epoch: term, By: label})
 	url := strings.TrimSuffix(s.url, streamPath(s.m.o.Cluster)) + switchAskPath(s.m.o.Cluster)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
 	if err != nil {
@@ -349,9 +376,15 @@ func (s *pairStream) serveSwitchAsk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad question", http.StatusBadRequest)
 		return
 	}
-	ans := s.judgeSwitch(ask)
+	ans := s.judgeSwitch(switchAsk{Epoch: ask.Epoch}) // the label never decides
 	if !ans.Good {
 		slog.Info("redundancy: refused the leader's switchover", "epoch", ask.Epoch, "why", ans.Why)
+	} else if !mutNaut("switch_by_dropped") {
+		// Kept for the takeover that follows this leadership's RESIGN:
+		// its cause (takeoverCause).
+		s.mu.Lock()
+		s.askedBy, s.askedEpoch = ask.By, ask.Epoch
+		s.mu.Unlock()
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(ans)
