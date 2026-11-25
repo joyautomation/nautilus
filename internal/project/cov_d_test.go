@@ -231,7 +231,7 @@ func TestEnumTagSeededByNumber(t *testing.T) {
 // a.st.
 func TestLibraryReferencesResolveInEitherDirection(t *testing.T) {
 	rt := loadRuntime(t, map[string]string{
-		"nautilus.yaml": "tasks:\n  - program: main.st\ntags:\n  - { name: In, role: state, init: 3 }\n  - { name: Out, role: state, type: INT }\n  - { name: Latched, role: state, type: BOOL }\n",
+		"nautilus.yaml": "tasks:\n  - program: main.st\ntags:\n  - { name: In, role: state, type: INT, init: 3 }\n  - { name: Out, role: state, type: INT }\n  - { name: Latched, role: state, type: BOOL }\n",
 		"a.st": `FUNCTION Twice : INT
 VAR_INPUT
     x : INT;

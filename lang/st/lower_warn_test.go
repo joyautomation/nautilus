@@ -28,8 +28,8 @@ func lowerWarnings(t *testing.T, src string) []string {
 // milliseconds — IEC 61131-3 has no such conversion, and an author who
 // meant seconds gets a timer a thousand times short. Lowering warns where
 // it happens and names the literal that says the same thing; a T# literal
-// and an explicit TO_TIME are silent, and so is a REAL (only an integer
-// reads as milliseconds; #498). A FUNCTION_BLOCK's declarations are
+// and an explicit TO_TIME are silent. A REAL is not read as milliseconds:
+// it is refused, as a FUNCTION argument is (#498, #1382). A FUNCTION_BLOCK's declarations are
 // lowered twice (signature, body) and still warn once.
 func TestIntegerWhereTimeIsExpectedWarns(t *testing.T) {
 	got := lowerWarnings(t, `
@@ -51,7 +51,7 @@ t1(IN := TRUE, PT := 30000);
 t2(IN := TRUE, PT := n);
 t3(IN := TRUE, PT := T#30S);
 t4(IN := TRUE, PT := TO_TIME(n));
-t5(IN := TRUE, PT := 1.5);
+t5(IN := TRUE, PT := T#1500MS); (* PT := 1.5 is refused: TestFBInputFollowsTheArgumentRule *)
 b(Period := 250);
 END_PROGRAM`)
 	want := []string{
