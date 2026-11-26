@@ -127,6 +127,8 @@ var actionClass = map[string]string{
 	"substitute.ack":       strict,
 	"program.edit":         strict,
 	"program.activate":     strict,
+	// A Logix download or online edit through the facade (#709).
+	"logix.deploy": strict,
 	// Ending the subscriptions a mass revocation held (#722): phones stop
 	// being paged on a person's word.
 	"push.confirm-revocations": strict,
@@ -654,6 +656,10 @@ type auditedRoute struct {
 	tf     targetFunc
 	h      http.HandlerFunc
 	pre    preStep
+	// stream: the handler's answer goes to the client as it is written
+	// (a deploy's progress); its entry is recorded when it returns, and a
+	// final {"event":"error"} line makes it a failure.
+	stream bool
 }
 
 // preStep runs before the seam decides anything: it may fix who the
@@ -775,11 +781,22 @@ func auditedAnswer(routes *http.ServeMux, w http.ResponseWriter, r *http.Request
 // answer runs h into a buffer, records the entry, then answers.
 func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTarget, h http.HandlerFunc) {
 	buf := &bufferedResponse{header: w.Header()}
+	var sw *auditStreamWriter
+	if a.stream {
+		sw = &auditStreamWriter{ResponseWriter: w, buf: buf}
+	}
 	// The entry's id, decided now: a route that answers "outcome unknown"
 	// links its later resolution to it (oplog_unknown.go).
 	ref := seamRef{id: audit.NewID(a.s.audit.now()), action: a.action, target: capText(t.target, targetMax)}
 	r = withSeamRef(r, ref)
-	h(buf, r)
+	if sw != nil {
+		h(sw, r)
+		if ev := sw.lastEvent(); ev == "error" {
+			buf.status = http.StatusInternalServerError
+		}
+	} else {
+		h(buf, r)
+	}
 	status := buf.status
 	if status == 0 {
 		status = http.StatusOK
@@ -845,6 +862,9 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		// says 200.
 		buf.header.Del(providerAnswerHeader)
 		status = http.StatusOK
+	}
+	if sw != nil {
+		return // already on the wire
 	}
 	w.WriteHeader(status)
 	w.Write(buf.body.Bytes())

@@ -192,9 +192,9 @@ func (f *Facade) Handler() http.Handler {
 	mux.Handle("/", f.srv.Handler())
 	mux.HandleFunc("GET /api/program", programGone)
 	mux.HandleFunc("GET /api/program/history", programGone)
-	mux.HandleFunc("PUT /api/program", programLocked)
-	mux.HandleFunc("POST /api/program/rollback", programLocked)
-	mux.HandleFunc("POST /api/program/activate", programLocked)
+	mux.Handle("PUT /api/program", f.srv.Audited("program.edit", nil, programLocked))
+	mux.Handle("POST /api/program/rollback", f.srv.Audited("program.rollback", nil, programLocked))
+	mux.Handle("POST /api/program/activate", f.srv.Audited("program.activate", nil, programLocked))
 	// The facade's own routes keep the server's Host rule (#819).
 	return f.srv.GuardHost(mux)
 }
