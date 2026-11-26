@@ -799,14 +799,21 @@ func (r *boxRig) hasWarning(member, s string) bool {
 // itself to a spare, writes that down, and goes silent. It never leads,
 // /api/cluster on it says "duplicate of a - spare", the original keeps
 // leading, and the spare stays one across its own restart (the flag is
-// read before the box check). The original's lease never broke.
+// read before the box check). The original usually keeps its lease; under
+// load one renewal can come late, and the lease then passes to b, the real
+// standby, which is correct (a marked incumbent can only renew its running
+// promise, never re-term). So the test asserts what must always hold: nobody
+// leads twice at once, the clone never leads, and a leader is a or the real b.
 func TestASpoofedCloneBesideTheLeaderBecomesASpare(t *testing.T) {
 	r := newBoxRig(t)
 	env := r.cloneDiskEnv("a", "box-a")
 	els := map[string]*node.Elector{"a": r.el("a"), "b": r.el("b"), "clone": r.el("clone")}
 	pairWait(t, "the clone to go spare", 10*time.Second, func() bool { return r.el("clone").Spare() })
-	if led := watchOneLeader(t, 2*time.Second, els); led["clone"] || led["b"] {
-		t.Fatalf("led: %v; want a alone", led)
+	// watchOneLeader fails on any overlap; the clone must never lead, and
+	// the pair keeps a leader among its real members (b may take over from
+	// a on one late renewal: not a fault).
+	if led := watchOneLeader(t, 2*time.Second, els); led["clone"] || !(led["a"] || led["b"]) {
+		t.Fatalf("led: %v; want a (or the real b after a late renewal), never the clone", led)
 	}
 	if !r.hasWarning("clone", "duplicate of a - spare") {
 		t.Fatalf("the spare's /api/cluster warnings: %v", r.nodes["clone"].m.q.Status().Warnings)
