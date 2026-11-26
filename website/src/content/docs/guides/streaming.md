@@ -333,14 +333,14 @@ what `stale` means, and it is a fact the runtime holds whether or not the
 driver reports anything. A plain `io.Memory` or a hand-written driver gets
 honest staleness for free.
 
-**On a standby**, the replica of a redundant pair that is not scanning,
+**On a standby**, the controller of a redundant pair that is not scanning,
 everything a scan refreshes is frozen: the driver-bound inputs, every tag a
 program writes, and the measured-dt tags. All of them are `stale`, as
 values held over from its last scan as leader. A driver's non-`good`
 verdict still stands, being more specific. Its `good` does not, because the
 value it vouches for has not reached the tag store. A setpoint the logic
 only reads is the operator's value, not a reading, and keeps its quality.
-The replica counts as a standby until the first scan of its own leadership
+The controller counts as a standby until the first scan of its own leadership
 has read its inputs. That covers a takeover still waiting for live inputs,
 one whose first read is in flight, and a leader whose lease has already
 passed on before its next scan. Then quality is the drivers' again. The

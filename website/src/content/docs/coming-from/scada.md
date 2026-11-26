@@ -25,7 +25,11 @@ configured by text files in a project folder that you keep in git.
 | A history provider and trends | `naut historian` archives tags into Postgres; the controller serves the history back for trends | [Historian](/guides/historian/) |
 | A Perspective view or Vision window | A `*.mimic.json` operator screen: equipment, pipes and tag bindings in a file, edited graphically in VS Code and served by `naut run` | [Operator screens](/guides/operator-screens/) |
 | A script that reads and writes tags | An HTTP API (and an event stream) any program can call; the control logic itself is IEC 61131-3 | [The HTTP API](/guides/http-api/) |
-| Gateway security and roles | Roles, users and sign-in are being added | [Users, roles and sign-in](/guides/auth/) |
+| Gateway security and roles | An `auth:` block: roles, areas, users, service tokens, and sign-in with your company's OIDC login | [Users, roles and sign-in](/guides/auth/) |
+| An audit log of who changed what | The audit journal, with a check that nobody edited it afterwards | [Audit trail](/guides/audit-trail/) |
+| A redundant gateway pair | Two controllers and a witness, one scanning leader, a takeover that keeps operator state | [Redundancy](/guides/redundancy/) |
+| Operator overrides of a bad sensor | A substitute value for a bounded time, flagged everywhere | [Substitutes](/guides/substitutes/) |
+| Operator notes, a shift log | Notes on an asset, a tag, an alarm or an area | [Notes](/guides/notes/) |
 
 ## What is different
 

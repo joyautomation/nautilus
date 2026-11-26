@@ -287,7 +287,7 @@ leadership moves.
 
 **A command queued while the controller was down goes out only on the
 leader.** Leadership is checked again when queued writes go out, before
-every tag and before every member write of a struct. A replica that lost
+every tag and before every member write of a struct. A controller that lost
 leadership during the outage drops what it queued, and what a broken flush
 put back, instead of sending it once the controller is back. A flush the
 gate closes partway through stops there: the tag being written and every
@@ -297,22 +297,22 @@ the push that follows the reopen sends them. A drop is not a failure: no
 error is recorded.
 
 **When the gate reopens, every output goes out again.** While it was
-closed another replica may have led and written the same tags, so nothing
-this replica wrote before is trusted to still be there. The first time the
+closed another controller may have led and written the same tags, so nothing
+this controller wrote before is trusted to still be there. The first time the
 driver sees the gate open again it forgets what it last wrote, and what is
 still queued from before, and asks the runtime for the outputs. The next
 push sends every output with the program's current value, including one
-that has not changed since this replica last led, and a struct goes out
-member by member in full. A replica that regains leadership pushes because
+that has not changed since this controller last led, and a struct goes out
+member by member in full. A controller that regains leadership pushes because
 it took over. A gate that reopens without a takeover (logic healthy again)
 pushes because the driver asked. A write-to-trigger tag, one whose every
 write starts something, is written again on every regain too. Gate such a
 command in the program, or make it edge-like, if a second write would act
 twice.
 
-**A replica that started as a standby commands every output on its first
+**A controller that started as a standby commands every output on its first
 takeover.** A standby has no start-up baseline (see [Writes](#writes)), so
-the takeover push is a set of commands, as the new primary of a hot-standby PLC
+the takeover push is a set of commands, as the new active controller of a hot-standby PLC
 pair drives its outputs at once.
 
 **A flip between two looks is not seen.** A gate func cannot say it

@@ -505,17 +505,17 @@ which is exactly what makes it unroutable next to another driver.
 With a `redundancy:` section, the driver's write gate is wired to leadership
 — commands leave the driver only on the leader, and a `SetWriteGate` func
 can compose a "logic healthy" signal into the same condition. Leadership
-is checked again when queued commands go out: a replica that lost it
+is checked again when queued commands go out: a controller that lost it
 during an outage drops what it queued, and so do the writes a broken
 flush put back. It is checked again before each write of a flush, so a
 long flush through a slow gateway stops sending once the gate closes.
 
 **When the gate reopens, every output goes out again.** While it was
-closed another replica may have led and written the same registers, so
-nothing this replica sent before is trusted to still be there. On the
+closed another controller may have led and written the same registers, so
+nothing this controller sent before is trusted to still be there. On the
 first scan after the driver sees the gate reopen, every output is sent
 once with the program's current value, including one that has not changed
-since this replica last led. A replica that regains leadership pushes
+since this controller last led. A controller that regains leadership pushes
 because it took over; a gate that reopens without a takeover (logic
 healthy again) pushes because the driver asks the runtime for the outputs
 when it sees the gate reopen. Commands the gate dropped go out in the same
@@ -523,13 +523,13 @@ push. Until that push, a `rewrite:` binding re-asserts nothing, so the
 value from the previous term is never sent: the keep-alive restarts with
 the program's value.
 
-**A replica that has been a standby has no baseline.** Once the driver has
-seen the write gate closed, the start-up baseline is off: a replica that
+**A controller that has been a standby has no baseline.** Once the driver has
+seen the write gate closed, the start-up baseline is off: a controller that
 starts as a standby commands every output with its first push as leader,
-as the new primary of a hot-standby PLC pair drives its outputs at once. A
+as the new active controller of a hot-standby PLC pair drives its outputs at once. A
 plain start, leader from the first scan and never gated, keeps the
 baseline: `naut run` starts the driver only after the redundancy elector
-has made its first decision, so a replica that acquires the lease at once
+has made its first decision, so a controller that acquires the lease at once
 never sees the gate closed. A driver restarted after it saw the gate
 closed is still a standby. A standby's reconnect re-asserts no `rewrite:`
 binding.
@@ -554,10 +554,10 @@ source is parked.
 
 **A closed gate stops the `rewrite:` re-asserts too, by design.** A device
 whose keep-alive word goes quiet trips its own fail-safe, which is exactly
-what must happen when this replica is not the leader or its logic is
+what must happen when this controller is not the leader or its logic is
 faulted. A hung controller that kept refreshing a stale command would mask
 the fault instead, leaving the device happily executing a setpoint nobody
-computes any more. Reads are unaffected on both replicas.
+computes any more. Reads are unaffected on both controllers.
 
 **A hung scan closes the gate, with or without `redundancy:`.** `naut run`
 gates the driver on live scans in every project. When one scan has been in

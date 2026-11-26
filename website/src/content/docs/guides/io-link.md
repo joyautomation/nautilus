@@ -4,11 +4,12 @@ description: Sensors on an IO-Link master's ports as typed tags decoded from the
 ---
 
 :::caution[Preview]
-Run against virtual masters (the Pepperl+Fuchs, ifm and SICK address spaces
-built from their manuals), not yet against a real master. The node ids for the
-ifm and SICK masters are marked `unverified` in their profiles until someone
-reads them off a real device. Try it against your master before you depend on
-it.
+Preview because verification on a real master is still open
+([#1044](https://github.com/joyautomation/nautilus/issues/1044)). It has run
+against virtual masters (the Pepperl+Fuchs, ifm and SICK address spaces built
+from their manuals). The node ids for the ifm and SICK masters are marked
+`unverified` in their profiles until someone reads them off a real device. Try
+it against your master before you depend on it.
 :::
 
 An IO-Link master is an ordinary OPC UA device (see

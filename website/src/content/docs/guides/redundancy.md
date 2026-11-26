@@ -1,20 +1,27 @@
 ---
 title: Redundancy & retained state
-description: Run replicas that elect one scanning leader, and keep operator setpoints and online edits across restarts — a ConfigMap and a Lease, no operator to install.
+description: Run two controllers and a witness that elect one scanning leader and keep operator state across a takeover, or run replicas on Kubernetes; and keep setpoints and online edits across restarts.
 ---
 
 Two manifest sections turn a single controller into something you can
-restart, reschedule, and replicate:
+restart and replicate:
 
 ```yaml
 retain: {}       # setpoints + online edits survive restarts
-redundancy: {}   # replicas elect one scanning leader
+redundancy: {}   # elect one scanning leader (add peers: for a pair, below)
 ```
 
-Both run on plain Kubernetes primitives — a ConfigMap and a
-`coordination.k8s.io` Lease, spoken directly with the pod's service
-account — and both degrade gracefully outside a cluster, so the same
-manifest runs on a bench laptop and as a three-replica Deployment.
+The way to run `redundancy:` without a cluster is **a pair**: two controllers on two
+boxes and a small third voter, `naut witness`, with no cluster to install.
+One controller scans (the leader), the other stands by with the leader's
+state, and a takeover keeps what operators entered. That mode, with its
+commissioning, is [A redundant pair without Kubernetes](#a-redundant-pair-without-kubernetes).
+
+`redundancy:` also has a Kubernetes mode: replicas of one Deployment elect
+a leader through a Lease, and `retain:` keeps its state in a ConfigMap. Both
+speak directly to the pod's service account, with no operator to install.
+Outside a cluster both degrade gracefully, so the same manifest runs on a
+bench laptop and as a three-replica Deployment.
 
 ## Retained state
 
@@ -205,7 +212,7 @@ never computes.
   last time it led, since the leader in between may have written
   something else. A replica that started as a
   standby has no start-up baseline, so its first takeover commands every
-  output, as the new primary of a hot-standby PLC pair does; a replica that
+  output, as the new active controller of a hot-standby PLC pair does; a replica that
   leads from its first scan keeps the baseline. `naut run` starts the
   drivers only after the elector's first decision (at most 5 s; a Lease
   read that fails at start is retried, not taken as standby), so a

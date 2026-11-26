@@ -72,9 +72,13 @@ More lessons follow. Until they are here, these guides cover the rest:
   tasks](/guides/blocks-and-tasks/), [testing](/reference/testing/)
 - I/O and protocols: [Modbus](/guides/modbus/),
   [OPC UA](/guides/opcua-server/), [EtherNet/IP](/guides/ethernet-ip/),
-  [Sparkplug](/guides/sparkplug/)
-- Operator screens: [Operator screens](/guides/operator-screens/)
-- Deploying: [Continuous deployment](/guides/deployment/)
+  [Sparkplug](/guides/sparkplug/), [substitutes for a bad
+  sensor](/guides/substitutes/)
+- Operator screens: [Operator screens](/guides/operator-screens/),
+  [alarm management](/guides/alarm-management/), [notes](/guides/notes/)
+- Deploying and operating: [Continuous deployment](/guides/deployment/),
+  [users, roles and sign-in](/guides/auth/), the [audit
+  trail](/guides/audit-trail/), [redundancy](/guides/redundancy/)
 - An AI agent: [AI assistants](/guides/ai-assistants/)
 
 Prefer one long walk-through? The [tutorial](/tutorial/) builds a motor

@@ -206,7 +206,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/parameters/patch`](#get-apiparameterspatch) | The plant-ahead values as a patch to the manifest (needs `parameters.writeBack`) |
 | `POST` | [`/api/parameters/import`](#post-apiparametersimport) | Apply a parameter set to the live setpoints, all or nothing (needs `config`) |
 | `GET` | [`/api/drivers`](#get-apidrivers) | Field driver and publisher status |
-| `GET` | [`/api/cluster`](#get-apicluster) | This replica's redundancy status |
+| `GET` | [`/api/cluster`](#get-apicluster) | This controller's redundancy status |
 | `POST` | [`/api/tags`](#post-apitags) | Write one tag or one member |
 | `GET` | [`/api/forces`](#forces) | The force table |
 | `POST` | [`/api/forces`](#forces) | Force a tag or member, or change a force |
@@ -577,7 +577,7 @@ and `extra` are the driver's own; each protocol guide documents its
 
 ### `GET /api/cluster`
 
-This replica's own view of [redundancy](/guides/redundancy/#redundancy).
+This controller's own view of [redundancy](/guides/redundancy/#redundancy).
 Without redundancy it answers as a standalone leader:
 
 ```sh
@@ -587,7 +587,7 @@ curl -s localhost:8080/api/cluster
 {"mode":"standalone","pod":"","leader":"","isLeader":true,"transitions":0}
 ```
 
-Always answered by the replica you asked, never forwarded to the leader.
+Always answered by the controller you asked, never forwarded to the leader.
 With an `auth:` block it needs `read`, like every read. A load balancer or
 probe that only wants to find the leader asks `/readyz` instead.
 
@@ -599,7 +599,7 @@ nothing else: no role, version or tag.
 
 | | `200 ok` | `503 not ready` |
 | --- | --- | --- |
-| `GET /healthz` | whenever the controller serves HTTP, on every replica | never |
+| `GET /healthz` | whenever the controller serves HTTP, on every controller | never |
 | `GET /readyz` | a controller without redundancy, or the leader | a standby, no leader known, or a leader whose scans have stopped |
 
 Use `/healthz` as a liveness probe: a standby answers it too, so it is
@@ -1326,7 +1326,7 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
     this ignores what is kept: if it takes over, it runs the manifest's
     addresses and its next save clears what was kept. During a rolling
     upgrade of a redundant pair, make no live I/O apply until both
-    replicas run the new build.
+    controllers run the new build.
 
   While what runs differs from the manifest, `config` on every frame
   says so (and `config.notKept` says if it would not survive a restart),
@@ -1713,7 +1713,7 @@ variable empty stops `naut run` at start, naming the variable.
 - **Several controllers share one database.** Rows carry a `controller`
   column: the project's name, plus `NAUTILUS_NODE` on a redundant pair or
   `POD_NAME` in a cluster (run it as a StatefulSet, so the name and the
-  journal's volume stay with the replica).
+  journal's volume stay with the controller).
 - **It never writes over itself.** The copy is only ever added to. If the
   journal no longer matches what the copy holds (a copied line changed,
   lines cut off the end, or a line that doesn't chain on from the copy's
@@ -1839,7 +1839,7 @@ own status codes come back unchanged.
 | `500` | `server.historian` is not a valid URL | `bad historian url: …` |
 | `502` | The historian did not answer | `historian unavailable: …` |
 
-## On a standby replica
+## On a standby
 
 With [redundancy](/guides/redundancy/#redundancy), a standby forwards every
 `/api/` request to the leader, except `GET /api/cluster` and

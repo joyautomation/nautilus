@@ -592,7 +592,7 @@ old leader's journal.
 
 A `chatter` or `flood` row with no end row means the controller stopped
 during the episode and nothing carried it: a pair whose takeover did not
-catch up its log, or a replica on an older version. If the controller's clock steps back
+catch up its log, or a controller on an older version. If the controller's clock steps back
 during an episode, detection reads the step as no time passing, and the
 episode's end row gives its start in the new clock's time; a `-sliding`
 report over a range that spans the step can differ from the controller

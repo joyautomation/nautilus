@@ -302,7 +302,7 @@ shutdown lets a standing force go and records it as interrupted.
 
 A seal is signed by the controller it is made on, with that controller's key, so a
 pair has two fingerprints to record: `GET /api/checkout` shows both
-(`keyFingerprints`, each announced through the log). Every replica checks a seal
+(`keyFingerprints`, each announced through the log). Every controller checks a seal
 when it applies it (the signature, the key, the hash, the run, the signer, the
 two-person rule, and that no point's latest result is a fail or a note) and keeps
 the record it rebuilt, so editing `checkout.yaml` later does not lose it; a

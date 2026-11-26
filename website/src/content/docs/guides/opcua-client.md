@@ -1,16 +1,14 @@
 ---
-title: Reading OPC UA (preview)
+title: Reading OPC UA
 description: Poll an OPC UA server (an Ignition gateway, a PLC's embedded server, a Kepware) from a committed manifest, with per-tag quality, typed writes you opt into per tag, and namespace-safe node ids.
 ---
 
-:::caution[Preview]
-Tested against gopcua's in-process server, open62541, Eclipse Milo,
-Ignition 8.3 and CODESYS Control Win V3 (see
+The driver has been run against gopcua's in-process server, open62541,
+Eclipse Milo, Ignition 8.3 and CODESYS Control Win V3 (see
 [Servers it has been run against](#servers-it-has-been-run-against)), each
-over `Basic256Sha256 / SignAndEncrypt`, and against virtual IO-Link
-masters. It has not yet been run against Ignition 8.1, Kepware or a PLC's
-own embedded server. Try it against your server before you depend on it.
-:::
+over `Basic256Sha256 / SignAndEncrypt`, and against virtual IO-Link masters.
+It has not been run against Ignition 8.1, Kepware or a PLC's own embedded
+server, so try it against your server before you depend on it.
 
 A `driver: {type: opcua-client}` section makes nautilus an OPC UA **client**: it
 polls one server's variables into the tag store. This is the opposite
@@ -185,11 +183,11 @@ Earlier versions took the first value as already sent and never wrote it
 
 Under `redundancy:` only the leader writes, and leadership is checked
 again when queued commands go out, and before each chunk of a large batch:
-a replica that lost it during an outage drops what it queued, and one
+a controller that lost it during an outage drops what it queued, and one
 demoted while a batch is going out sends no more of it, and logs how many
 writes went out and the names of the tags it dropped. When the write gate reopens, every output goes out
 once more with the program's value, changed or not, since another
-replica may have written the nodes in between, and a replica that started
+controller may have written the nodes in between, and a controller that started
 as a standby has no start-up baseline, so its first push as leader
 commands. The driver sees the gate by looking at it, at least once a
 second while connected and on every connect attempt: a flip between two
