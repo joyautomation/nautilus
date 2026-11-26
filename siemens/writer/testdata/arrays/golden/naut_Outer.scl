@@ -9,11 +9,14 @@ VERSION : 0.1
    END_VAR
    VAR 
       g : "naut_Grid";
+      naut_fault : "naut_Fault";
    END_VAR
 
 BEGIN
+	#naut_fault.faulted := FALSE;
 	#g(k := #k, x := 2.0);
-	IF "naut_Faults".scan.faulted THEN
+	IF #g.naut_fault.faulted THEN
+		#naut_fault := #g.naut_fault;
 		RETURN;
 	END_IF;
 	#y := #g.y;

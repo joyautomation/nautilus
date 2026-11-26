@@ -10,6 +10,7 @@ VERSION : 0.1
    END_VAR
    VAR 
       tbl : Array[-2..2, 0..3] of REAL;
+      naut_fault : "naut_Fault";
    END_VAR
    VAR_TEMP 
       naut_ix1 : LINT;
@@ -19,33 +20,34 @@ VERSION : 0.1
    END_VAR
 
 BEGIN
+	#naut_fault.faulted := FALSE;
 	#naut_ix1 := #k;
 	IF #naut_ix1 < -2 OR #naut_ix1 > 2 THEN
-		"naut_Faults".scan.faulted := TRUE;
-		"naut_Faults".scan.line := 23;
-		"naut_Faults".scan.block := 'Grid';
+		#naut_fault.faulted := TRUE;
+		#naut_fault.line := 23;
+		#naut_fault.block := 'Grid';
 		RETURN;
 	END_IF;
 	#naut_ix2 := INT_TO_LINT(#k) + 1;
 	IF #naut_ix2 < 0 OR #naut_ix2 > 3 THEN
-		"naut_Faults".scan.faulted := TRUE;
-		"naut_Faults".scan.line := 23;
-		"naut_Faults".scan.block := 'Grid';
+		#naut_fault.faulted := TRUE;
+		#naut_fault.line := 23;
+		#naut_fault.block := 'Grid';
 		RETURN;
 	END_IF;
 	#tbl[#naut_ix1, #naut_ix2] := #x;
 	#naut_ix3 := #k;
 	IF #naut_ix3 < -2 OR #naut_ix3 > 2 THEN
-		"naut_Faults".scan.faulted := TRUE;
-		"naut_Faults".scan.line := 24;
-		"naut_Faults".scan.block := 'Grid';
+		#naut_fault.faulted := TRUE;
+		#naut_fault.line := 24;
+		#naut_fault.block := 'Grid';
 		RETURN;
 	END_IF;
 	#naut_ix4 := INT_TO_LINT(#k) + 1;
 	IF #naut_ix4 < 0 OR #naut_ix4 > 3 THEN
-		"naut_Faults".scan.faulted := TRUE;
-		"naut_Faults".scan.line := 24;
-		"naut_Faults".scan.block := 'Grid';
+		#naut_fault.faulted := TRUE;
+		#naut_fault.line := 24;
+		#naut_fault.block := 'Grid';
 		RETURN;
 	END_IF;
 	#y := #tbl[#naut_ix3, #naut_ix4];

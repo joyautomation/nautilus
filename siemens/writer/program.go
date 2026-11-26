@@ -78,6 +78,9 @@ type progWriter struct {
 	hoistN     int
 	hoistDecls []string
 	faults     bool
+	// fcFault is where a FUNCTION that can fault, being printed, hands
+	// its fault (lift sets it).
+	fcFault string
 }
 
 // elementary maps the IEC elementary types the subset writes. SCL spells
@@ -227,6 +230,11 @@ func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st
 	if len(pw.hoistDecls) > 0 {
 		sections = append(sections, section{"VAR_TEMP", pw.hoistDecls})
 	}
+	bodyText := body.String()
+	sections, bodyText = pw.faultTail(sections, bodyText)
+	if len(w.diags) > before {
+		return false
+	}
 
 	sort.SliceStable(sections, func(i, j int) bool { return sectionRank[sections[i].header] < sectionRank[sections[j].header] })
 	// One section of each kind, as TIA's own sources have.
@@ -250,7 +258,7 @@ func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st
 		fmt.Fprintf(&b, "   VAR CONSTANT \n%s\n   END_VAR\n", strings.Join(consts, "\n"))
 	}
 	b.WriteString("\nBEGIN\n")
-	b.WriteString(body.String())
+	b.WriteString(bodyText)
 	b.WriteString(footer + "\n")
 	pw.fb = []byte(b.String())
 	return true

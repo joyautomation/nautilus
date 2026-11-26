@@ -547,6 +547,14 @@ func Write(in Input) (Output, []Diag, error) {
 	// the tags DB, the scan DBs, the programs and the project's blocks
 	// each reach some.
 	typeOrder := w.writeTypes(&out, claim)
+	// The data type a block that can fault keeps its fault in (arrays.go),
+	// first: the blocks declare it.
+	if w.faultType && claim(prefix+faultType, "the data type of a block's fault") {
+		name := prefix + faultType + ".udt"
+		out.Files = append(out.Files, File{Path: name, Data: faultTypeSource(prefix + faultType)})
+		out.Sources[name] = Source{Path: "nautilus.yaml"}
+		typeOrder = append([]string{name}, typeOrder...)
+	}
 
 	if len(w.diags) > 0 {
 		return Output{Warnings: w.warnings}, w.diags, nil
@@ -614,6 +622,8 @@ type writer struct {
 	// whose FB checks or propagates a fault.
 	faulty, impure map[string]int
 	faultProgs     map[string]bool
+	// faultType: a block keeps a fault, so the PLC data type is written.
+	faultType bool
 }
 
 func (w *writer) useGuarded(fn, path string) {

@@ -408,14 +408,17 @@ the scan end where nautilus's ends:
   start and end are constants inside the bounds and whose body never
   writes it, needs no check.
 - Any other index is computed into a temp (`naut_ix1`) and compared with
-  the bounds. Out of bounds, the block records the fault and returns.
+  the bounds. Out of bounds, the block records the fault in its own
+  `naut_fault` (a static of an FB, an output of a function) and returns.
 - Each block that calls a block that can fault checks for a fault after
   the call and returns too, before it stores the call's outputs (`=>`),
   as nautilus stores them only when the block finishes. A function that
   can fault is called into a temp (`naut_fc1`) ahead of the statement
   that uses it, so the statement's target is not written either.
-- The task's OB counts the fault after it has copied the scan's shared
-  tags out, since nautilus keeps what a faulted scan wrote.
+- The task's OB reads its program's `naut_fault` and counts the fault
+  after it has copied the scan's shared tags out, since nautilus keeps
+  what a faulted scan wrote. The fault travels with the calls, never
+  through a shared variable, so one task can't clear another's.
 
 The counts are in a data block, `naut_Faults`, with one record per task
 whose program can fault, readable over the Web API like any tag. They are

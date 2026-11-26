@@ -485,15 +485,22 @@ The rules:
   ruled (11-26) a guard that mirrors the fault: an index not proved in
   bounds (a literal inside them, or a FOR variable with a constant range
   inside them and a body that never writes it) is computed into a LINT
-  temp and checked; out of bounds the block sets the scan's fault (flag,
-  nautilus line, block) in `<prefix>Faults` and RETURNs. Every caller of
-  a block that can fault (an over-approximation: any index) checks the
-  flag after the call and RETURNs, before the call's `=>` outputs, which
-  nautilus stores only when the block finishes. The task's OB clears the
-  flag first and counts into the task's record last, after the
-  copy-out, since nautilus commits a faulted scan. The flag is one for
-  all tasks: the OBs share one priority, so none interrupts another
-  (tasks.go); different priorities need a flag per priority. The checks
+  temp and checked; out of bounds the block records the fault (flag,
+  nautilus line, block) in its own `naut_fault` (a `<prefix>Fault`: a
+  static of an FB or program, an output of an FC, cleared first thing)
+  and RETURNs. Every caller of a block that can fault (an
+  over-approximation: any index; such a block declares `naut_fault` even
+  when it checks nothing) reads the callee's fault right after the call,
+  takes it over and RETURNs, before the call's `=>` outputs, which
+  nautilus stores only when the block finishes. The task's OB reads its
+  program's `naut_fault` and counts into the task's record in
+  `<prefix>Faults` last, after the copy-out, since nautilus commits a
+  faulted scan. The fault never passes through a global (naut-lead,
+  #1394): a first version kept one flag in the faults DB, which an OB of
+  a higher priority could clear between a lower one's call and its check
+  (tiad sets no OB priority; whether TIA's defaults differ by OB number
+  is not measured), and a block run by two tasks has no one task's flag
+  to name. The checks
   follow nautilus's order of evaluation (lang/ir vm.go): an assignment's
   value before its target; an ELSIF's condition only in its branch; a
   WHILE's before each pass; an FB's inputs one by one into the instance

@@ -3,11 +3,6 @@ DATA_BLOCK "naut_Faults"
 VERSION : 0.1
 NON_RETAIN
    VAR 
-      scan : Struct
-         faulted : Bool;
-         line : DInt;
-         block : String;
-      END_STRUCT;
       main : Struct
          LogicErrors : LInt;
          Faulting : Bool;

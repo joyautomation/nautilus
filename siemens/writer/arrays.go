@@ -30,16 +30,22 @@ import (
 //
 //	#naut_ix1 := <index>;
 //	IF #naut_ix1 < lo OR #naut_ix1 > hi THEN
-//		"naut_Faults".scan.faulted := TRUE; ... line, block ...
+//		#naut_fault.faulted := TRUE; ... line, block ...
 //		RETURN;
 //	END_IF;
 //
-// RETURN ends the block; each caller checks the flag after it calls a
-// block that can fault, and returns too, up to the program's FB. Its OB
-// counts the fault into the task's record in the faults DB
+// Each block that can fault keeps its fault in its own naut_fault (a
+// "<prefix>Fault": faulted, line, block), cleared first thing: a static
+// of an FB or a program, an output of an FC. RETURN ends the block; each
+// caller reads the callee's naut_fault right after the call, takes it
+// over and returns too, up to the program's FB. Its OB counts the
+// program's fault into the task's record in the faults DB
 // ("<prefix>Faults": LogicErrors, Faulting, LastLine, LastBlock, the
 // counterpart of nautilus's task stats), after the task's shared tags are
-// copied out: nautilus commits what a faulted scan wrote.
+// copied out: nautilus commits what a faulted scan wrote. The fault never
+// passes through a global, so an OB of a higher priority that interrupts
+// another between a call and its check cannot clear or overwrite it, and
+// a block run by two tasks keeps one fault per instance (naut-lead).
 //
 // What has to be computed before the index is computed first, in
 // nautilus's order (lang/ir vm.go): an assignment's value before its
@@ -61,8 +67,13 @@ import (
 // that can fault (nautilus copies it back only when the block finishes,
 // TIA passes it by reference).
 
-// faultsDB is the faults DB's name without the prefix.
-const faultsDB = "Faults"
+// faultsDB is the faults DB's name without the prefix, faultType the
+// PLC data type a block keeps its fault in, faultVar that variable.
+const (
+	faultsDB  = "Faults"
+	faultType = "Fault"
+	faultVar  = "naut_fault"
+)
 
 // arrayDim is one dimension's bounds, folded.
 type arrayDim struct{ lo, hi int64 }
@@ -707,14 +718,19 @@ func (pw *progWriter) liftCall(b *strings.Builder, x *st.CallExpr, in string, at
 		return nil, false
 	}
 	ret := strings.ToUpper(strings.TrimSpace(p.ret))
+	// The FUNCTION hands its fault back through its output naut_fault,
+	// into a temp of this block.
+	ff := pw.hoistTemp("naut_ff", quote(pw.w.prefix+faultType))
+	pw.fcFault = "#" + ff
 	call := pw.expr(&out, 0)
+	pw.fcFault = ""
 	if call == "" {
 		return nil, false
 	}
 	tmp := pw.hoistTemp("naut_fc", p.ret)
 	pw.locals[strings.ToLower(tmp)] = local{name: tmp, typ: ret}
 	pw.emit(b, at, "%s#%s := %s;\n", in, tmp, call)
-	pw.faultCheck(b, in, at)
+	pw.faultCheck(b, in, at, "#"+ff)
 	return &st.IdentExpr{Name: tmp, Pos: x.Pos}, true
 }
 
@@ -748,29 +764,58 @@ func (pw *progWriter) hoistTemp(prefix, typ string) string {
 	}
 }
 
-// faultsName is the faults DB, quoted.
-func (pw *progWriter) faultsName() string { return quote(pw.w.prefix + faultsDB) }
-
 // faultIf writes the check of one index: when cond holds, the scan
-// faults where nautilus's would.
+// faults where nautilus's would. The block records the fault in its own
+// naut_fault (a static of an FB, an output of an FC) and returns.
 func (pw *progWriter) faultIf(b *strings.Builder, in string, at int, cond string) {
-	db := pw.faultsName()
 	pw.faults = true
 	pw.emit(b, at, "%sIF %s THEN\n", in, cond)
-	pw.emit(b, at, "%s\t%s.scan.faulted := TRUE;\n", in, db)
-	pw.emit(b, at, "%s\t%s.scan.line := %d;\n", in, db, pw.srcLine(at))
-	pw.emit(b, at, "%s\t%s.scan.block := '%s';\n", in, db, pw.name)
+	pw.emit(b, at, "%s\t#%s.faulted := TRUE;\n", in, faultVar)
+	pw.emit(b, at, "%s\t#%s.line := %d;\n", in, faultVar, pw.srcLine(at))
+	pw.emit(b, at, "%s\t#%s.block := '%s';\n", in, faultVar, pw.name)
 	pw.returnLines(b, in+"\t", at)
 	pw.emit(b, at, "%sEND_IF;\n", in)
 }
 
-// faultCheck follows a call of a block that can fault: when it did, this
-// block stops too.
-func (pw *progWriter) faultCheck(b *strings.Builder, in string, at int) {
+// faultCheck follows a call of a block that can fault, whose fault is
+// callee (#inst.naut_fault, or the temp an FC's output went to): when it
+// faulted, this block takes the fault over and returns too.
+func (pw *progWriter) faultCheck(b *strings.Builder, in string, at int, callee string) {
 	pw.faults = true
-	pw.emit(b, at, "%sIF %s.scan.faulted THEN\n", in, pw.faultsName())
+	pw.emit(b, at, "%sIF %s.faulted THEN\n", in, callee)
+	pw.emit(b, at, "%s\t#%s := %s;\n", in, faultVar, callee)
 	pw.returnLines(b, in+"\t", at)
 	pw.emit(b, at, "%sEND_IF;\n", in)
+}
+
+// faultTail declares the block's naut_fault and clears it first thing,
+// when the block can fault: an FB and a program keep it as a static (the
+// caller, or the task's OB, reads it from the instance after the call),
+// an FC as an output. The fault travels with the call chain, never
+// through a global: a task that interrupts another cannot clear or
+// overwrite it (naut-lead, #1394).
+func (pw *progWriter) faultTail(sections []section, body string) ([]section, string) {
+	need := pw.faults || pw.pou != nil && pw.w.canFault(pw.pou)
+	if !need {
+		return sections, body
+	}
+	if _, taken := pw.locals[faultVar]; taken {
+		pw.diag("siemens/name", 0, fmt.Sprintf("%s: the writer keeps the block's fault in a variable of that name", faultVar))
+		return sections, body
+	}
+	pw.w.faultType = true
+	header := "VAR"
+	if pw.kind == kindFC {
+		header = "VAR_OUTPUT"
+	}
+	sections = append(sections, section{header, []string{fmt.Sprintf("      %s : %s;", faultVar, quote(pw.w.prefix+faultType))}})
+	pw.lines = append([]int{0}, pw.lines...)
+	return sections, fmt.Sprintf("\t#%s.faulted := FALSE;\n", faultVar) + body
+}
+
+// faultTypeSource is the PLC data type a block's fault is kept in.
+func faultTypeSource(name string) []byte {
+	return []byte("TYPE " + quote(name) + "\nVERSION : 0.1\n   STRUCT\n      faulted : Bool;\n      line : DInt;\n      block : String;\n   END_STRUCT;\n\nEND_TYPE\n")
 }
 
 // returnLines leave the block as RETURN does (a FUNCTION hands back its
@@ -1087,7 +1132,6 @@ func faultsSource(name string, tasks []string) []byte {
 	b.WriteString("VERSION : 0.1\n")
 	b.WriteString("NON_RETAIN\n")
 	b.WriteString("   VAR \n")
-	b.WriteString("      scan : Struct\n         faulted : Bool;\n         line : DInt;\n         block : String;\n      END_STRUCT;\n")
 	for _, t := range tasks {
 		fmt.Fprintf(&b, "      %s : Struct\n         LogicErrors : LInt;\n         Faulting : Bool;\n         LastLine : DInt;\n         LastBlock : String;\n      END_STRUCT;\n", sclName(t))
 	}
@@ -1096,17 +1140,13 @@ func faultsSource(name string, tasks []string) []byte {
 	return []byte(b.String())
 }
 
-// faultClear and faultCount are a task OB's part: the flag cleared before
-// the program runs, the fault counted into the task's record after the
-// shared tags are copied out.
-func faultClear(db string) string {
-	return fmt.Sprintf("\t%s.scan.faulted := FALSE;\n", quote(db))
-}
-
-func faultCount(db, task string) string {
-	q, t := quote(db), quote(db)+"."+sclName(task)
-	return fmt.Sprintf("\tIF %s.scan.faulted THEN\n\t\t%s.LogicErrors := %s.LogicErrors + 1;\n\t\t%s.LastLine := %s.scan.line;\n\t\t%s.LastBlock := %s.scan.block;\n\tEND_IF;\n\t%s.Faulting := %s.scan.faulted;\n",
-		q, t, t, t, q, t, q, t, q)
+// faultCount is a task OB's part: the program's fault, read from its
+// instance DB after the shared tags are copied out, counted into the
+// task's record. Only this OB writes that record.
+func faultCount(db, task, instDB string) string {
+	f, t := quote(instDB)+"."+faultVar, quote(db)+"."+sclName(task)
+	return fmt.Sprintf("\tIF %s.faulted THEN\n\t\t%s.LogicErrors := %s.LogicErrors + 1;\n\t\t%s.LastLine := %s.line;\n\t\t%s.LastBlock := %s.block;\n\tEND_IF;\n\t%s.Faulting := %s.faulted;\n",
+		f, t, t, t, f, t, f, t, f)
 }
 
 // liftStmt writes what statement s needs computed first (lift) and

@@ -565,7 +565,7 @@ func (pw *progWriter) fbCall(b *strings.Builder, c *st.CallExpr, l local, p *pou
 	if faults {
 		// A fault in the block ends this one too, before its outputs are
 		// stored: nautilus stores them only when the block finishes.
-		pw.faultCheck(b, in, at)
+		pw.faultCheck(b, in, at, "#"+sclName(l.name)+"."+faultVar)
 	}
 	for _, o := range c.OutputBindings {
 		pn, ok := pins[strings.ToUpper(o.Name)]
@@ -627,6 +627,15 @@ func (pw *progWriter) fcCall(c *st.CallExpr, p *pou, stmt bool) string {
 			return ""
 		}
 		parts[i] = sclName(pn.name) + " := " + v
+	}
+	if pw.w.canFault(p) {
+		// A FUNCTION that can fault hands its fault back through its
+		// output; lift calls it ahead of the statement with a temp for it.
+		if pw.fcFault == "" {
+			pw.diag("siemens/call", line, p.what()+" can fault the scan and is called where the writer did not check it (a writer bug, please report it)")
+			return ""
+		}
+		parts = append(parts, faultVar+" => "+pw.fcFault)
 	}
 	pw.need(p, line)
 	return quote(pw.w.prefix+p.name) + "(" + strings.Join(parts, ", ") + ")"

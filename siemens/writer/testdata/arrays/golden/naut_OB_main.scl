@@ -4,12 +4,11 @@ TITLE = "Cyclic interrupt, 100ms"
 VERSION : 0.1
 
 BEGIN
-	"naut_Faults".scan.faulted := FALSE;
 	"naut_Main_DB"();
-	IF "naut_Faults".scan.faulted THEN
+	IF "naut_Main_DB".naut_fault.faulted THEN
 		"naut_Faults".main.LogicErrors := "naut_Faults".main.LogicErrors + 1;
-		"naut_Faults".main.LastLine := "naut_Faults".scan.line;
-		"naut_Faults".main.LastBlock := "naut_Faults".scan.block;
+		"naut_Faults".main.LastLine := "naut_Main_DB".naut_fault.line;
+		"naut_Faults".main.LastBlock := "naut_Main_DB".naut_fault.block;
 	END_IF;
-	"naut_Faults".main.Faulting := "naut_Faults".scan.faulted;
+	"naut_Faults".main.Faulting := "naut_Main_DB".naut_fault.faulted;
 END_ORGANIZATION_BLOCK

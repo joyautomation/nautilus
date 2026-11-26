@@ -362,9 +362,9 @@ func (w *writer) flagType(typ, path, ind string, u *tagUse) (string, string) {
 // assigned after.
 //
 // When the program can fault the scan (arrays.go), faults is the faults
-// DB: the OB clears the scan's flag first and counts a fault into task's
-// record last, after the copy-out (nautilus commits what a faulted scan
-// wrote).
+// DB: the OB counts the program's fault (its instance's naut_fault) into
+// the task's record last, after the copy-out (nautilus commits what a
+// faulted scan wrote).
 func (w *writer) obSource(ob OB, instDB string, sh *share, dt *dtOf, faults, task string) ([]byte, string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "ORGANIZATION_BLOCK %s\n", quote(ob.Name))
@@ -380,13 +380,10 @@ func (w *writer) obSource(ob OB, instDB string, sh *share, dt *dtOf, faults, tas
 		// before the scan takes its copy.
 		b.WriteString(dt.statements(w.tagsDB))
 	}
-	if faults != "" {
-		b.WriteString(faultClear(faults))
-	}
 	if sh == nil {
 		fmt.Fprintf(&b, "\t%s();\n", quote(instDB))
 		if faults != "" {
-			b.WriteString(faultCount(faults, task))
+			b.WriteString(faultCount(faults, task, instDB))
 		}
 		b.WriteString("END_ORGANIZATION_BLOCK\n")
 		return []byte(b.String()), ""
@@ -444,7 +441,7 @@ func (w *writer) obSource(ob OB, instDB string, sh *share, dt *dtOf, faults, tas
 		fmt.Fprintf(&b, "\tEND_IF;\n\t%s := %s;\n", flag, bitsLit(0, mask))
 	}
 	if faults != "" {
-		b.WriteString(faultCount(faults, task))
+		b.WriteString(faultCount(faults, task, instDB))
 	}
 	b.WriteString("END_ORGANIZATION_BLOCK\n")
 	return []byte(b.String()), ""

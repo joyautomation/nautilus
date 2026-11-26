@@ -1,0 +1,9 @@
+TYPE "naut_Fault"
+VERSION : 0.1
+   STRUCT
+      faulted : Bool;
+      line : DInt;
+      block : String;
+   END_STRUCT;
+
+END_TYPE
