@@ -17,9 +17,10 @@ on this page as plainly as the list of what it does.
 ## 1. Describe the plant as tags and logic
 
 **You can** declare every value the plant has as a tag with a type, a role
-(`input`, `output`, `setpoint`, `state`), a unit and limits, write the logic
+(what the tag is for: `input` from the field, `output` to it, an operator's
+`setpoint`, or internal `state`), a unit and limits, write the logic
 in Structured Text, Ladder, Function Block or SFC, and run it on a scan loop
-from your laptop with `naut run`.
+(read the inputs, run the logic, write the outputs, over and over) from your laptop with `naut run`.
 
 - [Your first program](/guides/first-program/): a pump with a level input.
 - [The tag model](/guides/tag-model/): roles, and the one rule that bites.
@@ -42,6 +43,8 @@ not as a frozen number.
   virtual masters only.
 - Switches, PDUs, UPSes and server BMCs as ordinary tags:
   [IT hardware](/guides/it-hardware/).
+- A PLC that configures nautilus as a PROFINET IO device (the device side
+  only): [PROFINET](/guides/profinet/), experimental.
 - A Sparkplug B host that consumes a group of edge nodes:
   [Sparkplug host](/guides/sparkplug-host/).
 
@@ -73,8 +76,10 @@ logic on a running controller.
 ## 5. Run on a bad sensor, in the open
 
 **You can** let an operator run the program on a chosen value for a bounded
-time while a sensor is bad, flagged everywhere as substituted, acknowledged
-if you require it, and expired by the controller.
+time while a sensor is bad (a **substitute**), flagged everywhere as
+substituted, and expired by the controller. Which inputs may be substituted,
+for how long, and whether the start must be acknowledged are rules in
+`nautilus.yaml`.
 
 - [Substitutes](/guides/substitutes/).
 
@@ -99,8 +104,8 @@ Postgres.
 the types, quality and timestamps intact, or publish them over Sparkplug B
 to a broker.
 
-- [Serving OPC UA](/guides/opcua-server/): a preview, and read the writes
-  section before you open a setpoint to a client.
+- [Serving OPC UA](/guides/opcua-server/): a preview, and read
+  [Writes](/guides/opcua-server/#writes) before you open a setpoint to a client.
 - [Sparkplug](/guides/sparkplug/).
 
 ## 8. Decide who may do what, and keep the record
@@ -111,14 +116,18 @@ journal that names who did what, with a copy somewhere the controller cannot
 rewrite so `naut audit verify` can tell if it was changed.
 
 ```sh
-naut auth init --user alice:operator --user bob:engineer
-naut users add alice
-naut users add bob
+naut auth init --user alice:operator --user bob:engineer   # adds an auth: block to nautilus.yaml
+naut users add alice       # asks for a password; on a box, run it with sudo
+naut users token alice     # a token for a script or VS Code
 ```
 
 ```yaml
-audit:
+audit:             # in nautilus.yaml
   sink: postgres   # its connection string in NAUTILUS_AUDIT_DB_URL
+```
+
+```sh
+naut audit verify --anchor postgres   # exit 0 verified, 1 BROKEN, 3 UNPROTECTED
 ```
 
 - [Users, roles and sign-in](/guides/auth/).
@@ -126,8 +135,9 @@ audit:
 
 ## 9. Run two controllers
 
-**You can** run two controllers and a small witness so that one scans and
-the other stands by with its state. A takeover keeps what operators
+**You can** run two controllers and a witness (a small third program,
+`naut witness`, that breaks a tie so the two never both scan) so that one
+scans and the other stands by with its state. A takeover keeps what operators
 entered, including setpoints, substitutes and alarm acknowledgements, and an
 optional floating address lets clients keep one URL.
 
@@ -141,17 +151,20 @@ redundancy:
 ```
 
 `naut check` loads that block. Commissioning the pair, the witness and the
-takeover time you can expect are in [Redundancy](/guides/redundancy/), and
+takeover time you can expect are in [Redundancy](/guides/redundancy/): with
+the default 1 s lease the new leader was in place in about a second, on a
+test bench. And
 the sign-in behaviour across a takeover is in
 [Users, roles and sign-in](/guides/auth/#a-redundant-pair). It is a hot
-standby with state streaming, not lockstep (step 11).
+standby with state streaming (a takeover is cold when the standby's image
+is stale or from another build), not lockstep (step 11).
 
 ## 10. Ship it and keep it running
 
-**You can** turn every merge that passes its tests into a controller image,
-install it on a Linux box over SSH, update and roll back by commit, measure
-how late a scan runs and isolate a fast task on its own core, and read what
-is running back as a git commit.
+**You can** have every change merged to git that passes its tests built into
+one controller program (an image), install it on a Linux box over SSH,
+update and roll back by commit, measure how late a scan runs and give a fast
+task its own CPU core, and read what is running back as a git commit.
 
 - [Deployment](/guides/deployment/).
 - [Real time](/guides/real-time/).
@@ -171,7 +184,8 @@ the list.
 - **Lockstep redundancy.** A pair is a hot standby. A takeover has a
   measured gap (the lease and the takeover time are in the redundancy
   guide), and a takeover is not bumpless. Some drivers are refused under
-  `redundancy:`: PLCnext, and PROFINET until the pair can name and check a
+  `redundancy:`: [PLCnext](/guides/plcnext/), and
+  [PROFINET](/guides/profinet/) until the pair can name and check a
   floating station address.
 - **Vendor PLCs as targets.** Logix and Siemens S7-1500 targets let
   nautilus be the IDE and the vendor's PLC the runtime. Both are
