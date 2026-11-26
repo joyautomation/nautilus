@@ -96,7 +96,7 @@ func readPolicy(t *testing.T, srv *Server, anonymous string) {
 // the audit journal needs audit; the file text of the live I/O routes
 // (/api/io/files, /api/config/files) needs the permission to edit it.
 func stricterRead(route string) bool {
-	return route == "/api/audit" || route == "/api/config/files" || route == "/api/config/patch" || route == "/api/parameters/patch" || route == "/api/io/files"
+	return route == "/api/audit" || route == "/api/audit.csv" || route == "/api/config/files" || route == "/api/config/patch" || route == "/api/parameters/patch" || route == "/api/io/files"
 }
 
 func gated(rec *httptest.ResponseRecorder) bool {

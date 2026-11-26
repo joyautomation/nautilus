@@ -1050,6 +1050,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/sfc/transition", s.audited("sfc.transition", sfcTarget(false), s.handleSFCTransition))
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
+	mux.HandleFunc("GET /api/audit.csv", s.handleAuditCSV)
 	mux.HandleFunc("GET /api/me", s.handleMe)
 	if s.hmi != nil {
 		// The HMI owns "/" (and whatever paths its own build wants under
