@@ -751,7 +751,7 @@ func (pw *progWriter) hoistTemp(prefix, typ string) string {
 	for {
 		pw.hoistN++
 		name := fmt.Sprintf("%s%d", prefix, pw.hoistN)
-		if _, taken := pw.locals[strings.ToLower(name)]; taken {
+		if pw.nameTaken(name) {
 			continue
 		}
 		t, why := pw.w.declType(typ, pw.path)
@@ -762,6 +762,16 @@ func (pw *progWriter) hoistTemp(prefix, typ string) string {
 		pw.hoistDecls = append(pw.hoistDecls, fmt.Sprintf("      %s : %s;", name, t))
 		return name
 	}
+}
+
+// nameTaken reports a name the block cannot take for a variable of its
+// own: one of its variables or constants, or a project constant (each
+// block that names one declares a copy of it under its name).
+func (pw *progWriter) nameTaken(name string) bool {
+	k := strings.ToLower(name)
+	_, local := pw.locals[k]
+	_, global := pw.w.lib.constDecls[k]
+	return local || global
 }
 
 // faultIf writes the check of one index: when cond holds, the scan
@@ -799,8 +809,12 @@ func (pw *progWriter) faultTail(sections []section, body string) ([]section, str
 	if !need {
 		return sections, body
 	}
-	if _, taken := pw.locals[faultVar]; taken {
-		pw.diag("siemens/name", 0, fmt.Sprintf("%s: the writer keeps the block's fault in a variable of that name", faultVar))
+	if pw.nameTaken(faultVar) {
+		line := 1
+		if pw.pou != nil {
+			line = pw.pou.lineOf()
+		}
+		pw.diag("siemens/name", line, fmt.Sprintf("%s: the writer keeps the block's fault in a variable of that name; rename yours", faultVar))
 		return sections, body
 	}
 	pw.w.faultType = true

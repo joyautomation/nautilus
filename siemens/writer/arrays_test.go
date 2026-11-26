@@ -416,3 +416,27 @@ func TestCalleeDeclaresItsFaultWhenCallersCheckIt(t *testing.T) {
 	wantLines(t, fileOf(t, out, "naut_L.scl"), "naut_fault : \"naut_Fault\";", "#naut_fault.faulted := FALSE;")
 	wantLines(t, fileOf(t, out, "naut_P.scl"), "IF #l.naut_fault.faulted THEN")
 }
+
+// TestWriterNamesAvoidProjectConstants (Fable re-check): a project
+// constant is copied into each block that names it, under its name, so a
+// temp the writer adds never takes a project constant's name, and a
+// project constant named naut_fault is refused, not declared twice.
+func TestWriterNamesAvoidProjectConstants(t *testing.T) {
+	write := func(lib, body string) (Output, []Diag) {
+		out, diags, err := Write(Input{Programs: []Program{{Path: "p.st", Libs: []string{lib}, Source: "PROGRAM P\nVAR a : ARRAY[0..3] OF INT; i, x : INT; END_VAR\n" + body + "\nEND_PROGRAM\n"}},
+			Tasks: []Task{{Name: "main", Program: "P", Interval: time.Second}}, BlockPrefix: "naut_"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out, diags
+	}
+	_, diags := write("VAR_GLOBAL CONSTANT\n  naut_fault : INT := 4;\nEND_VAR\n", "x := a[i] + naut_fault;")
+	if !hasDiag(diags, "naut_fault: the writer keeps the block's fault in a variable of that name") {
+		t.Errorf("naut_fault constant: %v", diags)
+	}
+	out, diags := write("VAR_GLOBAL CONSTANT\n  naut_ix1 : INT := 3;\nEND_VAR\n", "x := a[i] + naut_ix1;")
+	if len(diags) > 0 {
+		t.Fatal(diags)
+	}
+	wantLines(t, fileOf(t, out, "naut_P.scl"), "naut_ix1 : INT := 3;", "#naut_ix2 := #i;", "#a[#naut_ix2]) + INT_TO_LINT(#naut_ix1)")
+}
