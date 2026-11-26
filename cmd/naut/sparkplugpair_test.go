@@ -537,6 +537,9 @@ func TestPairSparkplugOneSessionThroughSwitchoverFailoverAndBack(t *testing.T) {
 	if v := r.nodes[survivor].m.peerEdge.Load(); v != uint64(killedBd)+1 {
 		t.Fatalf("the standby's peer edge session %d, want the leader's bdSeq %d + 1", v, killedBd)
 	}
+	// Counted before the kill: the survivor may birth before the test sees
+	// it lead (#1405).
+	before := len(obs.births(spClient(survivor)))
 	obs.setDeny(spClient(killed), true)
 	// The will fires now; the late copy is replayed below.
 	if cl, ok := srv.Clients.Get(spClient(killed)); ok {
@@ -544,8 +547,9 @@ func TestPairSparkplugOneSessionThroughSwitchoverFailoverAndBack(t *testing.T) {
 	}
 	r.nodes[killed].crash()
 	r.waitNewLeader(t, survivor, 15*time.Second)
-	before := len(obs.births(spClient(survivor)))
-	pairWait(t, "the survivor's NBIRTH", 10*time.Second, func() bool { return len(obs.births(spClient(survivor))) > before })
+	if !spWaitFor(10*time.Second, func() bool { return len(obs.births(spClient(survivor))) > before }) {
+		t.Fatalf("no NBIRTH from the survivor %s after the failover; status %+v\n%s", survivor, r.nodes[survivor].sp.Status(), obs.dump())
+	}
 	sb := obs.births(spClient(survivor))[before]
 	if sb.bdSeq == killedBd {
 		t.Fatalf("the survivor births with bdSeq %d, the killed leader's will's", sb.bdSeq)
@@ -565,8 +569,11 @@ func TestPairSparkplugOneSessionThroughSwitchoverFailoverAndBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	host.Publish("spBv1.0/Plant/NDEATH/Edge1", 1, false, will).WaitTimeout(time.Second)
+	// Its answer is a birth after this will. Not a count of births: the
+	// broker fired the killed session's will at the kill, and the survivor
+	// may have heard that one too and birthed again already (#1405).
 	pairWait(t, "the survivor's rebirth after the late will", 5*time.Second, func() bool {
-		return len(obs.births(spClient(survivor))) > before+1
+		return spBornAfterDeath(obs.all(), "late-will", spClient(survivor))
 	})
 	if online := spOnlineIgnoringBdSeq(obs.all()); !online {
 		t.Fatalf("a host that ignores bdSeq sees the edge node offline after the late will\n%s", obs.dump())
@@ -696,6 +703,26 @@ func spMetric(p sparkplug.Payload, name string) (sparkplug.Metric, bool) {
 
 // spOnlineIgnoringBdSeq is a host that takes the last NBIRTH or NDEATH as
 // the node's state, whatever its bdSeq.
+// spBornAfterDeath reports whether client born published an NBIRTH after
+// the last NDEATH that client dead published.
+func spBornAfterDeath(evs []spEvent, dead, born string) bool {
+	death := -1
+	for i, e := range evs {
+		if e.client == dead && e.kind == "NDEATH" {
+			death = i
+		}
+	}
+	if death < 0 {
+		return false
+	}
+	for _, e := range evs[death+1:] {
+		if e.client == born && e.kind == "NBIRTH" {
+			return true
+		}
+	}
+	return false
+}
+
 func spOnlineIgnoringBdSeq(evs []spEvent) bool {
 	online := false
 	for _, e := range evs {

@@ -107,8 +107,10 @@ func (r *pairRig) runs(n string) int64 {
 }
 
 // imaged waits until the standby's retain file holds an image the leader
-// copied after now: the leader's next image, persisted at the standby.
-// Never a sleep: the reported positions.
+// copied after now, persisted at the standby. Never a sleep: the reported
+// positions. The leader reports an image's seq only once it is sent, so
+// the one after the seq read now may have been copied before now; the one
+// after that was not (afterNow).
 func (r *pairRig) imaged(t *testing.T, lead string) {
 	t.Helper()
 	ls := r.streamStatus(lead)
@@ -117,9 +119,9 @@ func (r *pairRig) imaged(t *testing.T, lead string) {
 	}
 	after := ls.Seq
 	var want uint64
-	pairWait(t, "the leader's next image", 5*time.Second, func() bool {
+	pairWait(t, "an image the leader copied after now", 5*time.Second, func() bool {
 		want = r.streamStatus(lead).Seq
-		return want > after
+		return afterNow(want, after)
 	})
 	term := r.streamStatus(lead).Term
 	pairWait(t, "the standby to keep it in its retain file", 10*time.Second, func() bool {
@@ -423,6 +425,15 @@ func writeRetain(t *testing.T, path string, st retain.State) {
 // that elects at once (a campaign asked again, #710) is in sync before
 // that tick. A test that then reads, rewrites or corrupts the file would
 // have it written over by that first save.
+// afterNow reports whether the leader's image seq was copied after the
+// moment its stream reported after. The leader's stream sends one image at
+// a time and reports its seq once it is sent: when after was read, image
+// after+1 may already have been copied (a write made just before the read
+// is not in it), but after+2 was not yet asked for (#1405). It holds while
+// every image copied is sent: not across a switchover's start, nor while
+// the leader's images are over the size limit.
+func afterNow(seq, after uint64) bool { return seq > after+1 }
+
 func (r *pairRig) inSync(t *testing.T, n string) {
 	t.Helper()
 	pairWait(t, n+"'s stream in sync and saved", 10*time.Second, func() bool {
@@ -444,7 +455,10 @@ func TestPairTakeoverFlushesAnImageNotYetPersisted(t *testing.T) {
 	v := r.writeStream(t, lead, 81.5, 82.25, 8.5, "")
 	after := r.streamStatus(lead).Seq
 	var want uint64
-	pairWait(t, "the leader's next image", 5*time.Second, func() bool { want = r.streamStatus(lead).Seq; return want > after })
+	pairWait(t, "an image the leader copied after the write", 5*time.Second, func() bool {
+		want = r.streamStatus(lead).Seq
+		return afterNow(want, after)
+	})
 	pairWait(t, "the standby to apply it", 5*time.Second, func() bool { return r.streamStatus(stand).Seq >= want })
 	if s := r.streamStatus(stand); s.PersistedSeq >= want && s.PersistedTerm == s.Term {
 		t.Fatalf("the standby's file already holds image %d: the case proves nothing", s.PersistedSeq)

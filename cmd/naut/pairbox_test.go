@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"log"
 	"log/slog"
 	"maps"
 	"net"
@@ -23,6 +24,41 @@ import (
 
 	"github.com/joyautomation/nautilus/quorum/node"
 )
+
+// captureLogs sends slog's default logger to w for the rest of the test,
+// and puts back both slog's default and the log package's writer and
+// flags at its end. slog.SetDefault(old) alone is not enough: when old is
+// slog's built-in default it leaves the log package writing to w (see
+// log/slog.SetDefault), so every later test's log lines, slog's included,
+// went to a dead buffer and CI kept none for the pair flakes (#1405).
+func captureLogs(t *testing.T, w io.Writer) {
+	t.Helper()
+	old, oldW, oldF := slog.Default(), log.Writer(), log.Flags()
+	slog.SetDefault(slog.New(slog.NewTextHandler(w, nil)))
+	t.Cleanup(func() {
+		slog.SetDefault(old)
+		log.SetOutput(oldW)
+		log.SetFlags(oldF)
+	})
+}
+
+// After a test that captured the logs, slog and log write where they did
+// before it, not into its buffer (#1405).
+func TestCaptureLogsPutsTheLogWriterBack(t *testing.T) {
+	before := log.Writer()
+	logs := &lockedBuffer{}
+	t.Run("capture", func(t *testing.T) {
+		captureLogs(t, logs)
+		slog.Info("inside the capture")
+	})
+	if log.Writer() != before {
+		t.Fatalf("the log writer after the capture is %T, want the one before it (%T)", log.Writer(), before)
+	}
+	slog.Info("after the capture")
+	if got := logs.String(); !strings.Contains(got, "inside the capture") || strings.Contains(got, "after the capture") {
+		t.Fatalf("the capture's buffer holds %q: want the line logged inside it and not the one after", got)
+	}
+}
 
 // The cloned-disk gap (#1029), closed by binding the voter state to its
 // box: a clone (A's quorum.state and env on another box) starts
@@ -446,9 +482,7 @@ func TestCloneWithAnUnresolvableLinkNeverVotes(t *testing.T) {
 // logs is everything logged meanwhile (the witness logs it).
 func spoofedCloneCase(t *testing.T, member string, cut func(r *boxRig), raised func(r *boxRig, logs string) bool) {
 	logs := &lockedBuffer{}
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(old) })
+	captureLogs(t, logs)
 	r := newBoxRig(t)
 	cut(r)
 	time.Sleep(2 * time.Second) // four leases: the cut voter's promise to A has run out
@@ -640,9 +674,7 @@ func TestBoxRigHandOverLeavesBothAbleToLead(t *testing.T) {
 // clear gives a its grants back: it can lead again, with no restart.
 func TestSpoofedCloneBesideTheOriginalIsMarkedUntilCleared(t *testing.T) {
 	logs := &lockedBuffer{}
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(old) })
+	captureLogs(t, logs)
 	r := newBoxRig(t)
 	c := r.cloneDisk("a", "box-a")
 	pairWait(t, "b to mark a", 10*time.Second, func() bool { return slices.Contains(r.el("b").DuplicateMarks(), "a") })
@@ -681,9 +713,7 @@ func TestSpoofedCloneBesideTheOriginalIsMarkedUntilCleared(t *testing.T) {
 // hogs), as the PR says.
 func TestDeployRestartsMarkNothing(t *testing.T) {
 	logs := &lockedBuffer{}
-	old := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(old) })
+	captureLogs(t, logs)
 	r := newBoxRig(t)
 	for i := range 6 {
 		m := []string{"a", "b"}[i%2]
