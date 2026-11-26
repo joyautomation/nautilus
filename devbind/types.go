@@ -106,6 +106,17 @@ type assembler struct {
 	members []string // internal names, index-parallel to def.Fields
 	last    ir.Value // the last value delivered; Kind 0 before any
 	boxed   any      // last, boxed once: a map[string]any entry costs an allocation per box
+	// derived are the computed BOOL members after the polled ones: each
+	// field index, the source's, and the test. got marks the polled members
+	// delivered so far, so a derived point whose source has not arrived is
+	// false, never "0 equals the code".
+	derived []derivedField
+	got     []bool
+}
+
+type derivedField struct {
+	field, src int
+	d          devprofile.Derived
 }
 
 func newAssembler(d *device) *assembler {
@@ -115,6 +126,13 @@ func newAssembler(d *device) *assembler {
 		a.def.FieldIndex[pt.Name] = i
 		a.members = append(a.members, memberName(d.Name, pt.Name))
 	}
+	for _, dp := range d.derived {
+		src := a.def.FieldIndex[dp.From]
+		a.def.Fields = append(a.def.Fields, ir.StructField{Name: dp.Name, Type: ir.BoolT})
+		a.def.FieldIndex[dp.Name] = len(a.def.Fields) - 1
+		a.derived = append(a.derived, derivedField{field: len(a.def.Fields) - 1, src: src, d: dp})
+	}
+	a.got = make([]bool, len(a.members))
 	return a
 }
 
@@ -134,9 +152,11 @@ func (a *assembler) take(vals map[string]any) {
 		if !ok {
 			continue
 		}
+		first := !a.got[i] // a member's first delivery recomputes what reads it, even at its zero
+		a.got[i] = true
 		cur := a.cur(i)
 		if next.Kind == 0 {
-			if a.last.Kind != 0 && sameScalar(cur, iv) {
+			if a.last.Kind != 0 && !first && sameScalar(cur, iv) {
 				continue
 			}
 			next = a.base()
@@ -144,6 +164,9 @@ func (a *assembler) take(vals map[string]any) {
 		next.Fld[i] = iv
 	}
 	if next.Kind != 0 {
+		for _, df := range a.derived {
+			next.Fld[df.field] = ir.BoolVal(a.got[df.src] && df.d.Eval(next.Fld[df.src].I))
+		}
 		a.last, a.boxed = next, next
 	}
 	if a.last.Kind == 0 {

@@ -64,6 +64,10 @@ type Profile struct {
 	Params map[string]string `yaml:"params"`
 	// Points are the device's data, one row per register, coil or node.
 	Points []Point `yaml:"points"`
+	// Derived are BOOL members computed from a polled point's value (a bit
+	// of a status word, a code equal to a value), so an alarm can name a
+	// fault. They are never polled or written; see Derived.
+	Derived []Derived `yaml:"derived"`
 	// Simulator gives the device behaviour; nil means its points hold what
 	// was last written (by the controller, or by the process model).
 	Simulator *Simulator `yaml:"simulator"`
@@ -415,6 +419,9 @@ func (p *Profile) validate() error {
 		if err != nil {
 			return fmt.Errorf("point %s: %w", pt.Name, err)
 		}
+	}
+	if err := p.validateDerived(seen); err != nil {
+		return err
 	}
 	if err := p.validateIOLink(); err != nil {
 		return err

@@ -146,7 +146,7 @@ func TestDevicesRender(t *testing.T) {
 	if code := runDevicesRender([]string{dir}, &b); code != 0 {
 		t.Fatalf("render exited %d", code)
 	}
-	for _, want := range []string{"ABB_ACS355_FMBT21 : STRUCT", "CONV_ControlWord  output", "CONV.StatusWord   read", "CONV_ControlWord  write"} {
+	for _, want := range []string{"ABB_ACS355_FMBT21 : STRUCT", "CONV_ControlWord  output", "CONV.StatusWord   read", "CONV_ControlWord  write", "CONV.Tripped  CONV.StatusWord  bit 3"} {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("render lacks %q:\n%s", want, b.String())
 		}

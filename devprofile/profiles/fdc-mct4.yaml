@@ -33,6 +33,9 @@ points:
   - { name: Alarm1SP,        type: INT,  table: holding, address: 51, writable: true, desc: "Alarm 1 Setpoint", doc: "mct4 p. 172 register 51, *B13 p. 177" }
   - { name: Alarm2SP,        type: INT,  table: holding, address: 52, writable: true, desc: "Alarm 2 Setpoint", doc: "mct4 p. 172 register 52, *B13 p. 177" }
   - { name: Input1Units,     type: UINT, table: holding, address: 71, init: 1, desc: "Input 1 Units (0 C, 1 F, 2 process)", doc: "mct4 p. 172 register 71, *B14 p. 177" }
+derived:
+  - { name: SensorBreak, from: Loop1Error, eq: 39, desc: "Loop 1 reports a sensor break (error code 39)", doc: "mct4 p. 172 register 39, *B11 p. 176" }
+
 simulator: { block: MCT4_SIM, source: fdc-mct4.st }
 notes: |
   Loop 1 only: a PI loop over a first-order thermal model. Heat goes in only

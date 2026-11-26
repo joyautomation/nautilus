@@ -169,6 +169,16 @@ func runDevicesRender(args []string, w io.Writer) int {
 	}
 	tw.Flush()
 
+	if rows := set.Derived(); len(rows) > 0 {
+		fmt.Fprint(w, "\n# derived (computed from a polled member, never polled)\n\n")
+		tw = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "MEMBER\tFROM\tTRUE WHEN")
+		for _, r := range rows {
+			fmt.Fprintf(tw, "%s.%s\t%s.%s\t%s\n", r.Device, r.Name, r.Device, r.From, r.Test)
+		}
+		tw.Flush()
+	}
+
 	if set.Modbus() {
 		mm := set.ModbusManifest()
 		fmt.Fprint(w, "\n# modbus\n\n")
