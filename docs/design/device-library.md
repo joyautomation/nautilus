@@ -433,7 +433,7 @@ or the process model.
   `format:` key would have nothing to read and a migration nothing to do.
   When the first breaking change comes, add `format: 1` as a required key
   in that PR, and have `update` migrate the vendored copies it finds then.
-  Decided by naut-lead, 2026-11-26.
+  Decided 2026-11-26.
 
 ## 8. Plan
 

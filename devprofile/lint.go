@@ -88,7 +88,8 @@ func (p *Profile) Lint() []Finding {
 
 // lintOverlap finds two points that read or write the same address. A
 // BOOL point that takes a bit of a register (format bit:N) legitimately
-// shares it with the register's own point; two of one bit do not.
+// shares it with the register's own point, of any width; two of one bit do
+// not.
 func (p *Profile) lintOverlap() []Finding {
 	var out []Finding
 	if p.Protocol == ProtoOPCUA {
