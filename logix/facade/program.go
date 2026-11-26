@@ -140,6 +140,42 @@ func (p *programPlane) get(w http.ResponseWriter, _ *http.Request) {
 	writeAny(w, http.StatusOK, info)
 }
 
+// auditTarget names what a program write acts on for the journal: the
+// controller, the hash it runs now, and a hash of the source sent (never
+// the source itself, which can be large).
+func (p *programPlane) auditTarget(deploy bool) func(*http.Request, []byte) server.AuditTarget {
+	return func(_ *http.Request, body []byte) server.AuditTarget {
+		var req struct {
+			Mode   string `json:"mode"`
+			Source string `json:"source"`
+		}
+		_ = json.Unmarshal(body, &req)
+		p.mu.Lock()
+		before := sourceHash(p.source)
+		p.mu.Unlock()
+		t := server.AuditTarget{Target: "main", Before: before}
+		if p.cfg.Controller != "" {
+			t.Target = p.cfg.Controller
+		}
+		if req.Source != "" {
+			sum := sha256.Sum256([]byte(req.Source))
+			t.After = hex.EncodeToString(sum[:6])
+			t.Detail = map[string]any{"sha256": hex.EncodeToString(sum[:]), "bytes": len(req.Source)}
+		}
+		if deploy {
+			if t.Detail == nil {
+				t.Detail = map[string]any{}
+			}
+			mode := "other" // the client's own words are never journalled
+			if req.Mode == "online" || req.Mode == "download" {
+				mode = req.Mode
+			}
+			t.Detail["mode"] = mode
+		}
+		return t
+	}
+}
+
 func (p *programPlane) put(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	if code, msg := p.auth(r, server.PermEdit); code != 0 {
@@ -162,9 +198,15 @@ func (p *programPlane) put(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	rep, err := p.cfg.Deploy(ctx, req.Source, func(string) {})
 	if err != nil {
+		if outcomeUnknown(err) {
+			server.MarkOutcomeUnknown(w)
+		}
 		code, msg := deployError(err)
 		writeJSON(w, code, msg)
 		return
+	}
+	if rep.ModeWarning != "" {
+		server.JournalWarning(w, rep.ModeWarning)
 	}
 	writeAny(w, http.StatusOK, p.applied(req.Source, rep, started))
 }
@@ -218,6 +260,9 @@ func (p *programPlane) applied(src string, rep *deploy.Report, started time.Time
 	}
 	// valuesKept and resets are a download's: an online edit carries every
 	// value, so it has nothing to say about them (#391).
+	if rep.ModeWarning != "" {
+		body["modeWarning"] = rep.ModeWarning
+	}
 	if rep.Applied == deploy.Download {
 		body["resets"] = resets(rep)
 		body["valuesKept"] = valuesKept(rep)
@@ -250,7 +295,16 @@ func deployError(err error) (int, string) {
 	var nd *deploy.NeedsDownloadError
 	var ve *deploy.VerifyError
 	var se *deploy.StartStateError
+	var ou *deploy.OutcomeUnknownError
 	switch {
+	case errors.As(err, &ou):
+		// Before every other case: a verify that found the controller
+		// different is, after a write, in doubt first (#1404).
+		msg := ou.Error()
+		if errors.As(err, &ve) {
+			msg += ". The verify found: " + strings.Join(ve.Diffs, "; ")
+		}
+		return http.StatusBadGateway, msg
 	case errors.As(err, &se):
 		return http.StatusConflict, se.Error()
 	case errors.As(err, &de):
@@ -275,6 +329,9 @@ func deployError(err error) (int, string) {
 func errorEvent(err error) map[string]any {
 	code, msg := deployError(err)
 	ev := map[string]any{"event": "error", "status": code, "error": msg}
+	if outcomeUnknown(err) {
+		ev["outcome"] = "unknown"
+	}
 	var se *deploy.StartStateError
 	if errors.As(err, &se) {
 		ev["needsProgramMode"] = true
@@ -283,6 +340,13 @@ func errorEvent(err error) map[string]any {
 		}
 	}
 	return ev
+}
+
+// outcomeUnknown says a deploy failed after its write to the controller
+// began: the controller may hold the new program (#1404).
+func outcomeUnknown(err error) bool {
+	var ou *deploy.OutcomeUnknownError
+	return errors.As(err, &ou)
 }
 
 // deployStream is POST /api/logix/deploy: an online edit or a download,
@@ -365,18 +429,25 @@ func (p *programPlane) deployStream(w http.ResponseWriter, r *http.Request) {
 		rep, err = p.cfg.Deploy(ctx, req.Source, progress)
 	}
 	if err != nil {
+		if outcomeUnknown(err) {
+			server.MarkOutcomeUnknown(w)
+		}
 		emit(errorEvent(err))
 		return
 	}
 	body := p.applied(req.Source, rep, started)
 	body["event"] = "done"
+	if rep.ModeWarning != "" {
+		server.JournalWarning(w, rep.ModeWarning)
+	}
 	emit(body)
 	if req.Mode != "download" || p.cfg.Warm == nil {
 		return
 	}
 	// The report is out and the plane free; the warm-up is the next
-	// edit's. Like the deploy, it stops if the request goes away (a
-	// stopping serve), and the next edit then opens the session itself.
+	// edit's. Unlike a deploy past its write to the controller (#1404),
+	// it stops if the request goes away (a stopping serve), and the next
+	// edit then opens the session itself.
 	end()
 	p.cfg.Warm(ctx, progress)
 }

@@ -172,16 +172,16 @@ func (f *Facade) Handler() http.Handler {
 	mux.Handle("/", api)
 	if f.prog != nil {
 		mux.HandleFunc("GET /api/program", f.prog.get)
-		mux.HandleFunc("PUT /api/program", f.prog.put)
-		mux.HandleFunc("POST /api/logix/deploy", f.prog.deployStream)
+		mux.Handle("PUT /api/program", f.srv.Audited("program.edit", f.prog.auditTarget(false), f.prog.put))
+		mux.Handle("POST /api/logix/deploy", f.srv.AuditedStream("logix.deploy", f.prog.auditTarget(true), f.prog.deployStream))
 	} else {
 		mux.HandleFunc("GET /api/program", programGone)
-		mux.HandleFunc("PUT /api/program", programLocked)
-		mux.HandleFunc("POST /api/logix/deploy", noProject)
+		mux.Handle("PUT /api/program", f.srv.Audited("program.edit", nil, programLocked))
+		mux.Handle("POST /api/logix/deploy", f.srv.AuditedStream("logix.deploy", nil, noProject))
 	}
 	mux.HandleFunc("GET /api/program/history", programGone)
-	mux.HandleFunc("POST /api/program/rollback", programLocked)
-	mux.HandleFunc("POST /api/program/activate", programLocked)
+	mux.Handle("POST /api/program/rollback", f.srv.Audited("program.rollback", nil, programLocked))
+	mux.Handle("POST /api/program/activate", f.srv.Audited("program.activate", nil, programLocked))
 	// The facade's own routes (the program source among them) keep the
 	// server's Host rule (#819), as the server's routes do.
 	return f.srv.GuardHost(mux)

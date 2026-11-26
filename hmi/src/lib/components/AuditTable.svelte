@@ -40,6 +40,26 @@
 	let error = $state('');
 	let loading = $state(false);
 
+	let exporting = $state(false);
+
+	/** Download the journal as CSV for the toolbar's filter (the whole range, not the table's limit). */
+	export async function exportCsv() {
+		exporting = true;
+		const r = await client.csv(filter);
+		exporting = false;
+		if (!r.ok) {
+			error = r.message;
+			return;
+		}
+		error = '';
+		const url = URL.createObjectURL(r.blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = r.filename;
+		a.click();
+		setTimeout(() => URL.revokeObjectURL(url), 10_000);
+	}
+
 	// Ahead of time, so a role without audit is told before it asks.
 	const denied = $derived(deniedFor('audit'));
 
@@ -104,6 +124,7 @@
 				<option value="unknown">unknown</option>
 			</select>
 			<Button size="sm" type="submit" icon="arrow-path" loading={loading}>Read</Button>
+			<Button size="sm" type="button" icon="arrow-down" loading={exporting} onclick={() => void exportCsv()}>Export CSV</Button>
 		</form>
 
 		{#if error}<p class="msg err" role="alert">{error}</p>{/if}

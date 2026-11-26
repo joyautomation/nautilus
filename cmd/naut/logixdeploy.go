@@ -275,6 +275,19 @@ func runLogixDeploy(args []string) int {
 			fmt.Fprintf(os.Stderr, "naut logix deploy: %d construct(s) outside the Logix v1 subset; nothing sent\n", len(de.Diags))
 			return 1
 		}
+		var ou *deploy.OutcomeUnknownError
+		if errors.As(err, &ou) {
+			// Before the verify's own branch: a verify that failed after
+			// the write is in doubt first (#1404).
+			fmt.Fprintf(os.Stderr, "naut logix deploy: %v\n", err)
+			var ve *deploy.VerifyError
+			if errors.As(err, &ve) {
+				for _, d := range ve.Diffs {
+					fmt.Fprintln(os.Stderr, "  "+d)
+				}
+			}
+			return 1
+		}
 		var ve *deploy.VerifyError
 		if errors.As(err, &ve) {
 			fmt.Printf("VERIFY FAILED — %d difference(s) between what was sent and what runs:\n", len(ve.Diffs))
@@ -289,6 +302,9 @@ func runLogixDeploy(args []string) int {
 			return 1
 		}
 		return reportErr("deploy", err)
+	}
+	if rep.ModeWarning != "" {
+		fmt.Fprintln(os.Stderr, "naut logix deploy: WARNING: "+rep.ModeWarning)
 	}
 	if rep.Applied != deploy.BuildOnly {
 		fmt.Printf("%s done and verified in %s since the command started\n", rep.Applied, rep.Elapsed.Round(time.Millisecond))

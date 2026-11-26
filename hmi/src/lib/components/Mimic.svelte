@@ -20,7 +20,7 @@
 	import Pipe from './Pipe.svelte';
 	import StatusPill from './StatusPill.svelte';
 	import { sampleTag, tagHistory } from '../taghistory.svelte.js';
-	import { BUILTIN_PORTS, autoRoutes, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
+	import { BUILTIN_PORTS, autoRoutes, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints, unresolvedBindings, unresolvedMessage } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -350,6 +350,9 @@
 		return b.length > 0 ? JSON.stringify(b) : undefined;
 	});
 
+	/** Bindings that name no tag in the live frame: shown, never silent. */
+	const unresolved = $derived(unresolvedBindings(doc, tags));
+
 	/** Paint order for the pipe network — see the junction note in Pipe.svelte. */
 	const PIPE_LAYERS = ['wall', 'bore', 'flow'] as const;
 </script>
@@ -359,12 +362,18 @@
 	class:scrolling={floored}
 	bind:this={host}
 	data-broken-pipes={broken}
+	data-unresolved={unresolved.length > 0 ? JSON.stringify(unresolved) : undefined}
 	data-crossed={crossed}
 	data-unrouted={unrouted}
 	data-scale={scale.toFixed(3)}
 	data-canvas="{doc.canvas.width}x{doc.canvas.height}"
 	style="height: {doc.canvas.height * scale}px"
 >
+	{#if unresolved.length > 0}
+		<div class="unresolved" role="status">
+			{unresolvedMessage(unresolved)}
+		</div>
+	{/if}
 	<div
 		class="scroll-host"
 		style:width={floored ? `${doc.canvas.width * scale}px` : undefined}
@@ -601,6 +610,17 @@
 		.eq.clickable:is(:hover, :focus-visible, .selected, .fading) {
 			transition: none;
 		}
+	}
+	.unresolved {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		z-index: 5;
+		padding: 2px 8px;
+		font-size: 12px;
+		background: var(--warn-bg, #fff3cd);
+		color: var(--warn-fg, #664d03);
 	}
 	.unknown {
 		display: inline-block;

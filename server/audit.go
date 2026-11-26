@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -127,6 +128,8 @@ var actionClass = map[string]string{
 	"substitute.ack":       strict,
 	"program.edit":         strict,
 	"program.activate":     strict,
+	// A Logix download or online edit through the facade (#709).
+	"logix.deploy": strict,
 	// Ending the subscriptions a mass revocation held (#722): phones stop
 	// being paged on a person's word.
 	"push.confirm-revocations": strict,
@@ -654,6 +657,10 @@ type auditedRoute struct {
 	tf     targetFunc
 	h      http.HandlerFunc
 	pre    preStep
+	// stream: the handler's answer goes to the client as it is written
+	// (a deploy's progress); its entry is recorded when it returns, and a
+	// final {"event":"error"} line makes it a failure.
+	stream bool
 }
 
 // preStep runs before the seam decides anything: it may fix who the
@@ -751,7 +758,7 @@ func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set(auditJournalHeader, "down")
 	}
-	a.answer(w, r, t, a.h)
+	a.answerAs(w, r, t, a.h, a.stream)
 }
 
 // refuse answers r with h instead of the route's handler, through the
@@ -774,12 +781,41 @@ func auditedAnswer(routes *http.ServeMux, w http.ResponseWriter, r *http.Request
 
 // answer runs h into a buffer, records the entry, then answers.
 func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTarget, h http.HandlerFunc) {
+	a.answerAs(w, r, t, h, false)
+}
+
+// answerAs is answer; stream passes the handler's bytes through as they
+// are written (only the route's own handler streams: a refusal is held
+// until its entry is recorded, as on every route).
+func (a *auditedRoute) answerAs(w http.ResponseWriter, r *http.Request, t auditTarget, h http.HandlerFunc, stream bool) {
 	buf := &bufferedResponse{header: w.Header()}
+	var sw *auditStreamWriter
+	if stream {
+		sw = &auditStreamWriter{ResponseWriter: w, buf: buf}
+	}
 	// The entry's id, decided now: a route that answers "outcome unknown"
 	// links its later resolution to it (oplog_unknown.go).
 	ref := seamRef{id: audit.NewID(a.s.audit.now()), action: a.action, target: capText(t.target, targetMax)}
 	r = withSeamRef(r, ref)
-	h(buf, r)
+	if sw != nil {
+		h(sw, r)
+		if buf.status == 0 || buf.status < http.StatusBadRequest {
+			// A streamed answer is accepted only when it says so: ending
+			// without a terminal event (the request was cancelled, the
+			// handler returned early) is a failure.
+			switch sw.ended() {
+			case "done":
+			case "error":
+				buf.status = http.StatusInternalServerError
+			default:
+				buf.status = http.StatusInternalServerError
+				buf.body.Reset()
+				buf.body.WriteString(`{"error":"ended without a result"}`)
+			}
+		}
+	} else {
+		h(buf, r)
+	}
 	status := buf.status
 	if status == 0 {
 		status = http.StatusOK
@@ -811,6 +847,11 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		// effect (substitutes_oplog.go).
 		e.Result = audit.ResultUnknown
 	}
+	if buf.header.Get(journalAsHeader) == audit.ResultRefused && e.Result == audit.ResultError {
+		// A definite no answered 5xx (no leader known: nothing was sent).
+		e.Result = audit.ResultRefused
+	}
+	buf.header.Del(journalAsHeader) // the seam's, never the client's
 	valueCap := valueMax
 	if e.Result == audit.ResultOK {
 		if t.done != nil {
@@ -836,6 +877,14 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 			}
 		}
 	}
+	if m := buf.header.Get(journalWarningHeader); m != "" {
+		d := map[string]any{"warning": capText(m, reasonMax)}
+		for k, v := range e.Detail {
+			d[k] = v
+		}
+		e.Detail = d
+	}
+	buf.header.Del(journalWarningHeader) // the seam's, never the client's
 	e.Before, e.After = audit.Cap(e.Before, valueCap), audit.Cap(e.After, valueCap)
 	a.s.audit.record(e)
 	buf.header.Del(linkReasonHeader) // the seam's, never the client's
@@ -845,6 +894,9 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		// says 200.
 		buf.header.Del(providerAnswerHeader)
 		status = http.StatusOK
+	}
+	if sw != nil {
+		return // already on the wire
 	}
 	w.WriteHeader(status)
 	w.Write(buf.body.Bytes())
@@ -1472,29 +1524,16 @@ type auditResponse struct {
 // entries say who did what from where. The users and roles PRs give it
 // the "audit" permission (design §4).
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
-	if s.policy != nil {
-		// With an auth: block, reading the journal is the audit permission
-		// (design §6 Q1).
-		if code, msg := s.authorize(r, PermAudit, ""); code != 0 {
-			writeJSON(w, code, map[string]string{"error": msg})
-			return
-		}
-	} else if s.authToken != "" && !tokenMatches(r, s.authToken) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "the audit journal needs the auth token"})
+	if !s.auditReadable(w, r) {
 		return
 	}
 	q := r.URL.Query()
-	from, err := parseTime(q.Get("from"), time.Time{})
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from: " + err.Error()})
-		return
-	}
-	to, err := parseTime(q.Get("to"), time.Time{})
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "to: " + err.Error()})
+	f, ok := s.auditFilterOf(w, q)
+	if !ok {
 		return
 	}
 	limit := 100
+	var err error
 	if l := q.Get("limit"); l != "" {
 		if limit, err = strconv.Atoi(l); err != nil || limit < 1 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit: want a positive integer"})
@@ -1503,9 +1542,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	out := auditResponse{Entries: []audit.Entry{}}
 	for _, e := range s.audit.ring.Recent() {
-		if (!from.IsZero() && e.TS.Before(from)) || (!to.IsZero() && e.TS.After(to)) ||
-			!matchesUser(q.Get("user"), e.User) || !matches(q.Get("action"), e.Action) ||
-			!matches(q.Get("target"), e.Target) || !matches(q.Get("result"), e.Result) {
+		if !f(e) {
 			continue
 		}
 		if len(out.Entries) == limit {
@@ -1515,6 +1552,44 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		out.Entries = append(out.Entries, e)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// auditReadable answers a refusal and reports false when the request may
+// not read the journal: with an auth: block it is the audit permission
+// (design §6 Q1), without one the token.
+func (s *Server) auditReadable(w http.ResponseWriter, r *http.Request) bool {
+	if s.policy != nil {
+		if code, msg := s.authorize(r, PermAudit, ""); code != 0 {
+			writeJSON(w, code, map[string]string{"error": msg})
+			return false
+		}
+	} else if s.authToken != "" && !tokenMatches(r, s.authToken) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "the audit journal needs the auth token"})
+		return false
+	}
+	return true
+}
+
+// auditFilterOf reads the journal's filters (from, to, user, action,
+// target, result) from a query; on a bad one it answers 400 and reports
+// false.
+func (s *Server) auditFilterOf(w http.ResponseWriter, q url.Values) (func(audit.Entry) bool, bool) {
+	from, err := parseTime(q.Get("from"), time.Time{})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from: " + err.Error()})
+		return nil, false
+	}
+	to, err := parseTime(q.Get("to"), time.Time{})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "to: " + err.Error()})
+		return nil, false
+	}
+	user, action, target, result := q.Get("user"), q.Get("action"), q.Get("target"), q.Get("result")
+	return func(e audit.Entry) bool {
+		return !(!from.IsZero() && e.TS.Before(from)) && !(!to.IsZero() && e.TS.After(to)) &&
+			matchesUser(user, e.User) && matches(action, e.Action) &&
+			matches(target, e.Target) && matches(result, e.Result)
+	}, true
 }
 
 // matches is a filter: empty matches everything, else equal ignoring case.

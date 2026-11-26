@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -32,13 +34,21 @@ END_PROGRAM`
 // pairGate is one node's network: down refuses everything; loseWrites
 // runs a POST and loses its answer.
 type pairGate struct {
-	h                http.Handler
-	down, loseWrites atomic.Bool
+	h                                          http.Handler
+	down, loseWrites, failReads, dropReplicate atomic.Bool
 }
 
 func (g *pairGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if g.down.Load() {
 		http.Error(w, "down", http.StatusServiceUnavailable)
+		return
+	}
+	if g.dropReplicate.Load() && strings.HasSuffix(r.URL.Path, "/replicate") {
+		http.Error(w, "replicate down", http.StatusServiceUnavailable)
+		return
+	}
+	if g.failReads.Load() && r.Method != http.MethodPost {
+		http.Error(w, "reads down", http.StatusServiceUnavailable)
 		return
 	}
 	if g.loseWrites.Load() && r.Method == http.MethodPost {
@@ -53,6 +63,9 @@ type pair struct {
 	mu     sync.Mutex
 	leader string
 	term   uint64
+	// nodeView: an instance's log node sees this leader ("" = none) while
+	// its runtime keeps the view in leader.
+	nodeView map[string]string
 
 	urls   [3]string
 	gates  [3]*pairGate
@@ -68,11 +81,26 @@ type pair struct {
 type seat struct {
 	p    *pair
 	self string
+	rt   bool // the runtime's view (the log node's is the other)
 }
 
-func (s seat) IsLeader() bool     { s.p.mu.Lock(); defer s.p.mu.Unlock(); return s.p.leader == s.self }
-func (s seat) LeaderAddr() string { s.p.mu.Lock(); defer s.p.mu.Unlock(); return s.p.leader }
-func (s seat) Term() uint64       { s.p.mu.Lock(); defer s.p.mu.Unlock(); return s.p.term }
+func (s seat) IsLeader() bool {
+	s.p.mu.Lock()
+	defer s.p.mu.Unlock()
+	if v, ok := s.p.nodeView[s.self]; ok && !s.rt {
+		return v == s.self // the log's view differs from the runtime's (a race window)
+	}
+	return s.p.leader == s.self
+}
+func (s seat) LeaderAddr() string {
+	s.p.mu.Lock()
+	defer s.p.mu.Unlock()
+	if v, ok := s.p.nodeView[s.self]; ok && !s.rt {
+		return v
+	}
+	return s.p.leader
+}
+func (s seat) Term() uint64 { s.p.mu.Lock(); defer s.p.mu.Unlock(); return s.p.term }
 
 func (p *pair) lead(i int, term uint64) {
 	p.mu.Lock()
@@ -96,7 +124,7 @@ func newPair(t *testing.T) *pair {
 			p.stores[i] = &subStore{}
 			rt, err := runtime.New(runtime.Options{
 				Program: pairProgram, Driver: nio.NewMemory(), Clock: p.clks[i], Retain: p.stores[i],
-				Coordinator:   seat{p, p.urls[i]},
+				Coordinator:   seat{p: p, self: p.urls[i], rt: true},
 				Inputs:        []string{"Level", "Flow"},
 				Seed:          nio.Values{"Level": 40.0, "Flow": 3.0, "First": 0.0, "Seen": false},
 				Substitutable: []string{"Level", "Flow"},
@@ -111,7 +139,7 @@ func newPair(t *testing.T) *pair {
 		if sl != nil {
 			apply = func(e oplog.Entry) error { _, err := sl.Apply(e); return err }
 		}
-		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p, p.urls[i]},
+		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p: p, self: p.urls[i]},
 			Token: "t", Ephemeral: true, Apply: apply})
 		if err != nil {
 			t.Fatal(err)
@@ -419,5 +447,102 @@ func TestARetriedStartIsIdempotent(t *testing.T) {
 	}
 	if again := startOn(t, p.srvs[0], `{"name":"Level","requestId":"r-1"}`); decodeSubs(t, again.Body.Bytes()).Started.ID != id {
 		t.Fatal("a third try with the same request ID started another entry")
+	}
+}
+
+// A proposal with no leader known sent nothing: a definite no, so 503 "no
+// leader, retry", answered refused (not "outcome unknown"), journalled
+// refused, and oplog.ErrNoLeader still matches ErrReadOnly (#707, the
+// #1017 review). The runtime still thinks it leads: the window between
+// its view and the log's.
+func TestAStartWithNoLeaderKnownIsADefiniteNo(t *testing.T) {
+	p := newPair(t)
+	firstScan(t, p.rts[0])
+	p.rts[1].Scan()
+	p.lead(1, 2)
+	p.rts[1].Scan() // its runtime now leads
+	p.mu.Lock()
+	p.nodeView = map[string]string{p.urls[1]: ""}
+	p.mu.Unlock()
+	if _, err := p.nodes[1].Propose(context.Background(), oplog.Entry{Kind: oplog.KindSubstitute, Tag: "Level"}); !errors.Is(err, oplog.ErrNoLeader) || !errors.Is(err, oplog.ErrReadOnly) {
+		t.Fatalf("Propose with no leader = %v; want ErrNoLeader that is also ErrReadOnly", err)
+	}
+	// The handler's majority pre-check answers first when the log is
+	// unwritable; ErrNoLeader is what reaches unknownOutcome in the window
+	// between that check and the proposal.
+	h := p.srvs[1].audited("substitute.start", p.srvs[1].substituteStartTarget, func(w http.ResponseWriter, r *http.Request) {
+		unknownOutcome(w, fmt.Errorf("propose: %w", oplog.ErrNoLeader))
+	})
+	req := httptest.NewRequest("POST", "/api/substitutes", strings.NewReader(`{"name":"Level"}`))
+	r := httptest.NewRecorder()
+	h.ServeHTTP(r, req)
+	if r.Code != 503 || r.Header().Get(outcomeHeader) != "refused" || !strings.Contains(r.Body.String(), "no leader, retry") || strings.Contains(r.Body.String(), "outcome unknown") {
+		t.Fatalf("a start with no leader = %d %q %s; want 503 refused \"no leader, retry\"", r.Code, r.Header().Get(outcomeHeader), r.Body)
+	}
+	got := ""
+	for _, e := range p.srvs[1].audit.ring.Recent() {
+		if e.Action == "substitute.start" {
+			got = e.Result
+		}
+	}
+	if got != audit.ResultRefused {
+		t.Fatalf("the audit row says %q; want refused", got)
+	}
+}
+
+// A start the leader committed, on a replica that cannot catch up at once,
+// is 202 "committed, not yet visible here", not a 409 saying it did not
+// start (#707, the #1017 review). The replica's runtime believes it
+// leads while its log forwards to the real leader.
+func TestACommittedStartThisReplicaHasNotSeenIs202(t *testing.T) {
+	p := newPair(t)
+	firstScan(t, p.rts[0])
+	p.rts[1].Scan()
+	p.lead(1, 2)
+	p.rts[1].Scan() // its runtime now leads; its log forwards to the old leader
+	p.mu.Lock()
+	p.nodeView = map[string]string{p.urls[0]: p.urls[0], p.urls[1]: p.urls[0], p.urls[2]: p.urls[0]}
+	p.mu.Unlock()
+	p.gates[0].failReads.Store(true)
+	p.gates[1].dropReplicate.Store(true)
+	r := startOn(t, p.srvs[1], `{"name":"Level"}`)
+	if r.Code != 202 || !strings.Contains(r.Body.String(), "committed, not yet visible here") {
+		t.Fatalf("a committed start this replica has not seen = %d %s; want 202", r.Code, r.Body)
+	}
+	got := ""
+	for _, e := range p.srvs[1].audit.ring.Recent() {
+		if e.Action == "substitute.start" {
+			got = e.Result
+		}
+	}
+	if got != audit.ResultOK {
+		t.Fatalf("the audit row says %q; want ok (committed)", got)
+	}
+	p.gates[0].failReads.Store(false)
+	eventually(t, "the start is on the leader", func() bool { return len(p.rts[0].Substitutes()) == 1 })
+}
+
+// A proposal refused for want of a leader leaves nothing tracked as
+// "unknown" (nothing was sent, so there is nothing to resolve later), on
+// the substitute route and on a note's.
+func TestNoLeaderIsNotTrackedAsUnknown(t *testing.T) {
+	p := newPair(t)
+	s := p.srvs[0]
+	req := httptest.NewRequest("POST", "/x", nil)
+	_, err := s.proposeFor(context.Background(), req, oplog.Entry{Kind: oplog.KindSubstitute, Tag: "Level"}, true,
+		func(context.Context, oplog.Entry) (oplog.Entry, error) { return oplog.Entry{}, oplog.ErrNoLeader })
+	if !errors.Is(err, oplog.ErrNoLeader) {
+		t.Fatalf("err = %v", err)
+	}
+	s.unknowns.mu.Lock()
+	n := len(s.unknowns.order)
+	s.unknowns.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d proposals tracked after a no-leader refusal; want none", n)
+	}
+	w := httptest.NewRecorder()
+	noteUnknown(w, oplog.ErrNoLeader, "n1")
+	if w.Code != 503 || w.Header().Get(outcomeHeader) != "refused" || strings.Contains(w.Body.String(), "outcome unknown") {
+		t.Fatalf("note with no leader = %d %q %s; want 503 refused", w.Code, w.Header().Get(outcomeHeader), w.Body)
 	}
 }

@@ -96,7 +96,7 @@ func (r *pairRig) shadowed(t *testing.T, lead string) {
 	after := r.streamStatus(lead).Seq
 	pairWait(t, "the standby to apply the leader's next image", 5*time.Second, func() bool {
 		s := r.streamStatus(other(lead))
-		return s != nil && s.State == "in-sync" && s.Seq > after
+		return s != nil && s.State == "in-sync" && afterNow(s.Seq, after)
 	})
 }
 

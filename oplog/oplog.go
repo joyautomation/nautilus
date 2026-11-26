@@ -740,6 +740,12 @@ type Status struct {
 // ErrReadOnly says this instance cannot commit a write right now.
 var ErrReadOnly = errors.New("oplog: read-only: no quorum reachable")
 
+// ErrNoLeader says a proposal was refused before anything was sent: this
+// instance is not the leader and knows none to forward to. It wraps
+// ErrReadOnly (errors.Is matches both), and unlike a forwarding failure it
+// is a definite no: nothing reached any peer.
+var ErrNoLeader = fmt.Errorf("%w: no leader known, nothing was sent", ErrReadOnly)
+
 // ErrUnconfirmed says a write was stored by the leader but not confirmed
 // by a majority: it may still be committed and applied later, so the
 // write's outcome is unknown, not refused. It always comes wrapped with
@@ -1912,7 +1918,7 @@ func (n *Node) Propose(ctx context.Context, e Entry) (Entry, error) {
 	}
 	leader := n.leaderAddr()
 	if leader == "" {
-		return Entry{}, ErrReadOnly
+		return Entry{}, ErrNoLeader
 	}
 	var out proposeResp
 	if err := n.call(ctx, leader, "/api/oplog/propose", e, &out); err != nil {

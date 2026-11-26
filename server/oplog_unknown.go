@@ -329,7 +329,7 @@ func (s *Server) proposeFor(ctx context.Context, r *http.Request, e oplog.Entry,
 	}
 	t := s.unknowns.begin(e)
 	out, err := propose(ctx, e)
-	if errors.Is(err, oplog.ErrTooLarge) {
+	if errors.Is(err, oplog.ErrTooLarge) || errors.Is(err, oplog.ErrNoLeader) {
 		s.unknowns.refusedBeforeProposing(t) // its outcome is known
 		return out, err
 	}

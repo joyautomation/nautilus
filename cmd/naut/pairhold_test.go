@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/leader"
 )
 
 // The takeover hold on a real pair (#710 (b2), pairhold.go,
@@ -75,7 +77,10 @@ func waitHoldEvent(t *testing.T, jr *recJournal, event string) audit.Entry {
 // leader's /api/cluster shows the hold and warns of it, the journal says
 // when it started and when it passed its max, and it stays held past its
 // max until an operator's audited release-hold on the leader's API. A new
-// pair's first leader never holds (a start).
+// pair's first leader holds exactly when its leadership is a takeover: a
+// start never holds, but a first leader that took over from the peer (it
+// led or campaigned first, as when it yields an unsynced log at start)
+// does (#1405).
 // hold_never_starts and hold_no_max turn it red.
 func TestPairTakeoverHoldColdAndOperatorRelease(t *testing.T) {
 	testPairFiles = holdPairProject("  takeover-hold:\n    release: Release\n    max: 1s\n")
@@ -88,11 +93,23 @@ func TestPairTakeoverHoldColdAndOperatorRelease(t *testing.T) {
 	lead := r.leader()
 	stand := other(lead)
 	time.Sleep(200 * time.Millisecond)
-	if got := r.get(lead, "Held"); got != "false" {
-		t.Fatalf("the first leader holds (Held %s): a start never holds", got)
+	// Read within one leadership: the hold belongs to the term it read.
+	var (
+		takeover bool
+		held     string
+		st       *leader.HoldStatus
+	)
+	pairWait(t, "the first leader's hold, read within one term", 10*time.Second, func() bool {
+		q := r.nodes[lead].m.q
+		term := q.Term()
+		takeover, held, st = q.IsTakeover(), r.get(lead, "Held"), r.streamStatus(lead).TakeoverHold
+		return q.IsLeader() && q.Term() == term
+	})
+	if want := fmt.Sprint(takeover); held != want {
+		t.Fatalf("the first leader's Held %s, want %s: it holds exactly when it took over (takeover %v), never at a start", held, want, takeover)
 	}
-	if st := r.streamStatus(lead).TakeoverHold; st == nil || st.Holding || st.Release != "Release" {
-		t.Fatalf("the first leader's hold status %+v, want configured, not holding", st)
+	if st == nil || st.Holding != takeover || st.Release != "Release" {
+		t.Fatalf("the first leader's hold status %+v, want configured, holding %v", st, takeover)
 	}
 	jr := &recJournal{}
 	r.nodes[stand].m.SetJournal(jr)
@@ -104,7 +121,7 @@ func TestPairTakeoverHoldColdAndOperatorRelease(t *testing.T) {
 	if e := waitHoldEvent(t, jr, "start"); e.Detail["inherited"] != nil {
 		t.Fatalf("start %v: a cold takeover's hold is its own", e.Detail)
 	}
-	st := r.streamStatus(stand).TakeoverHold
+	st = r.streamStatus(stand).TakeoverHold
 	if st == nil || !st.Holding {
 		t.Fatalf("/api/cluster hold %+v, want holding", st)
 	}

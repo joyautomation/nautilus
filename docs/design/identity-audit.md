@@ -261,7 +261,7 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
 | Forces | `force.set`, `force.clear`, `force.clear-all` |
 | SFC | `sfc.step`, `sfc.transition` |
 | Alarms | `alarm.ack`, `alarm.shelve`, `alarm.unshelve`, `alarm.suppress`, `alarm.unsuppress` (#707). The alarm journal's unauthenticated `by` becomes the principal |
-| Programs | `program.edit`, `program.rollback`, `program.activate`, `logix.deploy`, `siemens.download` |
+| Programs | `program.edit`, `program.rollback`, `program.activate`, `logix.deploy` (the Logix facade; there is no `siemens.download` route yet: a Siemens download is the CLI, `naut siemens deploy`, which has no journal) |
 | Configuration | `config.apply` (#706, when it lands) |
 | Identity | `auth.signin` (ok or failed, rate-limited per source), `auth.signout`, `auth.elevate`, `user.add`/`disable`/`passwd`, `token.issue`/`revoke` |
 | Redundancy | #787 §7.1's actions, unchanged |

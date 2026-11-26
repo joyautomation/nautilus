@@ -34,7 +34,7 @@ func TestASupersededStandbysTakeoverRestoresNoneOfItsRetainedSubstitutes(t *test
 			p.stores[i] = &subStore{}
 			rt, err := runtime.New(runtime.Options{
 				Program: pairProgram, Driver: nio.NewMemory(), Clock: p.clks[i], Retain: p.stores[i],
-				Coordinator:   seat{p, p.urls[i]},
+				Coordinator:   seat{p: p, self: p.urls[i]},
 				Inputs:        []string{"Level", "Flow"},
 				Seed:          nio.Values{"Level": 40.0, "Flow": 3.0, "First": 0.0, "Seen": false},
 				Substitutable: []string{"Level", "Flow"},
@@ -49,7 +49,7 @@ func TestASupersededStandbysTakeoverRestoresNoneOfItsRetainedSubstitutes(t *test
 		if sl != nil {
 			apply = func(e oplog.Entry) error { _, err := sl.Apply(e); return err }
 		}
-		o := oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p, p.urls[i]},
+		o := oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p: p, self: p.urls[i]},
 			Token: "t", Ephemeral: true, Apply: apply}
 		if i == 1 {
 			// B keeps a mark: only a marked copy records a newer history.
