@@ -140,6 +140,42 @@ func (p *programPlane) get(w http.ResponseWriter, _ *http.Request) {
 	writeAny(w, http.StatusOK, info)
 }
 
+// auditTarget names what a program write acts on for the journal: the
+// controller, the hash it runs now, and a hash of the source sent (never
+// the source itself, which can be large).
+func (p *programPlane) auditTarget(deploy bool) func(*http.Request, []byte) server.AuditTarget {
+	return func(_ *http.Request, body []byte) server.AuditTarget {
+		var req struct {
+			Mode   string `json:"mode"`
+			Source string `json:"source"`
+		}
+		_ = json.Unmarshal(body, &req)
+		p.mu.Lock()
+		before := sourceHash(p.source)
+		p.mu.Unlock()
+		t := server.AuditTarget{Target: "main", Before: before}
+		if p.cfg.Controller != "" {
+			t.Target = p.cfg.Controller
+		}
+		if req.Source != "" {
+			sum := sha256.Sum256([]byte(req.Source))
+			t.After = hex.EncodeToString(sum[:6])
+			t.Detail = map[string]any{"sha256": hex.EncodeToString(sum[:]), "bytes": len(req.Source)}
+		}
+		if deploy {
+			if t.Detail == nil {
+				t.Detail = map[string]any{}
+			}
+			mode := "other" // the client's own words are never journalled
+			if req.Mode == "online" || req.Mode == "download" {
+				mode = req.Mode
+			}
+			t.Detail["mode"] = mode
+		}
+		return t
+	}
+}
+
 func (p *programPlane) put(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	if code, msg := p.auth(r, server.PermEdit); code != 0 {

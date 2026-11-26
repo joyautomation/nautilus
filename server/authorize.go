@@ -67,6 +67,7 @@ var actionPerm = map[string]string{
 	"program.edit":             PermEdit,
 	"program.rollback":         PermEdit,
 	"program.activate":         PermActivate,
+	"logix.deploy":             PermDeploy,
 	"push.confirm-revocations": PermConfig,
 	"checkout.begin":           PermCheckout,
 	"checkout.result":          PermCheckout,

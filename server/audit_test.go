@@ -1951,7 +1951,7 @@ func TestEveryActionIsClassed(t *testing.T) {
 	}
 	n := 0
 	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
+		if strings.HasSuffix(name, "_test.go") || name == "audit_export.go" { // the exported wrappers take the action as a parameter; the facades' literals are checked in TestFacadeActionsAreClassed
 			continue
 		}
 		f, err := parser.ParseFile(fset, name, nil, 0)
@@ -2151,5 +2151,21 @@ func TestRecordSystem(t *testing.T) {
 	if len(es) != 1 || es[0].User != "system" || es[0].Source != audit.SourceSystem ||
 		es[0].Action != "alarm.channel-insecure" || es[0].Target != "email" || es[0].Result != audit.ResultOK {
 		t.Fatalf("ring = %+v", es)
+	}
+}
+
+// The actions the facades journal through Audited are classed and mapped
+// to a permission (their literals live outside this package).
+func TestFacadeActionsAreClassed(t *testing.T) {
+	for _, a := range []string{"logix.deploy", "program.edit", "program.rollback", "program.activate"} {
+		if _, ok := actionClass[a]; !ok {
+			t.Errorf("%s is not classed", a)
+		}
+		if _, ok := actionPerm[a]; !ok {
+			t.Errorf("%s has no permission", a)
+		}
+	}
+	if !journalStrict("logix.deploy") {
+		t.Error("a download through the facade must be refused while the journal is down")
 	}
 }
