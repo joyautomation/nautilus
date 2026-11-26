@@ -83,7 +83,9 @@ func (s *Server) handleForce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.rt.Tags().Force(req.Name, req.Value); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		if !refuseSwitching(w, err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
 		return
 	}
 	logAction(r, "force: set", "tag", req.Name, "value", req.Value)
@@ -214,7 +216,9 @@ func (s *Server) sfcCommand(w http.ResponseWriter, r *http.Request, step bool) {
 		did, err = p.FireTransition(req.Transition)
 	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
+		if !refuseSwitching(w, err) {
+			http.Error(w, err.Error(), http.StatusConflict)
+		}
 		return
 	}
 	if step {

@@ -48,6 +48,17 @@ type Fake struct {
 	Token string
 	// Targets are the CPU addresses downloads may go to (TIAD_TARGETS).
 	Targets []string
+	// ReleaseOnlineFails makes taking a project offline fail inside TIA's
+	// side with this message: the project stays held online, and a close
+	// fails, leaving the session (the agent's broken close).
+	ReleaseOnlineFails string
+	// VerifyCloseError makes a verify fail to close its session: the
+	// session is kept and the reply's closeError says so (the verdict
+	// stands), as the agent's does when TIA is busy closing it.
+	VerifyCloseError string
+	// UI is TIAD_UI=1: TIA Portal runs with its user interface, so a show
+	// opens a block in its editor (Shown), and every download is refused.
+	UI bool
 	// UploadCPUError makes an upload succeed without its CPU: the agent's
 	// upload whose read of the project's CPU failed (cpuError).
 	UploadCPUError string
@@ -76,6 +87,13 @@ type Fake struct {
 	// identity online, as tiad.Openness cannot yet: online calls to a
 	// pinned CPU then fail with device_unverified.
 	NoIdentify bool
+	// OtherBlocks are program blocks every project holds outside any
+	// group nautilus imports into, besides Main at the root (a
+	// customer's group, a probe): a software import reports them with
+	// Main in its foreign list (#1326). OmitForeign makes the import
+	// report no foreign list at all, as an agent older than #1326.
+	OtherBlocks []tiad.ForeignBlock
+	OmitForeign bool
 
 	// policy is the projects' password policy for local users (nil:
 	// TIA's default), uploadAccess the access control an upload brings
@@ -84,8 +102,15 @@ type Fake struct {
 	uploadAccess string
 	uploadWeb    bool
 	// uploadAnonymous: an upload brings an active anonymous user.
-	uploadAnonymous bool
-	accessRecords   string
+	uploadAnonymous      bool
+	uploadAnonymousRoles []AnonymousRoleScript
+	// turnOnPending holds the projects marked turn-on pending (the
+	// agent's TurnOnRule.MarkerSuffix files).
+	turnOnPending map[string]bool
+	// rightsOnlyWhenOn: AccessScript.RightsOnlyWhenOn.
+	rightsOnlyWhenOn bool
+	uploadUsers      []string
+	accessRecords    string
 
 	// fingerprint scripts the fingerprint reads (SetFingerprint).
 	// tlsTrusted is set once the fake's TIA answered a TLS question
@@ -114,9 +139,11 @@ type Fake struct {
 	importReplacesForeign bool
 	// obImportIgnoresClass: SetOBImportIgnoresClass.
 	obImportIgnoresClass bool
-	keptLogons           map[string]bool
-	instanceLogons       map[string]string
-	answered             map[string]bool
+	// types: SetTypes.
+	types          TypesScript
+	keptLogons     map[string]bool
+	instanceLogons map[string]string
+	answered       map[string]bool
 
 	// deployRecs is the deploy record, oldest first, each intent with its
 	// outcome once written; archives the archived projects by sha256;
@@ -135,6 +162,16 @@ type Fake struct {
 	archiveN      int
 	// unreadableLines is what the deploy list reports (SetUnreadableLines).
 	unreadableLines int
+	// layoutScript is SetLayout; verifiedLoads each CPU's verify that
+	// found it equal to its newest load (the layout gate's proof).
+	layoutScript  LayoutScript
+	verifiedLoads map[string]verifiedLoad
+	// loadGen counts each CPU's downloads that may have reached it (the
+	// agent's loadGen): an adopt baseline stands only at its count.
+	loadGen map[string]int
+	// routes are the routes registered, "METHOD /pattern" (GET
+	// /v1/test/routes, as tiad-fake's seam).
+	routes []string
 
 	mu        sync.Mutex
 	pins      map[string]tiad.DeviceIdentity // CPU address → device pin
@@ -143,6 +180,8 @@ type Fake struct {
 	sessions  map[string]*session
 	next      int
 	downloads []Download
+	shown     []string
+	online    []string          // "online <address>" / "offline <address>", in order
 	loaded    map[string]string // CPU address → session that last downloaded
 	// saved is what a saved project holds besides its file: its CPU, the
 	// devices besides it and its protection, restored when it is opened.
@@ -153,11 +192,28 @@ type Fake struct {
 }
 
 type session struct {
-	id, project string
+	// deviceAttested is the device attestation the session's latest
+	// download (or dry run) check rested on, for its response and record.
+	deviceAttested *tiad.DeviceAttestationRecord
+	id, project    string
+	// heldOnline is the address an online call holds the project online
+	// to, "" when offline (the agent's Session.HeldOnline).
+	heldOnline string
+	// untouched: opened, and nothing but compare or export ran
+	// on it since (tiad.UntouchedKeeps); adopted is the adopt baseline an
+	// equal compare of it took (#1347).
+	untouched bool
+	adopted   *fakeAdopt
+	// adoptRefused is why the last compare that asked for an adopt
+	// baseline took none.
+	adoptRefused string
 	// guard is the directory a created project owns, "projects/<name>/".
-	guard    string
-	station  *tiad.Station
-	blocks   []tiad.Block
+	guard   string
+	station *tiad.Station
+	blocks  []tiad.Block
+	// decls is each imported block's declaration part (layoutDecl), by
+	// lower-cased name: the fake's layout is made from it.
+	decls    map[string]string
 	compiled bool
 	// changed is true until a download loads the project as it is.
 	changed bool
@@ -189,6 +245,15 @@ type session struct {
 	// recordOnly is set once an apply on this session asked for
 	// fullAccessRecordOnly (the agent's Session.AccessRecordOnly).
 	recordOnly bool
+	// turnOn is set once an apply on this session turned a kept CPU's
+	// access control on (accessControlTurnOn), failed or not, and
+	// turnOnLoaded once a download on it then loaded (the agent's
+	// Session.AccessTurnOn, AccessTurnOnLoaded).
+	turnOn, turnOnLoaded bool
+	// turnOnTried: a gated download reached the deploy record, or the
+	// session opened a project marked turn-on pending (the agent's
+	// Session.AccessTurnOnTried).
+	turnOnTried bool
 	// uploadedFrom is the address this session last uploaded from
 	// successfully, "" for none (the agent's Session.UploadedFrom): a
 	// later apply keeps it, a new upload clears it when it starts.
@@ -204,6 +269,12 @@ type session struct {
 	groups         map[string]string
 	mainReplaced   bool
 	foreignChanged bool
+	// importGroup is the session's last import's group (the agent's
+	// Session.ImportGroup: a compile then checks what lies outside it);
+	// typeModified is each data type's modified date once something moved
+	// it, by lower-cased name.
+	importGroup  string
+	typeModified map[string]string
 	// obInfo is each imported OB's class, number and cycle, by lower-cased
 	// name, as TIA keeps them across a source that replaces its body.
 	obInfo map[string]projectBlock
@@ -232,6 +303,7 @@ type savedProject struct {
 	blocks []tiad.Block
 	groups map[string]string
 	obInfo map[string]projectBlock
+	decls  map[string]string
 	// node and restored are the session's (session.node, .restored).
 	node     projectNode
 	restored string
@@ -438,6 +510,9 @@ type Download struct {
 	Session string
 	Request tiad.DownloadRequest
 	State   string
+	// EveryBlock: the load took the whole program (the agent's
+	// DownloadOptions.Software), not only what changed.
+	EveryBlock bool
 }
 
 // New returns an empty fake with a random token.
@@ -515,6 +590,14 @@ func (f *Fake) Station(sessionID string) (tiad.Station, bool) {
 	return *s.station, true
 }
 
+// Shown is every block a show opened in TIA's editor, as "group/name"
+// ("name" at the root), in order.
+func (f *Fake) Shown() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.shown...)
+}
+
 // Blocks returns the blocks a session's project holds, sorted by name.
 func (f *Fake) Blocks(sessionID string) []tiad.Block {
 	f.mu.Lock()
@@ -559,7 +642,9 @@ func (f *Fake) init() {
 		f.archived = map[string]archivedProject{}
 		f.savedArchives = map[string]savedProject{}
 		f.loadedArchive = map[string]string{}
-		m := http.NewServeMux()
+		mux := http.NewServeMux()
+		m := routeList{mux: mux, f: f}
+		m.HandleFunc("GET /v1/test/routes", f.wrap(f.testRoutes, false))
 		m.HandleFunc("GET /v1/health", f.wrap(f.health, false))
 		m.HandleFunc("GET /v1/probe", f.wrap(f.probe, false))
 		m.HandleFunc("GET /v1/files", f.wrap(f.listFiles, false))
@@ -576,16 +661,19 @@ func (f *Fake) init() {
 		m.HandleFunc("POST /v1/sessions/{id}/software", f.wrap(f.software, true))
 		m.HandleFunc("POST /v1/sessions/{id}/compile", f.wrap(f.compile, true))
 		m.HandleFunc("POST /v1/sessions/{id}/download", f.wrap(f.download, true))
+		m.HandleFunc("POST /v1/sessions/{id}/layout", f.wrap(f.layout, true))
 		m.HandleFunc("POST /v1/sessions/{id}/compare", f.wrap(f.compare, true))
 		m.HandleFunc("POST /v1/sessions/{id}/export", f.wrap(f.export, true))
 		m.HandleFunc("POST /v1/sessions/{id}/upload", f.wrap(f.upload, true))
 		m.HandleFunc("POST /v1/sessions/{id}/save", f.wrap(f.save, true))
+		m.HandleFunc("POST /v1/sessions/{id}/show", f.wrap(f.show, true))
+		m.HandleFunc("POST /v1/sessions/{id}/online", f.wrap(f.goOnline, true))
 		m.HandleFunc("POST /v1/sessions/{id}/fingerprint", f.wrap(f.readFingerprint, true))
 		m.HandleFunc("GET /v1/pins", f.wrap(f.listPins, false))
 		m.HandleFunc("GET /v1/deploys", f.wrap(f.listDeploys, false))
 		m.HandleFunc("POST /v1/deploys/verify", f.wrap(f.verifyDeploy, true))
 		m.HandleFunc("POST /v1/pins/{address}", f.wrap(f.setPin, false))
-		f.mux = m
+		f.mux = mux
 	})
 }
 
@@ -608,6 +696,13 @@ func (f *Fake) wrap(h handler, needsTIA bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		// Every session call UntouchedKeeps does not name touches the
+		// session before it runs, failed or not (#1347).
+		if id := r.PathValue("id"); id != "" && tiad.UntouchedTouches(r.Pattern) {
+			if s, ok := f.sessions[id]; ok {
+				s.untouched = false
+			}
+		}
 		if needsTIA {
 			for _, g := range f.Gates {
 				if g.Blocks() {
@@ -789,7 +884,7 @@ func cleanPath(p string) (string, *failure) {
 // --- handlers -----------------------------------------------------------------
 
 func (f *Fake) health(*http.Request) (any, *failure) {
-	return tiad.Health{Version: "fake", TIA: "V21", Openness: "V21", Sessions: len(f.sessions), Targets: f.Targets}, nil
+	return tiad.Health{Version: "fake", TIA: "V21", Openness: "V21", Sessions: len(f.sessions), Targets: f.Targets, UI: f.UI}, nil
 }
 
 func (f *Fake) probe(*http.Request) (any, *failure) {
@@ -823,6 +918,9 @@ func (f *Fake) putFile(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if isTurnOnMarker(p) {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", TurnOnMarkerFileRefused)
+	}
 	b, err := io.ReadAll(r.Body)
 	if err != nil {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "body: %v", err)
@@ -853,11 +951,19 @@ func (f *Fake) deleteFile(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if isTurnOnMarker(p) {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", TurnOnMarkerFileRefused)
+	}
 	if _, ok := f.files[p]; !ok {
 		return nil, fail(http.StatusNotFound, tiad.KindNotFound, "no file %s", p)
 	}
 	delete(f.files, p)
 	return struct{}{}, nil
+}
+
+// isTurnOnMarker is the agent's TurnOnRule.IsMarker.
+func isTurnOnMarker(p string) bool {
+	return strings.HasSuffix(strings.ToLower(strings.TrimRight(p, ". ")), ".turn-on-pending")
 }
 
 func (f *Fake) installGSD(r *http.Request) (any, *failure) {
@@ -1004,6 +1110,11 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 			delete(f.saved, p)
 		}
 	}
+	for p := range f.turnOnPending {
+		if strings.HasPrefix(strings.ToLower(p), strings.ToLower(guard)) {
+			delete(f.turnOnPending, p)
+		}
+	}
 	// As tiad does: the new project's policy is read once it is made, so
 	// a refusal comes after the old project of that name was replaced.
 	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
@@ -1022,7 +1133,7 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	var notes []string
-	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, true, &notes); fl != nil {
+	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, true, false, &notes); fl != nil {
 		delete(f.sessions, s.id)
 		f.retireIfTrusted()
 		return nil, fl
@@ -1062,6 +1173,7 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 		s.cpu, s.others, s.protection, s.protectedWith = sp.cpu, sp.others, sp.protection, sp.protectedWith
 		s.accessControl, s.access, s.webServer, s.webHTTPS = sp.accessControl, sp.access.clone(), sp.webServer, sp.webHTTPS
 		s.blocks, s.groups, s.obInfo = slices.Clone(sp.blocks), maps.Clone(sp.groups), maps.Clone(sp.obInfo)
+		s.decls = maps.Clone(sp.decls)
 		s.node, s.restored = sp.node, sp.restored
 		// A project that is a loaded archive, unchanged, is what that
 		// load put on the CPU.
@@ -1069,6 +1181,13 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 			s.changed = false
 		}
 		f.openRecords(s.access)
+	}
+	// Opened as saved: nothing has changed it yet (#1347).
+	s.untouched = true
+	// A project an unverified turn-on download saved stays gated.
+	if f.turnOnPending[p] {
+		s.turnOn, s.turnOnTried = true, true
+		return tiad.Session{ID: s.id, Project: p, Notes: []string{tiad.TurnOnPendingNote}}, nil
 	}
 	return tiad.Session{ID: s.id, Project: p}, nil
 }
@@ -1093,6 +1212,11 @@ func (f *Fake) session(r *http.Request) (*session, *failure) {
 func (f *Fake) closeSession(r *http.Request) (any, *failure) {
 	s, fl := f.session(r)
 	if fl != nil {
+		return nil, fl
+	}
+	// As the agent: a project held online goes offline first, and a close
+	// whose offline step fails keeps the session.
+	if _, fl := f.releaseOnline(s); fl != nil {
 		return nil, fl
 	}
 	delete(f.sessions, s.id)
@@ -1137,6 +1261,7 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		Station              tiad.Station `json:"station"`
 		Secrets              tiad.Secrets `json:"secrets"`
 		FullAccessRecordOnly bool         `json:"fullAccessRecordOnly"`
+		AccessControlTurnOn  bool         `json:"accessControlTurnOn"`
 	}
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
@@ -1146,6 +1271,10 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	}
 	if req.FullAccessRecordOnly && req.Station.CPU.AccessControl != tiad.AccessFullAccessUser {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "fullAccessRecordOnly goes with cpu.accessControl fullAccessUser")
+	}
+	turnOn := req.AccessControlTurnOn
+	if turnOn && req.Station.CPU.AccessControl != tiad.AccessFullAccessUser {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", TurnOnNeedsFullAccessUser)
 	}
 	// As the agent does: decided from the project's CPU before any write,
 	// so a refusal leaves the session as it was.
@@ -1157,19 +1286,40 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	var kept []tiad.KeptDevice
 	protection := actNothing
 	found := s.node
+	turning := false
 	if reuse {
 		var fl *failure
 		if protection, fl = planProtection(s.protection, req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword != ""); fl != nil {
 			return nil, fl
 		}
 		current := s.accessControl
-		if fl := planAccess(&current, req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword != ""); fl != nil {
+		if fl := planAccess(&current, req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword != "", turnOn); fl != nil {
 			return nil, fl
 		}
-		if fl := planWeb(&current, req.Station.WebServer); fl != nil {
+		turning = turnOn && current == AccessDisabled
+		after := current
+		if turning {
+			after = AccessEnabled
+		}
+		if fl := planWeb(&after, req.Station.WebServer); fl != nil {
 			return nil, fl
 		}
 		kept = s.others
+	}
+	if turning {
+		// Read before any write: a refusal leaves the session as it was.
+		if fl := s.turnOnCheck(&notes, f.rightsOnlyWhenOn && s.accessControl != AccessEnabled); fl != nil {
+			return nil, fl
+		}
+	} else if turnOn {
+		notes = append(notes, TurnOnNothingNote)
+	}
+	// As the agent: a pending mark over a project whose access control
+	// reads off goes.
+	if !turning && s.turnOn && !s.turnOnLoaded && reuse && s.accessControl == AccessDisabled {
+		delete(f.turnOnPending, s.project)
+		s.turnOn, s.turnOnTried = false, false
+		notes = append(notes, TurnOnClearedNote)
 	}
 	// As the agent: once asked on this session, failed or not, a reset to
 	// tiad's user is refused (its record shows what tiad was told).
@@ -1215,17 +1365,31 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	was, wasChanged := s.compiled && !wrote, s.changed || wrote
 	s.station, s.uploaded, s.compiled, s.changed = nil, false, false, true
 	s.unclean = true
+	if turning {
+		// From the first write on; a turn-on after an upload re-arms a
+		// spent gate.
+		s.turnOn, s.turnOnLoaded, s.turnOnTried = true, false, false
+	}
 	if n := protectionNote(s.protection, req.Station.CPU.ConfigurationProtection); n != "" {
 		notes = append(notes, n)
 	}
 	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
 		return nil, fl
 	}
-	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, !reuse, &notes); fl != nil {
+	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, !reuse, turning, &notes); fl != nil {
 		return nil, fl
 	}
 	if fl := s.applyWeb(req.Station.WebServer, req.Secrets, !reuse, &notes); fl != nil {
 		return nil, fl
+	}
+	if turning {
+		// As the agent: read again with access control on; a refusal
+		// leaves the session unclean.
+		var again []string
+		if fl := s.turnOnCheck(&again, f.rightsOnlyWhenOn && s.accessControl != AccessEnabled); fl != nil {
+			fl.msg += TurnOnLateRefusal
+			return nil, fl
+		}
 	}
 	s.unclean = false
 	if n := keptNote(kept); n != "" {
@@ -1297,7 +1461,7 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	if s.foreignChanged {
 		return nil, foreignUnusable("another import")
 	}
-	if fl := typesRefused(ds); fl != nil {
+	if fl := mixedRefused(ds); fl != nil {
 		return nil, fl
 	}
 	if fl := readOBs(req.OBs); fl != nil {
@@ -1307,8 +1471,14 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	before := s.projectBlocks()
-	if fl := foreignConflicts(ds, before, req.Group); fl != nil {
+	objectsBefore := f.objects(s)
+	if fl := foreignConflicts(ds, objectsBefore, req.Group); fl != nil {
 		return nil, fl
+	}
+	if req.Prune {
+		if fl := pruneRefused(objectsBefore, ds, req.Group, req.PrunePrefix); fl != nil {
+			return nil, fl
+		}
 	}
 	if fl := obConstantClash(ds, before, req.OBs); fl != nil {
 		return nil, fl
@@ -1322,6 +1492,16 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	}
 	if s.obInfo == nil {
 		s.obInfo = map[string]projectBlock{}
+	}
+	if s.typeModified == nil {
+		s.typeModified = map[string]string{}
+	}
+	s.importGroup = req.Group
+	typeSources := map[string]bool{}
+	for _, d := range ds {
+		if d.Kind == "UDT" {
+			typeSources[d.source] = true
+		}
 	}
 	// The cyclic interrupt OBs first, as the agent makes them: every
 	// delete before any import.
@@ -1389,6 +1569,31 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 				if _, ok := s.obInfo[strings.ToLower(h.Name)]; h.Kind == "OB" && !ok {
 					s.obInfo[strings.ToLower(h.Name)] = projectBlock{kind: "OB", number: freeOB(s.projectBlocks(), 123), class: "ProgramCycle"}
 				}
+				// A data type named like a customer's: TIA regenerates
+				// that one where it sits and hands it back, no error; the
+				// glue fails on its group and the session stays unusable.
+				if h.Kind != "UDT" || !typeSources[p] {
+					continue
+				}
+				for _, ft := range f.types.Foreign {
+					if strings.EqualFold(ft.Name, h.Name) {
+						s.typeModified[strings.ToLower(ft.Name)] = "regenerated by an import"
+						s.foreignChanged = true
+						return nil, outsideGroup(p, ft, req.Group)
+					}
+				}
+			}
+			for _, h := range heads {
+				// A regenerated type of nautilus's: TIA moves its date.
+				if _, ok := s.groups[strings.ToLower(h.Name)]; h.Kind == "UDT" && ok {
+					s.typeModified[strings.ToLower(h.Name)] = fmt.Sprintf("regenerated %d", len(s.typeModified)+1)
+				}
+			}
+			if s.decls == nil {
+				s.decls = map[string]string{}
+			}
+			for _, h := range heads {
+				s.decls[strings.ToLower(h.Name)] = layoutDecl(string(b))
 			}
 			made = append(made, heads...)
 		}
@@ -1400,8 +1605,9 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 		madeNow[strings.ToLower(b.Name)] = true
 	}
 	for _, b := range s.blocks {
-		// Prune deletes only in the import's group.
-		if req.Prune && owned(s.groups[strings.ToLower(b.Name)], req.Group) {
+		// Prune deletes only in the import's group, data types only with
+		// prunePrefix (the agent's pruneTypes).
+		if req.Prune && owned(s.groups[strings.ToLower(b.Name)], req.Group) && (b.Kind != "UDT" || req.PrunePrefix != "") {
 			if !madeNow[strings.ToLower(b.Name)] {
 				delete(s.obInfo, strings.ToLower(b.Name))
 			}
@@ -1423,10 +1629,15 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	if f.importReplacesForeign {
 		s.mainReplaced = true
 	}
-	if changed := foreignChanges(before, s.projectBlocks(), req.Group); len(changed) > 0 {
+	if f.types.ImportTouchesForeign {
+		for _, ft := range f.types.Foreign {
+			s.typeModified[strings.ToLower(ft.Name)] = fmt.Sprintf("touched by an import %d", len(s.typeModified)+1)
+		}
+	}
+	if changed := foreignChanges(objectsBefore, f.objects(s), req.Group); len(changed) > 0 {
 		s.foreignChanged = true
 		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed,
-			"the import changed program blocks outside group %q (%s): this session can no longer be saved, archived for a deploy or downloaded. Close it without saving",
+			"the import changed program blocks or data types outside group %q (%s): this session can no longer be saved, archived for a deploy or downloaded. Close it without saving, then open or adopt the project again",
 			req.Group, strings.Join(changed, "; "))
 	}
 	bad := failedOBSources(ds, req.OBs, res.Results)
@@ -1444,6 +1655,9 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 		if owned(s.groups[strings.ToLower(b.Name)], req.Group) {
 			res.Blocks = append(res.Blocks, b)
 		}
+	}
+	if !f.OmitForeign {
+		res.Foreign = foreignBlocks(f.objects(s), f.OtherBlocks, req.Group)
 	}
 	return res, nil
 }
@@ -1471,6 +1685,27 @@ func (f *Fake) compile(r *http.Request) (any, *failure) {
 	}
 	if !req.Hardware && !req.Software {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "neither hardware nor software selected")
+	}
+	// After an import, what the compile moves outside its group is a
+	// change (the agent's compile check).
+	var before []projectBlock
+	if s.importGroup != "" {
+		before = f.objects(s)
+	}
+	if f.types.CompileTouchesForeign {
+		if s.typeModified == nil {
+			s.typeModified = map[string]string{}
+		}
+		for _, ft := range f.types.Foreign {
+			s.typeModified[strings.ToLower(ft.Name)] = fmt.Sprintf("recompiled %d", len(s.typeModified)+1)
+		}
+	}
+	if before != nil {
+		if changed := foreignChanges(before, f.objects(s), s.importGroup); len(changed) > 0 {
+			s.foreignChanged = true
+			s.compiled = false
+			return nil, compileChanged(changed, s.importGroup)
+		}
 	}
 	res := f.CompileResult
 	if req.Hardware && s.protection == ProtectionWithoutPassword {
@@ -1508,6 +1743,9 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if err := req.Validate(); err != nil {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%v", err)
 	}
+	if f.UI {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", UIRefusesDownload)
+	}
 	if !contains(f.Targets, req.Address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", req.Address)
 	}
@@ -1520,6 +1758,15 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	}
 	if !s.compiled {
 		return nil, fail(http.StatusConflict, tiad.KindNotCompiled, "the project changed since the last full compile; compile hardware and software first")
+	}
+	// A stop without the consent to what it does to the data (#1341).
+	if why := tiad.CheckResetData(req); why != "" {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", why)
+	}
+	if s.turnOn && !s.turnOnLoaded {
+		if why := tiad.TurnOnDownloadRefusal(req, s.turnOnTried); why != "" {
+			return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s; nothing was sent to the CPU", why)
+		}
 	}
 	if s.station.CPU.AccessControl == tiad.AccessFullAccessUser && (req.Secrets == nil || req.Secrets.FullAccessPassword == "") {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", LoginDownloadNeedsPassword)
@@ -1607,15 +1854,24 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			msg:  why + "; nothing was sent to the CPU",
 			data: map[string]any{"questions": []tiad.Question{tiad.BlindTrustQuestion(*f.blindTrust)}, "keptDevices": keptList(s.kept), "blindTrust": f.blindTrust}}
 	}
-	if fl := f.checkDevicePin(req.Address, call); fl != nil {
+	attestedDevice, fl := f.checkDevicePin(req.Address, call, req.DeviceAttestation)
+	if fl != nil {
 		return nil, fl
 	}
+	s.deviceAttested = attestedDevice
 	// One project per CPU: the first download claims the CPU for its
 	// session, dry runs included, until that session is closed.
 	if holder, ok := f.claims[req.Address]; ok && holder != s.id {
 		return nil, fail(http.StatusConflict, tiad.KindBusy, "CPU %s belongs to session %s: one CPU, one project; close that session first", req.Address, holder)
 	}
 	f.claims[req.Address] = s.id
+	// The data layout gate (#1341): before the record, so a refusal
+	// records nothing.
+	layout, layoutNow := f.readLayout(s, req.Address, req.Hardware)
+	if fl := layoutRefusal(layout, req); fl != nil {
+		return nil, fl
+	}
+	everyBlock := req.Hardware || (req.Decisions.ResetData != nil && *req.Decisions.ResetData && layout.Baseline == "")
 	// The deploy record of a real download: the project archived, then
 	// the intent line, just before TIA's download; either failing refuses
 	// it with nothing sent to the CPU.
@@ -1625,10 +1881,19 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		if run, fl = f.recordIntent(s, req, attested); fl != nil {
 			return nil, fl
 		}
+		run.Layout = tiad.LayoutRecordOf(layoutNow, fakeTIAVersion)
+		run.LayoutBaseline = layout.Baseline
+		// A download to the CPU runs: the verify no longer stands, nor
+		// any adopt baseline taken for it.
+		delete(f.verifiedLoads, req.Address)
+		if f.loadGen == nil {
+			f.loadGen = map[string]int{}
+		}
+		f.loadGen[req.Address]++
 	}
 	var acting []string
 	var given string
-	res, fl := f.downloadTIA(s, req, attested, accessControlKept, reset, &acting, &given)
+	res, fl := f.downloadTIA(s, req, attested, accessControlKept, reset, everyBlock, layout.Baseline, &acting, &given)
 	if run == nil {
 		return res, fl
 	}
@@ -1637,7 +1902,8 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 
 // downloadTIA is the part of a download after every refusal the agent
 // makes itself: TIA's checks, the load and the compare right after it.
-func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, actingOut *[]string, givenOut *string) (_ any, fl *failure) {
+func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, everyBlock bool, baseline string, actingOut *[]string, givenOut *string) (_ any, fl *failure) {
+	relaxed := req.Decisions.ResetData == nil || !*req.Decisions.ResetData
 	var qs []tiad.Question
 	if f.PreDownload != nil {
 		qs = f.PreDownload(req)
@@ -1710,6 +1976,17 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 			}
 			return tiad.DownloadResult{DryRun: true, Provisional: true, QuestionsIncomplete: true, Questions: dq, KeptDevices: keptList(s.kept), BlindTrust: f.blindTrust}, nil
 		}
+		// The RUN backstop (#1341): without the consent, a stop, a
+		// reinitialize or a load of every block is a gate miss, never
+		// answered.
+		if relaxed && tiad.LayoutGateMissQuestion(q.ID) {
+			if len(acting) > 0 {
+				return nil, outcomeUnknown(tiad.LayoutGateMiss(q.ID, baseline)+"; and tiad cancelled the download at TIA's "+q.ID+" check, which the request does not answer yes", acting)
+			}
+			return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
+				msg:  tiad.LayoutGateMiss(q.ID, baseline) + "; nothing was loaded",
+				data: map[string]any{"questions": []tiad.Question{q}, "keptDevices": keptList(s.kept), "gateMiss": q.ID}}
+		}
 		now := reset
 		if q.ID == tiad.QuestionUserManagement {
 			now = reset.At(loggedOn, credentialsAsked, held, answeredBefore)
@@ -1771,7 +2048,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	}
 	rec := req
 	rec.Secrets = nil
-	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state})
+	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state, EveryBlock: everyBlock})
 	// A load may change the CPU's users: the evidence goes, and the
 	// compare after it may record it again.
 	loadedNow = true
@@ -1800,8 +2077,13 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	s.restored = s.archive
 	s.archive = ""
 	s.changed = false
-	// A dry run TIA asks nothing about cannot be cancelled: TIA loads.
+	// A dry run TIA asks nothing about cannot be cancelled: TIA loads,
+	// and every adopt baseline for the CPU goes (#1347).
 	if req.DryRun {
+		if f.loadGen == nil {
+			f.loadGen = map[string]int{}
+		}
+		f.loadGen[req.Address]++
 		return nil, outcomeUnknown("TIA ran the dry run's download without asking a single check, so tiad could not cancel it", nil)
 	}
 	// Success only on evidence: an online compare right after, in the
@@ -1833,6 +2115,10 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		}
 		return nil, fl
 	}
+	if s.turnOn && !s.turnOnLoaded {
+		s.turnOnLoaded = true
+		delete(f.turnOnPending, s.project)
+	}
 	res := tiad.DownloadResult{Downloaded: true, Questions: asked, State: said, StateSource: source, KeptDevices: keptList(s.kept), CompareEqual: true, BlindTrust: f.blindTrust}
 	// As the agent's equal compare names them: every program block the
 	// project holds, each seen identical ("Main [OB1]").
@@ -1844,6 +2130,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		res.Warning = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading"
 		res.Attestation = attested
 	}
+	res.DeviceAttestation = s.deviceAttested
 	res.UserManagementReset = given
 	return res, nil
 }
@@ -1910,9 +2197,19 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if fl := heldOnlineRefuses(s, "compare"); fl != nil {
+		return nil, fl
+	}
 	var req tiad.CompareRequest
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
+	}
+	if fl := checkDeviceAttestation(req.DeviceAttestation); fl != nil {
+		return nil, fl
+	}
+	if req.LayoutBaseline {
+		// Asking again drops what an earlier compare took.
+		s.adopted, s.adoptRefused = nil, ""
 	}
 	if f.CompareResult != nil {
 		return *f.CompareResult, nil
@@ -1930,7 +2227,7 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if !contains(f.Targets, addr) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", addr)
 	}
-	if fl := f.checkDevicePin(addr, "compare"); fl != nil {
+	if _, fl := f.checkDevicePin(addr, "compare", req.DeviceAttestation); fl != nil {
 		return nil, fl
 	}
 	why, loggedOn := f.login(addr, onlinePassword(req.Secrets), f.blindTrust)
@@ -1940,9 +2237,23 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	}
 	if !s.changed && (f.loaded[addr] == s.id || s.restored != "" && f.loadedArchive[addr] == s.restored) {
 		f.noteCompare(addr, onlinePassword(req.Secrets), loggedOn, true)
-		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, BlindTrust: f.blindTrust, Address: addr}, nil
+		res := tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, BlindTrust: f.blindTrust, Address: addr}
+		if req.LayoutBaseline {
+			res.LayoutBaseline = f.takeAdoptBaseline(s, addr)
+			s.adoptRefused = res.LayoutBaseline.Why
+		}
+		return res, nil
 	}
-	return tiad.CompareResult{Differences: []tiad.Difference{{Object: name, State: "different"}}, BlindTrust: f.blindTrust, Address: addr}, nil
+	res := tiad.CompareResult{Differences: []tiad.Difference{{Object: name, State: "different"}}, BlindTrust: f.blindTrust, Address: addr}
+	if req.LayoutBaseline {
+		why := f.adoptBaselineRefusal(s)
+		if why == "" {
+			why = "the compare found the project not equal to the CPU"
+		}
+		res.LayoutBaseline = &tiad.AdoptBaselineResult{Why: why}
+		s.adoptRefused = why
+	}
+	return res, nil
 }
 
 func (f *Fake) export(r *http.Request) (any, *failure) {
@@ -2003,6 +2314,9 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if fl := heldOnlineRefuses(s, "upload"); fl != nil {
+		return nil, fl
+	}
 	var req tiad.UploadRequest
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
@@ -2028,6 +2342,22 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s.ensureAccess()
 	s.access.anonymous = f.uploadAnonymous
 	s.access.dropGrants()
+	s.access.anonymousRoles = nil
+	for _, ar := range f.uploadAnonymousRoles {
+		s.access.anonymousRoles = append(s.access.anonymousRoles, ar.Name)
+		if !ar.System {
+			rights := map[string]bool{}
+			for _, x := range ar.Rights {
+				rights[x] = true
+			}
+			s.access.roles[ar.Name] = rights
+		}
+	}
+	for _, u := range f.uploadUsers {
+		if _, ok := s.access.users[u]; !ok {
+			s.access.users[u] = &fakeUser{roles: map[string]bool{}}
+		}
+	}
 	// What this session made in the users and roles belongs to the
 	// station the upload replaces.
 	removed := s.removeMade()
@@ -2145,8 +2475,14 @@ func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
+	if fl := heldOnlineRefuses(s, "read the fingerprint"); fl != nil {
+		return nil, fl
+	}
 	var req tiad.FingerprintRequest
 	if fl := decode(r, &req); fl != nil {
+		return nil, fl
+	}
+	if fl := checkDeviceAttestation(req.DeviceAttestation); fl != nil {
 		return nil, fl
 	}
 	if s.station == nil {
@@ -2156,7 +2492,7 @@ func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
 	if !contains(f.Targets, address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", address)
 	}
-	if fl := f.checkDevicePin(address, "fingerprint read"); fl != nil {
+	if _, fl := f.checkDevicePin(address, "fingerprint read", req.DeviceAttestation); fl != nil {
 		return nil, fl
 	}
 	return f.fingerprintOf(s, address, req.TrustUnverifiedCertificate, onlinePassword(req.Secrets), fingerprintTrustFix)
@@ -2272,19 +2608,60 @@ func deviceChanged(address string, pinned, now tiad.DeviceIdentity, diff, what s
 }
 
 // checkDevicePin is the agent's CheckDevicePin: with a device pin, the
-// CPU's identity read online must match it.
-func (f *Fake) checkDevicePin(address, call string) *failure {
+// CPU's identity read online must match it; one it cannot read fails
+// closed unless att, the operator's reading of it, matches the pin at the
+// pin's precision. It returns the attestation it rested on, nil when none,
+// and never adds or changes a pin.
+func (f *Fake) checkDevicePin(address, call string, att *tiad.DeviceAttestation) (*tiad.DeviceAttestationRecord, *failure) {
 	pinned, ok := f.pins[address]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if f.NoIdentify {
-		return fail(http.StatusConflict, tiad.KindDeviceUnverified,
-			"%s has a device pin, but its identity could not be read (this agent's TIA side cannot read a CPU's identity online yet), so the pin cannot be checked; the %s was refused before it began; it lifts only once tiad can read a CPU's identity online (#789): a re-pin (POST /v1/pins/%s, audited) records a new identity but cannot lift this", address, call, address)
+		const why = "this agent's TIA side cannot read a CPU's identity online yet"
+		if att == nil {
+			return nil, fail(http.StatusConflict, tiad.KindDeviceUnverified,
+				"%s has a device pin, but its identity could not be read (%s), so the pin cannot be checked; the %s was refused before it began%s", address, why, call, unverifiable(address))
+		}
+		if gap := tiad.DeviceAttestationGap(pinned, *att); gap != "" {
+			return nil, fail(http.StatusConflict, tiad.KindDeviceUnverified,
+				"%s has a device pin, but its identity could not be read (%s), and the attestation cannot stand in for it: %s; the %s was refused before it began", address, why, gap, call)
+		}
+		if diff := tiad.DeviceAttestationMismatch(pinned, *att); diff != "" {
+			return nil, deviceChanged(address, pinned, tiad.DeviceIdentity{Order: att.Order, Firmware: att.Firmware}, diff,
+				"The "+call+" was refused before it began (the identity is the attestation by "+strconv.Quote(att.By)+").")
+		}
+		return &tiad.DeviceAttestationRecord{By: att.By, Order: att.Order, Firmware: att.Firmware, Pinned: pinned, At: fakeNow()}, nil
 	}
 	now := f.device()
+	// An identity read but unusable is a read: no attestation stands in.
+	if err := now.Validate(); err != nil {
+		return nil, fail(http.StatusConflict, tiad.KindDeviceUnverified,
+			"%s has a device pin, but its identity could not be read (%v), so the pin cannot be checked; the %s was refused before it began; an attestation does not stand in for an identity tiad read and could not use", address, err, call)
+	}
 	if diff := tiad.DeviceMismatch(pinned, now); diff != "" {
-		return deviceChanged(address, pinned, now, diff, "The "+call+" was refused before it began.")
+		return nil, deviceChanged(address, pinned, now, diff, "The "+call+" was refused before it began.")
+	}
+	return nil, nil
+}
+
+// unverifiable is the agent's Unverifiable: what lifts a
+// device_unverified refusal, and what does not.
+func unverifiable(address string) string {
+	return "; to go ahead, read the CPU's order number and firmware off the device itself (its label or display) and attest them " +
+		"(deviceAttestation: {by, order, firmware}; naut: --attest-order and --attest-firmware): tiad compares them with the pin, audited. " +
+		"It lifts for good once tiad can read a CPU's identity online (#789); a re-pin (POST /v1/pins/" + address +
+		", audited) records a new identity but cannot lift this"
+}
+
+// checkDeviceAttestation is the agent's ReadDeviceAttestation check: a
+// malformed attestation is a bad request.
+func checkDeviceAttestation(a *tiad.DeviceAttestation) *failure {
+	if a == nil {
+		return nil
+	}
+	if err := a.Validate(); err != nil {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "%v", err)
 	}
 	return nil
 }
@@ -2353,6 +2730,9 @@ func (f *Fake) save(r *http.Request) (any, *failure) {
 	}
 	if s.foreignChanged {
 		return nil, foreignUnusable("saving it")
+	}
+	if s.turnOn && !s.turnOnLoaded {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", TurnOnSaveRefused)
 	}
 	p := s.project
 	if req.Archive {

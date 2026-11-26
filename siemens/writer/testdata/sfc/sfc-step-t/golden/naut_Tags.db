@@ -1,0 +1,15 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      back : BOOL;
+      go : BOOL;
+      sfc_done : BOOL;
+      sfc_t : TIME;
+      sfc_wait : BOOL;
+      sfc_x : BOOL;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

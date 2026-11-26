@@ -16,6 +16,7 @@
 	import { deniedFor } from '../auth.svelte.js';
 	import { AuditClient, type AuditFilter } from '../audit.js';
 	import { NotesClient } from '../notes.js';
+	import { CameraClient } from '../camera.js';
 	import StatusPill from './StatusPill.svelte';
 	import Sparkline from './Sparkline.svelte';
 	import TrendChart from './Trend.svelte';
@@ -25,6 +26,7 @@
 	import AlarmJournal from './AlarmJournal.svelte';
 	import AuditTable from './AuditTable.svelte';
 	import NotesPanel from './NotesPanel.svelte';
+	import CameraPanel from './CameraPanel.svelte';
 	import OutOfServiceBadge from './OutOfServiceBadge.svelte';
 
 	let {
@@ -33,7 +35,8 @@
 		write,
 		alarms = null,
 		auditClient = new AuditClient(),
-		notesClient = new NotesClient()
+		notesClient = new NotesClient(),
+		cameraClient = new CameraClient()
 	}: {
 		asset: AssetDescriptor;
 		/** The live tag values, by name (the frame's tags). */
@@ -43,6 +46,8 @@
 		alarms?: AlarmClient | null;
 		auditClient?: AuditClient;
 		notesClient?: NotesClient;
+		/** The controller's cameras for this equipment (#724). Null: none asked for, no request made. */
+		cameraClient?: CameraClient | null;
 	} = $props();
 
 	const p = $derived(asset.panel);
@@ -225,6 +230,13 @@
 		</section>
 	{/if}
 
+	{#if cameraClient}
+		<!-- controller-managed cameras (#724): the panel draws nothing when there are none -->
+		<section aria-label="Camera" class="camwrap">
+			<CameraPanel asset={asset.id} client={cameraClient} />
+		</section>
+	{/if}
+
 	{#if alarms}
 		<section aria-label="Alarms">
 			<h2>Alarms</h2>
@@ -365,6 +377,10 @@
 	}
 	.prio {
 		color: var(--muted);
+	}
+	/* the panel draws nothing when there are no cameras: then neither does its box */
+	.camwrap:not(:has(:global(.cams))) {
+		display: none;
 	}
 	.camera {
 		max-width: 100%;

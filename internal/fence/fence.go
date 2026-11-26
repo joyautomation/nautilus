@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,31 +37,59 @@ import (
 // from the same read (0 without a pair), for a driver that holds queued
 // commands to check they were computed under it. now is the wall clock,
 // taken before the read, so the budget counts from before it.
-func Begin(g nio.SendGate, now time.Time) (deadline time.Time, term uint64, ok bool) {
+//
+// done ends the send for Drain: the send is counted before the gate is
+// read (Enter), and the caller calls done once it has ended (answered,
+// failed or reset), on every path, including one that drops it after
+// Begin. A send Begin refuses is already ended; its done does nothing. done
+// may be called more than once. A nil gate (no pair) counts nothing; a
+// driver's own look func is a gate even off a pair, so its sends are
+// counted there too (one lock per send, and nothing ever drains them).
+func Begin(g nio.SendGate, now time.Time) (deadline time.Time, term uint64, ok bool, done func()) {
 	if g == nil {
-		return time.Time{}, 0, true
+		return time.Time{}, 0, true, noDone
+	}
+	early := !mut("enter_after_read")
+	if early {
+		enter()
 	}
 	open, budget, term := g()
 	pause(AfterCheck)
+	if !early {
+		enter()
+	}
 	if !open {
-		return time.Time{}, term, false
+		exit(false)
+		return time.Time{}, term, false, noDone
+	}
+	var once atomic.Bool
+	done = func() {
+		if once.CompareAndSwap(false, true) {
+			exit(true)
+		}
 	}
 	if budget < 0 || mut("send_no_deadline") {
-		return time.Time{}, term, true
+		return time.Time{}, term, true, done
 	}
 	if budget == 0 {
-		return time.Time{}, term, false
+		once.Store(true)
+		exit(false)
+		return time.Time{}, term, false, noDone
 	}
 	deadline = now.Add(budget)
 	pause(AfterDeadline)
-	return deadline, term, true
+	return deadline, term, true, done
 }
 
 // Started reports whether a send with deadline may still start now: the
-// last look before the send system call. Zero deadline: always.
+// last look before the send system call. Zero deadline: always. During a
+// Drain a send with a deadline (one on a pair) does not start.
 func Started(deadline, now time.Time) bool {
 	if deadline.IsZero() || mut("send_no_deadline") {
 		return true
+	}
+	if draining.Load() > 0 && !mut("drain_no_reset") {
+		return false
 	}
 	return now.Before(deadline)
 }
@@ -69,13 +98,21 @@ type fencedKey struct{}
 
 // Context is ctx bounded by a send's deadline and marked as a fenced send,
 // so the transport that carries it resets its socket when the send fails
-// (Fenced). A zero deadline returns ctx unchanged and a no-op cancel.
+// (Fenced). A Drain cancels it (ResetAll). A zero deadline returns ctx
+// unchanged and a no-op cancel.
 func Context(ctx context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
 	if deadline.IsZero() {
 		return ctx, func() {}
 	}
+	ctx, cancelCause := context.WithCancelCause(ctx)
 	ctx, cancel := context.WithDeadline(ctx, deadline)
-	return context.WithValue(ctx, fencedKey{}, true), cancel
+	fc := &fencedCtx{cancel: cancelCause}
+	registerCtx(fc)
+	return context.WithValue(ctx, fencedKey{}, true), func() {
+		unregisterCtx(fc)
+		cancel()
+		cancelCause(nil)
+	}
 }
 
 // Fenced reports whether ctx carries a send deadline from Context: a
@@ -107,6 +144,12 @@ func WithGate(ctx context.Context, g nio.SendGate, term uint64) context.Context 
 // ErrGateClosed is Check's answer when the request may not go: the gate
 // is closed, or open under another term than the send's.
 var ErrGateClosed = errors.New("write gate closed (or the lease's term moved) before this request: not sent")
+
+// ErrNotStarted marks a send refused before anything went out (its gate
+// closed, or its deadline passed first). Such a write is never a cut
+// (CutSend). A transport that can tell wraps it (cip.ErrNotStarted is
+// this value).
+var ErrNotStarted = errors.New("request not started")
 
 // Check reads the gate WithGate put on ctx, immediately before one request
 // of a send: nil to send it, ErrGateClosed (or ctx's error, past its
@@ -187,7 +230,9 @@ func LingerDefault(c net.Conn) {
 // Arm resets c with a timer AT deadline (design §3.4, rule 3), whatever the
 // sending goroutine is doing then: stalled, or waiting on a read whose own
 // timeout comes later. stop disarms it once the send is done and reports
-// whether the reset already fired (the send then failed, and c is closed).
+// whether the deadline's reset already fired (the send then failed, and c
+// is closed). A drain's reset (ResetAll) reports false: a planned
+// switchover's cut-short send is no write cut (CutSend).
 // After stop returns the timer never resets c: a timer that had started
 // finds the send done and leaves c alone, and one already resetting
 // finishes before stop returns, so a later send that reuses c (after the
@@ -209,31 +254,28 @@ func ArmAbort(s *Socket, deadline time.Time) (stop func() (fired bool)) {
 	return armFunc(deadline, func() { s.Abort() })
 }
 
-// armFunc runs reset at deadline unless stop came first (see Arm).
+// armFunc runs reset at deadline unless stop came first (see Arm). An
+// armed send is also reset by ResetAll, and at once when armed during a
+// Drain.
 func armFunc(deadline time.Time, reset func()) (stop func() (fired bool)) {
 	if deadline.IsZero() || mut("send_no_deadline") {
 		return func() bool { return false }
 	}
-	var mu sync.Mutex
-	fired, done := false, false
+	a := &armed{reset: reset}
 	t := time.AfterFunc(time.Until(deadline), func() {
 		if armFireHook != nil {
 			armFireHook()
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		if done {
-			return // the send finished first: the conn may already carry the next one
-		}
-		fired = true
-		reset()
+		a.fire(false) // a send that finished first leaves the conn alone: it may carry the next one
 	})
+	register(a)
 	return func() bool {
 		t.Stop()
-		mu.Lock()
-		defer mu.Unlock()
-		done = true
-		return fired
+		unregister(a)
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		a.done = true
+		return a.fired && !a.drained
 	}
 }
 
@@ -244,13 +286,16 @@ func armFunc(deadline time.Time, reset func()) (stop func() (fired bool)) {
 type Socket struct {
 	mu sync.Mutex
 	rc syscall.RawConn
+	// reset: this connection was reset (Abort), by whichever path got
+	// there first.
+	reset bool
 }
 
 // Control is a net.Dialer Control func: it keeps the socket and sets
 // SO_LINGER 0 on it.
 func (s *Socket) Control(_, _ string, c syscall.RawConn) error {
 	s.mu.Lock()
-	s.rc = c
+	s.rc, s.reset = c, false
 	s.mu.Unlock()
 	if mut("fence_fin") {
 		return nil
@@ -269,15 +314,30 @@ func (s *Socket) Control(_, _ string, c syscall.RawConn) error {
 // drops what it still held, and the transport's next read or write fails,
 // without closing the descriptor under it (Linux: connect AF_UNSPEC;
 // elsewhere nothing, and Abort reports false: a pair runs on Linux only).
+//
+// It reports whether the connection is reset, by this call or an earlier
+// one: a fenced write's send-deadline timer and its failure path both
+// abort, and whichever comes second finds it done (on a loaded runner the
+// timer often wins; CI on main after #1359).
 func (s *Socket) Abort() bool {
 	s.mu.Lock()
-	rc := s.rc
+	rc, done := s.rc, s.reset
 	s.mu.Unlock()
 	if rc == nil || mut("fence_fin") {
 		return false
 	}
+	if done && !mut("abort_twice_fails") {
+		return true
+	}
 	ok := false
 	_ = rc.Control(func(fd uintptr) { ok = abortFD(fd) })
+	if ok {
+		s.mu.Lock()
+		if s.rc == rc {
+			s.reset = true
+		}
+		s.mu.Unlock()
+	}
 	return ok
 }
 

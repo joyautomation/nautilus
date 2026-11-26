@@ -339,6 +339,10 @@ type Health struct {
 	Openness string   `json:"openness"` // Openness API version in use
 	Sessions int      `json:"sessions"`
 	Targets  []string `json:"targets"` // CPU addresses tiad may go online to
+	// UI is whether the agent runs TIA Portal with its user interface
+	// (TIAD_UI=1): it can then show a block in TIA's editor
+	// (Session.Show), and it refuses every download.
+	UI bool `json:"ui"`
 }
 
 func (c *Client) Health(ctx context.Context) (Health, error) {
@@ -585,6 +589,9 @@ type Session struct {
 	ID          string `json:"session"`
 	Project     string `json:"project"`
 	IdleSeconds int    `json:"idleSeconds,omitempty"`
+	// Notes are what an open says besides the session (a project marked
+	// turn-on pending).
+	Notes []string `json:"notes,omitempty"`
 
 	c *Client
 }
@@ -651,6 +658,9 @@ type AdoptResult struct {
 	// record's CPU, for a deploy source.
 	CPUAddress string `json:"cpuAddress"`
 	Address    string `json:"address,omitempty"`
+	// Notes: an adopt of an unverified turn-on deploy marks the project
+	// turn-on pending.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // AdoptProject places an archive as a deploy's saved project; nothing
@@ -763,6 +773,14 @@ type ApplyOptions struct {
 	// caller: naut sends it only on an operator's explicit action, never
 	// as a retry default.
 	FullAccessRecordOnly bool
+	// AccessControlTurnOn turns the kept CPU's access control on when it
+	// reads "Disabled" (cpu.accessControl fullAccessUser only): never
+	// from the spec's default. The session then downloads only by a
+	// hardware load that resets the CPU's user management with
+	// attestation.cpuAccessControl "disabled" (TurnOnDownloadRefusal), and
+	// is not saved before that loads it. naut sends it only on
+	// --turn-on-access-control.
+	AccessControlTurnOn bool
 }
 
 // ApplyStationWith is ApplyStation with options.
@@ -778,6 +796,9 @@ func (s *Session) ApplyStationWith(ctx context.Context, st Station, sec Secrets,
 	if o.FullAccessRecordOnly {
 		body["fullAccessRecordOnly"] = true
 	}
+	if o.AccessControlTurnOn {
+		body["accessControlTurnOn"] = true
+	}
 	_, err := s.c.doJSON(ctx, http.MethodPut, s.path("station"), body, &r)
 	return r, err
 }
@@ -788,9 +809,17 @@ type SoftwareRequest struct {
 	Group     string   `json:"group"`
 	Sources   []string `json:"sources"`   // .scl, .db, .udt
 	TagTables []string `json:"tagTables"` // tag table XML
-	// Prune deletes blocks in Group that no source produced, so a block
-	// removed from the nautilus project disappears from the CPU too.
+	// Prune deletes blocks and data types in Group that no source
+	// produced, so a block removed from the nautilus project disappears
+	// from the CPU too.
 	Prune bool `json:"prune"`
+	// PrunePrefix, with Prune, is the block prefix (siemens block-prefix):
+	// the agent refuses the call, before anything is imported, when the
+	// group holds a block or data type that no source declares and whose
+	// name lacks it (a customer's object there would be deleted). Empty
+	// keeps the prune as before. An agent older than D1b refuses the
+	// field.
+	PrunePrefix string `json:"prunePrefix,omitempty"`
 	// OBs are the cyclic interrupt OBs the import makes, one per
 	// ORGANIZATION_BLOCK source (siemens/writer Output.OBs). SCL source
 	// cannot make one: the agent makes each first (class, number, cycle)
@@ -846,6 +875,36 @@ type SoftwareResult struct {
 	Blocks  []Block        `json:"blocks"`
 	// OBs is what the import did for each cyclic interrupt OB asked for.
 	OBs []OBStep `json:"obs,omitempty"`
+	// Foreign is every program block outside the group after the import,
+	// by group path (the root, "", first) and then name: what a download
+	// loads besides nautilus's own (#1326). It is nil from an agent that
+	// does not report them (older than #1326), never from one that does.
+	Foreign []ForeignBlock `json:"foreign"`
+}
+
+// ForeignBlock is a program block outside the group a software import
+// went into. Group is its path from the program blocks' root ("" for the
+// root, "a/b" for user group b in user group a). Kind is OB, FB, FC, DB or
+// UDT, or the block's Openness type name for one the agent has no kind
+// for.
+type ForeignBlock struct {
+	Name   string `json:"name"`
+	Kind   string `json:"kind"`
+	Number int    `json:"number"`
+	// Group is a path from the program blocks' root, or for a data type
+	// from the PLC data types' root.
+	Group string `json:"group"`
+	// DataType marks a PLC data type (kind UDT), not a program block.
+	DataType bool `json:"dataType,omitempty"`
+}
+
+// Label is the block as TIA labels it: "Main [OB1]"; a data type is its
+// name.
+func (b ForeignBlock) Label() string {
+	if b.DataType {
+		return b.Name
+	}
+	return b.Name + " [" + b.Kind + strconv.Itoa(b.Number) + "]"
 }
 
 func (s *Session) Software(ctx context.Context, req SoftwareRequest) (SoftwareResult, error) {
@@ -961,6 +1020,20 @@ type CompareResult struct {
 	// Address is the CPU compared with: the spec's, or for a project
 	// opened as found (no spec applied yet), the project's own.
 	Address string `json:"address,omitempty"`
+	// LayoutBaseline is what became of CompareRequest.LayoutBaseline,
+	// nil when it was not asked for.
+	LayoutBaseline *AdoptBaselineResult `json:"layoutBaseline,omitempty"`
+}
+
+// AdoptBaselineResult says whether a compare took the session's adopt
+// baseline (#1347): the layout of the project as opened, which the
+// compare found equal to the CPU. Without it, Why says why not.
+type AdoptBaselineResult struct {
+	Taken      bool   `json:"taken"`
+	ID         string `json:"id,omitempty"`
+	Objects    int    `json:"objects,omitempty"`
+	Unreadable int    `json:"unreadable,omitempty"`
+	Why        string `json:"why,omitempty"`
 }
 
 // Compare compares the project with the CPU it was downloaded to.
@@ -985,6 +1058,15 @@ type OnlineSecrets struct {
 // CompareRequest is a compare's options.
 type CompareRequest struct {
 	Secrets *OnlineSecrets `json:"secrets,omitempty"`
+	// DeviceAttestation is the operator's reading of the CPU's order
+	// number and firmware off the device, for a pinned CPU the agent
+	// cannot identify online (DeviceAttestation, #1325); unused otherwise.
+	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
+	// LayoutBaseline asks an equal compare of a project nothing changed
+	// since it was opened to take the session's adopt baseline: the data
+	// layout a deploy's first download onto that CPU compares with
+	// (#1347). An agent older than that refuses the field.
+	LayoutBaseline bool `json:"layoutBaseline,omitempty"`
 }
 
 // CompareWith is Compare with options.
@@ -1105,6 +1187,9 @@ type FingerprintRequest struct {
 	// Secrets answer TIA's credentials question (OnlineSecrets). In a
 	// VerifyRequest they go in VerifyRequest.Secrets instead.
 	Secrets *OnlineSecrets `json:"secrets,omitempty"`
+	// DeviceAttestation: as CompareRequest's. In a VerifyRequest or a
+	// DownloadRequest it goes in their own DeviceAttestation instead.
+	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
 }
 
 // FingerprintItem is one item of TIA's fingerprint of a CPU, as TIA names
@@ -1153,4 +1238,57 @@ func (s *Session) Save(ctx context.Context, archive bool) (string, error) {
 	}
 	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("save"), map[string]bool{"archive": archive}, &r)
 	return r.Path, err
+}
+
+// Shown is the block a Show opened in TIA's editor.
+type Shown struct {
+	Block  string `json:"block"`
+	Type   string `json:"type"`
+	Number int    `json:"number"`
+	// Group is the block's group, a path from the program blocks' root
+	// ("" for the root).
+	Group string `json:"group"`
+}
+
+// Show opens the program block named block (compared without case, as
+// TIA names blocks) in TIA Portal's editor, on the agent's screen. Only
+// an agent started with TIAD_UI=1 has an editor to show it in (Health.UI);
+// any other refuses (KindBadRequest), as it does a block the project does
+// not hold (KindNotFound). It changes nothing in the project.
+func (s *Session) Show(ctx context.Context, block string) (Shown, error) {
+	var r Shown
+	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("show"), map[string]string{"block": block}, &r)
+	return r, err
+}
+
+// OnlineRequest is POST /v1/sessions/{id}/online.
+type OnlineRequest struct {
+	Online  bool           `json:"online"`
+	Secrets *OnlineSecrets `json:"secrets,omitempty"`
+	// DeviceAttestation is the operator's reading of the CPU's order
+	// number and firmware off the device, for a pinned CPU the agent
+	// cannot identify online (DeviceAttestation, #1325); unused otherwise.
+	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
+}
+
+// OnlineResult is where an online call left the session.
+type OnlineResult struct {
+	Online bool `json:"online"`
+	// Address is the CPU held online, or (going offline) the one it was
+	// held online to, "" when it was not.
+	Address string `json:"address"`
+	State   string `json:"state,omitempty"`
+}
+
+// Online holds the session's project online to its CPU in TIA Portal's
+// window, or (online false) takes it offline. Only an agent started with
+// TIAD_UI=1 has a window (Health.UI); any other refuses (KindBadRequest).
+// It loads, compares and writes nothing: TIA's window shows the CPU's
+// state and its own online/offline compare. While held online, the
+// session refuses compare, fingerprint and upload (KindBusy); a close
+// goes offline first.
+func (s *Session) Online(ctx context.Context, req OnlineRequest) (OnlineResult, error) {
+	var r OnlineResult
+	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("online"), req, &r)
+	return r, err
 }

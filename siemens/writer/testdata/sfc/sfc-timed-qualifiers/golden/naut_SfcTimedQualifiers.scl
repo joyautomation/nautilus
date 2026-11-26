@@ -1,0 +1,239 @@
+FUNCTION_BLOCK "naut_SfcTimedQualifiers"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      _S_Idle_X : BOOL := TRUE;
+      _S_A_X : BOOL;
+      _S_A_prev : BOOL;
+      _S_B_X : BOOL;
+      _S_Hold_X : BOOL;
+      _S_Hold_prev : BOOL;
+      _S_Clear_X : BOOL;
+      _S_Clear_prev : BOOL;
+      _q_A_sfc_L_L_tmr : TON_TIME;
+      "naut__q_A_sfc_L_L_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_D_D_tmr : TON_TIME;
+      "naut__q_A_sfc_D_D_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_SD_SD_tmr : TON_TIME;
+      "naut__q_A_sfc_SD_SD_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_SD_SD_ff : BOOL;
+      _q_A_sfc_DS_DS_tmr : TON_TIME;
+      "naut__q_A_sfc_DS_DS_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_DS_DS_ff : BOOL;
+      _q_A_sfc_SL_SL_tmr : TON_TIME;
+      "naut__q_A_sfc_SL_SL_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _q_A_sfc_SL_SL_ff : BOOL;
+      _q_A_CountL_L_tmr : TON_TIME;
+      "naut__q_A_CountL_L_tmr_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _en_t_go : BOOL;
+      _f_t_go : BOOL;
+      _en_t_fork : BOOL;
+      _f_t_fork : BOOL;
+      _en_t_hold : BOOL;
+      _f_t_hold : BOOL;
+      _en_t_next : BOOL;
+      _f_t_next : BOOL;
+      _en_t_rst : BOOL;
+      _f_t_rst : BOOL;
+      _en_t_back : BOOL;
+      _f_t_back : BOOL;
+      _en_t_clear : BOOL;
+      _f_t_clear : BOOL;
+      _act_sfc_S_stored : BOOL;
+      _act_CountS_stored : BOOL;
+      _act_sfc_DS_stored : BOOL;
+      _act_sfc_SD_stored : BOOL;
+      _act_sfc_SL_stored : BOOL;
+      _act_CountL_prev : BOOL;
+      _act_CountS_prev : BOOL;
+      _act_sfc_L_lvl : BOOL;
+      _act_sfc_D_lvl : BOOL;
+      _act_sfc_SD_lvl : BOOL;
+      _act_sfc_DS_lvl : BOOL;
+      _act_sfc_SL_lvl : BOOL;
+   END_VAR
+
+BEGIN
+	#_en_t_go := #_S_Idle_X AND "naut_Tags".go;
+	#_en_t_fork := #_S_Idle_X AND "naut_Tags".fork;
+	#_en_t_hold := #_S_Hold_X AND FALSE;
+	#_en_t_next := #_S_A_X AND "naut_Tags".next;
+	#_en_t_rst := #_S_B_X AND "naut_Tags".rst;
+	#_en_t_back := #_S_B_X AND "naut_Tags".back;
+	#_en_t_clear := #_S_Clear_X AND TRUE;
+	#_f_t_go := #_en_t_go;
+	#_f_t_fork := #_en_t_fork AND NOT #_f_t_go;
+	#_f_t_hold := #_en_t_hold;
+	#_f_t_next := #_en_t_next;
+	#_f_t_rst := #_en_t_rst;
+	#_f_t_back := #_en_t_back AND NOT #_f_t_rst;
+	#_f_t_clear := #_en_t_clear;
+	IF #_f_t_go THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_fork THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_hold THEN
+		#_S_Hold_X := FALSE;
+	END_IF;
+	IF #_f_t_next THEN
+		#_S_A_X := FALSE;
+	END_IF;
+	IF #_f_t_rst THEN
+		#_S_B_X := FALSE;
+	END_IF;
+	IF #_f_t_back THEN
+		#_S_B_X := FALSE;
+	END_IF;
+	IF #_f_t_clear THEN
+		#_S_Clear_X := FALSE;
+	END_IF;
+	IF #_f_t_go THEN
+		#_S_A_X := TRUE;
+	END_IF;
+	IF #_f_t_fork THEN
+		#_S_A_X := TRUE;
+		#_S_Hold_X := TRUE;
+	END_IF;
+	IF #_f_t_hold THEN
+		#_S_Hold_X := TRUE;
+	END_IF;
+	IF #_f_t_next THEN
+		#_S_B_X := TRUE;
+	END_IF;
+	IF #_f_t_rst THEN
+		#_S_Clear_X := TRUE;
+	END_IF;
+	IF #_f_t_back THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	IF #_f_t_clear THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	IF #_S_A_X AND NOT #_S_A_prev THEN
+		#_act_sfc_S_stored := TRUE;
+	END_IF;
+	IF #_S_A_X AND NOT #_S_A_prev THEN
+		#_act_CountS_stored := TRUE;
+	END_IF;
+	#_q_A_sfc_L_L_tmr(IN := #_S_A_X, PT := T#100ms, Q => #"naut__q_A_sfc_L_L_tmr_last".Q, ET => #"naut__q_A_sfc_L_L_tmr_last".ET);
+	#_q_A_sfc_D_D_tmr(IN := #_S_A_X, PT := T#100ms, Q => #"naut__q_A_sfc_D_D_tmr_last".Q, ET => #"naut__q_A_sfc_D_D_tmr_last".ET);
+	#_q_A_sfc_DS_DS_tmr(IN := #_S_A_X, PT := T#100ms, Q => #"naut__q_A_sfc_DS_DS_tmr_last".Q, ET => #"naut__q_A_sfc_DS_DS_tmr_last".ET);
+	#_q_A_CountL_L_tmr(IN := #_S_A_X, PT := T#100ms, Q => #"naut__q_A_CountL_L_tmr_last".Q, ET => #"naut__q_A_CountL_L_tmr_last".ET);
+	IF #_S_A_X AND NOT #_S_A_prev THEN
+		#_q_A_sfc_SD_SD_ff := TRUE;
+	END_IF;
+	IF #"naut__q_A_sfc_DS_DS_tmr_last".Q THEN
+		#_q_A_sfc_DS_DS_ff := TRUE;
+	END_IF;
+	IF #_S_A_X AND NOT #_S_A_prev THEN
+		#_q_A_sfc_SL_SL_ff := TRUE;
+	END_IF;
+	IF #_S_Hold_X AND NOT #_S_Hold_prev THEN
+		#_act_sfc_DS_stored := FALSE;
+		#_q_A_sfc_DS_DS_ff := FALSE;
+	END_IF;
+	IF #_S_Clear_X AND NOT #_S_Clear_prev THEN
+		#_act_sfc_SD_stored := FALSE;
+		#_q_A_sfc_SD_SD_ff := FALSE;
+	END_IF;
+	IF #_S_Clear_X AND NOT #_S_Clear_prev THEN
+		#_act_sfc_DS_stored := FALSE;
+		#_q_A_sfc_DS_DS_ff := FALSE;
+	END_IF;
+	IF #_S_Clear_X AND NOT #_S_Clear_prev THEN
+		#_act_sfc_SL_stored := FALSE;
+		#_q_A_sfc_SL_SL_ff := FALSE;
+	END_IF;
+	IF #_S_Clear_X AND NOT #_S_Clear_prev THEN
+		#_act_sfc_S_stored := FALSE;
+	END_IF;
+	IF #_S_Clear_X AND NOT #_S_Clear_prev THEN
+		#_act_CountS_stored := FALSE;
+	END_IF;
+	#_q_A_sfc_SD_SD_tmr(IN := #_q_A_sfc_SD_SD_ff, PT := T#100ms, Q => #"naut__q_A_sfc_SD_SD_tmr_last".Q, ET => #"naut__q_A_sfc_SD_SD_tmr_last".ET);
+	#_q_A_sfc_SL_SL_tmr(IN := #_q_A_sfc_SL_SL_ff, PT := T#100ms, Q => #"naut__q_A_sfc_SL_SL_tmr_last".Q, ET => #"naut__q_A_sfc_SL_SL_tmr_last".ET);
+	IF #_S_A_X AND NOT #"naut__q_A_CountL_L_tmr_last".Q OR #_act_CountL_prev THEN
+		"naut_Tags".sfc_cntl := LINT_TO_INT((((INT_TO_LINT("naut_Tags".sfc_cntl) + 1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	END_IF;
+	#_act_CountL_prev := #_S_A_X AND NOT #"naut__q_A_CountL_L_tmr_last".Q;
+	IF #_act_CountS_stored OR #_act_CountS_prev THEN
+		"naut_Tags".sfc_cnts := LINT_TO_INT((((INT_TO_LINT("naut_Tags".sfc_cnts) + 1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	END_IF;
+	#_act_CountS_prev := #_act_CountS_stored;
+	IF #_act_sfc_L_lvl AND NOT (#_S_A_X AND NOT #"naut__q_A_sfc_L_L_tmr_last".Q) THEN
+		"naut_Tags".sfc_l := FALSE;
+	END_IF;
+	IF #_S_A_X AND NOT #"naut__q_A_sfc_L_L_tmr_last".Q THEN
+		"naut_Tags".sfc_l := TRUE;
+	END_IF;
+	#_act_sfc_L_lvl := #_S_A_X AND NOT #"naut__q_A_sfc_L_L_tmr_last".Q;
+	IF #_act_sfc_D_lvl AND NOT #"naut__q_A_sfc_D_D_tmr_last".Q THEN
+		"naut_Tags".sfc_d := FALSE;
+	END_IF;
+	IF #"naut__q_A_sfc_D_D_tmr_last".Q THEN
+		"naut_Tags".sfc_d := TRUE;
+	END_IF;
+	#_act_sfc_D_lvl := #"naut__q_A_sfc_D_D_tmr_last".Q;
+	IF #_act_sfc_SD_lvl AND NOT #"naut__q_A_sfc_SD_SD_tmr_last".Q THEN
+		"naut_Tags".sfc_sd := #_act_sfc_SD_stored;
+	END_IF;
+	IF #_S_Clear_X AND NOT #_S_Clear_prev THEN
+		"naut_Tags".sfc_sd := FALSE;
+	END_IF;
+	IF #"naut__q_A_sfc_SD_SD_tmr_last".Q THEN
+		"naut_Tags".sfc_sd := TRUE;
+	END_IF;
+	#_act_sfc_SD_lvl := #"naut__q_A_sfc_SD_SD_tmr_last".Q;
+	IF #_act_sfc_DS_lvl AND NOT #_q_A_sfc_DS_DS_ff THEN
+		"naut_Tags".sfc_ds := #_act_sfc_DS_stored;
+	END_IF;
+	IF #_S_Hold_X AND NOT #_S_Hold_prev THEN
+		"naut_Tags".sfc_ds := FALSE;
+	END_IF;
+	IF #_S_Clear_X AND NOT #_S_Clear_prev THEN
+		"naut_Tags".sfc_ds := FALSE;
+	END_IF;
+	IF #_q_A_sfc_DS_DS_ff THEN
+		"naut_Tags".sfc_ds := TRUE;
+	END_IF;
+	#_act_sfc_DS_lvl := #_q_A_sfc_DS_DS_ff;
+	IF #_act_sfc_SL_lvl AND NOT (#_q_A_sfc_SL_SL_ff AND NOT #"naut__q_A_sfc_SL_SL_tmr_last".Q) THEN
+		"naut_Tags".sfc_sl := #_act_sfc_SL_stored;
+	END_IF;
+	IF #_S_Clear_X AND NOT #_S_Clear_prev THEN
+		"naut_Tags".sfc_sl := FALSE;
+	END_IF;
+	IF #_q_A_sfc_SL_SL_ff AND NOT #"naut__q_A_sfc_SL_SL_tmr_last".Q THEN
+		"naut_Tags".sfc_sl := TRUE;
+	END_IF;
+	#_act_sfc_SL_lvl := #_q_A_sfc_SL_SL_ff AND NOT #"naut__q_A_sfc_SL_SL_tmr_last".Q;
+	IF #_S_A_X AND NOT #_S_A_prev THEN
+		"naut_Tags".sfc_s := TRUE;
+	END_IF;
+	IF #_S_Clear_X AND NOT #_S_Clear_prev THEN
+		"naut_Tags".sfc_s := FALSE;
+	END_IF;
+	#_S_A_prev := #_S_A_X;
+	#_S_Hold_prev := #_S_Hold_X;
+	#_S_Clear_prev := #_S_Clear_X;
+END_FUNCTION_BLOCK

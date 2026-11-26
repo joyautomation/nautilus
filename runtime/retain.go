@@ -110,6 +110,12 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 	if r.coord == nil && r.retainStore == nil {
 		return true, 0
 	}
+	if r.edgeWait.Load() && !mutRuntime("edge_wait_blocks_others") {
+		// Another loop's tick holds the takeover edge, waiting a moment
+		// for a step it started (waitStep): nothing scans before the edge
+		// is taken, so answer that at once rather than wait on leadMu.
+		return false, 0
+	}
 	lead := r.coord == nil || r.coord.IsLeader()
 	r.leadMu.Lock()
 	defer r.leadMu.Unlock()
@@ -123,6 +129,8 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		r.readySince = time.Time{}
 		r.ioReset()
 		r.resetIntentSync()
+		r.flushReset()
+		r.handBackReset()
 	} else if !r.leading || termed != nil && termed.Term() != r.ledTerm {
 		// A takeover (not the same leadership resumed) first re-applies
 		// the kept I/O configuration (#706), so the inputs it then waits
@@ -131,8 +139,45 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		// (substitute_intent.go) runs alongside both, asked every tick, so
 		// the edge waits for the longer, not the sum.
 		resume := !r.leading && termed != nil && r.ledTerm != 0 && termed.Term() == r.ledTerm
-		ready := (resume || r.ioReady()) && r.inputsReady()
+		// A pair's takeover first flushes the newest state image into the
+		// retain store (#710 S1b), before anything below reads the store:
+		// ioReady keeps the store it reads for takeover's own load.
+		var term uint64
+		if termed != nil {
+			term = termed.Term()
+		}
+		if mutRuntime("stream_flush_after_io_read") {
+			// the store read for this edge first, the flush after it
+			if !resume && !r.ioReady() {
+				r.unfresh()
+				return false, r.edges
+			}
+		}
+		if !resume && !r.flushReady(term) {
+			r.unfresh()
+			return false, r.edges
+		}
+		// Once the edge has read the store (the flush, the I/O restore's
+		// first read): a
+		// takeover that would go cold on an unreadable store first asks
+		// whether to hand the lead back to the peer (#710 S2c-3), before
+		// the waits for live inputs and the log's catch-up, which a
+		// hand-back would spend for nothing. (The log's catch-up runs
+		// alongside all of these, as before: it reads, it never sends.)
+		io := resume || r.ioReady()
+		// The hand-back needs the edge's first read of the store only, not
+		// the I/O restore's retries of a failed one (about a second).
+		hb := resume || r.iokRead() && r.handBackReady(term)
+		stored := io && hb
+		ready := stored && r.inputsReady()
 		synced := resume || r.intentReady()
+		// The lease and its term are sampled again before taking over: this
+		// tick, or another that waited on leadMu, may have waited for a
+		// step meanwhile (#710 d1e, Fable). A lock-free read.
+		if r.coord != nil && !mutRuntime("wait_keeps_lead_sample") && (!r.coord.IsLeader() || termed != nil && termed.Term() != term) {
+			r.unfresh()
+			return false, r.edges
+		}
 		if !ready || !synced {
 			r.unfresh() // nothing scans: the tags are frozen
 			return false, r.edges
@@ -151,23 +196,42 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		// counted an edge, so a main read that began under the leadership
 		// before it cannot set fresh either.
 		r.leading = true
+		r.publishLead()
 	case lead && (!r.leading || termed != nil && termed.Term() != r.ledTerm):
 		// Leadership from standby, or a new term this replica never saw
 		// the gate close for (lost and regained between two scans): another
 		// replica may have led meanwhile.
 		r.unfresh() // until this leadership's first read
+		if !mutRuntime("takeover_keeps_switching") {
+			// A switchover of an earlier leadership is over (its resign
+			// stood this controller down). Not at the stand-down itself: a
+			// gate that closes for a tick and reopens in the same term (a
+			// late renewal) resumes the switchover, scans still stopped
+			// (Fable M1).
+			r.switchEnded()
+		}
 		r.takeover()
 		r.ioReset()
+		r.flushReset()
+		r.handBackReset()
 		r.leading = true
 		if termed != nil {
 			r.ledTerm = termed.Term()
 		}
+		r.publishLead()
 	case !lead:
+		if mutRuntime("resume_ends_switching") {
+			r.switchEnded()
+		}
 		if r.leading {
 			// Stepping down: forces belong to the active controller only.
 			r.dropForces("lost leadership")
+			// A takeover a program never scanned after is spent: a resume
+			// in the same term is no takeover (Sonnet, #1350).
+			r.clearTakeovers()
 		}
 		r.leading = false
+		r.publishLead()
 		r.unfresh()
 	}
 	return lead, r.edges
@@ -258,6 +322,10 @@ func (r *Runtime) takeover() {
 	// LoadRetained already restored the store before the API answered
 	// (standalone only): loading it again here would undo a write made
 	// in between (nautilus#531's startup half).
+	// This edge's own read of the store may already have failed
+	// (ioReady): then what loads below is no store at all.
+	bad := r.strm.storeBad.Swap(false) && !mutRuntime("stream_store_bad_forgotten")
+	r.strm.loadFailed.Store((r.iok.loadErr || bad) && !mutRuntime("stream_failed_load_streams"))
 	if r.retainPreloaded {
 		r.retainPreloaded = false
 	} else if r.retainStore != nil {
@@ -278,14 +346,37 @@ func (r *Runtime) takeover() {
 	// or this one's before a spell as standby (substitute_expiry.go).
 	r.retimeSubstitutes()
 	r.intentAfterTakeover() // a failed log catch-up: the fault, and a retry
-	r.prog.ResetFrame()
-	for _, tr := range r.tasks {
-		tr.prog.ResetFrame()
+	// A pair's takeover goes on from its standby's copy of the old
+	// leader's state when it may (hot.go, #710 S2): the image's frames,
+	// by value, timers moved to this clock, and its tags over the retain
+	// load. Otherwise it is cold, as below.
+	hot := false
+	inherit := time.Duration(-1) // the hold a hot takeover inherits (hold.go)
+	if r.strm.flush.Load() != nil {
+		h, why, had := r.strm.hot, r.strm.hotWhy, r.strm.hadImage
+		r.strm.hot, r.strm.hotWhy, r.strm.hadImage = nil, "", false
+		if h != nil && h.holding {
+			inherit = h.holdAge + h.Age
+		}
+		hot = r.hotTakeover(h, why, had)
 	}
-	// Process state re-derives from the field, except what a program
-	// declared VAR RETAIN: it goes back into the fresh frames.
-	if err := r.restoreLocals(); err != nil {
-		r.noteRetainError(err)
+	// The takeover hold (#710 (b2)): started, inherited or ended here,
+	// before the first scan latches TAKEOVER_HOLD().
+	r.holdOnTakeover(hot, inherit)
+	// TAKEOVER_SCAN() and HOT_TAKEOVER() for each program's next scan, and
+	// TAKEOVERS(), when this leadership took over from the peer rather
+	// than started (#710 (b)): the coordinator knows which.
+	defer func() { r.markTakeovers(hot) }()
+	if !hot {
+		r.prog.ResetFrame()
+		for _, tr := range r.tasks {
+			tr.prog.ResetFrame()
+		}
+		// Process state re-derives from the field, except what a program
+		// declared VAR RETAIN: it goes back into the fresh frames.
+		if err := r.restoreLocals(); err != nil {
+			r.noteRetainError(err)
+		}
 	}
 	// This replica has never written to the field, whatever its predecessor
 	// left in the store: the first scan as leader pushes the FULL output set
@@ -335,14 +426,45 @@ func (r *Runtime) restorePairAlarms() {
 func (r *Runtime) loadRetained() error {
 	st, err := r.loadStore()
 	if err != nil {
+		// Unreadable, not merely a value that no longer fits: this
+		// leadership runs on initial values (RetainLoadFailed).
+		r.strm.loadFailed.Store(!mutRuntime("stream_failed_load_streams"))
+		// The failback state is unknown, not "never set": the keeper must
+		// not read it as enabled (#710 d2). A hot takeover that carries the
+		// image's retain section hands it over again, known.
+		r.failbackLoaded(nil, mutRuntime("failback_unknown_as_known"))
 		return err
 	}
+	return r.applyRetained(st)
+}
+
+// applyRetained is loadRetained's application of a state: the store's,
+// or a hot takeover's image's when the store could not be read (hot.go).
+func (r *Runtime) applyRetained(st retain.State) error { return r.applyRetainedFrom(st, true) }
+
+// applyRetainedCarried is applyRetained of a hot takeover's image over an
+// unreadable own store (hot_install.go): the values the image carries,
+// not the alarm and substitute steps, which the pair's log owns and the
+// takeover already ran (a nil section would clear the substitute load
+// fault the failed store read raised).
+func (r *Runtime) applyRetainedCarried(st retain.State) error { return r.applyRetainedFrom(st, false) }
+
+func (r *Runtime) applyRetainedFrom(st retain.State, full bool) error {
 	allowed := make(map[string]bool, len(r.retainTags))
 	for _, n := range r.retainTags {
 		allowed[n] = true
 	}
 	r.params.load(st.ParamBases, st.ParamEdits, st.ParamCommitted)
 	r.pushLoaded(st.Push)
+	// A takeover whose store already failed this edge (a corrupt file the
+	// standby's carry or the edge's I/O read moved aside, so this load
+	// reads it empty) does not know the failback state either (Fable on
+	// d2): an image carried in later hands it over, known.
+	if full && r.strm.loadFailed.Load() && !mutRuntime("failback_unknown_as_known") {
+		r.failbackLoaded(nil, false)
+	} else {
+		r.failbackLoaded(st.Failback, true)
+	}
 	var errs []error
 	for name, v := range st.Tags {
 		if !allowed[name] {
@@ -411,7 +533,7 @@ func (r *Runtime) loadRetained() error {
 	// here rather than at construction is what makes a standby takeover
 	// correct: takeover() re-reads the store on the standby→leader edge, so
 	// a failover cannot resurrect hundreds of acked alarms as unacked.
-	if a := r.alarmRetainer(); a != nil {
+	if a := r.alarmRetainer(); a != nil && full {
 		if sa, ok := a.(SyncedAlarmRestorer); ok && r.intentLog() != nil {
 			// A pair: its operator-intent log holds the alarm state, and
 			// says whether this takeover's catch-up succeeded (#710).
@@ -474,7 +596,9 @@ func (r *Runtime) loadRetained() error {
 	// it resets the frames (restoreLocals).
 	r.pendingLocals = st.Locals
 	// Substitutes (substitute_retain.go): their own block, last.
-	r.loadSubstitutes(st.Substitutes)
+	if full {
+		r.loadSubstitutes(st.Substitutes)
+	}
 	return errors.Join(errs...)
 }
 
@@ -543,6 +667,15 @@ func (r *Runtime) retainSaver(ctx context.Context) []byte {
 			return lastSaved
 		case <-t.C:
 			lastSaved = r.saveRetained(lastSaved)
+		case req := <-r.carryRequests():
+			err := r.carry(req)
+			if err == nil {
+				// The store now holds an image's state, not what this
+				// replica last saved as leader: its next save as leader
+				// writes, whatever it compares equal to.
+				lastSaved = nil
+			}
+			req.reply <- err
 		case req := <-r.saveRequests():
 			var err error
 			lastSaved, err = r.saveRetainedErr(lastSaved)
@@ -575,13 +708,27 @@ func (r *Runtime) saveRetainedErr(lastSaved []byte) ([]byte, error) {
 	// has loaded the store (gate, before its next scan), its tags hold seeds
 	// and its frames are fresh, and saving them would overwrite what the
 	// takeover is about to load.
+	//
+	// A takeover edge waiting for its flush holds leadMu, and that flush's
+	// carry goes through this same saver goroutine: a save parked on the
+	// lock would hold the carry behind it for the whole wait. The edge's
+	// takeover has not loaded the store yet, so this save is one to skip
+	// anyway; the next period saves (#710 d1e, CI on #1359).
+	if r.flushWait.Load() && !mutRuntime("save_waits_on_edge") {
+		return lastSaved, ErrNotLeading
+	}
 	r.leadMu.Lock()
-	leading := r.leading
+	leading, term := r.leading, r.ledTerm
 	r.leadMu.Unlock()
 	if !leading {
 		return lastSaved, ErrNotLeading
 	}
 	st := r.retainState()
+	if r.strm.flush.Load() != nil && term != 0 && !mutRuntime("stream_leader_saves_unmarked") {
+		// A pair's leader marks its file with its term (#710 S1b): as a
+		// standby later, it takes no image of a leadership before this.
+		st.Stream = &retain.StreamPos{Term: term}
+	}
 	enc, err := json.Marshal(st)
 	if err != nil {
 		return lastSaved, err
@@ -592,6 +739,9 @@ func (r *Runtime) saveRetainedErr(lastSaved []byte) ([]byte, error) {
 	if err := r.retainStore.Save(st); err != nil {
 		r.noteRetainError(err)
 		return lastSaved, err
+	}
+	if !mutRuntime("retain_memory_only_forgotten") {
+		r.strm.memOnly.Store(false) // the store holds this leadership's values now
 	}
 	if k := r.ioKeeper(); k != nil {
 		k.IOSaved(st.IO) // durable now: its sequence is the store's
@@ -720,6 +870,7 @@ func (r *Runtime) retainState() retain.State {
 		// holds is another replica's, and a save must not erase it.
 		st.Push = r.pushHeld()
 	}
+	st.Failback = r.failbackHeld() // a pair's failback state (#710 d2)
 	// Substitutes (substitute_retain.go): their own block, last.
 	st.Substitutes = r.retainedSubstitutes()
 	return st

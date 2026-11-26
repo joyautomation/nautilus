@@ -40,7 +40,8 @@ func TestFencedSendUnitDataResetsAtItsDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Client{Log: slog.Default(), tcp: conn}
-	ctx, cancel := fence.Context(context.Background(), time.Now().Add(200*time.Millisecond))
+	fence.ResetCutsForTest()
+	ctx, cancel := fence.Context(fence.WithDevice(context.Background(), "plc1"), time.Now().Add(200*time.Millisecond))
 	defer cancel()
 	start := time.Now()
 	if _, err := c.SendUnitData(ctx, 1, 1, 0x4D, []byte{0x91, 0x02, 'S', 'P'}, []byte{0xCA, 0, 1, 0, 0, 0, 0, 0}); err == nil {
@@ -59,6 +60,11 @@ func TestFencedSendUnitDataResetsAtItsDeadline(t *testing.T) {
 	}
 	if c.tcp != nil {
 		t.Fatal("the client still holds the reset socket")
+	}
+	// #710: the request began and its deadline passed: one write cut. (A
+	// request refused before it began, ErrNotStarted, is not.)
+	if got := fence.CutCounts(); len(got) != 1 || got["plc1"] != 1 {
+		t.Fatalf("writes cut = %v, want plc1 1", got)
 	}
 }
 

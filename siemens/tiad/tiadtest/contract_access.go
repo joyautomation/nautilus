@@ -22,6 +22,7 @@ func contractAccessControl(t *testing.T, start Starter) {
 	t.Run("Adopted", func(t *testing.T) { contractAccessAdopted(t, start) })
 	t.Run("UploadRemovesWhatTheSessionMade", func(t *testing.T) { contractAccessUpload(t, start) })
 	t.Run("NoRecord", func(t *testing.T) { contractAccessNoRecord(t, start) })
+	t.Run("TurnOn", func(t *testing.T) { contractAccessTurnOn(t, start) })
 }
 
 // contractAccessNoRecord: a found user whose record is another agent
@@ -247,7 +248,7 @@ func contractAccessNewStation(t *testing.T, start Starter) {
 		t.Fatalf("a rotated secret: %+v %v", r, err)
 	}
 	// A password set is a change to the project: compile again first.
-	dl := AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	dl := AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindNotCompiled {
 		t.Fatalf("a download after a password was set, before a compile: %v", err)
 	}
@@ -271,9 +272,9 @@ func contractAccessNewStation(t *testing.T, start Starter) {
 }
 
 // contractAccessAdopted: tiad never turns access control on for a CPU it
-// did not make: fullAccessUser on an uploaded CPU without access control
-// refuses before any write, naming keep; on one with it on, it adds the
-// user.
+// did not make unasked: fullAccessUser on an uploaded CPU without access
+// control refuses before any write, naming keep and accessControlTurnOn
+// (contractAccessTurnOn); on one with it on, it adds the user.
 func contractAccessAdopted(t *testing.T, start Starter) {
 	a := start(t, Config{Targets: []string{benchCPU}})
 	c := a.Client()
@@ -288,7 +289,7 @@ func contractAccessAdopted(t *testing.T, start Starter) {
 	full := adoptedStation()
 	full.CPU.AccessControl = tiad.AccessFullAccessUser
 	if _, err := s.ApplyStation(ctx, full, BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest ||
-		!strings.Contains(err.Error(), `the project's CPU has its access control set to "Disabled", and tiad turns access control on only for a CPU it makes: to keep the CPU as found, set cpu.accessControl to keep`) {
+		!strings.Contains(err.Error(), TurnOnNotAsked) {
 		t.Fatalf("fullAccessUser on a CPU without access control: %v", err)
 	}
 	// Refused before any write: the session is as it was.

@@ -2,6 +2,7 @@ package hw
 
 import (
 	"context"
+	"github.com/joyautomation/nautilus/internal/fence"
 	"strings"
 	"sync"
 	"testing"
@@ -180,14 +181,23 @@ func TestCommandPastItsDeadlineIsOutcomeUnknown(t *testing.T) {
 	s := b.sources[0]
 	s.pending = []queuedWrite{{name: "Sys_Cmd", v: ir.BoolVal(false), at: b.now(), term: 1}}
 	b.SetSendGate(func() (bool, time.Duration, uint64) { return true, 100 * time.Millisecond, 1 })
+	b.SetCutLabel("bmcs", true) // one of several drivers: the name carries the driver's
+	fence.ResetCutsForTest()
 	b.flushWrites(context.Background(), s)
 	if s.lastWrite == nil || !strings.Contains(s.lastWrite.Error(), "outcome unknown") {
 		t.Fatalf("the row says %v; want the outcome unknown", s.lastWrite)
+	}
+	// #710: one write cut at its deadline, by source id.
+	if got := fence.CutCounts(); len(got) != 1 || got["bmcs/BMC1"] != 1 {
+		t.Fatalf("writes cut = %v, want bmcs/BMC1 1", got)
 	}
 	if b.errs.Load() != 0 {
 		t.Errorf("counted %d failure(s); an unknown outcome is not a failure", b.errs.Load())
 	}
 	b.flushWrites(context.Background(), s)
+	if got := fence.CutCounts(); got["bmcs/BMC1"] != 1 {
+		t.Errorf("writes cut = %v; a command not sent again is not cut again", got)
+	}
 	if calls != 1 || len(s.pending) != 0 {
 		t.Fatalf("%d send(s), %d still queued; want the command sent once, never again", calls, len(s.pending))
 	}

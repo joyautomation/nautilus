@@ -3,7 +3,6 @@ package node
 import (
 	"context"
 	crand "crypto/rand"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -25,7 +24,10 @@ import (
 
 // Defaults (design §2).
 const (
-	DefaultLease = 2 * time.Second
+	// DefaultLease is a pair's and its witness's lease when none is
+	// given: 1 s (#710; it was 2 s). Keep it equal to project's
+	// DefaultPairLease (cmd/naut tests it).
+	DefaultLease = time.Second
 	DefaultRho   = 0.01
 	// WitnessID is the witness's name in the vote protocol: one witness
 	// per pair, so it needs no other.
@@ -102,14 +104,19 @@ type Options struct {
 	// Dial, when set, opens the peer connections (default: net.Dialer).
 	// Tests cut links with it.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
-	// TLS, when set, is the pair's peer TLS client configuration
-	// (internal/peertls, #710): every peer call is then https. Nil: plain
-	// HTTP (redundancy.peer-tls: off, and tests).
-	TLS *tls.Config
+	// TLS, when set, is the pair's peer TLS client side (internal/peertls,
+	// #710): every peer call is then https, each checked as the member at
+	// the address it dials. Nil: plain HTTP (redundancy.peer-tls: off, and
+	// tests).
+	TLS TLSWrap
 	// Log defaults to slog.Default.
 	Log *slog.Logger
 	// OnEvent, when set, gets every Event, in order, from one goroutine.
 	OnEvent func(Event)
+	// StateWrite, when set, writes the state file's bytes in place of
+	// (*os.File).Write, before its fsync: for tests of a slow disk (#710,
+	// the lost switchover campaign). Nil in every build that runs a plant.
+	StateWrite func(*os.File, []byte) (int, error)
 
 	// For tests: the clock (quorum.Now), the HTTP client, and the state
 	// file's write.
@@ -144,7 +151,11 @@ const (
 	// EventLeaseMismatch: a voter refused a vote because its stated lease
 	// is longer than the voter's (Detail says which voter and both
 	// leases). The pair's members (or the witness's --lease) disagree.
-	// Raised on each side once per change.
+	// Raised on each side once per change: Event.Voter names the other
+	// side and Event.Inbound says whose request was refused. Detail ""
+	// clears it, once that voter next takes this controller's lease (a
+	// reply of any kind but a lease refusal), or this controller's voter
+	// next takes the peer's (#710).
 	EventLeaseMismatch EventKind = "redundancy.lease-mismatch"
 	// EventTermJumpRefused: a voter refused a vote asking for a term more
 	// than MaxTermJump above what it promised (Detail: which voter, the
@@ -292,8 +303,15 @@ type Event struct {
 	Gen, Incarnation uint64
 	Other            uint64 // EventTwoCopies, EventReadoptOverSwitch
 	Detail           string
-	// Voter names the voter an EventPeerTLS or EventPeerIdentity is about.
+	// Voter names the voter an EventPeerTLS, EventPeerIdentity,
+	// EventLeaseMismatch, EventTermJumpRefused or EventVersionMismatch is
+	// about.
 	Voter quorum.NodeID
+	// Inbound: a refusal event (lease, term jump, version) is about a
+	// request of Voter's that this controller's voter refused; false:
+	// Voter refused this controller's. The two are kept apart, so a pair
+	// whose leases differ reports each side once and never flaps.
+	Inbound bool
 }
 
 // Status is a snapshot of the elector, for the operator surfaces.
@@ -435,6 +453,9 @@ type Elector struct {
 	// this controller is silent (#1029 3c-2).
 	spareSeq uint64
 	spare    atomic.Bool
+	// markFn: the standby's in-sync mark, asked at each look
+	// (SetSyncMark).
+	markFn func(epoch uint64) (uint64, bool)
 
 	// The operator-intent log's seams and what they decided (logpref.go).
 	logFn     func() LogState
@@ -444,9 +465,28 @@ type Elector struct {
 	yieldedAt time.Time      // the last yield (at most one per yieldEvery)
 	yieldHold bool           // no renewal until the lease is seen over (a yield)
 	yieldDue  quorum.Instant // when it was due to end (the yield_until_due mutation)
+	// handBackUntil: a hand-back's hold (handback.go), no renewal and no
+	// campaign before it, the gate closed.
+	handBackUntil quorum.Instant
+	// peerLeaseSeen: this boot's voter has seen the peer hold a lease;
+	// tookOver: the last leadership acquired is a takeover (IsTakeover).
+	peerLeaseSeen bool
+	tookOver      atomic.Bool
+	// resignAt: when this controller's voter last took its peer's RESIGN
+	// afresh (serveVote), resignHeard once it has; byResign: the last
+	// leadership acquired began within resignWindow of one, so it is a
+	// planned switchover's, not a failover's (FromResign). A note beside
+	// the vote path, never read by it (#798 follow-up).
+	resignAt    quorum.Instant
+	resignHeard bool
+	byResign    atomic.Bool
 
 	gate    atomic.Pointer[gateState]
 	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
+	adopted atomic.Uint64 // the witness incarnation this controller adopted (AdoptedIncarnation)
+	// unboundNext is the earliest quorum.Instant unboundWitnessReply may
+	// close the kept connections again (0: any time): once a lease.
+	unboundNext atomic.Int64
 	wake    chan struct{}
 	// helloNow asks the hello loop for a hello at once, from the fast
 	// start: the link to the peer came up, or the peer's votes carry a new
@@ -525,13 +565,14 @@ func New(o Options) (*Elector, error) {
 	}
 	e := &Elector{
 		o: o, log: o.Log.With("cluster", o.Cluster, "node", string(o.Self)), now: now,
-		file: &State{Path: o.StatePath, Owner: o.Self, Cluster: o.Cluster, Box: o.Box, write: o.write},
+		file: &State{Path: o.StatePath, Owner: o.Self, Cluster: o.Cluster, Box: o.Box, write: firstWrite(o.write, o.StateWrite)},
 		call: caller{client: client, token: o.Token, lease: o.Lease, members: members(o.Self, o.Peer)},
 		peer: baseURL(o.PeerAddr, o.TLS != nil), wit: baseURL(o.WitnessAddr, o.TLS != nil), nonce: drawNonce(),
 		waiters: map[waitKey]chan quorum.Reply{}, written: make(chan struct{}), mismatch: map[string]string{}, links: map[string]string{},
 		wake: make(chan struct{}, 1), helloNow: make(chan struct{}, 1), events: make(chan Event, 64), decided: make(chan struct{}),
 	}
 	e.call.note, e.call.tls = e.noteLink, o.TLS != nil
+	e.call.wit, e.call.adopted = e.wit, e.adopted.Load
 	free := func() {}
 	if !mut("controller_unlocked") {
 		f, err := lock(o.StatePath + ".lock")
@@ -765,6 +806,24 @@ func (e *Elector) SendGate() (bool, time.Duration, uint64) {
 // the runtime resumes.
 func (e *Elector) Term() uint64 { return e.gate.Load().epoch }
 
+// IsTakeover reports whether the leadership this controller acquired
+// last is a takeover from its peer: any but this boot's first, and that
+// one too when its voter had seen the peer hold a lease before (#710 (b),
+// runtime.TakeoverKnower). FALSE before any.
+func (e *Elector) IsTakeover() bool { return e.tookOver.Load() }
+
+// resignWindow, in leases, is how soon after its voter took the peer's
+// RESIGN a leadership this controller acquires counts as the planned
+// switchover's: the campaign is at once and wins within a lease or so; a
+// lead taken later is a failover's.
+const resignWindow = 2
+
+// FromResign reports whether the leadership acquired last began from its
+// peer's RESIGN (a planned switchover, a failback or a hand-back), not
+// from a lease that ran out (a failover). A label for operators: nothing
+// decides on it (#798 follow-up).
+func (e *Elector) FromResign() bool { return e.byResign.Load() }
+
 // Decided is closed once this controller leads, or has seen the peer
 // leading.
 func (e *Elector) Decided() <-chan struct{} { return e.decided }
@@ -873,18 +932,26 @@ func (e *Elector) look() time.Duration {
 		return wait
 	}
 	e.mu.Lock()
-	h := e.health
+	h, mf, epoch := e.health, e.markFn, e.c.Term()
 	e.mu.Unlock()
 	healthy := h == nil || h()
 	ls, hasLog := e.logState() // outside mu: the log calls into the election
+	var markSeq uint64
+	var markCur bool
+	if mf != nil && epoch != 0 {
+		markSeq, markCur = mf(epoch) // outside mu, as the health check
+	}
 
 	e.mu.Lock()
 	now := e.now()
+	if mf != nil && e.c.Term() == epoch && e.c.Leading(now) {
+		e.c.SetMark(markSeq, markCur)
+	}
 	from, until := e.v.LeaderSeen()
 	e.unhealthy = !healthy
 	e.maybeYield(now, ls, hasLog)
 	may := e.mayCampaign(now) && (e.c.Leading(now) || !e.logHold(now, ls, hasLog))
-	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && may)
+	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && !e.handingBack(now) && may)
 	p, msgs, probe := e.a.Tick(now)
 	peer := false // the probe goes to the peer's voter too
 	if probe == nil {
@@ -965,12 +1032,25 @@ func (e *Elector) after(now quorum.Instant) {
 		}
 		e.event(out)
 	}
-	e.publish(now)
+	if from, until := e.v.LeaderSeen(); from == e.o.Peer && now < until {
+		e.peerLeaseSeen = true
+	}
+	// A new leadership's bookkeeping comes BEFORE publish opens the gate:
+	// the runtime reads IsTakeover in the takeover the open gate starts
+	// (Sonnet, #1350).
 	if t := e.c.Term(); e.c.Leading(now) && t != e.epoch {
 		e.epoch = t
 		e.acquired++
+		// A takeover, not a start, unless this is the boot's first
+		// leadership and it never saw the peer hold a lease (#710 (b)):
+		// a whole-pair power-up starts, a standby that followed a live
+		// leader takes over.
+		e.tookOver.Store(e.acquired > 1 || e.peerLeaseSeen || mut("every_acquisition_a_takeover"))
+		e.byResign.Store(e.resignHeard && now.Sub(e.resignAt) <= resignWindow*e.o.Lease && !mut("cause_resign_unnoted"))
+		e.resignHeard = false // one RESIGN names one leadership
 		e.log.Info("redundancy: this controller leads", "term", t)
 	}
+	e.publish(now)
 	if from, until := e.v.LeaderSeen(); e.c.Leading(now) || (from == e.o.Peer && now < until) {
 		e.once.Do(func() { close(e.decided) })
 	}
@@ -982,8 +1062,13 @@ func (e *Elector) after(now quorum.Instant) {
 // Read without the lock, so the log may ask under its own.
 func (e *Elector) CountedIncarnation() uint64 { return e.counted.Load() }
 
+// AdoptedIncarnation is the witness incarnation this controller adopted
+// (its voter state's), 0 while uncommissioned. Read without the lock.
+func (e *Elector) AdoptedIncarnation() uint64 { return e.adopted.Load() }
+
 // publish stores the gate. Under mu.
 func (e *Elector) publish(now quorum.Instant) {
+	e.adopted.Store(e.v.State().Incarnation)
 	inc, from := e.c.Counting()
 	if now < from {
 		inc = 0 // its quiet period: its grants don't count yet, nor its log
@@ -995,7 +1080,7 @@ func (e *Elector) publish(now quorum.Instant) {
 	}
 	if e.c.Leading(now) {
 		g.epoch, g.end = max(g.epoch, e.c.Term()), e.c.LeaseEnd()
-		g.open = (!e.released && !e.unhealthy) || mut("gate_ignores_health")
+		g.open = (!e.released && !e.unhealthy && !e.handingBack(now)) || mut("gate_ignores_health")
 		if e.spare.Load() {
 			g.open = false
 		}
@@ -1078,20 +1163,31 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 	}
 	b, _ := r.MarshalBinary()
 	go func() {
-		body, err := e.call.call(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
+		body, hdr, cn, err := e.call.callCert(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
+		if to == e.o.Witness && e.call.tls && !witnessOpOK(cn, e.adopted.Load()) && !mut("witness_refusals_unbound") {
+			e.unboundWitnessReply(to, cn, body, err)
+			return
+		}
 		var se *statusError
 		if errors.As(err, &se) && se.code == http.StatusConflict {
-			kind := EventLeaseMismatch
 			switch se.reason {
+			case "lease":
+				e.mismatched(EventLeaseMismatch, string(to), se.said())
 			case "term-jump":
-				kind = EventTermJumpRefused
+				e.mismatched(EventTermJumpRefused, string(to), se.said())
 			case "version":
-				kind = EventVersionMismatch
+				e.mismatched(EventVersionMismatch, string(to), se.said())
 			}
-			e.mismatched(kind, string(to), se.msg)
 		}
 		if errors.As(err, &se) && se.code == http.StatusBadRequest {
 			e.mismatched(EventVersionMismatch, string(to), olderPeerMsg(string(to)))
+		}
+		if (err == nil || (se != nil && se.code == http.StatusConflict && se.reason == "term-jump")) && voterLeaseFits(hdr, e.o.Lease) {
+			// The voter answered past its lease check (a reply of any
+			// kind, a probe's included, or a later refusal), and its own
+			// lease takes this controller's (not only its restart wait's):
+			// a lease refusal it gave clears.
+			e.leaseTaken(string(to), false)
 		}
 		if err != nil || body == nil {
 			return
@@ -1106,8 +1202,109 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 		if rep.From != to {
 			return // a voter answers as itself, or not at all
 		}
+		if !e.witnessReplyCounts(to, cn, rep) {
+			return
+		}
 		e.reply(to, rep)
 	}()
+}
+
+// witnessReplyCounts reports whether a vote's (or a RESIGN's) reply from
+// to, under the certificate named cn, goes to reply() (#710 2b): any
+// controller's does; the witness's when it is bound to its certificate
+// (witnessBound) and that is the incarnation this controller adopted (or
+// it adopted none). A bound reply from an incarnation it has not adopted
+// goes to the adoption alone (unadoptedWitness), and counts for nothing
+// else.
+func (e *Elector) witnessReplyCounts(to quorum.NodeID, cn string, rep quorum.Reply) bool {
+	if !e.witnessBound(to, cn, rep) {
+		return false
+	}
+	if to != e.o.Witness || !e.call.tls || witnessOpOK(cn, e.adopted.Load()) || mut("unadopted_reply_heard") {
+		return true
+	}
+	e.unadoptedWitness(rep)
+	return false
+}
+
+// unboundWitnessReply takes a vote's answer from the witness under
+// witness@0, or under an incarnation this controller does not count: it
+// raises and clears nothing (#710 2b). Only a reply bound to its
+// certificate goes on, to witnessBound and, unadopted, to the adoption
+// alone; witnessBound closes the kept connections when it is not bound.
+// Any other answer that came under a certificate (a refusal by status, a
+// 409 lease or term-jump, or a body that does not parse as the witness's
+// reply) has nothing to bind, and closes them too: a kept connection
+// would otherwise keep the uncounted certificate for as long as the
+// witness only refuses, and its refusals would never be heard (#1120: a
+// renewal in flight across CloseIdleConnections kept a connection under
+// another incarnation's certificate, and the lease report was never
+// raised).
+//
+// No answer at all (a timeout, a reset, a refused dial: no certificate)
+// closes nothing: there is no certificate to drop, and a witness having
+// trouble must not turn every vote into new handshakes. And it closes at
+// most once a lease: the client is shared with the peer's votes, and a
+// witness that really runs another incarnation refuses every vote until
+// an operator acts, for hours maybe. Its own call's connection is back in
+// the pool by now, so one close is the new handshake the next vote needs.
+func (e *Elector) unboundWitnessReply(to quorum.NodeID, cn string, body []byte, err error) {
+	if err == nil && body != nil {
+		var rep quorum.Reply
+		if rep.UnmarshalBinary(body) == nil && rep.From == to {
+			e.witnessReplyCounts(to, cn, rep)
+			return
+		}
+	}
+	if mut("unbound_refusal_keeps_conn") || (cn == "" && !mut("unbound_close_on_no_answer")) {
+		return
+	}
+	now, next := int64(e.now()), e.unboundNext.Load()
+	if mut("unbound_close_uncapped") || (now >= next && e.unboundNext.CompareAndSwap(next, now+int64(e.o.Lease))) {
+		e.call.client.CloseIdleConnections() // the next vote dials again
+	}
+}
+
+// unadoptedWitness hands a reply from a witness incarnation this
+// controller has not adopted (bound to its own certificate) to the
+// adoption alone (#710 2b): it is evidence that the incarnation answers,
+// nothing more. Its marks, fences, held state, relayed promise and grants
+// count only once the pair adopts it; a token holder answering as a fresh
+// incarnation must not mark this controller a duplicate, fence it, or
+// hold it. (An uncommissioned controller, nothing adopted, hears every
+// bound incarnation in full, as it must to adopt: witnessReplyCounts.)
+func (e *Elector) unadoptedWitness(rep quorum.Reply) {
+	e.mu.Lock()
+	now := e.now()
+	e.a.OnWitness(now, rep)
+	e.after(now)
+	e.mu.Unlock()
+	e.poke()
+}
+
+// witnessBound reports whether a vote reply from to counts by the
+// certificate it came under (#710 2b): with peer TLS, the witness's reply
+// must carry the incarnation its certificate names, never 0. A token
+// holder answering as a fresh incarnation (pinned at first contact) can't
+// speak for the one the pair counts, and nothing it says reaches the
+// voter, the marks or the adoption. A reply over witness@0 (a pair's
+// first vote, the witness drawing its incarnation) ends that connection,
+// so the next vote meets the incarnation's certificate.
+func (e *Elector) witnessBound(to quorum.NodeID, cn string, rep quorum.Reply) bool {
+	if to != e.o.Witness || !e.call.tls || mut("reply_inc_unbound") {
+		return true
+	}
+	inc, ok := witnessCertInc(cn)
+	if ok && inc != 0 && inc == rep.Incarnation {
+		return true
+	}
+	if !mut("bound_reply_keeps_conn") {
+		e.call.client.CloseIdleConnections() // the next vote dials again: a pair's first vote rode witness@0
+	}
+	if !ok || inc != 0 {
+		e.log.Warn("redundancy: a witness reply's incarnation is not the one its certificate names: not counted", "certificate", nonEmptyCN(cn), "reply", rep.Incarnation)
+	}
+	return false
 }
 
 // reply takes a voter's reply to this controller's request.
@@ -1188,12 +1385,35 @@ func (e *Elector) noteLink(url string, err error) {
 	case faultPeerTLS:
 		tlsMsg = who + " speaks TLS on its peer port and this controller plain HTTP (redundancy.peer-tls: off here): run one peer TLS setting on both controllers and the witness"
 	case faultForeignKey:
-		idMsg = who + "'s TLS key is not this pair's: it holds another NAUTILUS_PEER_TOKEN, or something else answers at " + hostOf(e.baseOf(voter)) + ". Give the two controllers and the witness the same token"
+		idMsg = who + "'s TLS certificate is not this pair's: it holds another NAUTILUS_PEER_TOKEN, or something else answers at " + hostOf(e.baseOf(voter)) + ". Give the two controllers and the witness the same token"
+		var pin interface{ SaysWhy() bool }
+		if errors.As(err, &pin) && pin.SaysWhy() {
+			// Its key is the pair's, but not the one pinned for it here
+			// (#710 per-box keys): the refusal says both fingerprints.
+			idMsg = who + " was refused: " + identityText(err)
+		}
 	case faultKeyRefused:
-		idMsg = who + " refused this controller's TLS key: it holds another NAUTILUS_PEER_TOKEN. Give the two controllers and the witness the same token"
+		idMsg = who + " refused this controller's TLS key: it holds another NAUTILUS_PEER_TOKEN, or it has another key pinned for " + string(e.o.Self) + " (this box was replaced, its state directory lost, or its key remade). If this box really changed, run `naut redundancy unpin " + string(e.o.Self) + "` on the other controller, the surviving one; " + who + "'s journal names both fingerprints"
+		var se *statusError
+		if errors.As(err, &se) && se.body != "" {
+			idMsg += ". It says: " + se.said()
+		}
 	}
 	e.linkState(EventPeerTLS, voter, tlsMsg)
 	e.linkState(EventPeerIdentity, voter, idMsg)
+}
+
+// identityText is a peer TLS refusal's own text, without the transport's
+// wrapping.
+func identityText(err error) string {
+	var id interface {
+		error
+		PeerIdentity() bool
+	}
+	if errors.As(err, &id) {
+		return id.Error()
+	}
+	return err.Error()
 }
 
 // hostOf is a base URL's host:port.
@@ -1241,24 +1461,88 @@ func (e *Elector) linkState(kind EventKind, voter quorum.NodeID, msg string) {
 	}
 }
 
-// mismatched reports a refusal between this controller and voter, sent
-// or received (a lease mismatch, or a term jump): logged and raised once
-// per change of what it says.
+// mismatched reports voter's refusal of this controller's request (a
+// lease mismatch, a term jump, a version): logged and raised once per
+// change of what it says.
 func (e *Elector) mismatched(kind EventKind, voter, msg string) {
-	key := string(kind) + "/" + voter
+	e.refusal(kind, voter, false, msg)
+}
+
+// refused reports this controller's voter's refusal of voter's request,
+// as mismatched does the other way.
+func (e *Elector) refused(kind EventKind, voter, msg string) {
+	e.refusal(kind, voter, true, msg)
+}
+
+func (e *Elector) refusal(kind EventKind, voter string, inbound bool, msg string) {
 	e.mu.Lock()
-	changed := e.mismatch[key] != msg
-	e.mismatch[key] = msg
-	if changed {
-		e.event(Event{Kind: kind, Detail: msg})
-	}
+	changed := e.noteRefusal(kind, voter, inbound, msg)
 	e.mu.Unlock()
+	if changed {
+		e.logRefusal(kind, voter, inbound, msg)
+	}
+}
+
+// refusalKey keys a refusal by its kind, the other side and the direction.
+func refusalKey(kind EventKind, voter string, inbound bool) string {
+	if inbound && !mut("lease_refusal_one_way") {
+		return string(kind) + "/" + voter + "/in"
+	}
+	return string(kind) + "/" + voter
+}
+
+// noteRefusal moves a refusal's state and raises its event, under e.mu:
+// msg "" clears it. As linkState, the state moves only with its event, so
+// a raise or a clear the handler drops is tried again at the next call
+// and never lost for good. It reports whether it moved.
+func (e *Elector) noteRefusal(kind EventKind, voter string, inbound bool, msg string) bool {
+	key := refusalKey(kind, voter, inbound)
+	if e.mismatch[key] == msg {
+		return false
+	}
+	if !e.tryEvent(Event{Kind: kind, Voter: quorum.NodeID(voter), Inbound: inbound, Detail: msg}) {
+		return false
+	}
+	if msg == "" {
+		delete(e.mismatch, key)
+	} else {
+		e.mismatch[key] = msg
+	}
+	return true
+}
+
+// leaseTaken clears a lease refusal between this controller and voter in
+// one direction (inbound: this controller's voter took voter's lease),
+// when one stands. Cheap when none does.
+func (e *Elector) leaseTaken(voter string, inbound bool) {
+	if mut("lease_mismatch_never_clears") {
+		return
+	}
+	e.mu.Lock()
+	changed := e.leaseTakenLocked(voter, inbound)
+	e.mu.Unlock()
+	if changed {
+		e.logRefusal(EventLeaseMismatch, voter, inbound, "")
+	}
+}
+
+func (e *Elector) leaseTakenLocked(voter string, inbound bool) bool {
+	if _, ok := e.mismatch[refusalKey(EventLeaseMismatch, voter, inbound)]; !ok {
+		return false
+	}
+	return e.noteRefusal(EventLeaseMismatch, voter, inbound, "")
+}
+
+func (e *Elector) logRefusal(kind EventKind, voter string, inbound bool, msg string) {
 	switch {
-	case !changed:
+	case msg == "" && inbound:
+		e.log.Info("redundancy: this controller's voter takes the peer's lease again", "voter", voter, "was", string(kind))
+	case msg == "":
+		e.log.Info("redundancy: a voter takes this controller's lease again", "voter", voter, "was", string(kind))
 	case kind == EventTermJumpRefused:
-		e.log.Error("redundancy: a vote was refused as a term jump", "voter", voter, "detail", msg)
+		e.log.Error("redundancy: a vote was refused as a term jump", "voter", voter, "inbound", inbound, "detail", msg)
 	default:
-		e.log.Error("redundancy: a vote was refused for its lease: the pair's leases (or the witness's --lease) disagree", "voter", voter, "detail", msg)
+		e.log.Error("redundancy: a vote was refused for its lease: the pair's leases (or the witness's --lease) disagree", "voter", voter, "inbound", inbound, "detail", msg)
 	}
 }
 
@@ -1289,6 +1573,7 @@ func (e *Elector) Handler() http.Handler {
 }
 
 func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(VoterLeaseHeader, strconv.FormatInt(int64(e.o.Lease), 10))
 	if !e.running.Load() || e.silent() {
 		http.Error(w, "not running", http.StatusServiceUnavailable)
 		return
@@ -1297,7 +1582,7 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	var req quorum.Request
 	if err == nil && errors.Is(req.UnmarshalBinary(b), quorum.ErrVersion) {
 		msg := versionMsg(string(e.o.Peer), quorum.FrameVersion(b))
-		e.mismatched(EventVersionMismatch, string(e.o.Peer), msg)
+		e.refused(EventVersionMismatch, string(e.o.Peer), msg)
 		refuse(w, "version", msg)
 		return
 	}
@@ -1305,7 +1590,7 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad frame", http.StatusBadRequest)
 		return
 	}
-	if req.From != e.o.Peer {
+	if req.From != e.o.Peer || !SenderOK(r, e.o.Cluster, string(req.From), "sender_unbound_vote") {
 		http.Error(w, "not this pair's peer", http.StatusForbidden)
 		return
 	}
@@ -1315,15 +1600,19 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	if limit := e.v.MaxRequestLease(now); !leaseFits(stated, limit) && !mut("controller_lease_unchecked") {
 		e.mu.Unlock()
 		msg := fmt.Sprintf("%s's lease %v is longer than this voter's %v (or missing)", req.From, stated, limit)
-		e.mismatched(EventLeaseMismatch, string(req.From), msg)
+		e.refused(EventLeaseMismatch, string(req.From), msg)
 		refuse(w, "lease", msg)
 		return
 	}
+	leaseBack := !mut("lease_mismatch_never_clears") && e.leaseTakenLocked(string(req.From), true)
 	if st := e.v.State(); termJump(req.Term, st.Promised, st.Floor) && !mut("controller_no_term_cap") {
 		e.mu.Unlock()
 		msg := fmt.Sprintf("%s asked for term %d, more than %d above the %d this voter promised", req.From, req.Term, uint64(MaxTermJump), max(st.Promised, st.Floor))
-		e.mismatched(EventTermJumpRefused, string(req.From), msg)
+		e.refused(EventTermJumpRefused, string(req.From), msg)
 		refuse(w, "term-jump", msg)
+		if leaseBack {
+			e.logRefusal(EventLeaseMismatch, string(req.From), true, "")
+		}
 		return
 	}
 	if fenced := e.v.FencedRequest(req); !fenced {
@@ -1347,6 +1636,18 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 		quorum.YieldTo(now, e.v, e.c, req)
 	}
 	p, replies := e.v.Handle(now, req)
+	if req.Resign && e.v.ResignTook() && !mut("resign_waits_for_look") {
+		// The peer resigned and this voter took it afresh (a duplicate's
+		// answer does nothing): campaign at this very poke (#710 d1).
+		e.resignAt, e.resignHeard = now, true // only noted: FromResign
+		e.c.LookNow(now)
+		if !mut("resign_keeps_own_hold") {
+			// A switchover back: this controller's own resign hold was
+			// there not to fight a peer taking over; the peer now hands
+			// the lead back.
+			e.c.EndResignHold(now)
+		}
+	}
 	var push *quorum.Request
 	if e.v.RelayChanged(now) {
 		push = e.c.PushProbe(now) // the witness hears this new promise now, not at the next look
@@ -1362,6 +1663,9 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	}
 	e.after(now)
 	e.mu.Unlock()
+	if leaseBack {
+		e.logRefusal(EventLeaseMismatch, string(req.From), true, "")
+	}
 	e.w.ask(p)
 	if push != nil {
 		e.vote(e.o.Witness, e.wit, *push)
@@ -1547,7 +1851,7 @@ func (e *Elector) serveAdopt(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad frame", http.StatusBadRequest)
 		return
 	}
-	if m.From != e.o.Peer {
+	if m.From != e.o.Peer || !SenderOK(r, e.o.Cluster, string(m.From), "sender_unbound_adopt") {
 		http.Error(w, "not this pair's peer", http.StatusForbidden)
 		return
 	}
@@ -1576,7 +1880,7 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "challenge", http.StatusBadRequest)
 		return
 	}
-	if quorum.NodeID(r.URL.Query().Get("from")) != e.o.Peer {
+	if from := r.URL.Query().Get("from"); quorum.NodeID(from) != e.o.Peer || !SenderOK(r, e.o.Cluster, from, "sender_unbound_hello") {
 		http.Error(w, "not this pair's peer", http.StatusForbidden)
 		return
 	}
@@ -2035,6 +2339,45 @@ func (e *Elector) KnownFloor() uint64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.a.KnownFloor()
+}
+
+// ImageTermOK is the term check on a state image from the peer (#710
+// S1b): quorum.ImageTermOK on this controller's voter, now. ownLed is the
+// last term this controller led (its runtime's), seen the newest term it
+// already took an image of. A spare takes none.
+func (e *Elector) ImageTermOK(term, ownLed, seen uint64) (bool, string) {
+	if e.spare.Load() {
+		return false, "this controller is a spare"
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return quorum.ImageTermOK(e.v, e.now(), e.o.Peer, term, ownLed, seen)
+}
+
+// SetSyncMark sets how this leader learns how far its standby is in sync
+// (#710 S2c-1): f(epoch) is the sequence of the last state image the
+// standby acknowledged in that epoch, and whether that is current. Each
+// look asks it, outside the election's lock (f must not call into the
+// election), and the renewals carry it to the voters
+// (quorum.Candidate.SetMark), which keep it for the next takeover's hot
+// check.
+func (e *Elector) SetSyncMark(f func(epoch uint64) (seq uint64, current bool)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.markFn = f
+}
+
+// HotVerdict is the hot takeover's check against the voters (#710 S2c-1,
+// quorum.HotCheck.Verdict) for an image of the peer at (epoch, seq), on
+// the lease this controller holds now: hot, or the cold reason. Not
+// leading, it is cold.
+func (e *Elector) HotVerdict(epoch, seq uint64) (bool, string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.c.Leading(e.now()) {
+		return false, quorum.ColdNotLeading
+	}
+	return e.c.HotCheck().Verdict(epoch, seq)
 }
 
 // Status returns a snapshot.

@@ -113,6 +113,9 @@ type sessions struct {
 	// expired, so an open that arrives after its end (a replay, a late
 	// retry) does not bring the session back.
 	ended map[string]time.Time
+	// adopted, when set, is told of each OIDC session adopted from the log
+	// (OnAdopted).
+	adopted func(session)
 }
 
 // sessionReplicator is what the store tells the log about.
@@ -470,21 +473,48 @@ func (ss *sessions) elevateFailed(hash string) (fails int, ended bool) {
 // An end the log has already carried, or an expiry, wins.
 func (ss *sessions) adopt(e oplog.SessionEntry) {
 	ss.mu.Lock()
-	defer ss.mu.Unlock()
 	ss.pruneLocked()
 	expires := time.UnixMilli(e.Expires)
 	if !ss.now().Before(expires) {
+		ss.mu.Unlock()
 		return
 	}
 	if _, gone := ss.ended[e.Hash]; gone {
+		ss.mu.Unlock()
 		return
 	}
 	if se, ok := ss.byHash[e.Hash]; ok {
 		se.local = false // the log has it now
+		ss.mu.Unlock()
 		return
 	}
-	ss.byHash[e.Hash] = &session{hash: e.Hash, user: e.User, oidc: e.OIDC, issuer: e.Issuer, sub: e.Sub, groups: e.Groups,
+	se := &session{hash: e.Hash, user: e.User, oidc: e.OIDC, issuer: e.Issuer, sub: e.Sub, groups: e.Groups,
 		created: time.UnixMilli(e.Created), expires: expires, cred: e.Cred}
+	ss.byHash[e.Hash] = se
+	adopted := ss.adopted
+	ss.mu.Unlock()
+	if adopted != nil && se.oidc {
+		adopted(*se) // outside the lock: it may write the pins file
+	}
+}
+
+// OnAdopted sets what is told of each OIDC session the log brings in from
+// the other controller (never an ended or expired one), after the store
+// takes it: the server pins its name here (#710). It returns the OIDC
+// sessions the store holds from the log already (the replay at start, now
+// applied in full, so a sign-out or an unpin in it has ended its open).
+func (ss *sessions) OnAdopted(f func(session)) []session {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	ss.adopted = f
+	ss.pruneLocked()
+	var held []session
+	for _, se := range ss.byHash {
+		if se.oidc && !se.local && ss.now().Before(se.expires) {
+			held = append(held, *se)
+		}
+	}
+	return held
 }
 
 // endByLog ends the session the log ended and remembers its hash until it

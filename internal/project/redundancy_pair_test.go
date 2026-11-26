@@ -15,7 +15,17 @@ func pairFS(red string) fstest.MapFS {
 	}
 }
 
-const pairOK = "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n"
+const pairOK = "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n"
+
+// A pair needs no opt-in since #710 closed; a manifest that still has
+// experimental: true loads as before.
+func TestPairNeedsNoOptIn(t *testing.T) {
+	for _, m := range []string{pairOK, strings.Replace(pairOK, "redundancy:\n", "redundancy:\n  experimental: true\n", 1)} {
+		if p, err := Load(pairFS(m), ""); err != nil || !p.Redundancy.Pair() {
+			t.Errorf("%q: %v", m, err)
+		}
+	}
+}
 
 // A pair's section (design §2) loads with its defaults, and the Kubernetes
 // forms keep their meaning: lease: is a name there, a time with peers:.
@@ -77,17 +87,22 @@ func TestPairSectionRefusals(t *testing.T) {
 		{"a lease name with peers", pairOK + "  lease: plant-a\n", "not a name"},
 		{"a lease too short", pairOK + "  lease: 10ms\n", "want between"},
 		{"a lease too long", pairOK + "  lease: 1h\n", "want between"},
-		{"no witness", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n", "witness is required"},
-		{"one peer", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n  witness: wit:9460\n", "peers.b"},
-		{"a third name", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n    c: ctl-c:9450\n  witness: wit:9460\n", `"c" is not a controller`},
-		{"one address twice", "redundancy:\n  experimental: true\n  peers:\n    a: ctl:9450\n    b: ctl:9450\n  witness: wit:9460\n", "both ctl:9450"},
-		{"no port", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a\n    b: ctl-b:9450\n  witness: wit:9460\n", "want host:port"},
-		{"port out of range", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:70000\n    b: ctl-b:9450\n  witness: wit:9460\n", "1 to 65535"},
-		{"bad witness", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit\n", "redundancy.witness"},
+		{"no witness", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n", "witness is required"},
+		{"one peer", "redundancy:\n  peers:\n    a: ctl-a:9450\n  witness: wit:9460\n", "peers.b"},
+		{"a third name", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n    c: ctl-c:9450\n  witness: wit:9460\n", `"c" is not a controller`},
+		{"one address twice", "redundancy:\n  peers:\n    a: ctl:9450\n    b: ctl:9450\n  witness: wit:9460\n", "both ctl:9450"},
+		{"no port", "redundancy:\n  peers:\n    a: ctl-a\n    b: ctl-b:9450\n  witness: wit:9460\n", "want host:port"},
+		{"port out of range", "redundancy:\n  peers:\n    a: ctl-a:70000\n    b: ctl-b:9450\n  witness: wit:9460\n", "1 to 65535"},
+		{"bad witness", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit\n", "redundancy.witness"},
 		{"relative state dir", pairOK + "  state-dir: state\n", "absolute path"},
 		{"witness without peers", "redundancy:\n  witness: wit:9460\n", "needs peers"},
 		{"state dir without peers", "redundancy:\n  state-dir: /srv/naut\n", "needs peers"},
-		{"a pair without the opt-in", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n", "retained values (setpoints) are not replicated until state streaming"},
+		{"a negative hot-max-age", pairOK + "  hot-max-age: -1s\n", "want 0"},
+		{"a hot-max-age that is not a time", pairOK + "  hot-max-age: soon\n", "bad duration"},
+		{"a hot-max-age without peers", "redundancy:\n  hot-max-age: 2s\n", "hot-max-age applies to a redundant pair"},
+		{"a stream budget that is not a rate", pairOK + "  stream-budget: fast\n", "redundancy.stream-budget"},
+		{"a stream budget too small", pairOK + "  stream-budget: 1kB/s\n", "at least 10kB/s"},
+		{"a stream budget without peers", "redundancy:\n  stream-budget: 1MB/s\n", "applies to a redundant pair"},
 		{"the opt-in without peers", "redundancy:\n  experimental: true\n", "applies to a redundant pair"},
 		{"empty peers", "redundancy:\n  peers: {}\n  witness: wit:9460\n", "peers is empty"},
 		{"a fence margin of a quarter lease", pairOK + "  lease: 2s\n  net-delay: 480ms\n  send-margin: 20ms\n", "under a quarter of the lease"},
@@ -126,17 +141,23 @@ func TestPairFenceMarginLoads(t *testing.T) {
 	}
 }
 
-// #798: a pair can't run a Sparkplug edge node yet (both members would
-// publish as the same edge node), so a pair with sparkplug: is refused at
-// load, naming the issue. The Kubernetes Lease mode is left as it was.
-func TestPairRefusesASparkplugEdge(t *testing.T) {
+// A pair with a Sparkplug edge loads (#798: only the leader holds the
+// session, naut run's supervisor), and each replica's MQTT client id is
+// its own: the manifest's, or "<group>-<edge>", then "-<member>".
+func TestPairRunsASparkplugEdgeUnderItsOwnClientID(t *testing.T) {
 	edge := "sparkplug:\n  broker: tcp://broker:1883\n  group-id: plant\n"
-	_, err := Load(pairFS(edge+pairOK), "")
-	if err == nil || !strings.Contains(err.Error(), "#798") {
-		t.Fatalf("a pair with a Sparkplug edge: %v; want refused naming #798", err)
+	if _, err := Load(pairFS(edge+pairOK), ""); err != nil {
+		t.Fatalf("a pair with a Sparkplug edge: %v; want it loaded", err)
 	}
-	if _, err := Load(pairFS(edge+"redundancy:\n  lease: plant-a\n"), ""); err != nil {
-		t.Fatalf("the Kubernetes Lease mode with a Sparkplug edge: %v; want it loaded as before", err)
+	for _, c := range []struct{ id, member, want string }{
+		{"", "", ""},
+		{"", "a", "plant-line1-a"},
+		{"spb-edge", "b", "spb-edge-b"},
+		{"spb-edge", "", "spb-edge"},
+	} {
+		if got := sparkplugClientID(c.id, "plant", "line1", c.member); got != c.want {
+			t.Errorf("client id %q member %q: %q, want %q", c.id, c.member, got, c.want)
+		}
 	}
 }
 
@@ -147,7 +168,8 @@ func TestPairSendBudget(t *testing.T) {
 		red  string
 		want time.Duration
 	}{
-		{pairOK, 1450 * time.Millisecond},
+		{pairOK, 700 * time.Millisecond}, // the default 1 s lease
+		{pairOK + "  lease: 2s\n", 1450 * time.Millisecond},
 		{pairOK + "  lease: 200ms\n", 125 * time.Millisecond},
 		{pairOK + "  lease: 4s\n  net-delay: 100ms\n", 2900 * time.Millisecond},
 	} {
@@ -240,5 +262,36 @@ func TestFloatingIPConfig(t *testing.T) {
 	}
 	if _, err := Load(pairFS("redundancy:\n  floating-ip: {address: 10.0.0.50/24, interface: eth0}\n"), ""); err == nil || !strings.Contains(err.Error(), "applies to a redundant pair") {
 		t.Errorf("floating-ip without peers: %v", err)
+	}
+}
+
+// The state stream's budget (#710 S1b): bytes a second, plain or with a
+// unit; 1 MB/s when unset.
+func TestStreamBudget(t *testing.T) {
+	for in, want := range map[string]int64{"": DefaultStreamBudget, "2000000": 2_000_000, "500kB/s": 500_000, "2MB/s": 2_000_000, "1MiB/s": 1 << 20, "64 KiB": 64 << 10, "1.5MB": 1_500_000} {
+		r := &RedundancyConfig{StreamBudget: in}
+		if got := r.StreamBudgetBytes(); got != want {
+			t.Errorf("stream-budget %q = %d, want %d", in, got, want)
+		}
+	}
+	if got := (*RedundancyConfig)(nil).StreamBudgetBytes(); got != DefaultStreamBudget {
+		t.Errorf("no section: %d, want the default", got)
+	}
+}
+
+// redundancy.hot-max-age: unset is the caller's default, 0 is 0 (every
+// takeover cold), a time is that time (#710 S2).
+func TestHotMaxAge(t *testing.T) {
+	if got := (*RedundancyConfig)(nil).HotMaxAgeOr(-1); got != -1 {
+		t.Errorf("nil config: %v, want the default", got)
+	}
+	for in, want := range map[string]time.Duration{"": -1, "  hot-max-age: 0s\n": 0, "  hot-max-age: 4s\n": 4 * time.Second} {
+		p, err := Load(pairFS(pairOK+in), "")
+		if err != nil {
+			t.Fatalf("%q: %v", in, err)
+		}
+		if got := p.Redundancy.HotMaxAgeOr(-1); got != want {
+			t.Errorf("%q: hot-max-age %v, want %v", in, got, want)
+		}
 	}
 }

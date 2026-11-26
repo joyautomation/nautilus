@@ -61,13 +61,13 @@ Each built-in role adds to the one before:
 
 | Role | Adds |
 |---|---|
-| `viewer` | `read` |
-| `operator` | `write` (tag writes), `ack` (alarms), `sfc` (step and transition commands), `note` ([operator notes and the shift log](/guides/notes/)) |
+| `viewer` | `read`, `camera` (viewing the plant's [cameras](/guides/cameras/): whole-controller, not scoped to an area, and held by every built-in role that reads) |
+| `operator` | `write` (tag writes), `ack` (alarms), `sfc` (step and transition commands), `note` ([operator notes and the shift log](/guides/notes/)), `ptz` (moving a [camera](/guides/cameras/) that pans and tilts: whole-controller, and [elevated](#elevation)) |
 | `supervisor` | `shelve`, `out-of-service` (taking equipment's alarms out of service), `substitute`, `audit` (reading the journal), `signoff` (sealing an [I/O checkout](/guides/checkout/) run: a fresh password, and by default someone who recorded none of its results) |
 | `engineer` | `force`, `edit` (online edits, rollbacks), `activate`, `deploy` (a Logix or Siemens download), `config` (live I/O configuration, and [IO-Link](/guides/io-link/) parameter writes, journalled as `param.write` on `<port device>/<variable>`), `checkout` (recording the results of an [I/O checkout](/guides/checkout/), per area; forcing an output there needs `force` too) |
 | `administrator` | `users`, `override`, `redundancy` (the redundant pair's operator commands: [clearing a duplicate mark](/guides/redundancy/)) |
 
-A custom role `inherits` one role (built-in or custom), then can `allow` more permissions or `deny` some.
+A custom role `inherits` one role (built-in or custom), then can `allow` more permissions or `deny` some. A contractor or a remote viewer who may see values and not the plant floor is `inherits: viewer` with `deny: [camera]`.
 
 ### Areas
 
@@ -194,7 +194,7 @@ auth:
 - **No tokens for OIDC names.** `naut users token` refuses an OIDC name: a personal access token would outlive the account's removal at the provider. Scripts and VS Code use a local user's token or a service token.
 - **Offline sites.** The provider must be reachable to sign in, not afterwards. Keep a local user (or `NAUTILUS_TOKEN`) for when it isn't.
 - **Upgrading.** A controller now takes the users lock (`.users.lock` in the state directory) at a name's first sign-in. One left owned by root by an older `sudo naut users` makes those sign-ins fail, with a message naming the `chown`; the next `sudo naut users` gives it back.
-- **Not on a redundant pair yet.** The pins are written by the box that signs a person in, and a pair doesn't share them yet (#710), so `auth.oidc` is refused with `redundancy:`. Use local users on a pair.
+- **On a redundant pair** each controller signs in at the provider itself, with its own copy of the block: deploy the same project to both and set `NAUTILUS_OIDC_SECRET` on each. Leave `redirect-url` empty and register both controllers' callback addresses at the provider, or set it to the pair's one floating address. A name's pin goes to the other controller with the sign-in (see [A redundant pair](#a-redundant-pair)).
 - **Tested against Keycloak** (`tools/keycloak/run.sh` runs the sign-in and the confirmation at the provider against a real Keycloak), in Chrome and Firefox. Entra ID, Google and Safari are not tested yet.
 
 The hops, for a proxy or firewall rule:
@@ -208,7 +208,7 @@ The hops, for a proxy or firewall rule:
 
 ## Elevation
 
-Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`out-of-service`, `force`, `edit`, `activate`, `deploy`, `config`, `users` and `override`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor. Taking equipment out of service hides its alarms for up to a week; putting it back needs only `ack` (over any one of its alarms) and no fresh password.
+Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`out-of-service`, `force`, `edit`, `activate`, `deploy`, `config`, `users`, `override` and, on a project with cameras, `ptz`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor. Taking equipment out of service hides its alarms for up to a week; putting it back needs only `ack` (over any one of its alarms) and no fresh password.
 
 - **The window.** The password counts for `auth.elevation` (15 minutes by default, 1m to 12h) after the user last entered it, at sign-in or at re-authentication. Use doesn't extend it. It never outlasts the session; an `elevation` as long as `session` means the sign-in counts for the whole session.
 - **Past it**, an elevated action is refused with `401` and `{"error": …, "elevate": true}`, and nothing is done. The error tells the user to confirm their password. An HMI asks for it (`POST /api/elevate`) and sends the action again.
@@ -331,7 +331,9 @@ Every command write is journalled, written or refused: action `tag.write`, sourc
 
   Without `public-urls` the `503` names no address: the `peers:` addresses are the pair's own and are never shown to a browser.
 - **Behind a load balancer or a Kubernetes Service**, a browser lands on the standby on about half its connections and gets the `503`. Give the balancer a health check on [`/readyz`](#probes) so it sends browsers only to the leader. `public-urls` names the pair's controllers `a` and `b`. The two-replica Deployment `naut new --deploy` generates has no stable pod names for it, so there the `503` names no leader and the `/readyz` health check is the way in. Its Service still sends token clients to either pod: a standby forwards their requests to the leader.
-- **A failover signs browser users out.** The new leader doesn't know the old one's sessions, so its users sign in again there. The old leader ends its sessions as soon as it is a standby, so they don't come back if it leads again (journalled as `auth.sessions-ended`).
+- **A takeover on a pair (`peers:`) keeps browser users signed in** when they use one address for the pair (a floating address or a proxy): each sign-in, password or OIDC, goes to the other controller through the operator log (see [the redundancy guide](/guides/redundancy/)). Through each controller's own address the browser has no cookie for the new leader, so the person signs in again there. An elevated action asks for the password, or the provider, again. Under the Kubernetes Lease mode a failover signs browser users out, and the old leader ends its sessions as soon as it is a standby (journalled as `auth.sessions-ended`).
+- **An OIDC name's pin goes with the sign-in.** The other controller pins the name to the same account when it takes the sign-in from the operator log (or at the session's first use there, if its copy of the log was still catching up), so while that session lasts no other account can take the name there after a takeover. A name already pinned there to another account keeps that pin: the session does not act there, and the journal's `auth.pin` entry says to run `naut users unpin <name>` on both controllers. Run `naut users unpin` on both controllers in any case: each keeps its own pins file. A name is not pinned on a controller that never held one of its sessions: one signed in while the operator log could not commit, or signed in and out (or expired) while that controller was down. There the next sign-in pins it, as on a single controller.
+- **Not with the Kubernetes Lease mode.** Its replicas share no operator log, so `auth.oidc` is refused with `redundancy:` without `peers:`.
 - **During an election** a controller that knows no leader refuses a new sign-in (`503`, try again shortly). Sessions it issued still work there and can be signed out. If it then leads again without ever having seen another leader, those sessions carry on: no failover happened as far as it knows.
 - **`naut users signout` reaches one box.** Sessions live on the leader, so run it there.
 - **Sign-out needs the leader.** If no leader is reachable, signing out can't revoke the session. It ends at the next failover or when it expires.

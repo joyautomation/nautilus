@@ -55,12 +55,14 @@ func (k *fakeKeeper) RestoreIO(ctx context.Context, st *retain.IOState) error {
 
 // keepTerm is a Termed Coordinator a test flips.
 type keepTerm struct {
-	lead atomic.Bool
-	term atomic.Uint64
+	lead     atomic.Bool
+	term     atomic.Uint64
+	takeover atomic.Bool // IsTakeover: false (a start) unless a test sets it
 }
 
-func (f *keepTerm) IsLeader() bool { return f.lead.Load() }
-func (f *keepTerm) Term() uint64   { return f.term.Load() }
+func (f *keepTerm) IsLeader() bool   { return f.lead.Load() }
+func (f *keepTerm) Term() uint64     { return f.term.Load() }
+func (f *keepTerm) IsTakeover() bool { return f.takeover.Load() }
 
 func (k *fakeKeeper) IOUnreadable(err error) {
 	k.mu.Lock()

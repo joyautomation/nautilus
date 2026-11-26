@@ -124,6 +124,9 @@ type Options struct {
 // Report is what happened.
 type Report struct {
 	Controller, Program, Routine string
+	// Warnings are the writer's (writer.Options.Warn): written on purpose,
+	// differently from nautilus.
+	Warnings []string
 	Rungs                        int
 	// Build is the SDK's own build time; ImportBuild the whole import +
 	// build leg as seen from here.

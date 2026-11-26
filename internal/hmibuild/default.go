@@ -594,9 +594,13 @@ const defaultLog = `<script>
 // defaultAlarms is the alarms page the bar's alarm banner opens: the
 // active ones, to acknowledge and shelve.
 const defaultAlarms = `<script>
+	import { page } from '$app/state';
 	import { AlarmTable, AlarmTuning, OutOfServicePanel, FloodBanner } from '@joyautomation/nautilus-hmi';
 	import { alarms } from 'nx:default/client';
-	let focus = $state(false);
+	// A page's link (#1249) opens one alarm (?alarm=<id>) or a flood's
+	// focus view (?focus=1).
+	let focus = $state(page.url.searchParams.get('focus') === '1');
+	const search = page.url.searchParams.get('alarm') ?? '';
 	// what would stop each chattering alarm: read when the SET chattering
 	// changes (a derived string, so a frame that changes nothing does not refetch)
 	const chatKey = $derived(alarms.instances.filter((a) => a.chatter).map((a) => a.id).join(','));
@@ -623,6 +627,7 @@ const defaultAlarms = `<script>
 			{now}
 			flood={alarms.flood}
 			{focus}
+			{search}
 			onchattershelve={async (id, seconds, reason, by) => (await alarms.shelve(id, seconds, by, { reason, via: 'chatter' })) !== null}
 			onack={(ids, by) => alarms.ack(ids, by)}
 			onshelve={(id, until, by) => alarms.shelve(id, Math.max(1, Math.round((until - Date.now()) / 1000)), by)}

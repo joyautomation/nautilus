@@ -205,6 +205,7 @@ const (
 	evDiskDone
 	evFault
 	evHeal
+	evResignPeer // a resign's RESIGN to the peer, if the witness has not answered by now
 )
 
 type event struct {
@@ -272,8 +273,20 @@ type node struct {
 
 	voter *quorum.Voter
 	cand  *quorum.Candidate
-	adopt *quorum.Adoption
-	nonce uint64
+	// imgEpoch models a standby's state image (#710 S2c-1): the epoch of
+	// the last leader renewal from its peer that reached this boot's
+	// voter, as its stream would have brought an image. Lost at a
+	// restart, spent when it leads. wasLeading: its gate at the last
+	// gate().
+	imgEpoch   uint64
+	wasLeading bool
+	// resignB is a resign's RESIGN not yet sent to the peer (it goes once
+	// the witness answers, or at evResignPeer); resignID its id, kept to
+	// know the voters' answers to it (#710 d1).
+	resignB  []byte
+	resignID uint64
+	adopt    *quorum.Adoption
+	nonce    uint64
 	// seen is the voter's handshake state after the last call into the
 	// adoption, so a change (a proposal, an adoption in memory) is seen;
 	// cnt is what the protocol says this controller counts (countTruth).
@@ -327,6 +340,9 @@ type pendingGrant struct {
 
 // World is one run in progress.
 type World struct {
+	// leadHeard: per voter and boot, the highest campaign or renewal Seq
+	// it received (the resign oracle's ground truth, #710 d1).
+	leadHeard map[heardKey]uint64
 	// clearPlan is the operator's clear command's check, made once for
 	// all the Clear faults at one instant (the real command checks once
 	// and sends every member the same plan).
@@ -367,7 +383,7 @@ type World struct {
 
 func newWorld(o Options) *World {
 	o.defaults()
-	w := &World{o: o, net: rand.New(rand.NewPCG(o.Seed, 0x6e6574)), probeNet: rand.New(rand.NewPCG(o.Seed, 0x70726f6265)), fromSpareDone: map[int]bool{}, tookAddress: map[Addr]bool{}}
+	w := &World{o: o, net: rand.New(rand.NewPCG(o.Seed, 0x6e6574)), probeNet: rand.New(rand.NewPCG(o.Seed, 0x70726f6265)), fromSpareDone: map[int]bool{}, tookAddress: map[Addr]bool{}, leadHeard: map[heardKey]uint64{}}
 	for a := Addr(0); a < nNodes; a++ {
 		w.nodes[a] = &node{
 			addr:  a,
@@ -490,6 +506,8 @@ func (w *World) step(e *event) {
 		return
 	}
 	switch e.kind {
+	case evResignPeer:
+		w.resignToPeer(n)
 	case evTick:
 		if e.gen == n.tickGen {
 			w.tick(n)
@@ -518,6 +536,11 @@ func (w *World) start(n *node) {
 	n.up, n.deferred = true, nil
 	n.paused = n.pauses > 0 || n.freezes > 0
 	n.boot++
+	for k := range w.leadHeard {
+		if k.voter == n.addr {
+			delete(w.leadHeard, k) // a voter's leadSeq is memory only (Fable re-check, #1355)
+		}
+	}
 	n.sent, n.grantEnd, n.legit = nil, nil, nil
 	n.disk.queue, n.disk.busy = nil, false
 	n.spareSeq, n.spare = 0, false
@@ -591,6 +614,7 @@ func (w *World) start(n *node) {
 		panic(err) // a sim bug: the config is built here
 	}
 	n.cand = c
+	n.imgEpoch, n.wasLeading = 0, false
 	n.adopt = quorum.NewAdoption(n.voter, c, now)
 	n.seen = st
 	// The ground truth of what counts (design §3.1), kept apart from the
@@ -706,7 +730,22 @@ func (w *World) scan(n *node) {
 // lease end (local), or closed.
 func (w *World) gate(n *node) {
 	now := w.local(n)
-	if n.up && n.cand != nil && n.cand.Leading(now) {
+	leading := n.up && n.cand != nil && n.cand.Leading(now)
+	if leading && !n.wasLeading {
+		// A takeover: judge the hot check on the image this boot holds
+		// (HotOracle), and lead with the standby in sync, as far as the
+		// stream goes here (one image, current).
+		epoch := n.cand.Term()
+		w.rec.LeadStarts = append(w.rec.LeadStarts, LeadStart{At: w.now, Node: n.addr, Epoch: epoch, Boot: n.boot, Local: w.local(n)})
+		if n.imgEpoch != 0 {
+			hot, why := n.cand.HotCheck().Verdict(n.imgEpoch, 1)
+			w.rec.Takeovers = append(w.rec.Takeovers, HotTakeover{At: w.now, Node: n.addr, Image: n.imgEpoch, Epoch: epoch, Hot: hot, Why: why})
+		}
+		n.imgEpoch = 0
+	}
+	n.wasLeading = leading
+	if leading {
+		n.cand.SetMark(1, true)
 		w.rec.gate(n.addr, w.now, true, n.cand.LeaseEnd(), n.cand.VoteTerm())
 		return
 	}
@@ -789,6 +828,9 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 		if n.adopt != nil && w.fromPeer(n, from) && !(req.Term == 0 && req.ID == quorum.ProbeID) {
 			n.adopt.OnPeer(now) // a relay probe is for the voter only (#1029 step 1)
 		}
+		if req.Renewal && req.Epoch != 0 && n.cand != nil && req.From == nodeIDs[peerOf(n.addr)] && !n.cand.Leading(now) {
+			n.imgEpoch = req.Epoch // the peer leads: its stream's image (HotOracle)
+		}
 		if from != n.addr {
 			dups, _ := n.voter.Duplicates()
 			n.voter.Hear(now, req.From, req.Nonce, req.Promise)
@@ -866,6 +908,15 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	}
 	if quorum.IsRelayProbe(rep) {
 		return // the relay probe's reply is for the voter only
+	}
+	if n.resignID != 0 && rep.ID == n.resignID && rep.Nonce == n.nonce && rep.To == nodeIDs[n.addr] {
+		// A voter's answer to this boot's RESIGN: no grant. The witness's
+		// sends it on to the peer (Elector.Resign).
+		w.tracef("%v hears %v's answer to its RESIGN: taken=%v", n.addr, from, rep.Granted)
+		if rep.From == "W" {
+			w.resignToPeer(n)
+		}
+		return
 	}
 	if rep.Granted {
 		w.rec.received(from, rep, n.addr, w.now)
@@ -1029,6 +1080,16 @@ func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request)
 			w.tracef("%v yields its own promise to %v's term %d", n.addr, from, r.Term)
 			w.gate(n)
 		}
+	}
+	if r.Resign {
+		w.handleResign(n, from, now, r)
+		return
+	}
+	if r.Term != 0 && r.Nonce != 0 && !n.voter.FencedRequest(r) {
+		// Ground truth for the resign oracle: the highest campaign or
+		// renewal Seq this voter received from the boot.
+		k := heardKey{n.addr, r.From, r.Nonce}
+		w.leadHeard[k] = max(w.leadHeard[k], r.Seq)
 	}
 	before := n.voter.RelayRefused()
 	dups, _ := n.voter.Duplicates()
@@ -1227,5 +1288,81 @@ func (w *World) pause(n *node, on bool) {
 	for _, e := range d {
 		e.at = w.now
 		w.push(e)
+	}
+}
+
+// --- a planned switchover (#710 d1) --------------------------------------
+
+// heardKey is a voter and a boot of a name.
+type heardKey struct {
+	voter Addr
+	name  quorum.NodeID
+	nonce uint64
+}
+
+// resign is the operator's switchover on n: if it leads, it resigns and
+// sends the RESIGN to the witness; the peer's copy waits for the
+// witness's answer, or lease/8 (resignToPeer).
+func (w *World) resign(n *node) {
+	if !n.up || n.cand == nil || n.spare || n.paused {
+		return
+	}
+	now := w.local(n)
+	r := quorum.ResignAt(now, n.voter, n.cand, 1, true)
+	quorum.ResignDrained(now, n.voter, n.cand, r) // the simulator has no outputs to drain
+	if r == nil {
+		w.tracef("%v: the operator's switchover: not leading, nothing to resign", n.addr)
+		return
+	}
+	// Its own voter's promise to itself ends here (the ledger's truth).
+	w.rec.released = append(w.rec.released, release{voter: n.addr, at: w.now})
+	w.rec.Resigns = append(w.rec.Resigns, ResignRec{At: w.now, Node: n.addr, Epoch: r.Epoch, Boot: n.boot, Local: now})
+	w.tracef("%v resigns epoch %d (id %d)", n.addr, r.Epoch, r.ID)
+	w.gate(n)
+	b, _ := r.MarshalBinary()
+	n.resignB, n.resignID = b, r.ID
+	w.send(n.addr, W, b)
+	w.push(&event{at: w.now + w.o.Lease/8, kind: evResignPeer, node: n.addr, boot: n.boot})
+}
+
+// resignToPeer sends n's pending RESIGN to its peer, once.
+func (w *World) resignToPeer(n *node) {
+	if n.resignB == nil {
+		return
+	}
+	b := n.resignB
+	n.resignB = nil
+	w.sendPeerVote(n, b)
+}
+
+// handleResign is a voter taking (or refusing) a RESIGN: as Voter.Handle,
+// minus the ledger (a RESIGN's answer is no grant). A controller whose
+// voter took its peer's RESIGN looks at once, its own resign hold over
+// (Elector.serveVote).
+func (w *World) handleResign(n *node, from Addr, now quorum.Instant, r quorum.Request) {
+	key := heardKey{n.addr, r.From, r.Nonce}
+	heardAbove := w.leadHeard[key] > r.Seq
+	_, to0, until0 := n.voter.PromiseUntil()
+	p, replies := n.voter.Handle(now, r)
+	_, _, until1 := n.voter.PromiseUntil()
+	took := n.voter.ResignTook()
+	if took && to0 == r.From && now < until0 && until1 == 0 {
+		w.rec.ResignsTaken = append(w.rec.ResignsTaken, ResignTaken{At: w.now, Voter: n.addr, Name: r.From, Nonce: r.Nonce, Epoch: r.Epoch, HeardLater: heardAbove})
+		w.tracef("%v takes %s's RESIGN of epoch %d", n.addr, r.From, r.Epoch)
+	}
+	if took && n.cand != nil && from != n.addr {
+		n.cand.LookNow(now)
+		n.cand.EndResignHold(now)
+		w.soonerLook(n)
+	}
+	if p != nil {
+		w.persist(n, p)
+	}
+	for _, rep := range replies {
+		if from != n.addr {
+			rep.Promise = n.voter.Relay(now)
+		}
+		b, _ := rep.MarshalBinary()
+		w.send(n.addr, from, b)
 	}
 }

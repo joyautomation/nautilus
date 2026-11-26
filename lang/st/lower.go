@@ -95,6 +95,22 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	// file so peer FBs and the outer program can reference them by name
 	// during type resolution. The defs are pointers, so populating their
 	// slot tables in the next phase is observed by all earlier references.
+	// A nautilus system function's name is not a POU's (#710 (b)): a call
+	// would bind to the POU, and the program would read its own answer
+	// for the runtime's.
+	if prog.Name != "" && ir.IsSystemFunction(prog.Name) {
+		return nil, systemNameErr("PROGRAM", prog.Name)
+	}
+	for _, fbDecl := range prog.FBDecls {
+		if ir.IsSystemFunction(fbDecl.Name) {
+			return nil, errAt(fbDecl.Pos, systemNameErr("FUNCTION_BLOCK", fbDecl.Name))
+		}
+	}
+	for _, fd := range prog.FuncDecls {
+		if ir.IsSystemFunction(fd.Name) {
+			return nil, errAt(fd.Pos, systemNameErr("FUNCTION", fd.Name))
+		}
+	}
 	inFile := map[string]*ir.FBDef{}
 	for _, fbDecl := range prog.FBDecls {
 		if _, prev, dup := ir.Lookup(inFile, fbDecl.Name); dup {
@@ -575,6 +591,11 @@ func (l *lowerer) hiddenFunc(name string) (string, bool) {
 		return def.Name, true
 	}
 	return "", false
+}
+
+// systemNameErr refuses a POU named as a nautilus system function.
+func systemNameErr(what, name string) error {
+	return fmt.Errorf("%s %q has the name of a nautilus system function (%s()): rename it", what, name, strings.ToUpper(name))
 }
 
 // dupErr is the duplicate-declaration error. When the two declarations
@@ -1520,7 +1541,9 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 			}
 			slotT := def.Slot(idx).Type
 			// An ANY in-out (READ's RD_1) takes the bound variable as it is.
-			if !ir.IsAny(slotT) && !slotT.Equal(target.ExprType()) {
+			// Equal compares kinds only, so the width is compared too: an
+			// INT pin cannot hold a reference to a DINT (#1382).
+			if !ir.IsAny(slotT) && (!slotT.Equal(target.ExprType()) || !sameWidth(slotT, target.ExprType())) {
 				return nil, errNode(na.Value, fmt.Errorf("FB %s VAR_IN_OUT %q: needs a %s variable, got %s "+
 					"(an IN_OUT is passed by reference, so no conversion happens)",
 					def.Name, na.Name, slotT, target.ExprType()))
@@ -1562,8 +1585,12 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 			}
 		}
 		v = coerce(v, def.Inputs[idx].Type)
-		if !assignable(def.Inputs[idx].Type, v.ExprType()) && (def.Inputs[idx].Type.Enum != nil || v.ExprType().Enum != nil) {
-			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
+		// An input follows a FUNCTION argument's rule, in its words (#1382:
+		// a REAL or a BOOL into an INT input passed). An integer into a
+		// TIME input is read as milliseconds with a warning, as before.
+		if !assignable(def.Inputs[idx].Type, v.ExprType()) && !intAsTime(def.Inputs[idx].Type, v.ExprType()) {
+			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: cannot pass %s as %s%s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type,
+				l.inferredTagHint(na.Value, v.ExprType(), def.Inputs[idx].Type)))
 		}
 		l.warnIntAsTime(na.Value, def.Inputs[idx].Type, v, fmt.Sprintf("%s input %s", def.Name, def.Inputs[idx].Name))
 		if v, err = storeInput(def.Inputs[idx].Type, v, na.Value); err != nil {
@@ -1597,10 +1624,15 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		if err != nil {
 			return nil, fmt.Errorf("FB %s output %q target: %w", def.Name, ob.Name, err)
 		}
-		// out => o stores the output into o: the same rule as o := fb.out
-		// (#782). The output already holds its own type's width.
+		// out => o stores the output into o: the same rules, in the same
+		// order and words, as o := fb.out (#782, #1378: a REAL output into
+		// an INT is refused, not stored as a REAL). The output already
+		// holds its own type's width.
 		if ot := def.OutputType(idx); ot != nil {
 			err := realRule(target.ExprType(), &ir.Lit{T: ot})
+			if err == nil && !assignable(target.ExprType(), ot) {
+				err = fmt.Errorf("cannot assign %s to %s", ot, target.ExprType())
+			}
 			if err == nil {
 				_, err = storeRule(target.ExprType(), &ir.Lit{T: ot}, nil)
 			}
@@ -2387,6 +2419,50 @@ func coerce(e ir.Expr, want *ir.Type) ir.Expr {
 		return intToReal(e)
 	}
 	return e
+}
+
+// inferredTagHint names the fix when a refused value is a project tag
+// whose type was only inferred from its init: (a number is REAL): the
+// tag needs a type:, which the author may not know it lacks (#1382).
+func (l *lowerer) inferredTagHint(src Expression, got, want *ir.Type) string {
+	id, ok := src.(*IdentExpr)
+	if !ok || got == nil || want == nil {
+		return ""
+	}
+	sym, ok := l.lookup(id.Name)
+	if !ok || !sym.implicit {
+		return ""
+	}
+	if _, _, stated := ir.Lookup(l.tagTypes, sym.global); stated {
+		return ""
+	}
+	return fmt.Sprintf("; tag %s has no type:, so it is %s; give it type: %s", sym.global, got, want)
+}
+
+// intAsTime reports an integer bound to a TIME input: read as milliseconds,
+// with a warning (warnIntAsTime), not refused.
+func intAsTime(want, got *ir.Type) bool {
+	return want != nil && got != nil && want.Kind == ir.TypeTime && got.IsInteger() && got.Enum == nil
+}
+
+// sameWidth reports whether two types of the same kind (Type.Equal) also
+// have the same width, element by element in an array: an INT and a DINT,
+// or a REAL and an LREAL, are Equal but cannot stand in for each other by
+// reference. An integer of no declared width matches any.
+func sameWidth(a, b *ir.Type) bool {
+	for a != nil && b != nil && a.Kind == ir.TypeArray && b.Kind == ir.TypeArray {
+		a, b = a.Elem, b.Elem
+	}
+	if a == nil || b == nil || a.Kind != b.Kind {
+		return true
+	}
+	switch a.Kind {
+	case ir.TypeInt:
+		return a.Enum != nil || a.Name == "" || b.Name == "" || a.Name == b.Name
+	case ir.TypeReal:
+		return (a.Name == "LREAL") == (b.Name == "LREAL")
+	}
+	return true
 }
 
 func assignable(lhs, rhs *ir.Type) bool {

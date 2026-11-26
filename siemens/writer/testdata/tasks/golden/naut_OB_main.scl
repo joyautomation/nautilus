@@ -1,0 +1,34 @@
+ORGANIZATION_BLOCK "naut_OB_main"
+TITLE = "Cyclic interrupt, 100ms"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	// The tags this task shares with others, copied in: the program works on the copy.
+	"naut_Scan_main".tags.Alarm := "naut_Tags".Alarm;
+	"naut_Scan_main".tags.Done := "naut_Tags".Done;
+	"naut_Scan_main".tags.Level := "naut_Tags".Level;
+	"naut_Scan_main".tags.Pump.Run := "naut_Tags".Pump.Run;
+	"naut_Scan_main".tags.Pump.Speed := "naut_Tags".Pump.Speed;
+	"naut_Scan_main".tags.Start := "naut_Tags".Start;
+	"naut_Scan_main".tags.Status := "naut_Tags".Status;
+	"naut_Scan_main".tags.Stop := "naut_Tags".Stop;
+	"naut_Main_DB"();
+	// What the scan assigned, back into the tags DB, member by member and bit by bit.
+	IF "naut_Scan_main".assigned.Alarm THEN
+		"naut_Tags".Alarm := "naut_Scan_main".tags.Alarm;
+		"naut_Scan_main".assigned.Alarm := FALSE;
+	END_IF;
+	IF "naut_Scan_main".assigned.Done THEN
+		"naut_Tags".Done := "naut_Scan_main".tags.Done;
+		"naut_Scan_main".assigned.Done := FALSE;
+	END_IF;
+	IF "naut_Scan_main".assigned.Pump.Run THEN
+		"naut_Tags".Pump.Run := "naut_Scan_main".tags.Pump.Run;
+		"naut_Scan_main".assigned.Pump.Run := FALSE;
+	END_IF;
+	IF "naut_Scan_main".assigned.Pump.Speed THEN
+		"naut_Tags".Pump.Speed := "naut_Scan_main".tags.Pump.Speed;
+		"naut_Scan_main".assigned.Pump.Speed := FALSE;
+	END_IF;
+END_ORGANIZATION_BLOCK

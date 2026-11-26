@@ -33,14 +33,17 @@ func TestResolve(t *testing.T) {
 	}{
 		{"nothing asked", nil, Decisions{}, false, false, "", ""},
 		{"stop unanswered", []Question{stop}, Decisions{}, false, false, "stop-cpu", ""},
-		{"stop yes", []Question{stop}, Decisions{StopCPU: Yes()}, false, false, "", ""},
+		{"stop yes", []Question{stop}, Decisions{StopCPU: Yes(), ResetData: Yes()}, false, false, "", ""},
 		{"stop no", []Question{stop}, Decisions{StopCPU: No()}, false, false, "", "stop-cpu"},
 		{"start-after no is stay in STOP", []Question{{ID: QuestionStartAfter}}, Decisions{StartAfter: No()}, false, false, "", ""},
 		{"start-after unanswered", []Question{{ID: QuestionStartAfter}}, Decisions{}, false, false, "start-after", ""},
-		{"reinit all agreed, any case", []Question{reinit}, Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, false, "", ""},
-		{"reinit partly agreed", []Question{reinit}, Decisions{Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
-		{"reinit unanswered", []Question{reinit}, Decisions{}, false, false, "reinitialize", ""},
-		{"reinit naming nothing is never answered", []Question{{ID: QuestionReinitialize}}, Decisions{Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
+		// Only the consent to the reset answers TIA's reinitialize check,
+		// which names no data block (#1341).
+		{"reinit with the consent and the stop", []Question{reinit}, Decisions{ResetData: Yes(), StopCPU: Yes()}, false, false, "", ""},
+		{"reinit naming nothing, with the consent and the stop", []Question{{ID: QuestionReinitialize}}, Decisions{ResetData: Yes(), StopCPU: Yes()}, false, false, "", ""},
+		{"reinit with the consent, no stop (its yes stops the CPU)", []Question{reinit}, Decisions{ResetData: Yes()}, false, false, "reinitialize", ""},
+		{"reinit without the consent", []Question{reinit}, Decisions{}, false, false, "reinitialize", ""},
+		{"reinit, consent no", []Question{reinit}, Decisions{ResetData: No()}, false, false, "reinitialize", ""},
 		{"cert matches", []Question{cert}, Decisions{TrustCertificate: "ab12"}, false, false, "", ""},
 		{"cert differs", []Question{cert}, Decisions{TrustCertificate: "FFFF"}, false, false, "", "certificate"},
 		{"password from secret", []Question{pw}, Decisions{}, true, false, "", ""},
@@ -49,8 +52,8 @@ func TestResolve(t *testing.T) {
 		{"configuration password missing", []Question{cfg}, Decisions{}, false, false, "configuration-password", ""},
 		{"protection password never answers configuration-password", []Question{cfg}, Decisions{}, true, false, "configuration-password", ""},
 		{"configuration password never answers password", []Question{pw}, Decisions{}, false, true, "password", ""},
-		{"other never answered", []Question{other}, Decisions{StopCPU: Yes(), Overwrite: Yes(), StartAfter: Yes()}, true, false, "other", ""},
-		{"unknown id is other", []Question{{ID: "new-in-v22"}}, Decisions{StopCPU: Yes()}, true, false, "new-in-v22", ""},
+		{"other never answered", []Question{other}, Decisions{StopCPU: Yes(), ResetData: Yes(), Overwrite: Yes(), StartAfter: Yes()}, true, false, "other", ""},
+		{"unknown id is other", []Question{{ID: "new-in-v22"}}, Decisions{StopCPU: Yes(), ResetData: Yes()}, true, false, "new-in-v22", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -66,7 +69,7 @@ func TestResolve(t *testing.T) {
 // family is answered only by its own decision, never by another's, and
 // user-management only when the spec keeps access control.
 func TestResolveSoftwareLoadFamily(t *testing.T) {
-	all := Decisions{StopCPU: Yes(), Overwrite: Yes(), ConsistentDownload: Yes(), StartAfter: Yes()}
+	all := Decisions{StopCPU: Yes(), ResetData: Yes(), Overwrite: Yes(), ConsistentDownload: Yes(), StartAfter: Yes()}
 	cases := []struct {
 		name                 string
 		q                    string
@@ -109,14 +112,6 @@ func TestResolveSoftwareLoadFamily(t *testing.T) {
 		if Acting(id) {
 			t.Errorf("%s must be passive", id)
 		}
-	}
-}
-
-func TestResolveNamesTheMissingDB(t *testing.T) {
-	q := Question{ID: QuestionReinitialize, Message: "Reinitialise", Objects: []string{"Tags", "Prog_DB"}}
-	u, _ := Resolve([]Question{q}, Decisions{Reinitialize: []string{"Tags"}}, false, false, false, ResetGate{})
-	if len(u) != 1 || !strings.Contains(u[0].Message, "not agreed: Prog_DB") {
-		t.Fatalf("got %+v", u)
 	}
 }
 
@@ -652,6 +647,32 @@ func TestCompileMessageBlock(t *testing.T) {
 		name, line, ok := c.m.Block()
 		if name != c.name || line != c.line || ok != c.ok {
 			t.Errorf("%+v: got %q %d %v, want %q %d %v", c.m, name, line, ok, c.name, c.line, c.ok)
+		}
+	}
+}
+
+// TestCheckResetData (#1341): a stop needs the resetData consent; a
+// download without it needs the layout check's digest, a dry run too;
+// consent no is none, and a digest never stands in for it.
+func TestCheckResetData(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		req  DownloadRequest
+		want string
+	}{
+		{"consent", DownloadRequest{Decisions: Decisions{ResetData: Yes(), StopCPU: Yes()}}, ""},
+		{"no consent, no digest", DownloadRequest{}, "a download without decisions.resetData needs layoutDigest"},
+		{"consent no, no digest", DownloadRequest{Decisions: Decisions{ResetData: No()}}, "a download without decisions.resetData needs layoutDigest"},
+		{"no consent, a digest", DownloadRequest{LayoutDigest: "d"}, ""},
+		{"stop, no consent", DownloadRequest{Decisions: Decisions{StopCPU: Yes()}}, "decisions.stopCpu yes needs decisions.resetData yes"},
+		{"stop, no consent, a digest", DownloadRequest{LayoutDigest: "d", Decisions: Decisions{StopCPU: Yes()}}, "decisions.stopCpu yes needs decisions.resetData yes"},
+		{"dry run, stop, no consent", DownloadRequest{DryRun: true, Decisions: Decisions{StopCPU: Yes()}}, "decisions.stopCpu yes needs decisions.resetData yes"},
+		{"dry run, no stop, no digest", DownloadRequest{DryRun: true, Decisions: Decisions{StopCPU: No()}}, "a download without decisions.resetData needs layoutDigest"},
+		{"dry run, consent", DownloadRequest{DryRun: true, Decisions: Decisions{ResetData: Yes()}}, ""},
+	} {
+		got := CheckResetData(c.req)
+		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
 	}
 }

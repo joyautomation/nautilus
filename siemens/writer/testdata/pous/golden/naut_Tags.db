@@ -1,0 +1,16 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      Count : DINT;
+      High : BOOL;
+      Level : REAL;
+      Next : INT;
+      Pct : REAL;
+      Run : BOOL;
+      Starts : INT;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

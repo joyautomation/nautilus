@@ -442,6 +442,19 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 			errs = append(errs, err.Error())
 		}
 	}
+	// A class named to page individually in a flood that no alarm has is
+	// a typo that would let the alarms it meant to name be grouped.
+	if in := p.Alarms.Flood.Individual; in != nil {
+		used := map[string]bool{}
+		for _, d := range defs {
+			used[strings.ToLower(d.Class)] = true
+		}
+		for i, c := range in.Classes {
+			if c != "" && !used[strings.ToLower(c)] && !strings.EqualFold(c, alarm.SafetyClass) {
+				errs = append(errs, fmt.Sprintf("alarms.flood.individual.classes[%d]: no alarm has class %q", i, c))
+			}
+		}
+	}
 
 	byName := make(map[string]alarm.TagInfo, len(tags))
 	for _, t := range tags {
@@ -725,6 +738,9 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		}
 	}
 
+	if durable {
+		notify = append(notify, p.AlarmNotifiers...)
+	}
 	eng, err := alarm.New(alarm.Options{
 		Defs: defs,
 		Read: read,
@@ -774,7 +790,9 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 				chans[k] = ch
 			}
 		}
-		o := escalate.Options{Config: esc, Engine: eng, Log: log, Channels: chans, AckLink: p.AckLink, AckCode: p.AckCode}
+		o := escalate.Options{Config: esc, Engine: eng, Log: log, Channels: chans, AckLink: p.AckLink, AckCode: p.AckCode,
+			Home: p.Alarms.Oncall.AckURL}
+		o.Chatter, o.Flood = p.Alarms.paging()
 		// The write gate itself (leader.Election.IsLeader on a pair or a
 		// Kubernetes lease), asked by the sender before every send: never
 		// a cached role, so a standby whose role is stale pages nobody.
@@ -807,6 +825,16 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		}
 	})
 	return out, nil
+}
+
+// paging is how chattering and floods change escalation (#1249): a
+// chattering alarm pages once per level per episode, and a flood's pages
+// are grouped, unless the project turns them off. Critical and safety
+// always page on their own; alarms.flood.individual adds to them.
+func (c *AlarmsConfig) paging() (chatter bool, flood escalate.FloodPaging) {
+	flood.Group = c.Flood.Groups()
+	flood.Priorities, flood.Classes = c.Flood.IndividualSet()
+	return c.Chatter.Pages(), flood
 }
 
 // alarmSink opens the configured durable journal, or (nil, nil, nil) for

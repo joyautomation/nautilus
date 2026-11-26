@@ -233,6 +233,9 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 	for _, name := range running {
 		p := s.rt.TaskProgram(name)
 		rep, err := p.SwapWarm(sources[name])
+		if refuseSwitching(w, err) {
+			return
+		}
 		if err != nil {
 			// Pre-validated, so this is unreachable short of a racing edit;
 			// report honestly rather than mask it.

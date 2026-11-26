@@ -146,23 +146,153 @@ func TestCandidateBackOffAfterLapse(t *testing.T) {
 	}
 }
 
-// A campaign no majority even heard within a lease backs the candidate off
-// for one lease from then: sent at 0, unheard at 2 s, silent until 4 s.
+// A campaign no majority even heard within a lease backs the candidate
+// off two leases from its last ask (#710): sent at 0 and asked again (same
+// term, a new id) at the looks of 0.5 s and 1 s (up to three quarters of a
+// lease, 1.5 s, from the first send); unheard at 2 s, silent until 5 s,
+// since a voter that took the 1 s ask promised it until 3 s.
 func TestCandidateBackOffWhenUnheard(t *testing.T) {
 	c := newC(t, cfgA(), 0, 0)
-	if c.Tick(0, "", 0, true) == nil {
+	r := c.Tick(0, "", 0, true)
+	if r == nil {
 		t.Fatal("no campaign")
 	}
+	var asks []Instant
 	for now := 500 * ms; now <= 2*time.Second; now += 500 * ms {
-		if r := c.Tick(at(now), "A", 0, true); r != nil && now >= 2*time.Second {
-			t.Fatalf("campaigned at %v, unheard rounds must back off", now)
+		q := c.Tick(at(now), "A", 0, true)
+		if q == nil {
+			continue
+		}
+		if q.Term != r.Term || q.ID <= r.ID || q.Seq <= r.Seq || q.Renewal {
+			t.Fatalf("at %v: %+v, want the campaign %+v asked again under a new id and Seq", now, q, r)
+		}
+		asks = append(asks, at(now))
+	}
+	if len(asks) != 2 || asks[0] != at(500*ms) || asks[1] != at(time.Second) {
+		t.Fatalf("asked again at %v, want 0.5 s and 1 s (not from 1.5 s on)", asks)
+	}
+	if r := c.Tick(at(4999*ms), "A", 0, true); r != nil {
+		t.Fatalf("campaigned at 4.999 s inside the back-off from the last ask: %+v", r)
+	}
+	if r := c.Tick(at(5*time.Second), "A", 0, true); r == nil || r.Term <= 1 {
+		t.Fatalf("at 5 s, once the back-off ended: %+v, want a new campaign", r)
+	}
+}
+
+// A pending campaign that reask declines to ask again never leaves
+// NextLook at a look already past (#710): a driver arms its timer there,
+// and one in the past fires at once, again and again, so it would spin
+// until the round expires (the simulator hung on it). Whatever stops the
+// re-ask (the three quarters of a lease run out, the controller unhealthy,
+// another leader's lease seen on its own voter), the looks move on.
+func TestCandidateNextLookNeverPastWhenAReaskIsDeclined(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		seenFrom NodeID
+		healthy  func(Instant) bool
+	}{
+		{"window run out", "", func(Instant) bool { return true }},
+		{"unhealthy", "", func(now Instant) bool { return now < at(300*ms) }},
+		{"another leader seen", "B", func(Instant) bool { return true }},
+	} {
+		c := newC(t, cfgA(), 0, 0)
+		if c.Tick(0, "", 0, true) == nil {
+			t.Fatalf("%s: no campaign", tc.name)
+		}
+		// A re-ask at a look's instant leaves that look to the next Tick at
+		// the same instant: two Ticks at one instant, never three.
+		now, same := Instant(0), 0
+		for now < at(3*time.Second) {
+			next := c.NextLook()
+			if next < now {
+				t.Fatalf("%s: at %v the next look is %v, already past", tc.name, time.Duration(now), time.Duration(next))
+			}
+			if same = map[bool]int{true: same + 1, false: 0}[next == now]; same > 1 {
+				t.Fatalf("%s: at %v the next look is now again: the driver would spin", tc.name, time.Duration(now))
+			}
+			now = next
+			seenFrom, seenUntil := NodeID(""), Instant(0)
+			if tc.seenFrom != "" && now >= at(300*ms) {
+				seenFrom, seenUntil = tc.seenFrom, now.Add(time.Second)
+			}
+			c.Tick(now, seenFrom, seenUntil, tc.healthy(now))
 		}
 	}
-	if r := c.Tick(at(3999*ms), "A", 0, true); r != nil {
-		t.Fatalf("campaigned at 3.999 s inside the back-off: %+v", r)
-	}
-	if r := c.Tick(at(4*time.Second), "A", 0, true); r == nil {
-		t.Fatal("no campaign once the back-off ended at 4 s")
+}
+
+// A campaign asked again (#710) goes under a new id, same term, and its
+// lease runs from the send of the request each grant answers, the earlier
+// of the two: a voter promises from when it took the request it grants.
+// Sent at 0 (id 1), asked again at 250 ms (lease/8):
+//
+//   - both grants answer the re-ask: the lease ends at 2.23 s, from
+//     250 ms, not at 1.98 s from the first send (on a slow link the first
+//     renewal would land after that: sim TestASingleRestartRaisesNo
+//     Duplicate, seed 12);
+//
+//   - both answer the first ask, landing after the re-ask left: 1.98 s,
+//     from 0, not from the latest ask;
+//
+//   - one of each: from the earlier, 1.98 s;
+//
+//   - A grants the re-ask, then its grant of the first ask lands: still
+//     from 250 ms, since A's promise runs from the later ask it took;
+//
+//   - three grants: from the second latest, which two voters both
+//     promised from: A first, W and B the re-ask, 2.23 s; A and W first,
+//     B the re-ask, 1.98 s.
+func TestCandidateLeaseFromTheAskItsGrantsAnswer(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		aFirst   bool // A's grant answers the first ask
+		wFirst   bool // W's grant answers the first ask
+		b        bool // B grants the re-ask too
+		aLate    bool // A's grant of the first ask lands after its re-ask's
+		leaseEnd time.Duration
+	}{
+		{"both answer the re-ask", false, false, false, false, 2230 * ms},
+		{"A's first-ask grant lands last", false, false, false, true, 2230 * ms},
+		{"both answer the first ask", true, true, false, false, 1980 * ms},
+		{"one of each", true, false, false, false, 1980 * ms},
+		{"three, two answer the re-ask", true, false, true, false, 2230 * ms},
+		{"three, two answer the first ask", true, true, true, false, 1980 * ms},
+	} {
+		c := newC(t, cfgA(), 0, 0)
+		r := c.Tick(0, "", 0, true)
+		if r == nil {
+			t.Fatal("no campaign")
+		}
+		if c.NextLook() != at(250*ms) {
+			t.Fatalf("%s: next look %v, want the re-ask at 250 ms", tc.name, time.Duration(c.NextLook()))
+		}
+		q := c.Tick(at(250*ms), "", 0, true)
+		if q == nil || q.Term != r.Term || q.ID == r.ID || q.Seq <= r.Seq || q.Renewal {
+			t.Fatalf("%s: at 250 ms: %+v, want %+v asked again under a new id", tc.name, q, r)
+		}
+		ga, gw := q, q
+		if tc.aFirst {
+			ga = r
+		}
+		if tc.wFirst {
+			gw = r
+		}
+		c.OnReply(at(300*ms), granted("A", ga, 0))
+		if tc.aLate {
+			c.OnReply(at(300*ms), granted("A", r, 0))
+		}
+		c.OnReply(at(300*ms), granted("W", gw, 42))
+		if tc.b {
+			c.OnReply(at(300*ms), granted("B", q, 0))
+		}
+		if !c.Leading(at(300 * ms)) {
+			t.Fatalf("%s: not leading on a majority", tc.name)
+		}
+		if c.LeaseEnd() != at(tc.leaseEnd) {
+			t.Fatalf("%s: lease end %v, want %v", tc.name, time.Duration(c.LeaseEnd()), tc.leaseEnd)
+		}
+		if q2 := c.Tick(at(300*ms), "", 0, true); q2 == nil || !q2.Renewal {
+			t.Fatalf("%s: after winning: %+v, want a renewal at once, not another ask", tc.name, q2)
+		}
 	}
 }
 
@@ -400,5 +530,58 @@ func TestQuietReplyIsHeardNotCounted(t *testing.T) {
 	c.OnReply(at(10*ms), refused("W", r, 0, 42))
 	if r2 := c.Tick(at(300*ms), "", 0, true); r2 == nil || r2.ID == r.ID {
 		t.Fatal("no retry at 300 ms: the refusal in the quiet period was not heard")
+	}
+}
+
+// A refusal at the term a leader renews at, from a voter that granted
+// this boot that very term (a restarted voter in its restart wait, a
+// promise relayed to it, a floor at the term), re-terms only once the term
+// stops renewing: while the other two grant it, a re-term would cost a
+// write at every voter (#1120: on a slow disk it lost the lease) and win
+// nothing. Once they don't (a witness adoption raised the floor to the
+// term at this controller's own voter), it re-terms as before.
+// reterm_on_own_promise and reterm_with_majority turn it red.
+func TestCandidateOwnPromiseRefusalReTermsOnlyWithoutAMajority(t *testing.T) {
+	c := newC(t, cfgA(), 0, 0)
+	r := c.Tick(0, "", 0, true)
+	c.OnReply(at(10*ms), granted("A", r, 0))
+	c.OnReply(at(10*ms), granted("B", r, 0)) // B promised term 1 to this boot
+	r2 := c.Tick(at(500*ms), "", 0, true)
+	if r2 == nil || !r2.Renewal || r2.Term != 1 {
+		t.Fatalf("renewal: %+v", r2)
+	}
+	c.OnReply(at(510*ms), granted("A", r2, 0))
+	c.OnReply(at(510*ms), granted("W", r2, 42))
+	c.OnReply(at(510*ms), refused("B", r2, 1, 0)) // its restart wait
+	r3 := c.Tick(at(time.Second), "", 0, true)
+	if r3 == nil || r3.Term != 1 {
+		t.Fatalf("with A and W granting, the next renewal %+v; want term 1 still (no re-term)", r3)
+	}
+	// Now the witness is silent: term 1 no longer renews.
+	c.OnReply(at(1010*ms), granted("A", r3, 0))
+	c.OnReply(at(1010*ms), refused("B", r3, 1, 0))
+	r4 := c.Tick(at(1500*ms), "", 0, true)
+	if r4 == nil || !r4.Renewal || r4.Term <= 1 {
+		t.Fatalf("with no majority at term 1, the next renewal %+v; want a re-term", r4)
+	}
+}
+
+// A refusal at the leader's term from a voter that never granted this
+// boot that term promised it elsewhere (a standby that won its own voter
+// in a contested cold start): it re-terms at once, majority or not, or that
+// voter is never won back (F13, TestStandbyRejoinsTheLeader).
+// own_promise_unchecked turns it red.
+func TestCandidateRefusalFromAVoterThatNeverGrantedTheTermReTerms(t *testing.T) {
+	c := newC(t, cfgA(), 0, 0)
+	r := c.Tick(0, "", 0, true)
+	c.OnReply(at(10*ms), granted("A", r, 0))
+	c.OnReply(at(10*ms), granted("W", r, 42))
+	r2 := c.Tick(at(500*ms), "", 0, true)
+	c.OnReply(at(510*ms), granted("A", r2, 0))
+	c.OnReply(at(510*ms), granted("W", r2, 42))
+	c.OnReply(at(510*ms), refused("B", r2, 1, 0)) // B promised term 1 to itself
+	r3 := c.Tick(at(time.Second), "", 0, true)
+	if r3 == nil || !r3.Renewal || r3.Term <= 1 {
+		t.Fatalf("the next renewal %+v; want a re-term above 1", r3)
 	}
 }

@@ -65,7 +65,11 @@ func vethInNamespace(t *testing.T) {
 		{"link", "set", "pn1", "up"},
 	} {
 		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
-			t.Fatalf("NETNS-SETUP-FAILED ip %v: %v %s", args, err, out)
+			// A skip, not a failure: this is the namespace's own run, whose output
+			// the parent logs, and a "--- FAIL" line in a log that ends in the
+			// parent's SKIP is read as a flake (#1120). The parent skips on this
+			// marker (NAUTILUS_PROFINET_VETH=1 makes it a failure there).
+			t.Skipf("NETNS-SETUP-FAILED ip %v: %v %s", args, err, out)
 		}
 	}
 	dcp := net.HardwareAddr{0x01, 0x0E, 0xCF, 0x00, 0x00, 0x00}

@@ -115,7 +115,7 @@ func contractReuse(t *testing.T, start Starter) {
 	// A dry run cancels at TIA's first check (a dry run TIA asks nothing
 	// about cannot be cancelled).
 	a.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "Stop the CPU"}})
-	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, DryRun: true}
+	dl := tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, DryRun: true}
 	if res, err := s.Download(ctx, dl); err != nil || !res.DryRun || !reflect.DeepEqual(res.KeptDevices, kept) || !keptQ(res.Questions) {
 		t.Fatalf("a dry run: %+v %v", res, err)
 	}
@@ -136,19 +136,19 @@ func contractReuse(t *testing.T, start Starter) {
 	if len(a.Loaded(t)) != 0 {
 		t.Fatalf("loaded without a matching yes: %+v", a.Loaded(t))
 	}
-	dl.Decisions = tiad.Decisions{AcceptUnverifiedHardware: tiad.Yes(), KeptDevices: []string{"io-device-up"}}
+	dl.Decisions = tiad.Decisions{ResetData: tiad.Yes(), AcceptUnverifiedHardware: tiad.Yes(), KeptDevices: []string{"io-device-up"}}
 	_, err = s.Download(ctx, dl)
 	if tiad.Kind(err) != tiad.KindDecisionRequired || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) {
 		t.Fatalf("a download needing decisions: %v, kept %+v", err, tiad.KeptDevicesOf(err))
 	}
 	a.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "Stop the CPU"}})
-	dl.Decisions = tiad.Decisions{AcceptUnverifiedHardware: tiad.Yes(), StopCPU: tiad.No(), StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
+	dl.Decisions = tiad.Decisions{ResetData: tiad.Yes(), AcceptUnverifiedHardware: tiad.Yes(), StopCPU: tiad.No(), StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
 	_, err = s.Download(ctx, dl)
 	if tiad.Kind(err) != tiad.KindDeclined || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) {
 		t.Fatalf("a declined download: %v, kept %+v", err, tiad.KeptDevicesOf(err))
 	}
 	a.SetQuestions(t, nil)
-	dl.Decisions = tiad.Decisions{AcceptUnverifiedHardware: tiad.Yes(), StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
+	dl.Decisions = tiad.Decisions{ResetData: tiad.Yes(), AcceptUnverifiedHardware: tiad.Yes(), StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
 	res, err := s.Download(ctx, dl)
 	if err != nil || !res.Downloaded || !reflect.DeepEqual(res.KeptDevices, kept) {
 		t.Fatalf("the download: %+v %v", res, err)

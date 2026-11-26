@@ -23,6 +23,21 @@ func isFirstScan(fn, args string) bool {
 	return strings.EqualFold(fn, "FIRST_SCAN") && strings.TrimSpace(args) == ""
 }
 
+// PairStateWarning is the warning a program that reads a nautilus pair's
+// state gets (#710 (b)): on Logix the system functions are constants,
+// so logic gated on them is dead code there.
+const PairStateWarning = "TAKEOVER_SCAN/HOT_TAKEOVER/PEER_READY/TAKEOVERS/TAKEOVER_HOLD read a nautilus pair; on this target they are constant (FALSE/0)"
+
+// pairStateUsed warns, once per write, that a system function became a
+// constant.
+func (lw *lowered) pairStateUsed() {
+	if lw.pairWarned || lw.opts.Warn == nil {
+		return
+	}
+	lw.pairWarned = true
+	lw.opts.Warn(PairStateWarning)
+}
+
 // LOCAL_TIME is the calendar now, as GSV(WallClockTime,,LocalDateTime,…)
 // writes it: seven DINTs, year to microsecond. An instance is a DINT[7]
 // tag, a call fills it, and a member reads its element. The import of a

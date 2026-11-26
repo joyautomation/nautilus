@@ -38,10 +38,12 @@ func mustCompile(t *testing.T, c Settings) *Policy {
 // Every built-in role against every permission, on the whole controller.
 func TestBuiltInRoles(t *testing.T) {
 	want := map[string]string{
-		Viewer:        "read",
-		Operator:      "read write ack note sfc",
-		Supervisor:    "read write ack shelve out-of-service note substitute sfc audit signoff",
-		Engineer:      "read write ack shelve out-of-service note substitute force sfc edit activate deploy config audit checkout signoff",
+		// every built-in role that reads may view the cameras (#724): zero-config
+		// and existing role setups keep working
+		Viewer:        "read camera",
+		Operator:      "read write ack note sfc camera ptz",
+		Supervisor:    "read write ack shelve out-of-service note substitute sfc audit signoff camera ptz",
+		Engineer:      "read write ack shelve out-of-service note substitute force sfc edit activate deploy config audit checkout signoff camera ptz",
 		Administrator: strings.Join(Permissions, " "),
 	}
 	for role, perms := range want {
@@ -214,7 +216,7 @@ func TestCanNormalisesTheTarget(t *testing.T) {
 func TestDescribe(t *testing.T) {
 	p := mustCompile(t, plant)
 	got := fmt.Sprint(p.Describe(User("pat")))
-	want := "{user:pat [lead-operator viewer] map[*:[read sfc] roasting:[write ack shelve note]] map[roasting:[rst_* burner_*]]}"
+	want := "{user:pat [lead-operator viewer] map[*:[read sfc camera ptz] roasting:[write ack shelve note]] map[roasting:[rst_* burner_*]]}"
 	if got != want {
 		t.Errorf("Describe(pat) = %s, want %s", got, want)
 	}
@@ -270,7 +272,7 @@ func TestAreaEdges(t *testing.T) {
 // substitutes, never ask for the password again. Taking equipment out of
 // service (#715) does: it hides a week of alarms.
 func TestElevatedPermissions(t *testing.T) {
-	want := map[string]bool{OutOfService: true, Force: true, Edit: true, Activate: true, Deploy: true, Config: true, Users: true, Override: true, Redundancy: true, Signoff: true}
+	want := map[string]bool{OutOfService: true, Force: true, Edit: true, Activate: true, Deploy: true, Config: true, Users: true, Override: true, Redundancy: true, Signoff: true, PTZ: true}
 	for _, p := range Permissions {
 		if Elevated(p) != want[p] {
 			t.Errorf("Elevated(%q) = %v, want %v", p, Elevated(p), want[p])
@@ -353,5 +355,32 @@ func TestOIDCNameDoesNotFold(t *testing.T) {
 	}
 	if _, err := Compile(Settings{OIDC: true, OIDCUsers: map[string][]Grant{"JSM\u0130TH@corp.example": {{Role: Viewer}}}}); err == nil {
 		t.Error("auth.oidc.users took a name that folds into another")
+	}
+}
+
+// Viewing the cameras is a permission of its own (#724): a role can have read
+// and not camera (a contractor or a remote viewer who may see values and not the
+// floor), it is whole-controller, so a grant fenced to an area holds it on
+// every camera, and it is not one a fresh password is asked for.
+func TestCameraIsItsOwnWholeControllerPermission(t *testing.T) {
+	p := mustCompile(t, Settings{
+		Areas: map[string][]string{"sp": {"SP"}},
+		Roles: map[string]RoleDef{"blind": {Inherits: Viewer, Deny: []string{Camera}}},
+		Users: map[string][]Grant{
+			"viewer": {{Role: Viewer}},
+			"blind":  {{Role: "blind"}},
+			"fenced": {{Role: Operator, Areas: []string{"sp"}}},
+		},
+	})
+	for user, want := range map[string]bool{"viewer": true, "blind": false, "fenced": true} {
+		if got := p.Can(User(user), Camera, All).Allowed; got != want {
+			t.Errorf("%s may view cameras: %v, want %v", user, got, want)
+		}
+	}
+	if !p.Can(User("blind"), Read, All).Allowed {
+		t.Error("denying camera took away read")
+	}
+	if !Elevated(PTZ) || AreaScoped(PTZ) || AreaScoped(Camera) || Elevated(Camera) {
+		t.Error("camera must be whole-controller and not elevated; ptz whole-controller and elevated")
 	}
 }

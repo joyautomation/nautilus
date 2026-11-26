@@ -86,6 +86,34 @@ type State struct {
 	// Secret, so what it holds must be useless without the box's secrets
 	// file. Nil until the first subscription.
 	Push *PushState `json:"push,omitempty"`
+	// Failback is a redundant pair's failback state (#710 d2): whether
+	// automatic failback to the preferred controller is suspended, by whom
+	// and why, and its ping-pong count. Saved by the leader, carried to the
+	// standby in the state stream's images. Nil when never set.
+	Failback *FailbackState `json:"failback,omitempty"`
+	// Stream is where in a redundant pair's state stream this file stands
+	// (#710 S1b): the leadership (term) and image (seq) a standby last
+	// carried into it, or the term its own controller led when it last
+	// saved as leader (Seq 0). A standby takes no image older than it, so
+	// a file never goes back to an older leadership's values. Nil outside
+	// a pair. Not carried from an image: the standby writes its own.
+	Stream *StreamPos `json:"stream,omitempty"`
+}
+
+// StreamPos is a place in a pair's state stream: (term, seq) order.
+type StreamPos struct {
+	Term uint64 `json:"term"`
+	Seq  uint64 `json:"seq,omitempty"`
+	// At is when a standby carried the image into the file (#710
+	// S2c-3: a hand-back says how old the file it leads on is). Zero in a
+	// leader's own save, and in a file from before it.
+	At time.Time `json:"at,omitzero"`
+}
+
+// Before reports whether p comes before (term, seq) in the stream's
+// order. A nil p comes before everything.
+func (p *StreamPos) Before(term, seq uint64) bool {
+	return p == nil || p.Term < term || (p.Term == term && p.Seq < seq)
 }
 
 // PushState is the retained Web Push subscriptions.
@@ -295,5 +323,28 @@ func Carry(own, lead State) State {
 	own.Locals = lead.Locals
 	own.Programs, own.ProgramBases, own.DiscardedPrograms = lead.Programs, lead.ProgramBases, lead.DiscardedPrograms
 	own.Push = lead.Push
+	if !mutRetain("failback_not_carried") {
+		// The pair's failback state (#710 d2): the leader's decides, so a
+		// suspension an operator made holds on whichever controller leads.
+		own.Failback = lead.Failback
+	}
 	return own
+}
+
+// FailbackState is a pair's failback state (#710 d2,
+// redundancy.failback).
+type FailbackState struct {
+	// Suspended: no automatic failback until an operator resumes it.
+	Suspended bool `json:"suspended,omitempty"`
+	// By and Why say who suspended it and why; AtMs when (Unix ms).
+	By   string `json:"by,omitempty"`
+	Why  string `json:"why,omitempty"`
+	AtMs int64  `json:"atMs,omitempty"`
+	// Stopped: the ping-pong stop suspended it (max failbacks in a row,
+	// each followed by a failover within after); its alarm is up until an
+	// operator resumes.
+	Stopped bool `json:"stopped,omitempty"`
+	// Count is the failbacks in a row each followed by a failover within
+	// the failback's after (the ping-pong count).
+	Count int `json:"count,omitempty"`
 }

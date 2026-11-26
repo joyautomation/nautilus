@@ -506,7 +506,7 @@ namespace Tiad
                     {
                         if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) s.AccessControlSet = true;
                         CheckPolicy(t, h, st, sec);
-                        t.ApplyStation(h, st, CpuReuse.Create, sec, new List<string>(), s.Made);
+                        t.ApplyStation(h, st, CpuReuse.Create, sec, false, new List<string>(), s.Made);
                     }
                     catch
                     {
@@ -570,8 +570,19 @@ namespace Tiad
                 RetireIfTrusted();
                 throw;
             }
+            // A project an unverified turn-on download saved stays gated.
+            if (File.Exists(full + TurnOnRule.MarkerSuffix))
+            {
+                s.AccessTurnOn = true;
+                s.AccessTurnOnTried = true;
+                Log.Line("audit access-turn-on session={0} project={1} opened turn-on pending", s.Id, Json.Quote(s.Project));
+            }
+            // Opened as saved: nothing has changed it yet (#1347).
+            s.Untouched = true;
             sessions.End(s);
-            return SessionJson(s);
+            var o = SessionJson(s);
+            if (s.AccessTurnOn) o["notes"] = new[] { TurnOnRule.PendingNote };
+            return o;
         }
 
         object ListSessions(Call c)
@@ -644,6 +655,7 @@ namespace Tiad
                 Station st = Station.Read(r.Child("station"));
                 Secrets sec = Secrets.Read(r.Child("secrets"));
                 bool recordOnly = r.Bool("fullAccessRecordOnly");
+                bool turnOn = r.Bool("accessControlTurnOn");
                 r.Done();
                 CheckStation(st, sec);
                 sec.Records = records;
@@ -652,6 +664,7 @@ namespace Tiad
                     if (st.Cpu.AccessControl != StationRules.AccessFullAccessUser) throw TiadException.BadRequest("{0}", "fullAccessRecordOnly goes with cpu.accessControl fullAccessUser");
                     Log.Line("audit access-record session={0} project={1} fullAccessRecordOnly=yes", s.Id, Json.Quote(s.Project));
                 }
+                if (turnOn && st.Cpu.AccessControl != StationRules.AccessFullAccessUser) throw TiadException.BadRequest("{0}", TurnOnRule.NeedsFullAccessUser);
                 // The session's state changes only on the TIA thread, in
                 // call order. Until TIA has applied the spec, the project
                 // is neither compiled nor described by any spec, so a
@@ -665,13 +678,55 @@ namespace Tiad
                     ProjectCpu pc = s.Unclean ? null : t.ReadCpu(s.Handle);
                     string decision = CpuReuse.Decide(pc, st.Cpu, s.Unclean);
                     string protection = ConfigProtection.Nothing;
+                    // Whether this apply turns a kept CPU's access control
+                    // on (accessControlTurnOn over "Disabled").
+                    bool turning = false;
                     if (decision == CpuReuse.Reuse)
                     {
                         CpuReuse.Collides(pc, st);
                         protection = ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
-                        AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "");
-                        WebRule.Plan(pc.AccessControl, st.WebServer);
+                        AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "", turnOn);
+                        WebRule.Plan(AccessRule.After(pc.AccessControl, st.Cpu.AccessControl, turnOn), st.WebServer);
+                        turning = turnOn && pc.AccessControl == TurnOnRule.Disabled;
                         kept = pc.Others;
+                    }
+                    if (turning)
+                    {
+                        // Read before any write: a refusal leaves the
+                        // session as it was.
+                        try
+                        {
+                            TurnOnRule.Check(t.ReadTurnOn(s.Handle), notes);
+                        }
+                        catch (TiadException e)
+                        {
+                            Log.Line("audit access-turn-on session={0} project={1} refused: {2}", s.Id, Json.Quote(s.Project), Json.Quote(e.Message));
+                            throw;
+                        }
+                    }
+                    else if (turnOn)
+                    {
+                        notes.Add(TurnOnRule.NothingNote);
+                    }
+                    // A pending mark over a project whose access control
+                    // reads off (the archive failed before it saved, or an
+                    // upload brought the CPU's off state back): no load of
+                    // it turns the CPU's on, so the gate goes.
+                    if (!turning && s.AccessTurnOn && !s.AccessTurnOnLoaded && decision == CpuReuse.Reuse && pc.AccessControl == TurnOnRule.Disabled)
+                    {
+                        string marker = work.Resolve(s.Project) + TurnOnRule.MarkerSuffix;
+                        try
+                        {
+                            File.Delete(marker);
+                            s.AccessTurnOn = false;
+                            s.AccessTurnOnTried = false;
+                            notes.Add(TurnOnRule.ClearedNote);
+                            Log.Line("audit access-turn-on session={0} project={1} pending mark removed: the project's access control reads \"Disabled\"", s.Id, Json.Quote(s.Project));
+                        }
+                        catch (Exception e)
+                        {
+                            Log.Line("audit access-turn-on session={0} removing the turn-on pending mark failed: {1}", s.Id, Json.Quote(e.GetType().Name + ": " + e.Message));
+                        }
                     }
                     if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) s.AccessControlSet = true;
                     if (recordOnly) s.AccessRecordOnly = true;
@@ -706,7 +761,32 @@ namespace Tiad
                     s.Compiled = false;
                     s.Station = null;
                     s.Unclean = true;
-                    t.ApplyStation(s.Handle, st, decision, sec, notes, s.Made);
+                    if (turning)
+                    {
+                        // From the first write on: gated until a download
+                        // on this session loads it (a turn-on after an
+                        // upload re-arms a spent gate).
+                        s.AccessTurnOn = true;
+                        s.AccessTurnOnLoaded = false;
+                        s.AccessTurnOnTried = false;
+                        Log.Line("audit access-turn-on session={0} project={1} accessControlTurnOn=yes from={2}", s.Id, Json.Quote(s.Project), Json.Quote(pc.AccessControl));
+                    }
+                    t.ApplyStation(s.Handle, st, decision, sec, turning, notes, s.Made);
+                    if (turning)
+                    {
+                        // Read again with access control on: TIA may read a
+                        // role's runtime rights only then. A refusal here
+                        // leaves the session unclean: close it unsaved.
+                        try
+                        {
+                            TurnOnRule.Check(t.ReadTurnOn(s.Handle), new List<string>());
+                        }
+                        catch (TiadException e)
+                        {
+                            Log.Line("audit access-turn-on session={0} project={1} refused after the turn-on (session unclean): {2}", s.Id, Json.Quote(s.Project), Json.Quote(e.Message));
+                            throw TiadException.BadRequest("{0}", e.Message + TurnOnRule.LateRefusal);
+                        }
+                    }
                     s.Unclean = false;
                     string kn = CpuReuse.KeptNote(kept);
                     if (kn != null) notes.Add(kn);
@@ -741,6 +821,9 @@ namespace Tiad
                 List<string> srcs = r.Strs("sources");
                 List<string> tables = r.Strs("tagTables");
                 bool prune = r.Bool("prune");
+                // prunePrefix: with prune, every object in the group that no
+                // source declares must carry it (Ownership.PruneRefused).
+                string prunePrefix = r.Str("prunePrefix");
                 List<CyclicOB> obs = CyclicObs.Read(r.Children("obs"));
                 r.Done();
                 if (group == "") throw TiadException.BadRequest("group is empty");
@@ -753,10 +836,11 @@ namespace Tiad
                 SoftwareResult res = OnSession(s, delegate(ITia t)
                 {
                     if (s.ForeignChanged) throw Ownership.Unusable("another import");
-                    // Every block the sources declare, read on the TIA
-                    // thread right before TIA reads the same files: a name
-                    // outside the group, or a data type, refuses the whole
-                    // call before anything is imported (Ownership).
+                    // Every block and data type the sources declare, read on
+                    // the TIA thread right before TIA reads the same files:
+                    // a name outside the group (blocks and data types share
+                    // TIA's names), or a source with both kinds, refuses the
+                    // whole call before anything is imported (Ownership).
                     var declared = new List<Declared>();
                     foreach (var src in sources)
                     {
@@ -766,20 +850,33 @@ namespace Tiad
                             declared.Add(d);
                         }
                     }
-                    TiadException types = Ownership.TypesRefused(declared);
-                    if (types != null) throw types;
+                    TiadException mixed = Ownership.MixedRefused(declared);
+                    if (mixed != null) throw mixed;
+                    HashSet<string> typeSources = Ownership.TypeSources(declared);
+                    foreach (var src in sources) src.DataTypes = typeSources.Contains(src.Path);
                     TiadException obSources = CyclicObs.SourcesRefused(declared, obs);
                     if (obSources != null) throw obSources;
                     List<ProjectBlock> before = t.Blocks(s.Handle);
-                    List<string> conflicts = Ownership.Conflicts(declared, before, group);
+                    List<ProjectBlock> objectsBefore = Objects(t, s, before);
+                    List<string> conflicts = Ownership.Conflicts(declared, objectsBefore, group);
                     if (conflicts.Count > 0) throw Ownership.Refusal(conflicts, group);
+                    if (prune)
+                    {
+                        TiadException notOurs = Ownership.PruneRefused(objectsBefore, declared, group, prunePrefix);
+                        if (notOurs != null) throw notOurs;
+                    }
                     TiadException clash = CyclicObs.ConstantClash(declared, before, obs);
                     if (clash != null) throw clash;
                     List<OBStep> steps = CyclicObs.Plan(obs, before, group, prune);
                     s.Compiled = false;
-                    // Unusable until the blocks outside the group compare
-                    // the same afterwards, whether the import returns or
-                    // throws: a failure part-way may have replaced one.
+                    // The group this session imports into: a later compile
+                    // checks what lies outside it, and a compare requires
+                    // its data types by name (TiaNames.CompareEqual).
+                    s.ImportGroup = group;
+                    // Unusable until the blocks and data types outside the
+                    // group compare the same afterwards, whether the import
+                    // returns or throws: a failure part-way may have
+                    // replaced one.
                     s.ForeignChanged = true;
                     // touched: an OB was deleted or imported. A failure after
                     // that may leave an OB gone or an empty stub, so the
@@ -804,15 +901,26 @@ namespace Tiad
                             touched = true;
                             t.ImportBlock(s.Handle, group, CyclicObs.Xml(st.Want));
                         }
-                        sr = t.ImportSoftware(s.Handle, group, sources, tagTables, prune);
+                        sr = t.ImportSoftware(s.Handle, group, sources, tagTables, prune, prune && prunePrefix != "");
                     }
-                    catch
+                    catch (Exception e)
                     {
-                        if (!touched && Ownership.Changed(before, t.Blocks(s.Handle), group).Count == 0) s.ForeignChanged = false;
+                        // TIA handed back an object outside the group: it
+                        // replaced a same-named object where it sits, maybe
+                        // with the same content and date, so no compare can
+                        // clear the session (Ownership).
+                        TiaException te = e as TiaException;
+                        if (te != null && te.OutsideGroup) throw Ownership.OutsideGroupError(te.Message, group);
+                        // A data type import that failed stays unusable too:
+                        // TIA may have regenerated a customer's type with its
+                        // content and date, and the failure may have hidden
+                        // the glue's mark.
+                        if (!touched && typeSources.Count == 0 && Ownership.Changed(objectsBefore, Objects(t, s, t.Blocks(s.Handle)), group).Count == 0) s.ForeignChanged = false;
                         throw;
                     }
                     List<ProjectBlock> after = t.Blocks(s.Handle);
-                    List<string> changed = Ownership.Changed(before, after, group);
+                    List<ProjectBlock> objectsAfter = Objects(t, s, after);
+                    List<string> changed = Ownership.Changed(objectsBefore, objectsAfter, group);
                     if (changed.Count > 0) throw Ownership.ForeignChangedError(changed, group);
                     // A source that declares an asked OB must have made its
                     // body: else the OB is an empty stub (or gone, with prune).
@@ -822,10 +930,25 @@ namespace Tiad
                     if (bad.Count > 0) throw CyclicObs.VerifyFailed(bad);
                     s.ForeignChanged = false;
                     sr.Obs = steps;
+                    sr.Foreign = Ownership.Foreign(objectsAfter, group);
                     return sr;
                 });
                 return res.ToJson();
             });
+        }
+
+        // Objects is blocks and then every data type the project holds
+        // (ITia.Types, each marked DataType): the one list the ownership
+        // checks read, since blocks and data types share TIA's names.
+        static List<ProjectBlock> Objects(ITia t, Session s, List<ProjectBlock> blocks)
+        {
+            var l = new List<ProjectBlock>(blocks);
+            foreach (var ty in t.Types(s.Handle))
+            {
+                ty.DataType = true;
+                l.Add(ty);
+            }
+            return l;
         }
 
         object Compile(Call c)
@@ -840,6 +963,19 @@ namespace Tiad
                 if (!hw && !sw) throw TiadException.BadRequest("neither hardware nor software selected");
                 CompileResult res = OnSession(s, delegate(ITia t)
                 {
+                    // After an import, a compile recompiles what uses the
+                    // group's objects. TIA's date bump is accepted on the
+                    // group's own; a block or data type outside the group
+                    // whose date moves (a customer's block that uses one of
+                    // nautilus's types) makes the session unusable: the
+                    // compile changed what nautilus does not own.
+                    // Pinned unusable before the compile and cleared only once
+                    // a read after it shows nothing outside changed: a
+                    // compile, or the read after it, that fails leaves it.
+                    string group = s.ImportGroup;
+                    bool was = s.ForeignChanged;
+                    List<ProjectBlock> before = group == "" ? null : Objects(t, s, t.Blocks(s.Handle));
+                    if (before != null) s.ForeignChanged = true;
                     CompileResult cr;
                     try
                     {
@@ -848,7 +984,18 @@ namespace Tiad
                     catch
                     {
                         s.Compiled = false;
+                        if (before != null && Ownership.Changed(before, Objects(t, s, t.Blocks(s.Handle)), group).Count == 0) s.ForeignChanged = was;
                         throw;
+                    }
+                    if (before != null)
+                    {
+                        List<string> changed = Ownership.Changed(before, Objects(t, s, t.Blocks(s.Handle)), group);
+                        if (changed.Count > 0)
+                        {
+                            s.Compiled = false;
+                            throw Ownership.CompileChangedError(changed, group);
+                        }
+                        s.ForeignChanged = was;
                     }
                     // Only a full compile without errors makes the
                     // project downloadable.

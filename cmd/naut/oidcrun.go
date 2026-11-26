@@ -63,7 +63,7 @@ func withOIDC(sopts *server.Options, proj *project.Project, getenv func(string) 
 	if err != nil {
 		return nil, err
 	}
-	sopts.OIDC, sopts.OIDCRedirectURL = oidcSeam{c}, o.RedirectURL
+	sopts.OIDC, sopts.OIDCRedirectURL, sopts.OIDCIssuer = oidcSeam{c}, o.RedirectURL, o.Issuer
 	return c, nil
 }
 

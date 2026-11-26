@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -24,30 +25,42 @@ var benchGlobals = []Global{
 	{Name: "Level", Type: "REAL", Init: "12.5", Retain: true},
 }
 
-// TestGolden writes the bench fixture and compares every generated file
-// with testdata/bench/golden/. The goldens encode what TIA's exported
-// sources look like as far as public knowledge goes; they are unverified
-// against a TIA compile until S2b, which corrects them from real exports.
-func TestGolden(t *testing.T) {
-	src, err := os.ReadFile("testdata/bench/Main.st")
+var coverageGlobals = []Global{
+	{Name: "Start", Type: "BOOL"},
+	{Name: "Reset", Type: "BOOL"},
+	{Name: "Running", Type: "BOOL"},
+}
+
+// golden writes testdata/<fixture>/Main.st with globals and one 100 ms
+// task, and compares every generated file with testdata/<fixture>/golden/.
+func golden(t *testing.T, fixture string, globals []Global) Output {
+	t.Helper()
+	src, err := os.ReadFile("testdata/" + fixture + "/Main.st")
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, diags, err := Write(Input{
+	return goldenInput(t, fixture, Input{
 		Programs: []Program{{Path: "Main.st", Source: string(src)}},
-		Globals:  benchGlobals,
+		Globals:  globals,
 		Tasks:    []Task{{Name: "main", Program: "Main", Interval: 100 * time.Millisecond}},
 		// The default the CLI passes: the FB "Main" would otherwise
 		// collide with TIA's own "Main" [OB1] (#789).
 		BlockPrefix: "naut_",
 	})
+}
+
+// goldenInput writes in and compares every generated file with
+// testdata/<fixture>/golden/.
+func goldenInput(t *testing.T, fixture string, in Input) Output {
+	t.Helper()
+	out, diags, err := Write(in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(diags) > 0 {
 		t.Fatalf("diagnostics: %v", diags)
 	}
-	dir := "testdata/bench/golden"
+	dir := "testdata/" + fixture + "/golden"
 	if *update {
 		os.RemoveAll(dir)
 		os.MkdirAll(dir, 0o755)
@@ -72,14 +85,22 @@ func TestGolden(t *testing.T) {
 			t.Errorf("%s differs from its golden (go test ./siemens/writer/ -update, then review the diff):\n%s", e.Name(), got[e.Name()])
 		}
 	}
+	return out
+}
+
+// TestGolden writes the bench fixture and compares every generated file
+// with testdata/bench/golden/, compiled 0/0 on TIA V21 (README).
+func TestGolden(t *testing.T) {
+	out := golden(t, "bench", benchGlobals)
 
 	if len(out.OBs) != 1 || out.OBs[0].Number != 30 || out.OBs[0].Cycle != 100*time.Millisecond {
 		t.Errorf("OBs: %+v", out.OBs)
 	}
 	for path, want := range map[string]string{
-		"Level":        `"naut_Tags".Level`,
-		"Main.count":   `"naut_Main_DB".count`,
-		"main.dwell.Q": `"naut_Main_DB".dwell.Q`,
+		"Level":         `"naut_Tags".Level`,
+		"Main.count":    `"naut_Main_DB".count`,
+		"main.dwell.Q":  `"naut_Main_DB".dwell.Q`,
+		"main.dwell.IN": `"naut_Main_DB".dwell.IN`,
 	} {
 		if got, ok := out.Symbol(path); !ok || got != want {
 			t.Errorf("Symbol(%q) = %q, want %q", path, got, want)
@@ -87,8 +108,33 @@ func TestGolden(t *testing.T) {
 	}
 }
 
+// TestInstancesGolden: every IEC function block the writer knows, called
+// every way the writer writes it, as compiled 0/0 on TIA V21
+// (testdata/instances/README.md, #1338). A type added to the writer's
+// maps must join main.st, and the golden a new TIA compile.
+func TestInstancesGolden(t *testing.T) {
+	src, err := os.ReadFile("testdata/instances/main.st")
+	if err != nil {
+		t.Fatal(err)
+	}
+	goldenInput(t, "instances", Input{
+		Programs:    []Program{{Path: "main.st", Source: string(src)}},
+		Globals:     []Global{{Name: "Go", Type: "BOOL"}, {Name: "Out", Type: "BOOL"}, {Name: "N", Type: "DINT"}},
+		Tasks:       []Task{{Name: "main", Program: "main", Interval: 100 * time.Millisecond}},
+		BlockPrefix: "naut_",
+	})
+	for typ := range instMembers {
+		if !regexp.MustCompile(`(?i):\s*` + typ + `\s*;`).MatchString(string(src)) {
+			t.Errorf("testdata/instances/main.st declares no %s: add one, and compile the golden on TIA again", typ)
+		}
+	}
+}
+
 func TestTaskRules(t *testing.T) {
-	prog := []Program{{Path: "p.st", Source: "PROGRAM P\nVAR x : REAL; END_VAR\nx := x + 1.0;\nEND_PROGRAM\n"}}
+	prog := []Program{
+		{Path: "p.st", Source: "PROGRAM P\nVAR x : REAL; END_VAR\nx := x + 1.0;\nEND_PROGRAM\n"},
+		{Path: "q.st", Source: "PROGRAM Q\nVAR x : REAL; END_VAR\nx := x + 1.0;\nEND_PROGRAM\n"},
+	}
 	for _, c := range []struct {
 		name  string
 		tasks []Task
@@ -97,7 +143,12 @@ func TestTaskRules(t *testing.T) {
 		{"no interval", []Task{{Name: "main", Program: "P"}}, "no interval"},
 		{"over 60 s", []Task{{Name: "main", Program: "P", Interval: 61 * time.Second}}, "60 s"},
 		{"sub-millisecond", []Task{{Name: "main", Program: "P", Interval: 1500 * time.Microsecond}}, "whole number"},
-		{"two tasks", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "P", Interval: 2 * time.Second}}, "2 tasks"},
+		{"one program, two tasks", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "P", Interval: 2 * time.Second}}, "task slow runs program P, which task main runs too"},
+		// The rules hold for every task, not the first alone.
+		{"second task over 60 s", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "slow", Program: "Q", Interval: 61 * time.Second}}, "task slow: interval 1m1s is over the 60 s"},
+		{"second task sub-millisecond", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "fast", Program: "Q", Interval: 1500 * time.Microsecond}}, "task fast: interval 1.5ms is not a whole number"},
+		{"second task no interval", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "fast", Program: "Q"}}, "task fast has no interval"},
+		{"second task no program", []Task{{Name: "main", Program: "P", Interval: time.Second}, {Name: "fast", Program: "R", Interval: time.Second}}, "task fast runs program R, which the writer could not write"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, diags, err := Write(Input{Programs: prog, Tasks: c.tasks})
@@ -118,33 +169,33 @@ func TestBlockNamesDoNotCollide(t *testing.T) {
 	}
 }
 
-// TestRefusals: what the first subset does not write is a diagnostic on
+// TestRefusals: what the writer does not translate is a diagnostic on
 // the line that wrote it, and no files at all.
 func TestRefusals(t *testing.T) {
 	cases := []struct {
 		name, decls, body, rule string
 		line                    int
 	}{
-		{"division by a variable", "a, b : INT;", "a := a / b;", "siemens/division", 3},
-		{"division by zero constant", "a : INT;", "a := a / 0;", "siemens/division", 3},
-		{"mod by a variable", "a, b : INT;", "a := a MOD b;", "siemens/division", 3},
-		{"string", "s : STRING;", "", "siemens/type", 2},
-		{"array", "a : ARRAY[1..3] OF INT;", "", "siemens/type", 2},
-		{"sr", "f : SR;", "", "siemens/type", 2},
-		{"overloaded conversion", "a : INT; r : REAL;", "r := TO_REAL(a);", "siemens/conversion", 3},
+		{"string", "s : WSTRING;", "", "siemens/type", 2},
+		{"mod of reals", "r, q : REAL;", "r := r MOD q;", "siemens/division", 3},
+		{"an sr outside VAR", "", "", "siemens/var", 0},
+		{"overloaded conversion of a literal", "r : REAL;", "r := TO_REAL(5);", "siemens/conversion", 3},
+		{"min of 33", "a : INT;", "a := MIN(" + strings.Repeat("a, ", 32) + "a);", "siemens/call", 3},
+		{"mixed named and positional", "a : INT;", "a := LIMIT(0, IN := a, MX := 9);", "siemens/nautilus", 3},
+		{"shift of a literal", "w : WORD; n : INT;", "w := SHL(16#FF, n);", "siemens/function", 3},
+		{"bitwise of int and lword", "a : INT; w : LWORD;", "w := w AND a;", "siemens/int-width", 3},
+		{"byte access", "w : WORD; b : BYTE;", "b := w.%B0;", "siemens/partial", 3},
+		{"bitwise in an FB input", "t : TON; a, b : INT; q : BOOL;", "t(IN := q, PT := INT_TO_TIME(NOT a));", "siemens/int-width", 3},
+		{"array of instances", "a : ARRAY[1..3] OF TON;", "", "siemens/type", 2},
 		{"unknown function (nautilus refuses first)", "a : INT;", "a := FOO(a);", "siemens/nautilus", 3},
 		{"unknown name (nautilus refuses first)", "a : INT;", "a := Nope;", "siemens/nautilus", 3},
-		{"truncated real", "r : REAL; l : LINT;", "l := TRUNC(r);", "siemens/function", 3},
 		{"ltime", "t : LTIME;", "", "siemens/type", 2},
 		{"time arithmetic", "a, b : TIME;", "a := a + b;", "siemens/time", 3},
-		{"bitwise and", "a, b : WORD;", "a := a AND b;", "siemens/operator", 3},
 		{"int arithmetic into an FB input", "t : TON; n : INT; b : BOOL;", "t(IN := b, PT := INT_TO_TIME(n + 1));", "siemens/int-width", 3},
 		{"int arithmetic as a CASE selector", "n : INT;", "CASE n + 1 OF 1: n := 0; END_CASE;", "siemens/int-width", 3},
 		{"int arithmetic stored into a REAL", "n : INT; r : REAL;", "r := n + 1;", "siemens/int-width", 3},
-		{"counter CV bound to an INT", "c : CTU; n : INT; b : BOOL;", "c(CU := b, PV := 5, CV => n);", "siemens/int-width", 3},
+		{"a counter's member written outside its call", "c : CTU; b : BOOL;", "c.PV := 5;", "siemens/member", 3},
 		{"sqrt of an int", "n : INT; r : REAL;", "r := SQRT(n);", "siemens/function", 3},
-		{"zero divisor written 0.0e0", "r : REAL;", "r := r / 0.0e0;", "siemens/division", 3},
-		{"zero divisor written 16#0", "a : INT;", "a := a / 16#0;", "siemens/division", 3},
 		{"instance as an input", "", "", "siemens/var", 0},
 		{"positional instance args (nautilus refuses first)", "t : TON; b : BOOL;", "t(b, T#1s);", "siemens/nautilus", 3},
 		{"instance in temp", "", "", "siemens/nautilus", 0},
@@ -155,6 +206,10 @@ func TestRefusals(t *testing.T) {
 			src := "PROGRAM P\nVAR " + c.decls + " END_VAR\n" + c.body + "\nEND_PROGRAM\n"
 			if c.name == "instance in temp" {
 				src = "PROGRAM P\nVAR_TEMP t : TON; END_VAR\nEND_PROGRAM\n"
+				c.line = 2
+			}
+			if c.name == "an sr outside VAR" {
+				src = "PROGRAM P\nVAR_INPUT f : SR; END_VAR\nEND_PROGRAM\n"
 				c.line = 2
 			}
 			if c.name == "instance as an input" {
@@ -229,7 +284,7 @@ func TestIntegerArithmeticIsWidenedAndWrapped(t *testing.T) {
 		"#ok := INT_TO_LINT(#a) + INT_TO_LINT(#b) > 30000;",
 		"#a := LINT_TO_INT((((#c.CV) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);",
 		"#a := 16#FF;",
-		"c : CTU_LINT;",
+		"c : IEC_LCOUNTER;",
 	} {
 		if !strings.Contains(fb, want) {
 			t.Errorf("missing %q in\n%s", want, fb)
@@ -297,7 +352,7 @@ func TestSymbolAnswersOnlyForWhatExists(t *testing.T) {
 // names the ladder's own line, which differs from the line of the ST it
 // was lowered to.
 func TestLadderDiagnosticPointsAtTheLadderLine(t *testing.T) {
-	src := "PROGRAM L\nVAR\n    a : REAL;\n    b : REAL;\n    Run : BOOL;\n    Out : BOOL;\nEND_VAR\nLD\n  RUNG first\n    Run ( Out )\n\n  // a note above the rung\n  RUNG ratio\n    GT(DIV(a, b), 1.0) ( Run )\nEND_LD\nEND_PROGRAM\n"
+	src := "PROGRAM L\nVAR\n    a : REAL;\n    b : REAL;\n    Run : BOOL;\n    Out : BOOL;\nEND_VAR\nLD\n  RUNG first\n    Run ( Out )\n\n  // a note above the rung\n  RUNG ratio\n    GT(MOD(a, b), 1.0) ( Run )\nEND_LD\nEND_PROGRAM\n"
 	_, diags, err := Write(Input{Programs: []Program{{Path: "l.ld", Source: src}}})
 	if err != nil {
 		t.Fatal(err)
@@ -308,7 +363,7 @@ func TestLadderDiagnosticPointsAtTheLadderLine(t *testing.T) {
 	}
 	stLine := 0
 	for i, l := range strings.Split(stSrc, "\n") {
-		if strings.Contains(l, "/ b") || strings.Contains(l, "DIV(") {
+		if strings.Contains(l, "MOD b") || strings.Contains(l, "MOD(") {
 			stLine = i + 1
 		}
 	}
@@ -328,7 +383,7 @@ func TestLadderDiagnosticPointsAtTheLadderLine(t *testing.T) {
 }
 
 func TestGlobalTypeRefusedInTheTagsDB(t *testing.T) {
-	_, diags, err := Write(Input{Globals: []Global{{Name: "Name", Type: "STRING"}}})
+	_, diags, err := Write(Input{Globals: []Global{{Name: "Name", Type: "WSTRING"}}})
 	if err != nil || len(diags) != 1 || diags[0].Rule != "siemens/type" {
 		t.Fatalf("%v %v", err, diags)
 	}

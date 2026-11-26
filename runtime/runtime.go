@@ -336,6 +336,27 @@ type Runtime struct {
 	edges uint64
 	// imageSeq numbers the state images (image.go).
 	imageSeq imageSeqs
+	// sw is a planned switchover's state (switch.go).
+	sw switchState
+	// edgeWait: a loop's tick on a takeover edge is waiting for a step
+	// it started (waitStep, under leadMu); other ticks do not queue.
+	edgeWait atomic.Bool
+	// flushWait: the edgeWait is for this edge's own flush (waitStep),
+	// whose carry may read the leadership snapshot (carry).
+	flushWait atomic.Bool
+	// leadSnap is ledTerm<<1 | leading, published under leadMu
+	// (publishLead) for LeadingTerm, which takes no lock.
+	leadSnap atomic.Uint64
+	// imgMu guards the round the state image is in (RequestImage,
+	// TakeImage): its number, its phase (0 first copies, 1 the re-copy of
+	// the faster tasks, 2 taken) and the task that copied last.
+	imgMu      sync.Mutex
+	imgRound   uint64
+	imgPhase   int
+	imgSlowest int
+	imgStamps  []uint64
+	// carried is the tags a state image carries (imagetags.go), fixed in New.
+	carried *carrySet
 	// ready is the driver as an io.InputsReadier (nil when it is not one),
 	// readyWait how long a takeover waits for it, and readySince when the
 	// pending takeover began waiting (zero when none is). See inputsReady.
@@ -401,6 +422,13 @@ type Runtime struct {
 	iok ioKeep
 	// pushk keeps the Web Push subscriptions in the retain store (#722).
 	pushk pushKeep
+	// failk carries a pair's failback state (failbackkeep.go, #710 d2).
+	failk failbackKeep
+	// strm is a pair's state stream: the takeover flush and the standby's
+	// carries (stream.go).
+	strm streamSide
+	// hold is a pair's takeover hold (hold.go, #710 (b2)).
+	hold holdState
 
 	// live is what Liveness reads: Run's loops' scan edges and lifecycle.
 	live liveness
@@ -686,6 +714,9 @@ func New(o Options) (*Runtime, error) {
 		return nil, err
 	}
 	r.initParams(o.Tags)
+	for _, np := range r.namedPrograms() {
+		np.prog.switching = &tags.switching // online edits refused while switching (switch.go)
+	}
 	r.mono = monoFor(o.Clock)
 	if a, ok := o.Driver.(nio.OutputsRequester); ok {
 		r.asker = a
@@ -707,6 +738,19 @@ func New(o Options) (*Runtime, error) {
 	// Flag the output tags in the store so a write to one stamps the
 	// output generation Scan reads (see Tags.markOutputs).
 	tags.markOutputs(o.Outputs)
+	// The tags a pair's state image carries: every one the field does not
+	// provide (imagetags.go).
+	dtTags := []string{o.DtTag}
+	for _, tr := range tasks {
+		dtTags = append(dtTags, tr.dtTag)
+	}
+	r.carried = buildCarrySet(tags, r.inputs, r.outputs, dtTags)
+	for _, np := range r.namedPrograms() {
+		np.prog.mu.Lock()
+		np.prog.carry = r.carried
+		np.prog.carryIdx = r.carried.idxOf(np.prog.writtenKeys())
+		np.prog.mu.Unlock()
+	}
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
 	r.late.thresholdUs = lateThresholdS(o.LateThreshold.Seconds(), o.Scan.Seconds()) * 1e6
 	r.cpus, r.prio = o.CPUs, o.Priority
@@ -1397,9 +1441,10 @@ func (r *Runtime) scanTask(tr *taskRun) { r.scanTaskAt(tr, time.Time{}) }
 // scanTaskAt is scanTask with the slot the scan was due at (zero when the
 // caller is not Run's scheduler), for the lateness sample.
 func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
-	if !r.gate() {
+	if !r.gate() || !r.scanEnter() {
 		return
 	}
+	defer r.scanExit()
 	t0 := time.Now()
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	tr.mu.Lock()
@@ -1457,9 +1502,10 @@ func (r *Runtime) Scan() { r.scanAt(time.Time{}) }
 // is not Run's scheduler), for the lateness sample.
 func (r *Runtime) scanAt(due time.Time) {
 	ok, edge := r.gateEdge()
-	if !ok {
+	if !ok || !r.scanEnter() {
 		return
 	}
+	defer r.scanExit()
 	t0 := time.Now()
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	r.mu.Lock()
@@ -1548,7 +1594,12 @@ func (r *Runtime) scanAt(due time.Time) {
 	// to a standby that is now writing, and its stale outputs must not land
 	// after the new leader's (#621). Not sent means not held: the next push
 	// is the whole set.
+	//
+	// While a pair's takeover hold holds (hold.go), nothing is pushed: not
+	// sent means not held, so the release's push is the whole set.
 	if r.driver != nil && len(r.outputs) > 0 && r.coord != nil && !r.coord.IsLeader() {
+		r.outSent.Store(false)
+	} else if r.holdScan() {
 		r.outSent.Store(false)
 	} else if r.driver != nil && len(r.outputs) > 0 {
 		gen := r.tags.outputGeneration()
@@ -1569,10 +1620,12 @@ func (r *Runtime) scanAt(due time.Time) {
 				// A failed write leaves the driver holding who-knows-what:
 				// retry the whole set next scan rather than trusting the stamp.
 				r.outSent.Store(false)
+				r.holdAfterPush() // a child of a composite may have taken it
 			} else {
 				r.outGen.Store(gen)
 				r.outSent.Store(true)
 				r.deliverPush(out)
+				r.holdAfterPush()
 			}
 		}
 	}

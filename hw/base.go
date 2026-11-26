@@ -161,6 +161,7 @@ type Config struct {
 // it — either way the runtime sees one Driver with the modbus-shaped surface
 // (New never dials, Start polls, Stop waits).
 type Base struct {
+	fence.CutLabel
 	kind        string
 	log         *slog.Logger
 	poll        PollFunc
@@ -1150,15 +1151,17 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 			continue
 		}
 		w := b.writes[name]
-		deadline, term, ok := time.Time{}, batchTerm, true
+		deadline, term, ok, done := time.Time{}, batchTerm, true, func() {}
 		if !mut("gate_per_batch") {
-			deadline, term, ok = fence.Begin(b.gate(), time.Now())
+			deadline, term, ok, done = fence.Begin(b.gate(), time.Now())
 		}
 		if !ok || !fence.Started(deadline, time.Now()) {
+			done()
 			b.dropRest(s, batch[i:])
 			return
 		}
 		if q.term != term && !mut("old_term_sent") {
+			done()
 			oldTerm = append(oldTerm, name)
 			continue
 		}
@@ -1166,6 +1169,7 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 		fence.BeforeSend()
 		err := b.write(wctx, s.cfg.ID, w.decl, q.v)
 		cancel()
+		done() // answered, failed, or reset: ended for a drain
 		if errors.Is(err, ErrNoWrite) {
 			continue
 		}
@@ -1176,6 +1180,7 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 			s.mu.Lock()
 			s.lastWrite = fmt.Errorf("write %s: outcome unknown: no answer by its send deadline, so the connection was reset; the device may have carried it out, and it is not sent again (%w)", name, err)
 			s.mu.Unlock()
+			fence.Cut(b.CutName(s.cfg.ID))
 			b.log.Warn(b.kind+": command outcome unknown (no answer by its send deadline; not sent again)", "source", s.cfg.ID, "tag", name, "error", err)
 			continue
 		}

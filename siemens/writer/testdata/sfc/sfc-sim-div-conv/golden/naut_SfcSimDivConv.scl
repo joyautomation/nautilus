@@ -1,0 +1,144 @@
+FUNCTION_BLOCK "naut_SfcSimDivConv"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      _S_Idle_X : BOOL := TRUE;
+      _S_L_X : BOOL;
+      _S_M_X : BOOL;
+      _S_R_X : BOOL;
+      _S_LD_X : BOOL;
+      _S_MD_X : BOOL;
+      _S_RD_X : BOOL;
+      _S_Join_X : BOOL;
+      _en_t_fork : BOOL;
+      _f_t_fork : BOOL;
+      _en_t_l : BOOL;
+      _f_t_l : BOOL;
+      _en_t_m : BOOL;
+      _f_t_m : BOOL;
+      _en_t_r : BOOL;
+      _f_t_r : BOOL;
+      _en_t_join : BOOL;
+      _f_t_join : BOOL;
+      _en_t_back : BOOL;
+      _f_t_back : BOOL;
+      _act_sfc_Idle_lvl : BOOL;
+      _act_sfc_L_lvl : BOOL;
+      _act_sfc_M_lvl : BOOL;
+      _act_sfc_R_lvl : BOOL;
+      _act_sfc_LD_lvl : BOOL;
+      _act_sfc_MD_lvl : BOOL;
+      _act_sfc_RD_lvl : BOOL;
+      _act_sfc_Join_lvl : BOOL;
+   END_VAR
+
+BEGIN
+	#_en_t_fork := #_S_Idle_X AND "naut_Tags".go;
+	#_en_t_l := #_S_L_X AND "naut_Tags".donel;
+	#_en_t_m := #_S_M_X AND "naut_Tags".donem;
+	#_en_t_r := #_S_R_X AND "naut_Tags".doner;
+	#_en_t_join := #_S_LD_X AND #_S_MD_X AND #_S_RD_X AND TRUE;
+	#_en_t_back := #_S_Join_X AND "naut_Tags".back;
+	#_f_t_fork := #_en_t_fork;
+	#_f_t_l := #_en_t_l;
+	#_f_t_m := #_en_t_m;
+	#_f_t_r := #_en_t_r;
+	#_f_t_join := #_en_t_join;
+	#_f_t_back := #_en_t_back;
+	IF #_f_t_fork THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_l THEN
+		#_S_L_X := FALSE;
+	END_IF;
+	IF #_f_t_m THEN
+		#_S_M_X := FALSE;
+	END_IF;
+	IF #_f_t_r THEN
+		#_S_R_X := FALSE;
+	END_IF;
+	IF #_f_t_join THEN
+		#_S_LD_X := FALSE;
+		#_S_MD_X := FALSE;
+		#_S_RD_X := FALSE;
+	END_IF;
+	IF #_f_t_back THEN
+		#_S_Join_X := FALSE;
+	END_IF;
+	IF #_f_t_fork THEN
+		#_S_L_X := TRUE;
+		#_S_M_X := TRUE;
+		#_S_R_X := TRUE;
+	END_IF;
+	IF #_f_t_l THEN
+		#_S_LD_X := TRUE;
+	END_IF;
+	IF #_f_t_m THEN
+		#_S_MD_X := TRUE;
+	END_IF;
+	IF #_f_t_r THEN
+		#_S_RD_X := TRUE;
+	END_IF;
+	IF #_f_t_join THEN
+		#_S_Join_X := TRUE;
+	END_IF;
+	IF #_f_t_back THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	IF #_act_sfc_Idle_lvl AND NOT #_S_Idle_X THEN
+		"naut_Tags".sfc_idle := FALSE;
+	END_IF;
+	IF #_S_Idle_X THEN
+		"naut_Tags".sfc_idle := TRUE;
+	END_IF;
+	#_act_sfc_Idle_lvl := #_S_Idle_X;
+	IF #_act_sfc_L_lvl AND NOT #_S_L_X THEN
+		"naut_Tags".sfc_l := FALSE;
+	END_IF;
+	IF #_S_L_X THEN
+		"naut_Tags".sfc_l := TRUE;
+	END_IF;
+	#_act_sfc_L_lvl := #_S_L_X;
+	IF #_act_sfc_M_lvl AND NOT #_S_M_X THEN
+		"naut_Tags".sfc_m := FALSE;
+	END_IF;
+	IF #_S_M_X THEN
+		"naut_Tags".sfc_m := TRUE;
+	END_IF;
+	#_act_sfc_M_lvl := #_S_M_X;
+	IF #_act_sfc_R_lvl AND NOT #_S_R_X THEN
+		"naut_Tags".sfc_r := FALSE;
+	END_IF;
+	IF #_S_R_X THEN
+		"naut_Tags".sfc_r := TRUE;
+	END_IF;
+	#_act_sfc_R_lvl := #_S_R_X;
+	IF #_act_sfc_LD_lvl AND NOT #_S_LD_X THEN
+		"naut_Tags".sfc_ld := FALSE;
+	END_IF;
+	IF #_S_LD_X THEN
+		"naut_Tags".sfc_ld := TRUE;
+	END_IF;
+	#_act_sfc_LD_lvl := #_S_LD_X;
+	IF #_act_sfc_MD_lvl AND NOT #_S_MD_X THEN
+		"naut_Tags".sfc_md := FALSE;
+	END_IF;
+	IF #_S_MD_X THEN
+		"naut_Tags".sfc_md := TRUE;
+	END_IF;
+	#_act_sfc_MD_lvl := #_S_MD_X;
+	IF #_act_sfc_RD_lvl AND NOT #_S_RD_X THEN
+		"naut_Tags".sfc_rd := FALSE;
+	END_IF;
+	IF #_S_RD_X THEN
+		"naut_Tags".sfc_rd := TRUE;
+	END_IF;
+	#_act_sfc_RD_lvl := #_S_RD_X;
+	IF #_act_sfc_Join_lvl AND NOT #_S_Join_X THEN
+		"naut_Tags".sfc_join := FALSE;
+	END_IF;
+	IF #_S_Join_X THEN
+		"naut_Tags".sfc_join := TRUE;
+	END_IF;
+	#_act_sfc_Join_lvl := #_S_Join_X;
+END_FUNCTION_BLOCK

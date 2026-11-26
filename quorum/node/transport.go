@@ -29,6 +29,26 @@ const TokenHeader = "X-Nautilus-Cluster"
 // LeaseHeader carries the sender's lease, in nanoseconds, on every vote.
 const LeaseHeader = "X-Nautilus-Lease"
 
+// VoterLeaseHeader carries a voter's own lease, in nanoseconds, on every
+// vote answer (#710). A dialer clears a lease refusal only when its lease
+// fits it: during a voter's restart wait the voter still takes a longer
+// lease it refuses after (quorum.Voter.MaxRequestLease), which is no
+// all-clear. An answer without it (an older voter) clears as before.
+const VoterLeaseHeader = "X-Nautilus-Voter-Lease"
+
+// voterLeaseFits reports whether lease fits the voter's own lease the
+// answer's headers state (true when they state none).
+func voterLeaseFits(h http.Header, lease time.Duration) bool {
+	if mut("lease_clear_on_wait") {
+		return true
+	}
+	n, err := strconv.ParseInt(h.Get(VoterLeaseHeader), 10, 64)
+	if err != nil || n <= 0 {
+		return true
+	}
+	return lease <= time.Duration(n)
+}
+
 // MembersHeader carries the pair's two controller names, "a,b" sorted, on
 // every request a controller sends. The witness binds a cluster to them at
 // its first vote and answers no other sender for it.
@@ -99,6 +119,21 @@ type statusError struct {
 	code   int
 	msg    string
 	reason string // RefusedHeader
+	// body is the answer's own text, at most maxRefusalText bytes: what a
+	// refusal says, for an operator's condition (msg adds the call).
+	body string
+}
+
+// maxRefusalText bounds the refusal text a voter's answer puts in a report.
+const maxRefusalText = 512
+
+// said is what the voter's answer says, or the whole error when it says
+// nothing.
+func (e *statusError) said() string {
+	if e.body == "" {
+		return e.msg
+	}
+	return e.body
 }
 
 func (e *statusError) Error() string { return e.msg }
@@ -183,30 +218,104 @@ func baseURL(addr string, tls bool) string {
 	return "http://" + addr
 }
 
+// TLSWrap is peer TLS's client side (#710): it runs the handshake over
+// raw, a connection dialed to addr (the host:port of a peer address as
+// Options names it: DialAddr), and returns it once the other end is the
+// member at that address (internal/peertls Peer.Wrap: its certificate
+// signed by the token's key, naming that member, its key the pinned one).
+// ctx bounds the handshake. Nil: plain HTTP.
+type TLSWrap func(ctx context.Context, raw net.Conn, addr string) (net.Conn, error)
+
+// DialAddr is the host:port a peer call to addr (a peer address from the
+// manifest, or a URL in tests) dials: what a TLSWrap is handed.
+func DialAddr(addr string) string { return hostOf(baseURL(addr, true)) }
+
 // newClient is the HTTP client for peer calls: connections kept alive,
 // a few per peer, and no overall timeout (each call has its own deadline).
-// conf, when set, is peer TLS's client side (#710): the handshake rides
-// the same dial, so a close is still a reset.
-func newClient(dial func(ctx context.Context, network, addr string) (net.Conn, error), conf *tls.Config) *http.Client {
+// wrap, when set, is peer TLS's client side (#710): the handshake rides
+// the same dial, so a close is still a reset, and each destination gets
+// its own check (a TLS ServerName can't name the member: it is empty for
+// an IP address).
+func newClient(dial func(ctx context.Context, network, addr string) (net.Conn, error), wrap TLSWrap) *http.Client {
 	if dial == nil {
 		dial = (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 15 * time.Second}).DialContext
 	}
-	handshake := tlsHandshakeTimeout
-	if mut("peer_tls_handshake_unbounded") {
-		handshake = 0
-	}
-	return &http.Client{Transport: &http.Transport{
-		Proxy:           nil, // peers are reached directly, never through an HTTP proxy
-		DialContext:     resetOnClose(dial),
-		TLSClientConfig: conf,
-		// A call's deadline ends the call, not the transport's own dial and
-		// handshake: without a bound, a peer that accepts and never speaks
-		// (a hung process) would keep one connection per call (#1230 review).
-		TLSHandshakeTimeout: handshake,
+	tr := &http.Transport{
+		Proxy:               nil, // peers are reached directly, never through an HTTP proxy
+		DialContext:         resetOnClose(dial),
 		MaxIdleConnsPerHost: 4,
 		IdleConnTimeout:     90 * time.Second,
 		ForceAttemptHTTP2:   false,
-	}}
+	}
+	if wrap != nil {
+		tr.DialTLSContext = tlsDial(resetOnClose(dial), wrap)
+	}
+	return &http.Client{Transport: tr}
+}
+
+// tlsDial dials raw and runs wrap's handshake over it, bounded: a call's
+// deadline ends the call, not the dial and handshake, so without a bound
+// a peer that accepts and never speaks (a hung process) would keep one
+// connection per call (#1230 review).
+func tlsDial(dial func(ctx context.Context, network, addr string) (net.Conn, error), wrap TLSWrap) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		raw, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		hctx := ctx
+		if !mut("peer_tls_handshake_unbounded") {
+			var cancel context.CancelFunc
+			hctx, cancel = context.WithTimeout(ctx, tlsHandshakeTimeout)
+			defer cancel()
+		}
+		return wrap(hctx, raw, addr)
+	}
+}
+
+// NewPeerClient is an HTTP client for a peer call of its own, outside the
+// vote protocol's: the pair's state stream (#710 S1b) keeps its own
+// connections, so a busy stream never delays a renewal (design §6). Same
+// dial (every close a reset), same peer TLS, same handshake bound.
+func NewPeerClient(dial func(ctx context.Context, network, addr string) (net.Conn, error), wrap TLSWrap) *http.Client {
+	return newClient(dial, wrap)
+}
+
+// PeerURL is the base URL of a peer address (host:port, or a URL in
+// tests): https with peer TLS on.
+func PeerURL(addr string, tls bool) string { return baseURL(addr, tls) }
+
+// peerKey is the request context key of the member a peer listener's
+// TLS verified (WithPeer).
+type peerKey struct{}
+
+type verifiedPeer struct{ cluster, name string }
+
+// WithPeer is r carrying the member peer TLS verified for it (cluster, ""
+// for the witness, and name): what internal/peertls's Bind hands the
+// handlers, through cmd/naut, which imports both.
+func WithPeer(r *http.Request, cluster, name string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), peerKey{}, verifiedPeer{cluster, name}))
+}
+
+// VerifiedPeer is the member peer TLS verified for r (WithPeer).
+func VerifiedPeer(r *http.Request) (cluster, name string, ok bool) {
+	v, ok := r.Context().Value(peerKey{}).(verifiedPeer)
+	return v.cluster, v.name, ok
+}
+
+// SenderOK reports whether a request that names sender of cluster in its
+// body (or query) comes from that member: the one its TLS certificate
+// names (#710 per-box keys). A request without TLS is peer TLS off (the
+// loud lab opt-out): nothing to bind. With TLS and no verified member (a
+// listener without Bind) it fails closed. mutation is the handler's own
+// row, which skips the check.
+func SenderOK(r *http.Request, cluster, sender, mutation string) bool {
+	if r.TLS == nil || mut(mutation) {
+		return true
+	}
+	c, n, ok := VerifiedPeer(r)
+	return ok && c == cluster && n == sender
 }
 
 // tlsHandshakeTimeout bounds a peer TLS handshake.
@@ -245,12 +354,22 @@ func faultOf(err error) linkFault {
 		return faultPeerTLS
 	case errors.As(err, &id) && id.PeerIdentity():
 		return faultForeignKey
+	case keyRefusal(err):
+		return faultKeyRefused
 	case errors.As(err, &op) && op.Op == "remote error" && strings.Contains(op.Err.Error(), "certificate"):
 		// A TLS 1.3 client learns that the server refused its key only
 		// at its first read: an alert, "bad certificate".
 		return faultKeyRefused
 	}
 	return faultNone
+}
+
+// keyRefusal reports a peer listener's refusal of this side's key at a
+// request (internal/peertls Bind: a 403 marked peer-key), as when a name's
+// pin changed under a kept connection.
+func keyRefusal(err error) bool {
+	var se *statusError
+	return errors.As(err, &se) && se.reason == "peer-key"
 }
 
 // resetOnClose dials with SO_LINGER 0, so every close of a peer
@@ -282,11 +401,66 @@ type caller struct {
 	// tls: calls go out with peer TLS. Only a plain call can meet a TLS
 	// listener's 400, so only then is that answer read as one.
 	tls bool
+	// wit is the witness's base URL, and adopted the witness incarnation
+	// this controller's pair counts (0 when none): with peer TLS, an
+	// answer from the witness to anything but a vote counts only from
+	// that incarnation's certificate (#710 2b; a vote reply is bound to
+	// its own, Elector.witnessBound).
+	wit     string
+	adopted func() uint64
+}
+
+// errWitnessInc: an answer from the witness to a call that is not a vote
+// came under the certificate of an incarnation the pair does not count.
+var errWitnessInc = errors.New("the witness answered as an incarnation this pair does not count (a rebuilt witness counts once both controllers adopt it)")
+
+// witnessCertInc reads the witness's certificate name, witness@<inc>, as
+// internal/peertls writes it (WitnessName: decimal, canonical).
+func witnessCertInc(cn string) (uint64, bool) {
+	s, ok := strings.CutPrefix(cn, "witness@")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(s, 10, 64)
+	if err != nil || strconv.FormatUint(n, 10) != s {
+		return 0, false
+	}
+	return n, true
+}
+
+// leafCN is the other end's certificate name on a TLS answer ("" when
+// none).
+func leafCN(cs *tls.ConnectionState) string {
+	if cs == nil || len(cs.PeerCertificates) == 0 {
+		return ""
+	}
+	return cs.PeerCertificates[0].Subject.CommonName
+}
+
+// witnessOpOK reports whether an answer from the witness under the
+// certificate named cn counts for a call that is not a vote: an
+// incarnation, not 0, and the one the pair counts once it counts one.
+func witnessOpOK(cn string, adopted uint64) bool {
+	inc, ok := witnessCertInc(cn)
+	return ok && inc != 0 && (adopted == 0 || inc == adopted)
 }
 
 // call sends one request with a deadline of d and returns the body of a
 // 200 answer, nil for a 204, or an error.
 func (c *caller) call(ctx context.Context, d time.Duration, method, url string, body []byte) ([]byte, error) {
+	b, _, err := c.callHeader(ctx, d, method, url, body)
+	return b, err
+}
+
+// callHeader is call with the answer's headers (nil when none came).
+func (c *caller) callHeader(ctx context.Context, d time.Duration, method, url string, body []byte) ([]byte, http.Header, error) {
+	b, h, _, err := c.callCert(ctx, d, method, url, body)
+	return b, h, err
+}
+
+// callCert is callHeader with the name on the answering end's
+// certificate ("" without peer TLS).
+func (c *caller) callCert(ctx context.Context, d time.Duration, method, url string, body []byte) ([]byte, http.Header, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
 	var rd io.Reader
@@ -295,7 +469,7 @@ func (c *caller) call(ctx context.Context, d time.Duration, method, url string, 
 	}
 	req, err := http.NewRequestWithContext(ctx, method, url, rd)
 	if err != nil {
-		return nil, err
+		return nil, nil, "", err
 	}
 	req.Header.Set(TokenHeader, c.token)
 	req.Header.Set(LeaseHeader, strconv.FormatInt(int64(c.lease), 10))
@@ -306,24 +480,45 @@ func (c *caller) call(ctx context.Context, d time.Duration, method, url string, 
 	resp, err := c.client.Do(req)
 	if err != nil {
 		c.noted(url, err)
-		return nil, err
+		return nil, nil, "", err
 	}
 	defer resp.Body.Close()
+	cn := leafCN(resp.TLS)
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxFrame))
 	if err == nil && !c.tls && resp.StatusCode == http.StatusBadRequest && bytes.Contains(b, []byte(httpsAnswer)) {
 		err = fmt.Errorf("%s %s: %w", method, url, errPeerSpeaksTLS)
 	}
+	if err == nil && c.tls && c.wit != "" && strings.HasPrefix(url, c.wit+Prefix) && !strings.HasSuffix(url, "/vote") &&
+		!witnessOpOK(cn, c.adoptedInc()) && !mut("witness_ops_any_inc") {
+		err = fmt.Errorf("%s %s: %w (its certificate names %s)", method, url, errWitnessInc, nonEmptyCN(cn))
+	}
 	c.noted(url, err)
 	switch {
 	case err != nil:
-		return nil, err
+		return nil, resp.Header, cn, err
 	case resp.StatusCode == http.StatusNoContent:
-		return nil, nil
+		return nil, resp.Header, cn, nil
 	case resp.StatusCode != http.StatusOK:
-		return nil, &statusError{code: resp.StatusCode, reason: resp.Header.Get(RefusedHeader),
-			msg: fmt.Sprintf("%s %s: %s: %s", method, url, resp.Status, bytes.TrimSpace(b))}
+		body := bytes.TrimSpace(b)
+		said := strings.ToValidUTF8(string(body[:min(len(body), maxRefusalText)]), "")
+		return nil, resp.Header, cn, &statusError{code: resp.StatusCode, reason: resp.Header.Get(RefusedHeader),
+			msg: fmt.Sprintf("%s %s: %s: %s", method, url, resp.Status, body), body: said}
 	}
-	return b, nil
+	return b, resp.Header, cn, nil
+}
+
+func (c *caller) adoptedInc() uint64 {
+	if c.adopted == nil {
+		return 0
+	}
+	return c.adopted()
+}
+
+func nonEmptyCN(cn string) string {
+	if cn == "" {
+		return "nothing"
+	}
+	return cn
 }
 
 func (c *caller) noted(url string, err error) {
@@ -371,3 +566,7 @@ func refuse(w http.ResponseWriter, why, msg string) {
 	w.Header().Set(RefusedHeader, why)
 	http.Error(w, msg, http.StatusConflict)
 }
+
+// CloseIdle closes the elector's kept peer connections: after a peer's pin
+// is dropped (#710 per-box keys), its next call meets the new key.
+func (e *Elector) CloseIdle() { e.call.client.CloseIdleConnections() }

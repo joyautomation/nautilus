@@ -124,6 +124,7 @@ export default defineConfig({
             { slug: 'guides/alarm-management' },
             { slug: 'guides/notes' },
             { slug: 'guides/checkout' },
+            { slug: 'guides/cameras' },
             { slug: 'guides/historian' },
           ],
         },
@@ -158,6 +159,7 @@ export default defineConfig({
             { slug: 'guides/plcnext' },
             { slug: 'guides/groov-epic' },
             { slug: 'guides/verdin' },
+            { slug: 'guides/siemens' },
           ],
         },
         {

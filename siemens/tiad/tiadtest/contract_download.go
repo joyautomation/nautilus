@@ -35,63 +35,66 @@ var ResolveCases = []struct {
 	ConfigurationPassword bool
 	Unanswered, Declined  string
 }{
-	{"nothing asked", nil, tiad.Decisions{}, false, false, "", ""},
-	{"stop unanswered", []tiad.Question{qStop}, tiad.Decisions{}, false, false, "stop-cpu", ""},
-	{"stop yes", []tiad.Question{qStop}, tiad.Decisions{StopCPU: tiad.Yes()}, false, false, "", ""},
-	{"stop no", []tiad.Question{qStop}, tiad.Decisions{StopCPU: tiad.No()}, false, false, "", "stop-cpu"},
-	{"overwrite unanswered", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.Yes()}, false, false, "overwrite", ""},
-	{"overwrite no", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{Overwrite: tiad.No()}, false, false, "", "overwrite"},
+	{"nothing asked", nil, tiad.Decisions{ResetData: tiad.Yes()}, false, false, "", ""},
+	{"stop unanswered", []tiad.Question{qStop}, tiad.Decisions{ResetData: tiad.Yes()}, false, false, "stop-cpu", ""},
+	{"stop yes", []tiad.Question{qStop}, tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes()}, false, false, "", ""},
+	{"stop no", []tiad.Question{qStop}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No()}, false, false, "", "stop-cpu"},
+	{"overwrite unanswered", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes()}, false, false, "overwrite", ""},
+	{"overwrite no", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{ResetData: tiad.Yes(), Overwrite: tiad.No()}, false, false, "", "overwrite"},
 	// TIA's ConsistentBlocksDownload: asked after stop-cpu by a real
 	// software download (#789 walk-past window). Only its own decision
 	// answers it, never overwrite.
-	{"consistent-download unanswered", []tiad.Question{{ID: tiad.QuestionConsistentDownload}}, tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes()}, false, false, "consistent-download", ""},
-	{"consistent-download no", []tiad.Question{{ID: tiad.QuestionConsistentDownload}}, tiad.Decisions{ConsistentDownload: tiad.No()}, false, false, "", "consistent-download"},
+	{"consistent-download unanswered", []tiad.Question{{ID: tiad.QuestionConsistentDownload}}, tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes()}, false, false, "consistent-download", ""},
+	{"consistent-download no", []tiad.Question{{ID: tiad.QuestionConsistentDownload}}, tiad.Decisions{ResetData: tiad.Yes(), ConsistentDownload: tiad.No()}, false, false, "", "consistent-download"},
 	{"stop, then consistent-download yes", []tiad.Question{qStop, {ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionStartAfter}},
-		tiad.Decisions{StopCPU: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes()}, false, false, "", ""},
+		tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes()}, false, false, "", ""},
 	// The rest of the software-load family (#789 restart window): each
 	// only by its own decision. The bench spec sets access control
 	// (fullAccessUser), so keeping the CPU's users is refused there.
-	{"alarm-texts unanswered", []tiad.Question{{ID: tiad.QuestionAlarmTexts}}, tiad.Decisions{ConsistentDownload: tiad.Yes(), AllBlocks: tiad.Yes()}, false, false, "alarm-texts", ""},
-	{"alarm-texts yes", []tiad.Question{{ID: tiad.QuestionAlarmTexts}}, tiad.Decisions{AlarmTexts: tiad.Yes()}, false, false, "", ""},
-	{"all-blocks unanswered", []tiad.Question{{ID: tiad.QuestionAllBlocks}}, tiad.Decisions{ConsistentDownload: tiad.Yes(), AlarmTexts: tiad.Yes()}, false, false, "all-blocks", ""},
-	{"all-blocks no", []tiad.Question{{ID: tiad.QuestionAllBlocks}}, tiad.Decisions{AllBlocks: tiad.No()}, false, false, "", "all-blocks"},
-	{"identification-data load nothing", []tiad.Question{{ID: tiad.QuestionIdentificationData}}, tiad.Decisions{IdentificationDataLoadNothing: tiad.Yes()}, false, false, "", ""},
-	{"identification-data unanswered", []tiad.Question{{ID: tiad.QuestionIdentificationData}}, tiad.Decisions{StopCPU: tiad.Yes()}, false, false, "identification-data", ""},
-	{"user-management keep refused when the spec sets access control", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementKeepOnline: tiad.Yes()}, false, false, "user-management", ""},
-	{"user-management no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementKeepOnline: tiad.No()}, false, false, "", "user-management"},
+	{"alarm-texts unanswered", []tiad.Question{{ID: tiad.QuestionAlarmTexts}}, tiad.Decisions{ResetData: tiad.Yes(), ConsistentDownload: tiad.Yes(), AllBlocks: tiad.Yes()}, false, false, "alarm-texts", ""},
+	{"alarm-texts yes", []tiad.Question{{ID: tiad.QuestionAlarmTexts}}, tiad.Decisions{ResetData: tiad.Yes(), AlarmTexts: tiad.Yes()}, false, false, "", ""},
+	{"all-blocks unanswered", []tiad.Question{{ID: tiad.QuestionAllBlocks}}, tiad.Decisions{ResetData: tiad.Yes(), ConsistentDownload: tiad.Yes(), AlarmTexts: tiad.Yes()}, false, false, "all-blocks", ""},
+	{"all-blocks no", []tiad.Question{{ID: tiad.QuestionAllBlocks}}, tiad.Decisions{ResetData: tiad.Yes(), AllBlocks: tiad.No()}, false, false, "", "all-blocks"},
+	{"identification-data load nothing", []tiad.Question{{ID: tiad.QuestionIdentificationData}}, tiad.Decisions{ResetData: tiad.Yes(), IdentificationDataLoadNothing: tiad.Yes()}, false, false, "", ""},
+	{"identification-data unanswered", []tiad.Question{{ID: tiad.QuestionIdentificationData}}, tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes()}, false, false, "identification-data", ""},
+	{"user-management keep refused when the spec sets access control", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{ResetData: tiad.Yes(), UserManagementKeepOnline: tiad.Yes()}, false, false, "user-management", ""},
+	{"user-management no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{ResetData: tiad.Yes(), UserManagementKeepOnline: tiad.No()}, false, false, "", "user-management"},
 	// Resetting it to the project's: a software download is refused before
 	// TIA (CheckUserManagementReset: it loads no hardware); a no declines,
 	// keep's or reset's.
-	{"user-management reset refused", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementResetToProject: tiad.Yes()}, false, false, "user-management", ""},
-	{"user-management reset no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementResetToProject: tiad.No()}, false, false, "", "user-management"},
-	{"user-management keep no, reset no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementKeepOnline: tiad.No(), UserManagementResetToProject: tiad.No()}, false, false, "", "user-management"},
-	{"start-after no is stay in STOP", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{StartAfter: tiad.No()}, false, false, "", ""},
-	{"start-after unanswered", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{}, false, false, "start-after", ""},
-	{"reinit all agreed, any case", []tiad.Question{qReinit}, tiad.Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, false, "", ""},
-	{"reinit partly agreed", []tiad.Question{qReinit}, tiad.Decisions{Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
-	{"reinit unanswered", []tiad.Question{qReinit}, tiad.Decisions{}, false, false, "reinitialize", ""},
-	{"reinit naming nothing is never answered", []tiad.Question{{ID: tiad.QuestionReinitialize}}, tiad.Decisions{Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
-	{"cert matches, any case", []tiad.Question{qCert}, tiad.Decisions{TrustCertificate: "ab12"}, false, false, "", ""},
-	{"cert differs", []tiad.Question{qCert}, tiad.Decisions{TrustCertificate: "FFFF"}, false, false, "", "certificate"},
-	{"cert unanswered", []tiad.Question{qCert}, tiad.Decisions{}, false, false, "certificate", ""},
-	{"password from secret", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{}, true, false, "", ""},
-	{"password missing", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{}, false, false, "password", ""},
-	{"configuration password from its secret", []tiad.Question{qConfigPw}, tiad.Decisions{}, false, true, "", ""},
-	{"configuration password missing", []tiad.Question{qConfigPw}, tiad.Decisions{}, false, false, "configuration-password", ""},
+	{"user-management reset refused", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{ResetData: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}, false, false, "user-management", ""},
+	{"user-management reset no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{ResetData: tiad.Yes(), UserManagementResetToProject: tiad.No()}, false, false, "", "user-management"},
+	{"user-management keep no, reset no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{ResetData: tiad.Yes(), UserManagementKeepOnline: tiad.No(), UserManagementResetToProject: tiad.No()}, false, false, "", "user-management"},
+	{"start-after no is stay in STOP", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}, false, false, "", ""},
+	{"start-after unanswered", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{ResetData: tiad.Yes()}, false, false, "start-after", ""},
+	// TIA's reinitialize check names no data block (bench 1510SP,
+	// 2026-11-24): the consent to the reset answers it, whatever it
+	// names. Without the consent it is a gate miss (contractLayoutGate).
+	{"reinit with the consent and the stop", []tiad.Question{qReinit}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.Yes()}, false, false, "", ""},
+	{"reinit naming nothing, with the consent and the stop", []tiad.Question{{ID: tiad.QuestionReinitialize}}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.Yes()}, false, false, "", ""},
+	// Its yes is StopPlcAndReinitialize: never without the stop's consent.
+	{"reinit with the consent, no stop", []tiad.Question{qReinit}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No()}, false, false, "reinitialize", ""},
+	{"cert matches, any case", []tiad.Question{qCert}, tiad.Decisions{ResetData: tiad.Yes(), TrustCertificate: "ab12"}, false, false, "", ""},
+	{"cert differs", []tiad.Question{qCert}, tiad.Decisions{ResetData: tiad.Yes(), TrustCertificate: "FFFF"}, false, false, "", "certificate"},
+	{"cert unanswered", []tiad.Question{qCert}, tiad.Decisions{ResetData: tiad.Yes()}, false, false, "certificate", ""},
+	{"password from secret", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{ResetData: tiad.Yes()}, true, false, "", ""},
+	{"password missing", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{ResetData: tiad.Yes()}, false, false, "password", ""},
+	{"configuration password from its secret", []tiad.Question{qConfigPw}, tiad.Decisions{ResetData: tiad.Yes()}, false, true, "", ""},
+	{"configuration password missing", []tiad.Question{qConfigPw}, tiad.Decisions{ResetData: tiad.Yes()}, false, false, "configuration-password", ""},
 	// Each password answers its own question only, never the other's.
-	{"protection password never answers configuration-password", []tiad.Question{qConfigPw}, tiad.Decisions{}, true, false, "configuration-password", ""},
-	{"configuration password never answers password", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{}, false, true, "password", ""},
-	{"other never answered", []tiad.Question{{ID: tiad.QuestionOther, Message: "Something new"}}, tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}, true, false, "other", ""},
-	{"an unknown check is other", []tiad.Question{{ID: "new-in-v22"}}, tiad.Decisions{StopCPU: tiad.Yes()}, true, false, "other", ""},
+	{"protection password never answers configuration-password", []tiad.Question{qConfigPw}, tiad.Decisions{ResetData: tiad.Yes()}, true, false, "configuration-password", ""},
+	{"configuration password never answers password", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{ResetData: tiad.Yes()}, false, true, "password", ""},
+	{"other never answered", []tiad.Question{{ID: tiad.QuestionOther, Message: "Something new"}}, tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}, true, false, "other", ""},
+	{"an unknown check is other", []tiad.Question{{ID: "new-in-v22"}}, tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes()}, true, false, "other", ""},
 	// TIA asks one check at a time: the first not answered yes decides.
-	{"the first check decides: declined", []tiad.Question{qStop, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.No()}, false, false, "", "stop-cpu"},
-	{"the first check decides: unanswered", []tiad.Question{{ID: tiad.QuestionOverwrite}, qStop}, tiad.Decisions{StopCPU: tiad.No()}, false, false, "overwrite", ""},
-	{"a password first, then a refusal", []tiad.Question{{ID: tiad.QuestionPassword}, qStop}, tiad.Decisions{StopCPU: tiad.No()}, true, false, "", "stop-cpu"},
+	{"the first check decides: declined", []tiad.Question{qStop, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No()}, false, false, "", "stop-cpu"},
+	{"the first check decides: unanswered", []tiad.Question{{ID: tiad.QuestionOverwrite}, qStop}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No()}, false, false, "overwrite", ""},
+	{"a password first, then a refusal", []tiad.Question{{ID: tiad.QuestionPassword}, qStop}, tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No()}, true, false, "", "stop-cpu"},
 	// Start-after answered no changes nothing, so a refusal after it is
 	// still clean.
-	{"start-after no first, then a refusal", []tiad.Question{{ID: tiad.QuestionStartAfter}, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{StartAfter: tiad.No()}, false, false, "overwrite", ""},
+	{"start-after no first, then a refusal", []tiad.Question{{ID: tiad.QuestionStartAfter}, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}, false, false, "overwrite", ""},
 	{"all answered", []tiad.Question{qStop, qReinit, {ID: tiad.QuestionOverwrite}, {ID: tiad.QuestionStartAfter}, qCert, {ID: tiad.QuestionPassword}},
-		tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes(), Reinitialize: []string{"Tags", "Prog_DB"}, TrustCertificate: "AB12"}, true, false, "", ""},
+		tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes(), TrustCertificate: "AB12"}, true, false, "", ""},
 }
 
 var (
@@ -118,10 +121,17 @@ func contractDownload(t *testing.T, start Starter) {
 // imported and fully compiled: ready to download.
 func compiledBench(t *testing.T, start Starter, targets ...string) (Target, *tiad.Session) {
 	t.Helper()
-	if targets == nil {
-		targets = []string{benchCPU}
+	return compiledBenchWith(t, start, Config{Targets: targets})
+}
+
+// compiledBenchWith is compiledBench on an agent started with cfg (its
+// Targets the bench CPU when empty).
+func compiledBenchWith(t *testing.T, start Starter, cfg Config) (Target, *tiad.Session) {
+	t.Helper()
+	if cfg.Targets == nil {
+		cfg.Targets = []string{benchCPU}
 	}
-	a := start(t, Config{Targets: targets})
+	a := start(t, cfg)
 	c := a.Client()
 	installGSD(t, c)
 	s, err := c.CreateProject(ctx, "bench", BenchStation(), BenchSecrets)
@@ -192,7 +202,7 @@ func contractHardwareGate(t *testing.T, a Target, s *tiad.Session, req tiad.Down
 	}
 	// The time is tiad's alone: a request cannot send one.
 	body := map[string]any{"address": req.Address, "hardware": true, "software": true, "announced": true,
-		"decisions":   map[string]any{"acceptUnverifiedHardware": true, "stopCpu": true, "startAfter": true},
+		"decisions":   map[string]any{"resetData": true, "acceptUnverifiedHardware": true, "stopCpu": true, "startAfter": true},
 		"attestation": map[string]string{"by": att.By, "text": att.Text, "at": "2020-01-01T00:00:00.000Z"}}
 	if status, b := rawJSON(t, a.Client(), "POST", "/v1/sessions/"+s.ID+"/download", body); status != http.StatusBadRequest || !strings.Contains(string(b), "unknown field") {
 		t.Fatalf("an attestation with its own time: HTTP %d %s", status, b)
@@ -215,11 +225,11 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionStartAfter, Message: "Start the CPU after loading"}})
 	req := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}, Secrets: &tiad.Secrets{Protection: "protection-must-not-be-recorded", FullAccessPassword: BenchFullAccessPassword}}
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.Yes()}, Secrets: &tiad.Secrets{Protection: "protection-must-not-be-recorded", FullAccessPassword: BenchFullAccessPassword}}
 
 	// A dry run cancels at TIA's first check, so it sees only that one.
 	dry := req
-	dry.DryRun, dry.Decisions = true, tiad.Decisions{}
+	dry.DryRun, dry.Decisions = true, tiad.Decisions{ResetData: tiad.Yes()}
 	// It lists tiad's own unverified-hardware question too, unanswered.
 	dr, err := s.Download(ctx, dry)
 	if err != nil || !dr.DryRun || !dr.Provisional || !dr.QuestionsIncomplete || dr.Downloaded || questionIDs(dr.Questions) != "stop-cpu,unverified-hardware" || dr.Questions[0].Message != "The CPU must stop" {
@@ -253,7 +263,8 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	if cmp, err := s.CompareWith(ctx, BenchCompare); err != nil || !cmp.Equal || len(cmp.Differences) != 0 {
 		t.Fatalf("compare after the download: %+v %v", cmp, err)
 	}
-	want := []Loaded{{Address: benchCPU, Hardware: true, Software: true, State: "RUN"}}
+	// A hardware load takes the whole program (#1341).
+	want := []Loaded{{Address: benchCPU, Hardware: true, Software: true, State: "RUN", EveryBlock: true}}
 	if l := a.Loaded(t); !reflect.DeepEqual(l, want) {
 		t.Fatalf("loaded %+v, want %+v", l, want)
 	}
@@ -304,7 +315,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 func contractDownloadRules(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start, benchCPU, otherCPU)
 	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionReinitialize, Message: "reinit", Objects: []string{"naut_Main_DB"}}})
-	base := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}
+	base := tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}
 
 	// Whether the CPU starts after loading is decided before TIA is
 	// called; then TIA's checks come one at a time.
@@ -313,21 +324,49 @@ func contractDownloadRules(t *testing.T, start Starter) {
 		t.Fatalf("no decisions: %v %+v", err, tiad.Questions(err))
 	}
 	first := base
-	first.Decisions = tiad.Decisions{StartAfter: tiad.No()}
+	first.Decisions = tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}
 	if _, err := s.Download(ctx, first); tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "stop-cpu" {
 		t.Fatalf("only start-after decided: %v %+v", err, tiad.Questions(err))
 	}
+	// A stop yes without the consent to what it does to the data is
+	// refused before anything reaches the CPU (#1341), whatever else the
+	// request answers; consent no is no consent.
+	for _, consent := range []*bool{nil, tiad.No()} {
+		noConsent := base
+		noConsent.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: consent, StartAfter: tiad.No()}
+		noConsent.LayoutDigest = "a digest does not stand in for the consent"
+		if _, err := s.Download(ctx, noConsent); tiad.Kind(err) != tiad.KindBadRequest ||
+			!strings.Contains(err.Error(), "decisions.stopCpu yes needs decisions.resetData yes: a load may return data blocks to their start values, retained ones included, and with the CPU in STOP TIA does so without asking (#1341); nothing was sent to the CPU") {
+			t.Fatalf("a stop without the reset-data consent (%v): %v", consent, err)
+		}
+		// A download without it needs the digest of the layout check the
+		// caller showed (contractLayoutGate), before anything else is
+		// checked.
+		for _, d := range []tiad.Decisions{{ResetData: consent, StopCPU: tiad.No(), StartAfter: tiad.No()}, {ResetData: consent}} {
+			noStop := base
+			noStop.Decisions = d
+			if _, err := s.Download(ctx, noStop); tiad.Kind(err) != tiad.KindBadRequest ||
+				!strings.Contains(err.Error(), "a download without decisions.resetData needs layoutDigest, the digest of the data layout check the caller showed (POST /v1/sessions/{id}/layout)") {
+				t.Fatalf("a download without the reset-data consent or a digest (%v, %+v): %v", consent, d, err)
+			}
+		}
+	}
+	if n := len(a.Loaded(t)); n != 0 {
+		t.Fatalf("%d load(s) without the consent", n)
+	}
 	// Stop answered yes, then a check the request does not answer: TIA
 	// may already have stopped the CPU, so never a clean refusal.
+	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionOverwrite, Message: "overwrite"}})
 	acted := base
-	acted.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}
+	acted.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No()}
 	_, err = s.Download(ctx, acted)
 	if tiad.Kind(err) != tiad.KindOutcomeUnknown || strings.Join(tiad.ActingAnswers(err), ",") != "stop-cpu" ||
 		!strings.Contains(err.Error(), "TIA may already have stopped the CPU: check its mode and start it") || !strings.Contains(err.Error(), "compare before anything else") {
 		t.Fatalf("a cancel after an acting answer: %v, want outcome_unknown naming stop-cpu", err)
 	}
+	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionReinitialize, Message: "reinit", Objects: []string{"naut_Main_DB"}}})
 	no := base
-	no.Decisions = tiad.Decisions{StopCPU: tiad.No(), Reinitialize: []string{"naut_Main_DB"}, StartAfter: tiad.No()}
+	no.Decisions = tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No(), StartAfter: tiad.No()}
 	if _, err := s.Download(ctx, no); tiad.Kind(err) != tiad.KindDeclined || questionIDs(tiad.Questions(err)) != "stop-cpu" {
 		t.Fatalf("declined stop: %v", err)
 	}
@@ -349,7 +388,7 @@ func contractDownloadRules(t *testing.T, start Starter) {
 	// Whether the CPU starts after loading is always decided before
 	// loading, even when TIA would not ask.
 	yes := base
-	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), Reinitialize: []string{"naut_main_db"}}
+	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes()}
 	if _, err := s.Download(ctx, yes); tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "start-after" {
 		t.Fatalf("no startAfter decision: %v, want decision_required start-after", err)
 	}
@@ -362,7 +401,7 @@ func contractDownloadRules(t *testing.T, start Starter) {
 	}
 	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionStartAfter}})
 	stay := base
-	stay.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}
+	stay.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No()}
 	if r, err := s.Download(ctx, stay); err != nil || !r.Downloaded || r.State != "STOP" || r.StateSource != tiad.StateFromTIAMessage {
 		t.Fatalf("load and stay in STOP: %+v %v", r, err)
 	}
@@ -421,12 +460,15 @@ func contractResolve(t *testing.T, start Starter) {
 			t.Fatalf("%s: %d downloads loaded, want %d (a refusal must load nothing)", rc.Name, n, loads)
 		}
 	}
-	// A partly agreed reinitialize names the DBs not agreed.
+	// decisions.reinitialize is retired (#1341): TIA names no data block,
+	// so only the reset-data consent answers its check. A request that
+	// still sends it is refused, loading nothing.
 	a.SetQuestions(t, []tiad.Question{qReinit})
+	n := len(a.Loaded(t))
 	_, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true,
-		"decisions": map[string]any{"reinitialize": []string{"tags"}, "startAfter": false}, "secrets": benchLoginJSON})
-	if !strings.Contains(string(b), "(not agreed: Prog_DB)") {
-		t.Errorf("a partly agreed reinitialize: %s", b)
+		"decisions": map[string]any{"resetData": true, "reinitialize": []string{"tags"}, "startAfter": false}, "secrets": benchLoginJSON})
+	if !strings.Contains(string(b), "unknown field") || !strings.Contains(string(b), "reinitialize") || len(a.Loaded(t)) != n {
+		t.Errorf("a request that sends the retired decisions.reinitialize: %s", b)
 	}
 }
 
@@ -445,8 +487,10 @@ func contractDownloadRequest(t *testing.T, start Starter) {
 		{"no address", map[string]any{"software": true, "announced": true}, "not an IPv4 address"},
 		{"a name for an address", map[string]any{"address": "plc-1", "software": true, "announced": true}, "not an IPv4 address"},
 		{"a short address", map[string]any{"address": "192.0.2", "software": true, "announced": true}, "not an IPv4 address"},
-		{"announced as a string", map[string]any{"address": benchCPU, "software": true, "announced": "true"}, ""},
-		{"a decision as a string", map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCpu": "yes"}}, ""},
+		// (resetData given: a lenient parse must not pass on the #1341 gate
+		// alone.)
+		{"announced as a string", map[string]any{"address": benchCPU, "software": true, "announced": "true", "decisions": map[string]any{"resetData": true}}, ""},
+		{"a decision as a string", map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"resetData": true, "stopCpu": "yes"}}, ""},
 		{"an unknown decision", map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCPU": true}}, "unknown field"},
 		{"an unknown field", map[string]any{"address": benchCPU, "software": true, "announced": true, "force": true}, "unknown field"},
 		// A key twice must never be read as its last (or first) value.
@@ -462,7 +506,7 @@ func contractDownloadRequest(t *testing.T, start Starter) {
 	}
 	// Null decisions are no answers.
 	a.SetQuestions(t, []tiad.Question{qStop})
-	status, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCpu": nil}, "secrets": benchLoginJSON})
+	status, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"stopCpu": nil, "resetData": true}, "secrets": benchLoginJSON})
 	if status != http.StatusConflict || envelopeKind(b) != tiad.KindDecisionRequired {
 		t.Fatalf("a null decision: HTTP %d %s, want decision_required", status, b)
 	}
@@ -604,7 +648,7 @@ func contractExportUploadSave(t *testing.T, start Starter) {
 		t.Fatalf("a refused download loaded %+v", l)
 	}
 	// After an upload the project no longer matches its spec.
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
 		t.Fatalf("download after an upload: %v", err)
 	}
 	if p, err := s.Save(ctx, false); err != nil || p != "projects/bench/bench.ap21" {
@@ -653,7 +697,7 @@ func contractS2aSequence(t *testing.T, start Starter) {
 	if _, err := s.CompareWith(ctx, BenchCompare); err != nil {
 		t.Fatalf("compare after the upload: %v", err)
 	}
-	dl := AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	dl := AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
 		t.Fatalf("download straight after the upload: %v", err)
 	}
@@ -702,7 +746,7 @@ func contractOneCPU(t *testing.T, start Starter) {
 	// TIA opens one project at a time (#616), so a second project for the
 	// CPU cannot even open while the first is open: one CPU, one project.
 	one := mk("one")
-	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	if _, err := one.Download(ctx, dl); err != nil {
 		t.Fatalf("the first project's download: %v", err)
 	}

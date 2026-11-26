@@ -4,6 +4,29 @@
 
 ### Added
 
+- **Live video from an RTSP camera plays in the panel** (#724 slice 3b, kit side): a camera the controller marks
+  `hls` shows a muted `<video>` instead of the motion-JPEG `<img>`, started only by "Watch live" and stopped by Stop,
+  a hidden tab, leaving the page and any error (the viewer cap, the 15-minute limit and a camera that did not open
+  show the controller's words). The player is the kit's own (about 200 lines, Media Source Extensions; Safari and
+  iOS play HLS natively): no hls.js, so the playground's wasm does not grow. The measured bitrate is shown, or
+  "bitrate not measured" where the browser plays the stream itself. `Camera.hls`; new exports: `playHls`,
+  `parsePlaylist`, `codecFromInit`, `nextSegments`, `bufferTrim`, `liveSeek`, `BitrateMeter`, `LIVE_LIMIT`,
+  `CameraClient.hlsUrl`.
+
+- **A picture is kept when an alarm activates** (#724 slice 2, kit side): `<AlarmJournal>` shows a small thumbnail (a
+  link to the full picture, up to 3 cameras then "+N") on each `Activated` row that has one. Pictures are asked for
+  lazily, three requests at a time; a controller that keeps none (404) is asked once and the journal looks as
+  before, and a person without the `camera` permission sees one line, not one per row. `AlarmJournal` takes
+  `snapshotClient` (null: no request); `AlarmEvent.occurrence`. New exports: `SnapshotClient`, `parseSnaps`,
+  `thumbSplit`, `NO_SNAP_VIEW`.
+
+- **`<CameraPanel {asset}/>`: the controller's built-in cameras on an asset page** (#724 slice 1, kit side): a refreshing still
+  by default, live video only after "Watch live", with the measured bitrate and a Stop button; live stops when the
+  tab is hidden, on a stream error and when the page goes away. A failure shows the controller's own message (the
+  viewer cap, a camera that did not answer). With no cameras for the asset nothing is drawn. `AssetPage` takes
+  `cameraClient` (null: no request). New exports: `CameraPanel`, `CameraClient`, `formatBps`, `camerasFor`,
+  `watchingText`, `cameraNext`.
+
 - **`<CheckoutPage {force}/>` and `<CheckoutBanner {frame}/>`** (#719 slice 3): the I/O checkout, as the kit shows
   it: progress by area and device, Pass/Fail/Note per point, a forced output with typed confirmation, and a banner on
   every screen while a checkout force stands (the controller's countdown; "state unknown" on a quiet stream, never

@@ -1,0 +1,9 @@
+TYPE "naut_R"
+VERSION : 0.1
+   STRUCT
+      n : String;
+      v : REAL := 1.5;
+      hist : Array[0..2] of INT;
+   END_STRUCT;
+
+END_TYPE

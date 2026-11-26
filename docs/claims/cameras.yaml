@@ -1,0 +1,518 @@
+page: website/src/content/docs/guides/cameras.md
+title: Cameras
+prefix: CAM
+claims:
+  - id: CAM-001
+    claim: >-
+      Cameras are optional: a project with no `cameras:` section has no camera
+      routes (they answer like any unknown API path), and `naut check` says
+      nothing about them.
+    source: "#cameras"
+    tests:
+      - go ./server TestACameraRoutesAreNotMountedWithoutCameras
+      - go ./internal/project TestNoCamerasNoCheck
+
+  - id: CAM-002
+    claim: >-
+      The manifest refuses a camera row that cannot be right and names the row:
+      no id or kind, an id that is not URL-safe, a duplicate id, an unknown kind,
+      a missing url, a URL with a user name or password in it (the error never
+      repeats the password), a scheme the kind does not use, an interval or
+      viewer cap out of range, an unknown field. `naut check` refuses an asset
+      the plant does not have, and warns when a camera of a kind that is not
+      built in yet has no snapshot-url.
+    source: "#the-manifest"
+    tests:
+      - go ./camera TestValidateAcceptsGoodRowsAndNamesEachBadOne
+      - go ./internal/project TestACameraRowThatCannotBeRightRefusesTheManifest
+      - go ./internal/project TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant
+
+  - id: CAM-003
+    claim: >-
+      A camera's credentials are the secret `camera.<id>` of the secrets file;
+      `naut check` says which cameras need credentials the file lacks or holds
+      malformed (an error on the controller, a warning off it), without
+      repeating a credential; the controller reads the file when a picture is
+      asked for.
+    source: "#credentials"
+    tests:
+      - go ./cmd/naut TestCameraCredentialsAreCheckedAgainstTheSecretsFile
+      - go ./cmd/naut TestACameraProjectGetsOptionsAndOthersGetNone
+      - go ./alarm/oncall TestCameraSecretsAreKeyedByCameraID
+
+  - id: CAM-004
+    claim: >-
+      The controller fetches a still with the camera's credentials by basic or
+      digest authentication, sending nothing until the camera asks and then only
+      in the scheme it asked for (a digest camera never sees the password in
+      basic), refuses a snapshot that is larger than 4 MB or is not a JPEG,
+      refuses a redirect to another host, port or scheme, refuses a digest
+      algorithm it does not speak, and says why a camera did not answer without
+      its address, its own bytes or a credential, whichever error the connection
+      or the stream parser raised; `naut check` warns on credentials over http.
+    source: "#what-the-controller-does"
+    tests:
+      - go ./camera TestSnapshotFetchesWithBasicAndDigestCredentials
+      - go ./camera TestSnapshotRefusesWhatIsNotAStillAndNeverRepeatsCredentialsOrAddress
+      - go ./camera TestErrorsFromABrokenCameraCarryNeitherItsAddressNorItsBytes
+      - go ./camera TestCredentialsAreSentOnlyAfterTheChallengeAndInItsScheme
+      - go ./camera TestARedirectKeepsHostPortAndScheme
+      - go ./camera TestACredentialInAURLsQueryIsRefused
+      - go ./server TestCameraSnapshotsAreStillsFetchedWithTheControllersCredentials
+      - go ./internal/project TestCamerasAreReadFromTheManifestAndCheckedAgainstThePlant
+
+  - id: CAM-005
+    claim: >-
+      A motion-JPEG camera is relayed frame by frame: a part that is not a JPEG
+      ends the stream without reaching the browser, and a camera that is not a
+      motion-JPEG stream is said so; a virtual camera is drawn by the controller
+      and runs until the viewer leaves. A camera that refuses the controller is
+      a 502 with a reason, not an empty stream, and one that stops sending ends
+      the stream instead of holding its place.
+    source: "#what-the-controller-does"
+    tests:
+      - go ./camera TestRelayCarriesFramesAndEndsOnAPartThatIsNotAJPEG
+      - go ./camera TestRelayOfAVirtualCameraRunsUntilTheViewerLeaves
+      - go ./camera TestAStreamThatGoesQuietEnds
+      - go ./camera TestVirtualFrameIsAJPEGThatMoves
+      - go ./server TestACameraThatRefusesTheControllerIsA502NotAnEmptyStream
+
+  - id: CAM-006
+    claim: >-
+      Viewing a camera needs read and the `camera` permission, held by every
+      built-in role that reads and removable per custom role (`deny: [camera]`):
+      a person with read and not camera is listed the cameras with view false,
+      is refused a still or stream with 403 "no permission to view cameras" and
+      the camera is never contacted for them; a refused live view is journalled;
+      a person who may not read, or is not signed in, is refused before the camera
+      is named; the list tells no address, URL or credential; /api/me lists the
+      permission only on a project with cameras. The permission is
+      whole-controller, not area-scoped, and not elevated.
+    source: "#who-may-view"
+    tests:
+      - go ./server TestCamerasAreForReadersAndNeverTellAnAddress
+      - go ./server TestAPersonWithoutThePermissionToViewCamerasIsToldAndTheCameraIsNeverAsked
+      - go ./auth TestCameraIsItsOwnWholeControllerPermission
+      - go ./auth TestBuiltInRoles
+    note: >-
+      Read is whole-controller in the auth model, so a camera is not scoped to
+      an area; that is stated on the page, not hidden.
+
+  - id: CAM-007
+    claim: >-
+      A live view of a real camera is journalled when it starts and when it ends
+      (with the seconds, the bytes and why it ended), and a view that could not
+      start is journalled as an error. One camera's viewers are capped by
+      `max-viewers`, one person's streams by two and the controller's by four,
+      each refusal saying which cap, and a place is given back when the viewer
+      leaves. A view ends after its time limit and when the person signs out or
+      may no longer read; a still is fetched from a camera at most once a second
+      however many ask; a picture is answered never cached, never sniffed and
+      sandboxed; a HEAD is not a view.
+    source: "#who-may-view"
+    tests:
+      - go ./server TestACameraStreamIsLiveJournalledAndCapped
+      - go ./server TestALiveViewEndsWhenThePersonSignsOutOrTimeRunsOut
+      - go ./server TestStillsAreFetchedAtMostOnceASecondPerCamera
+      - go ./camera TestLimiterHoldsTheCameraCapTheControllersCapAndEachPersons
+      - go ./camera TestMeterIsTheAverageSinceTheFirstByte
+
+  - id: CAM-008
+    claim: >-
+      The asset page shows a still that refreshes by default, starts live video
+      only on a click and shows its bitrate, and stops live video when the tab
+      is hidden or the page closes.
+    source: "#on-the-asset-page"
+    tests: []
+    note: >-
+      The kit's pure parts (bitrate text, the mode of a feed, the client) are
+      tested in hmi/tests/camera.test.ts, which this inventory does not run;
+      the click, the hidden tab and the stop were seen in a browser against a
+      running controller with a virtual camera, not automated.
+
+  - id: CAM-009
+    claim: >-
+      The camera code is controller-only: the playground's wasm links none of
+      the camera package's fetch, relay or drawing code.
+    source: "#what-is-not-here-yet"
+    tests:
+      - go ./internal/contextmap TestWasmStaysFreeOfControllerCode
+      - go ./internal/contextmap TestContextMap
+
+  - id: CAM-010
+    claim: >-
+      `snapshot-on-alarm` and `snapshot-alarms` need a still (a kind that has
+      one or a snapshot-url), the camera-snapshots policy has bounds, and `naut
+      check` refuses a snapshot-alarms id the project does not have and warns
+      when no alarm is on the equipment a camera asks about.
+    source: "#pictures-when-an-alarm-activates"
+    tests:
+      - go ./camera TestSnapshotOnAlarmNeedsAStillAndThePolicyHasBounds
+      - go ./cmd/naut TestCameraAlarmChecks
+
+  - id: CAM-011
+    claim: >-
+      A new activation of an alarm on a camera's equipment (or named by it) keeps
+      a still, not a standing activation, an acknowledgement or an alarm with no
+      occurrence; only the controller that leads captures; a flood inside five
+      seconds shares one picture; each capture is journalled by the system, a
+      camera that did not answer is journalled as an error without its address,
+      and no picture is kept while the filesystem is under the floor.
+    source: "#pictures-when-an-alarm-activates"
+    tests:
+      - go ./server TestAnAlarmActivationKeepsTheStillOfTheCamerasThatWatchItsEquipment
+      - go ./server TestAnAlarmFloodSharesAPictureAndAStandbyKeepsNone
+      - go ./server TestNoPicturesAreKeptWhileTheDiskIsNearlyFull
+      - go ./server TestAFloodThatArrivesWhileTheFirstFetchRunsAllGetThePicture
+      - go ./server TestAnActivationThatFindsTheCapturePlacesBusyIsJournalled
+    note: >-
+      The capture is exercised through the notifier the alarm engine calls, with
+      events made by the test; the engine's own delivery to it is the existing
+      Notifier path.
+
+  - id: CAM-012
+    claim: >-
+      Pictures are kept under names the store makes (a name that is not one never
+      reaches the filesystem), by alarm occurrence in an append-only index that
+      survives a restart (a lost picture, a stray file and a torn last line are
+      dropped), in a 0700 directory with 0600 files; nothing is kept past
+      keep-days, whether or not anything is being written, nor past the count and
+      byte bounds (the bytes also capped at 5% of the free space at start); a
+      purge drops pictures and their index rows.
+    source: "#how-long-they-are-kept"
+    tests:
+      - go ./camera TestSnapshotsAreKeptByOccurrenceAndOnlyUnderNamesTheStoreMade
+      - go ./camera TestSnapshotsSurviveARestartAndDropWhatIsGone
+      - go ./camera TestSnapshotRetentionByCountBytesAndAge
+      - go ./camera TestSnapshotsNeverFillTheFilesystem
+      - go ./camera TestPurgeDropsPicturesAndTheirIndexRows
+      - go ./camera TestAFloodSharesOnePictureAndEachAlarmFindsIt
+      - go ./camera TestSharedPicturesKeepEveryOccurrenceAcrossARestart
+      - go ./camera TestTheByteBoundNeverTrimsEverythingAndASaveSaysWhenItDidNotKeep
+      - go ./camera TestAnOversizedPictureDeletesNothingAndTheCapCountsWhatIsHeld
+
+  - id: CAM-013
+    claim: >-
+      Seeing a kept picture needs read and the camera permission (403 "no
+      permission to view cameras" otherwise); a name that is not the store's is a
+      404; looking at a kept picture is journalled (camera.snapshot-view: the
+      person, the picture and its occurrences, once per person and picture in ten
+      minutes); a purge needs the config permission, says what it purges, and is
+      journalled; `naut camera snapshots purge` sends exactly that.
+    source: "#how-long-they-are-kept"
+    tests:
+      - go ./server TestKeptPicturesNeedThePermissionAndPurgeIsAudited
+      - go ./server TestPurgeRefusesDaysOutOfRange
+      - go ./cmd/naut TestCameraPurgeCommand
+
+  - id: CAM-014
+    claim: >-
+      The alarm journal shows a thumbnail of the picture kept for an activation,
+      asks lazily and only for rows shown, asks no more after a 404, and says once
+      that the person has no permission to view cameras.
+    source: "#pictures-when-an-alarm-activates"
+    tests: []
+    note: >-
+      The kit's client and helpers are tested in hmi/tests (not run by this
+      inventory); the journal's rendering was seen in a browser against a running
+      controller, not automated.
+
+  - id: CAM-015
+    claim: >-
+      The controller opens an RTSP camera over TCP (RTP interleaved on the
+      control connection; a camera that will send only UDP is refused), takes
+      its H.264 track from the session description (the parameter sets from the
+      description or, when it has none, from the stream), answers a credential
+      challenge only after the camera asks and in the scheme it asked for
+      (digest preferred; basic never sent to a camera that asked for digest),
+      refuses an absolute control URL on another host, and ends with a reason
+      that names neither the camera's address, its URL nor a credential when it
+      offers another codec or no video, has no such stream, gives no session,
+      answers in something that is not RTSP, sends an endless header block, a
+      line or a body past the bounds, goes quiet, or refuses the credentials.
+    source: "#live-video-of-an-rtsp-camera"
+    tests:
+      - go ./camera TestACameraBecomesAnHLSStreamOverRTSPInterleavedOnTCP
+      - go ./camera TestParameterSetsComeFromTheStreamWhenTheDescriptionHasNone
+      - go ./camera TestDigestAndBasicCredentialsAreAnsweredOnlyAfterTheChallengeAndNeverDowngraded
+      - go ./camera TestADigestCameraIsNotDowngradedToBasicMidSession
+      - go ./camera TestAChallengeThatIsNotUTF8DoesNotCrashTheController
+      - go ./camera TestAChallengeWithALineBreakInItIsRefused
+      - go ./camera TestAContentBaseOnAnotherHostIsIgnoredAndAControlWithSpacesIsNot
+      - go ./camera TestWhatACameraOffersThatCannotBeRelayedIsSaidInPlainWords
+      - go ./camera TestAHostileCameraEndsTheSessionWithoutGrowingMemoryOrNamingItself
+      - go ./camera TestACameraThatGoesQuietOrNeverAnswersPlayEndsTheSession
+      - go ./camera TestAControlURLNamingAnotherHostIsNotFollowed
+      - go ./camera TestDialErrorsNameNeitherTheAddressNorTheURL
+    note: >-
+      Tested against a fake camera serving a real H.264 clip (camera/cameratest),
+      and once against a real camera: a USB webcam (1280x720, 15 frames a second,
+      H.264 encoded by ffmpeg's libx264 at about 1.5 Mbit/s) served as RTSP on the
+      loopback address by a small live source, relayed by the controller and played in
+      Chrome for four minutes (see CAM-021). That run was by hand, is not a test, and
+      was one webcam, not an IP camera: a camera's own RTSP server, its credentials
+      and its quirks were not exercised.
+
+  - id: CAM-016
+    claim: >-
+      What a camera's bytes reach first is parsed with every length bounded and
+      refuses what it cannot read: the session description (size, lines, track),
+      the sequence parameter set (picture size from 1 to 8192 each way,
+      Exp-Golomb codes of bounded length), RTP packets (version, CSRC list,
+      extension, padding) and the reassembly of FU-A and STAP-A units into
+      pictures: a lost or reordered packet drops the picture it was in, a
+      fragment whose start was lost is never assembled, a NAL unit over 1 MB, a
+      picture over 2 MB or 1,024 NAL units is dropped, everything after a loss is
+      dropped until a whole keyframe (one that lost its first packets is never
+      emitted), an authentication challenge that is not UTF-8 is an error and
+      not a crash and one with a control character or quote in what is echoed
+      back (the realm, nonce, opaque) is refused, and the buffer never holds
+      more than one NAL unit and one picture.
+    source: "#what-a-stream-can-use"
+    tests:
+      - go ./camera TestTheClipIsRealH264
+      - go ./camera TestThePacketsOfARealClipBecomeItsPicturesAgainAtAnyPacketSize
+      - go ./camera TestALostPacketDropsItsPictureAndEverythingUntilAWholeKeyframe
+      - go ./camera TestAKeyframeThatLostItsFirstPacketsIsNeverEmitted
+      - go ./camera TestFragmentsOfANALWhoseStartWasLostAreNeverAssembled
+      - go ./camera TestAStreamWithoutMarkersStillEndsPicturesByTimestamp
+      - go ./camera TestHostilePacketsAreBoundedAndRefused
+    note: >-
+      Each parser also has a Go fuzz target (camera/fuzz_test.go: the session
+      description, the parameter set, RTP, the depacketiser, the RTSP response and
+      the segment name), seeded from the clip and the fake camera; `go test` runs
+      the seeds and any crasher kept in testdata/fuzz as regression tests, and
+      each was explored for a few minutes before review. The inventory cannot
+      name fuzz functions, so they are not listed as tests.
+
+  - id: CAM-017
+    claim: >-
+      The controller repackages the camera's H.264 as fragmented MP4 without
+      decoding it: an init segment (ftyp and moov with the picture size and the
+      parameter sets) and segments of whole pictures cut at keyframes about every
+      two seconds, listed in a sliding HLS playlist of six; pictures before the
+      first keyframe are dropped; a group of pictures that does not fit a 4 MB
+      segment (or 1,500 pictures, or 20 seconds) is dropped and, the second time,
+      ends the stream with a reason; the window never holds more than 16 MB; what
+      every stream holds (finished segments, the segment being built, the
+      picture waiting, a fixed 5 MB reserve) is counted against one budget shared by
+      all live streams (64 MB by default, camera-streams: memory-mb, 16 to 4096), and a stream
+      that would pass it ends with "camera stream too large for this controller";
+      a camera that changes its picture settings after the first picture ends the
+      stream, one whose in-band sets differ from its description's before it begins
+      is taken at its word; segment names are only the
+      ones the playlist makes.
+    source: "#what-a-stream-can-use"
+    tests:
+      - go ./camera TestTheClipBecomesAnHLSPlaylistOfWholeGOPSegments
+      - go ./camera TestFFprobeReadsTheSegmentsWhenItIsThere
+      - go ./camera TestPicturesBeforeTheFirstKeyframeAreDroppedAndAGroupThatDoesNotFitEndsTheStream
+      - go ./camera TestAFloodOfTinyPicturesIsBoundedInCountAndTime
+      - go ./camera TestTheLiveStreamsShareOneMemoryBudget
+      - go ./camera TestTheBudgetCountsWhatTheHeapHolds
+      - go ./camera TestStreamPolicyBounds
+      - go ./camera TestTheWindowAndItsBytesAreBounded
+      - go ./camera TestWaitReturnsWhenTheFirstSegmentsAreReadyOrTheStreamEnds
+      - go ./camera TestSegmentNamesAreOnlyTheOnesThePlaylistMakes
+    note: >-
+      The ffprobe test reads the segments with a real tool when one is on the
+      machine and is skipped otherwise (CI has none); the segments' playback in
+      a browser is the player's claim (CAM-020).
+
+  - id: CAM-018
+    claim: >-
+      A camera's RTSP session starts on the first request for its playlist and
+      stops 30 seconds after the last request, at most four sessions are open and
+      a camera that failed is not redialled for five seconds, bad RTP packets are losses and not
+      the end of the session, and the next request after a session ended starts a
+      fresh one.
+    source: "#live-video-of-an-rtsp-camera"
+    tests:
+      - go ./camera TestASessionIsStoppedWhenNobodyAsksForIt
+      - go ./camera TestAFailingCameraIsNotRedialledAtOnceAndSessionsAreCapped
+      - go ./camera TestBadRTPPacketsAreLossesNotTheEndOfTheSession
+
+  - id: CAM-019
+    claim: >-
+      An RTSP camera is served as HLS at /api/cameras/{id}/hls/ (playlist, init
+      segment, segments): every request checks read and the camera permission
+      afresh and the camera is never contacted for a person who may not view it;
+      a viewer is a lease kept alive by their requests and dropped after fifteen
+      seconds of silence, counted against the camera's, the person's and the
+      controller's caps; the view is journalled when the lease begins and ends
+      (with the bytes served and why it ended), a camera that cannot be relayed
+      is a 502 with a reason that names nothing of the camera, gives the place
+      back and is one error row in the journal, and a refused view is journalled, and a view ends at its time limit.
+    source: "#live-video-of-an-rtsp-camera"
+    tests:
+      - go ./server TestAnRTSPCameraIsPlayedAsHLSAndTheViewIsJournalledForItsLease
+      - go ./server TestHLSNeedsTheCameraPermissionAndNeverContactsTheCameraWithout
+      - go ./server TestAnRTSPCameraThatCannotBeRelayedIsAnErrorInWordsAndGivesBackItsPlace
+      - go ./server TestHLSViewersAreCappedByCameraPersonAndController
+      - go ./server TestAnHLSViewEndsAtItsTimeLimit
+    note: >-
+      The per-camera max-viewers cap is the Limiter's (CAM-007); this inventory
+      exercises the per-person cap on HLS leases. A revoked person is refused at
+      their next request, which the per-request permission check gives; it is not
+      separately tested with a live session.
+
+  - id: CAM-020
+    claim: >-
+      The asset page plays an RTSP camera's HLS stream (through Media Source
+      Extensions where the browser has them, Apple's managed variant on a recent iPhone, natively where it has only HLS),
+      starting only on a click, showing the measured bitrate and stopping on Stop,
+      when the tab is hidden and when the page goes away; a camera with no still
+      shows a placeholder and no broken image.
+    source: "#live-video-of-an-rtsp-camera"
+    tests: []
+    note: >-
+      The player's pure parts (playlist, codec string, which segments to fetch,
+      buffer trimming, the bitrate meter) and its flow against fakes are tested
+      in hmi/tests/hls.test.ts, which this inventory does not run. The player was
+      run in Chrome against a controller and a fake RTSP camera serving a real
+      H.264 clip: it plays through MSE and measures the bitrate. Not run: Safari
+      or an iPhone (the managed and native paths), Firefox and a hidden tab. It was
+      also run once for four minutes against live H.264 from a USB webcam (1280x720,
+      15 frames a second, about 1.5 Mbit/s, encoded by ffmpeg and served as RTSP on the
+      loopback address): the video played from the first segment at full size, the
+      playback clock kept pace with the wall clock, the buffer held 2 to 4 seconds, no
+      stall was seen, 15 of 1703 frames were dropped by the browser (0.9%), and the
+      meter read 1.7 to 2.2 Mbit/s. That was by hand and is not repeatable by this
+      inventory; the stream came from a webcam, not from an IP camera with its own RTSP server.
+
+  - id: CAM-021
+    claim: >-
+      An ONVIF camera is found from its device service address: the controller
+      asks for the media service, the profiles, and the stream and snapshot
+      addresses of the smallest H.264 profile (or the one the row names), keeps
+      the answer for ten minutes and a failure for five seconds, and then treats
+      the camera as an RTSP one with the same relay, caps and journal.
+    source: "#onvif-cameras"
+    tests:
+      - go ./camera TestAnONVIFDeviceIsResolvedToItsSubStreamOnTheManifestsHost
+      - go ./camera TestADeviceThatIsDownIsNotAskedAtEveryRequest
+      - go ./camera TestAnONVIFCameraStreamsThroughTheSameRelayAndAStillComesFromItsSnapshotAddress
+      - go ./camera TestAnONVIFCameraIsAnHLSCameraWithAStillAndPinsNoHostOfItsOwn
+
+  - id: CAM-022
+    claim: >-
+      What an ONVIF device answers is never followed: the host of every address
+      it returns is the manifest's, the scheme must be the one asked for, user
+      information is dropped, an https device's services stay https and a port the
+      device does not name is the manifest's, what one service asked for (basic or
+      digest) is not applied to another, answers over 1 MB, non-SOAP answers and DTD
+      entities are refused, a fault's reason is shown trimmed and without
+      control characters, and a profile token that is not plain is not used.
+      Credentials leave as a WS-Security digest (the device's own clock read
+      first), or in the HTTP scheme the device asks for, never in the clear
+      before it asks, and a refusal does not name the password.
+    source: "#onvif-cameras"
+    tests:
+      - go ./camera TestWhatAnONVIFDeviceSendsIsNeverTrustedOrFollowed
+      - go ./camera TestONVIFCredentialsGoOutAsADigestAndAWrongPasswordIsRefusedPlainly
+      - go ./camera TestADeviceReachedOverHTTPSIsNeverSentTheCredentialsOverHTTPAndKeepsItsPort
+      - go ./camera TestASnapshotAddressThatCouldNotBeAskedForIsNotRememberedAsNone
+      - go ./camera TestAPlayingStreamIsNotHeldUpWhenTheDeviceIsGoneAndItsAnswerExpired
+    note: >-
+      Run against a fake device only; no real ONVIF camera has been tried yet
+      (pending: a bench device, one that asks HTTP basic on its snapshot port,
+      a Profile-T device).
+
+  - id: CAM-023
+    claim: >-
+      A camera marked ptz: true is moved by people who hold the ptz permission
+      (whole-controller, elevated, the operator role and up, and only with the
+      camera permission too): a move is bounded to ten seconds and told to the
+      device with the same limit, the controller owns its stop (when the time is
+      up, when the move's answer was lost, after a failed preset, when a stop
+      overtook the move, and at shutdown), a stop needs only the camera
+      permission and no fresh password and never waits for a move or is refused
+      for being quick, moves are one at a time per camera, a preset is gone to
+      only if the device lists it, a refused request never reaches the camera,
+      and every request is journalled as camera.ptz (a stop as camera.ptz-stop).
+    source: "#pan-tilt-and-zoom"
+    tests:
+      - go ./camera TestAMoveIsBoundedToldToTheDeviceAndStoppedOnRequest
+      - go ./camera TestPresetsAreTheDevicesAndOnlyTheDevicesAreGoneTo
+      - go ./camera TestACameraThatIsNotMarkedPTZOrIsNotONVIFCannotBeMoved
+      - go ./server TestACameraIsMovedBoundedStoppedAndJournalled
+      - go ./server TestPTZRefusesWhatItShouldWithoutAskingTheCamera
+      - go ./server TestMovesCannotBeSentFasterThanOneAtATime
+      - go ./server TestAStopNeedsNeitherThePTZPermissionNorAFreshPassword
+      - go ./server TestAViewerMayStopACameraAndMayNotMoveIt
+      - go ./server TestAFailedRequestNeverCancelsTheStopOfAMoveAlreadyRunning
+      - go ./server TestAMoveWhoseAnswerWasLostIsStoppedAnyway
+      - go ./server TestAStopThatOvertakesItsMoveIsNotUndoneByIt
+    note: >-
+      Run against a fake device only; pending: a real pan and tilt camera.
+
+  - id: CAM-024
+    claim: >-
+      One elevation covers a session of moves: a browser sign-in whose password
+      is fresh pans again and again inside auth.elevation without being asked,
+      and is asked (401 with elevate) once it lapses, and nothing reaches the
+      camera then.
+    source: "#pan-tilt-and-zoom"
+    tests:
+      - go ./server TestOneElevationCoversASessionOfMoves
+      - go ./auth TestElevatedPermissions
+  - id: CAM-025
+    claim: >-
+      naut camera discover probes the local network for ONVIF cameras and lists
+      what answers with a manifest row to start from, changing nothing: answers
+      are treated as data (size-bounded, at most 256 devices and 16 from one
+      address, cleaned of control, format and separator characters, only http and https addresses without user information, a
+      device whose address is not on the host it answered from is flagged),
+      with nothing answering it says what to check, and the probe ends when
+      asked to or after its timeout.
+    source: "#finding-onvif-cameras-on-the-network"
+    tests:
+      - go ./camera TestDiscoveryAsksForVideoTransmittersAndListsWhatAnswers
+      - go ./camera TestWhatAnswersIsNeverTrustedOrAllowedToMoveATerminal
+      - go ./camera TestAFloodOfAnswersKeepsAtMostMaxFound
+      - go ./camera TestOneAddressCannotFillTheTableWithDevices
+      - go ./camera TestNoCharacterThatCanReorderOrRewriteATerminalSurvives
+      - go ./camera TestDiscoveryEndsWhenAskedToAndWithNoAnswersIsAnEmptyList
+      - go ./cmd/naut TestCameraDiscoverListsWhatAnsweredWithARowToStartFromAndChangesNothing
+      - go ./cmd/naut TestCameraDiscoverSaysWhatToDoWhenNothingAnswersAndWhenItCannotProbe
+    note: >-
+      Run against a loopback responder only (the multicast send is not exercised
+      by a test); pending: a real camera answering a real probe on a real network.
+
+  - id: CAM-026
+    claim: >-
+      The guide's CPU and memory figures for relaying RTSP to HLS are a
+      measurement, not a claim: one Verdin AM62 (two Cortex-A53 cores, a
+      PREEMPT_RT Yocto image), 1280x720 at 15 frames a second and about 1.7
+      Mbit/s, one and two streams watched, a 60-second window each.
+    source: "#what-the-cpu-cost-is"
+    tests: []
+    note: >-
+      Taken once by hand (the test harness is scratch: an in-tree fake RTSP
+      server replaying an ffmpeg-encoded test pattern over the LAN, a viewer
+      script fetching the playlist and segments, /proc sampled over ssh). No
+      test in this inventory runs it, and it is not a regression guard. The
+      guide's remark that naut run's screen build was still going at full use of
+      both cores after 90 s on that board (about 4 s on a desktop: 3.7 s wall and
+      48 s of CPU for the same build here) was seen once, by hand.
+
+  - id: CAM-027
+    claim: >-
+      In the playground only a kind: virtual camera is listed, with the row's id,
+      label and asset marked local and no address of any other row, and a project
+      with no virtual camera has no camera route; the kit draws a local camera as a
+      simulated test pattern on a canvas (bars, a sweeping line, the name, SIMULATED
+      and a clock) without asking for a still or a stream. No playground page shows
+      the camera yet: the camera panel is on the plant model's asset pages, which the
+      playground does not build.
+    source: "#in-the-playground"
+    tests:
+      - go ./cmd/naut-wasm TestThePlaygroundListsOnlyVirtualCamerasAndMarksThemLocal
+    note: >-
+      The pattern is tested in hmi/tests/testpattern.test.ts (which this inventory
+      does not run). The canvas component itself (VirtualCamera.svelte) was looked at once in
+      Chrome through a real controller's built screen; the wasm list route is
+      tested under Node. The whole playground tab was not run, and by reading
+      the code (cmd/naut-wasm startHMI builds only hmi apps and mimics) no playground
+      page renders the panel: showing it needs the asset pages in the playground,
+      which is follow-up work tracked on #714.

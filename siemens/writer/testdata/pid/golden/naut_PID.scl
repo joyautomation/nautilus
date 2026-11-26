@@ -1,0 +1,164 @@
+FUNCTION_BLOCK "naut_PID"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      AUTO : BOOL;
+      PV : LREAL;
+      SP : LREAL;
+      KP : LREAL;
+      KI : LREAL;
+      KD : LREAL;
+      CV_MAN : LREAL;
+      CV_MIN : LREAL;
+      CV_MAX : LREAL;
+      DIRECT : BOOL;
+      "DT" : LREAL;
+      "DB" : LREAL;
+      RESET : BOOL;
+   END_VAR
+   VAR_OUTPUT 
+      CV : LREAL;
+      ERR : LREAL;
+      SAT_HI : BOOL;
+      SAT_LO : BOOL;
+      P_TERM : LREAL;
+      I_TERM : LREAL;
+      D_TERM : LREAL;
+   END_VAR
+   VAR 
+      _mem : LREAL;
+      _called : BOOL;
+      _integral : LREAL;
+      _prevPV : LREAL;
+      _dFilt : LREAL;
+      _havePrev : BOOL;
+      _prevAuto : BOOL;
+   END_VAR
+   VAR_TEMP 
+      t_cvMin : LREAL;
+      t_cvMax : LREAL;
+      t_swap : LREAL;
+      t_meas : LREAL;
+      t_dt : LREAL;
+      t_errRaw : LREAL;
+      t_errPID : LREAL;
+      t_pTerm : LREAL;
+      t_rawDeriv : LREAL;
+      t_tf : LREAL;
+      t_alpha : LREAL;
+      t_derivSigned : LREAL;
+      t_dTerm : LREAL;
+      t_integral : LREAL;
+      t_candidate : LREAL;
+      t_unclamped : LREAL;
+      t_iTerm : LREAL;
+      t_cv : LREAL;
+   END_VAR
+
+BEGIN
+	// nautilus's PID (lang/ir/builtins_pid.go), written by naut: change it
+	// there, not here. LREAL pins and working values: nautilus computes in
+	// 64-bit floats, and a 32-bit integral would stop growing once err*dt
+	// fell below its last digit.
+	#t_cvMin := #CV_MIN;
+	#t_cvMax := #CV_MAX;
+	// CV_MIN and CV_MAX both 0 (unbound): the IEC 0..100 range.
+	IF #t_cvMin = 0.0 AND #t_cvMax = 0.0 THEN
+	    #t_cvMax := 100.0;
+	END_IF;
+	IF #t_cvMin > #t_cvMax THEN
+	    #t_swap := #t_cvMin;
+	    #t_cvMin := #t_cvMax;
+	    #t_cvMax := #t_swap;
+	END_IF;
+	// dt: DT when it is above 0, else the seconds since this instance's
+	// last call (0 on its first). RUNTIME runs on every call, as nautilus
+	// notes the call's time on every call.
+	#t_meas := RUNTIME(#_mem);
+	IF NOT #_called OR #t_meas < 0.0 THEN
+	    #t_meas := 0.0;
+	END_IF;
+	#_called := TRUE;
+	IF #"DT" > 0.0 THEN
+	    #t_dt := #"DT";
+	ELSE
+	    #t_dt := #t_meas;
+	END_IF;
+	// Error and deadband.
+	IF #DIRECT THEN
+	    #t_errRaw := #PV - #SP;
+	ELSE
+	    #t_errRaw := #SP - #PV;
+	END_IF;
+	#t_errPID := #t_errRaw;
+	IF #"DB" > 0.0 AND ABS(#t_errRaw) <= #"DB" THEN
+	    #t_errPID := 0.0;
+	END_IF;
+	#t_pTerm := #KP * #t_errPID;
+	// Derivative on PV, first-order filtered (N = 10).
+	#t_rawDeriv := 0.0;
+	IF #_havePrev AND #t_dt > 0.0 THEN
+	    #t_rawDeriv := (#PV - #_prevPV) / #t_dt;
+	END_IF;
+	IF #KD > 0.0 AND #t_dt > 0.0 THEN
+	    #t_tf := #KD / 10.0;
+	    #t_alpha := #t_dt / (#t_tf + #t_dt);
+	    #_dFilt := #_dFilt + #t_alpha * (#t_rawDeriv - #_dFilt);
+	ELSE
+	    #_dFilt := #t_rawDeriv;
+	END_IF;
+	#_prevPV := #PV;
+	#_havePrev := TRUE;
+	#t_derivSigned := #_dFilt;
+	IF NOT #DIRECT THEN
+	    #t_derivSigned := -#_dFilt;
+	END_IF;
+	#t_dTerm := #KP * #KD * #t_derivSigned;
+	// Integral: MANUAL back-solves it so that P+I+D equals CV_MAN
+	// (bumpless); AUTO integrates, except on the first scan after MANUAL
+	// and while the unclamped CV is past a limit the error pushes towards.
+	#t_integral := #_integral;
+	IF NOT #AUTO THEN
+	    IF #KP <> 0.0 AND #KI <> 0.0 THEN
+	        #t_integral := (#CV_MAN - #t_pTerm - #t_dTerm) / (#KP * #KI);
+	    ELSE
+	        #t_integral := 0.0;
+	    END_IF;
+	ELSIF #KI <> 0.0 AND #t_dt > 0.0 AND #_prevAuto THEN
+	    #t_candidate := #t_integral + #t_errPID * #t_dt;
+	    #t_unclamped := #t_pTerm + #KP * #KI * #t_candidate + #t_dTerm;
+	    IF #t_unclamped > #t_cvMax AND #t_errPID > 0.0 THEN
+	        ;
+	    ELSIF #t_unclamped < #t_cvMin AND #t_errPID < 0.0 THEN
+	        ;
+	    ELSE
+	        #t_integral := #t_candidate;
+	    END_IF;
+	END_IF;
+	IF #RESET THEN
+	    #t_integral := 0.0;
+	END_IF;
+	#_integral := #t_integral;
+	#_prevAuto := #AUTO;
+	#t_iTerm := #KP * #KI * #t_integral;
+	// CV, clamped.
+	IF #AUTO THEN
+	    #t_cv := #t_pTerm + #t_iTerm + #t_dTerm;
+	ELSE
+	    #t_cv := #CV_MAN;
+	END_IF;
+	#SAT_HI := FALSE;
+	#SAT_LO := FALSE;
+	IF #t_cv > #t_cvMax THEN
+	    #t_cv := #t_cvMax;
+	    #SAT_HI := TRUE;
+	ELSIF #t_cv < #t_cvMin THEN
+	    #t_cv := #t_cvMin;
+	    #SAT_LO := TRUE;
+	END_IF;
+	#CV := #t_cv;
+	#ERR := #t_errRaw;
+	#P_TERM := #t_pTerm;
+	#I_TERM := #t_iTerm;
+	#D_TERM := #t_dTerm;
+END_FUNCTION_BLOCK

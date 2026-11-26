@@ -134,18 +134,32 @@ namespace Tiad.Test
                 T("OwnershipReadsEveryHeader", OwnershipReadsEveryHeader),
                 T("OwnershipRefusesABlockOutsideTheGroup", OwnershipRefusesABlockOutsideTheGroup),
                 T("OwnershipSeesAChangeOutsideTheGroup", OwnershipSeesAChangeOutsideTheGroup),
+                T("OwnershipRefusesADataTypeOutsideTheGroup", OwnershipRefusesADataTypeOutsideTheGroup),
+                T("OwnershipPrunesOnlyPrefixedObjects", OwnershipPrunesOnlyPrefixedObjects),
                 T("CyclicObsReadsAndRefuses", CyclicObsReadsAndRefuses),
                 T("CyclicObsMatchSources", CyclicObsMatchSources),
                 T("CyclicObsRefuseTheSystemConstantClash", CyclicObsRefuseTheSystemConstantClash),
                 T("CyclicObsPlan", CyclicObsPlan),
                 T("CyclicObsVerifyAndXml", CyclicObsVerifyAndXml),
                 T("KeptDevicesNeedANamedYes", KeptDevicesNeedANamedYes),
+                T("StopNeedsTheResetDataConsent", StopNeedsTheResetDataConsent),
+                T("LayoutReadsTheRootAttributeList", LayoutReadsTheRootAttributeList),
+                T("LayoutDiffNamesTheDataBlocks", LayoutDiffNamesTheDataBlocks),
+                T("LayoutDigestNamesTheExactLayout", LayoutDigestNamesTheExactLayout),
+                T("LayoutRecordIsTheBaseline", LayoutRecordIsTheBaseline),
+                T("LayoutDigestMatchesTheGoCopy", LayoutDigestMatchesTheGoCopy),
+                T("UntouchedRuleKeepsOnlyReads", UntouchedRuleKeepsOnlyReads),
+                T("RouterHookSeesEveryMatchedRoute", RouterHookSeesEveryMatchedRoute),
+                T("AddedKindsNeedNoConsent", AddedKindsNeedNoConsent),
+                T("AdoptBaselineIsNamedByItsObjects", AdoptBaselineIsNamedByItsObjects),
+                T("ReinitializeNeedsTheConsent", ReinitializeNeedsTheConsent),
                 T("ProtectionStepsHappyPaths", ProtectionStepsHappyPaths),
                 T("ProtectionStepsStranded", ProtectionStepsStranded),
                 T("ProtectionStepsReadBack", ProtectionStepsReadBack),
                 T("AccessPlan", AccessPlan),
                 T("AccessStepsNewCpu", AccessStepsNewCpu),
                 T("AccessStepsKeptCpu", AccessStepsKeptCpu),
+                T("TurnOnCheck", TurnOnCheck),
                 T("AccessStepsReadBack", AccessStepsReadBack),
                 T("AccessPrepare", AccessPrepare),
                 T("AccessRecordsKnownAnswer", AccessRecordsKnownAnswer),
@@ -2004,7 +2018,7 @@ namespace Tiad.Test
         static void CompareIs(CompareNode tree, List<ProjectBlock> blocks, bool equal, string diffs, string what)
         {
             var l = new List<Difference>();
-            Eq(TiaNames.CompareEqual(tree, blocks, l), equal, what + " equal");
+            Eq(TiaNames.CompareEqual(tree, blocks, null, l), equal, what + " equal");
             Eq(Diffs(l), diffs, what + " differences");
         }
 
@@ -2069,8 +2083,32 @@ namespace Tiad.Test
 
             // The decision adds to what is already there and reads only that.
             var l = new List<Difference> { new Difference { Object = "earlier", State = "different" } };
-            Eq(TiaNames.CompareEqual(BenchTree(), MainOnly(), l), true, "an equal tree with earlier entries");
+            Eq(TiaNames.CompareEqual(BenchTree(), MainOnly(), null, l), true, "an equal tree with earlier entries");
             Eq(l.Count, 1, "an equal tree adds nothing");
+
+            // D1b: the import group's data types are required by name (the
+            // bare name, TypeLabel, a guess until the bench shows one). A
+            // wrong guess can only refuse: a missing type's element is in a
+            // non-identical state, and one the tree leaves out is not
+            // compared. Customer types are not required, as before.
+            var naut = new List<ProjectBlock> { new ProjectBlock { Name = "naut_R", Type = "PlcStruct", Group = "nautilus", DataType = true } };
+            Func<CompareNode, string> typed = delegate(CompareNode tree)
+            {
+                var d = new List<Difference>();
+                bool eq = TiaNames.CompareEqual(tree, MainOnly(), naut, d);
+                return eq + " " + Diffs(d);
+            };
+            Eq(typed(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"),
+                Cmp("PLC data types", "FolderContentsIdentical", Cmp("nautilus", "FolderContentsIdentical", Cmp("naut_R", "ObjectsIdentical"))))), "True ", "the group's type identical");
+            Eq(typed(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("PLC data types", "FolderContentsIdentical"))),
+                "False naut_R (data type): not compared", "the group's type left out of the tree");
+            Eq(typed(Cmp("PLC_1", "FolderContentsDifferent", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("PLC data types", "FolderContentsDifferent", Cmp("naut_R", "RightMissing")))),
+                "False naut_R: only offline", "the group's type missing on the CPU");
+            Eq(typed(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"),
+                Cmp("PLC data types", "FolderContentsIdentical", Cmp("naut_R [UDT]", "ObjectsIdentical")))), "False naut_R (data type): not compared", "a label other than the guess refuses");
+            var none = new List<Difference>();
+            Eq(TiaNames.CompareEqual(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("PLC data types", "FolderContentsIdentical")), MainOnly(), null, none),
+                true, "no import group: no type required, as before");
         }
 
         // CompareSeesEveryBlock: #789 stage 3 gate. An equal compare must

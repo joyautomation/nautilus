@@ -24,6 +24,11 @@ namespace Tiad
         // InDoubt marks a failure inside a download TIA had begun: the CPU
         // may or may not be loaded, so the agent answers outcome_unknown.
         public readonly bool InDoubt;
+        // OutsideGroup marks an import that TIA answered with an object
+        // outside the group asked (ITia.ImportSoftware): it replaced a
+        // same-named object where it sits, so the session stays unusable
+        // whatever a compare after it shows.
+        public bool OutsideGroup;
 
         public TiaException(string message) : base(message)
         {
@@ -43,6 +48,9 @@ namespace Tiad
     {
         public string Path = "";     // request form, relative to the work dir
         public string FullPath = "";
+        // DataTypes marks a source that declares data types only
+        // (Ownership.TypeSources): it generates into the data types' group.
+        public bool DataTypes;
     }
 
     public sealed class SourceResult
@@ -93,6 +101,10 @@ namespace Tiad
         // Obs is what the import did for each cyclic interrupt OB the
         // request asked for (CyclicObs.Plan), the agent's own.
         public List<OBStep> Obs = new List<OBStep>();
+        // Foreign is every program block outside the group after the
+        // import (Ownership.Foreign): what a download loads besides
+        // nautilus's own (#1326). The agent sets it, never TIA's side.
+        public List<ProjectBlock> Foreign = new List<ProjectBlock>();
 
         public Obj ToJson()
         {
@@ -100,9 +112,21 @@ namespace Tiad
             foreach (var r in Results) rs.Add(r.ToJson());
             var bs = new List<object>();
             foreach (var b in Blocks) bs.Add(b.ToJson());
+            var fs = new List<object>();
+            foreach (var b in Foreign)
+            {
+                var f = new Obj();
+                f["name"] = b.Name;
+                f["kind"] = Ownership.KindOf(b);
+                f["number"] = b.Number;
+                f["group"] = b.Group ?? "";
+                if (b.DataType) f["dataType"] = true;
+                fs.Add(f);
+            }
             var o = new Obj();
             o["results"] = rs;
             o["blocks"] = bs;
+            o["foreign"] = fs;
             if (Obs.Count > 0)
             {
                 var os = new List<object>();
@@ -206,8 +230,16 @@ namespace Tiad
         // cpu.accessControl (AccessSteps.Run), then webServer and its
         // users (WebSteps.Run, after access control). notes gets what the caller
         // should know besides the changes; made collects what it made in
-        // the project's users and roles, as soon as it is made.
-        void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made);
+        // the project's users and roles, as soon as it is made. turnOn
+        // turns a kept CPU's access control on when it reads "Disabled"
+        // (accessControlTurnOn, TurnOnRule; the agent checked it first).
+        void ApplyStation(object project, Station next, string decision, Secrets secrets, bool turnOn, List<string> notes, AccessMade made);
+
+        // ReadTurnOn reads what TurnOnRule.Check needs of the project
+        // before an apply turns its kept CPU's access control on: its
+        // local users, and its anonymous user (active, its roles and their
+        // runtime rights on the project's CPU).
+        TurnOnFacts ReadTurnOn(object project);
 
         // ReadPolicy is the project's password policy for local users.
         PasswordPolicy ReadPolicy(object project);
@@ -232,15 +264,34 @@ namespace Tiad
         // before any write, so such a refusal leaves the session as it was.
         string CannotApply(Station next);
 
-        // ImportSoftware generates blocks from sources into group; with
-        // prune, it deletes blocks in group that no source produced. TIA
-        // replaces a same-named block outside group too: the agent checks
-        // first (Ownership), with Blocks.
-        SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune);
+        // ImportSoftware generates blocks from sources into group, and a
+        // source marked DataTypes into the PLC data types' user group of the
+        // same name (made when it is not there); with prune, it deletes the
+        // blocks in the group that no source produced, and with pruneTypes
+        // then the data types too (the agent sets it only when the caller
+        // sent prunePrefix: an older caller's prune never deletes data
+        // types). It fails (TiaException) when TIA hands back an object
+        // that is not a block in the block group or a data type in the data
+        // types' group: TIA replaces a same-named object where it sits. The
+        // agent checks first (Ownership), with Blocks and Types, and the
+        // result's Blocks lists the group's blocks and data types (UDT).
+        SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune, bool pruneTypes);
 
         // Blocks is every program block the project holds, in every block
         // group, each with its group (ProjectBlock.Group). It reads only.
         List<ProjectBlock> Blocks(object project);
+
+        // Types is every PLC data type the project holds, in every data
+        // types group however deep, each with its group (a path from the
+        // data types' root), DataType set and its modified time. It reads
+        // only.
+        List<ProjectBlock> Types(object project);
+
+        // Layout is every program block and PLC data type the project
+        // holds, in every group, each read from its XML export
+        // (LayoutRule.FromExport); one that does not export is unreadable,
+        // never left out. It reads only (#1341).
+        List<LayoutObject> Layout(object project);
 
         // ImportBlock imports one block's SimaticML (CyclicObs.Xml) into
         // group, making the group when it is not there.
@@ -251,6 +302,25 @@ namespace Tiad
         void DeleteBlock(object project, string group, string name);
 
         CompileResult Compile(object project, bool hardware, bool software);
+
+        // HoldOnline takes the project online to its CPU at address and
+        // keeps it online, so TIA's window shows the CPU's online state and
+        // its online/offline compare: it never loads, compares or reads
+        // anything itself. TIA's questions going online are answered as a
+        // compare's are (use). It returns TIA's online state. The agent
+        // asks it only of a TIA started with its user interface.
+        // ReleaseOnline takes it offline again; it does nothing for a
+        // project that is not held online. CloseProject goes offline first
+        // for a project still held online.
+        string HoldOnline(object project, string address, LoginUse use);
+
+        void ReleaseOnline(object project);
+
+        // Show opens the block named name, in group (a ProjectBlock.Group
+        // the agent read with Blocks), in TIA Portal's editor. The agent
+        // asks it only of a TIA started with its user interface
+        // (Config.Ui). It changes nothing in the project.
+        void Show(object project, string group, string name);
 
         // Download loads the project into the CPU at address, never at
         // any address of the project's own. TIA asks its pre-download
@@ -272,7 +342,13 @@ namespace Tiad
         // it whether the download logged on before TIA asks its
         // user-management check (UserManagementRule.Gate.At), and whether
         // a compare logged on (InstanceLogons).
-        DownloadOutcome Download(object project, string address, bool hardware, bool software,
+        //
+        // everyBlock loads the whole PLC program (DownloadOptions.Software),
+        // which stops the CPU and returns every data block to its start
+        // values; otherwise only what changed loads
+        // (DownloadOptions.SoftwareOnlyChanges), which keeps the CPU's data
+        // where no data block's layout changed (#1341, bench 1510SP).
+        DownloadOutcome Download(object project, string address, bool hardware, bool software, bool everyBlock,
             Secrets secrets, bool? startAfter, Func<Question, Answer> answer, LoginUse use);
 
         // Compare compares the project's PLC software with the CPU at

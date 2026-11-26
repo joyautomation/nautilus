@@ -1,0 +1,145 @@
+FUNCTION_BLOCK "naut_SfcAltPriority"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      _S_Idle_X : BOOL := TRUE;
+      _S_X_X : BOOL;
+      _S_Y_X : BOOL;
+      _S_W_X : BOOL;
+      _S_Z_X : BOOL;
+      _S_Ghost_X : BOOL;
+      _en_t_dead : BOOL;
+      _f_t_dead : BOOL;
+      _en_t_x : BOOL;
+      _f_t_x : BOOL;
+      _en_t_y : BOOL;
+      _f_t_y : BOOL;
+      _en_t_w : BOOL;
+      _f_t_w : BOOL;
+      _en_t_xr : BOOL;
+      _f_t_xr : BOOL;
+      _en_t_yr : BOOL;
+      _f_t_yr : BOOL;
+      _en_t_wr : BOOL;
+      _f_t_wr : BOOL;
+      _en_t_zg : BOOL;
+      _f_t_zg : BOOL;
+      _en_t_gi : BOOL;
+      _f_t_gi : BOOL;
+      _act_sfc_Idle_lvl : BOOL;
+      _act_sfc_X_lvl : BOOL;
+      _act_sfc_Y_lvl : BOOL;
+      _act_sfc_W_lvl : BOOL;
+      _act_sfc_Z_lvl : BOOL;
+   END_VAR
+
+BEGIN
+	#_en_t_dead := #_S_Idle_X AND #_S_Ghost_X AND TRUE;
+	#_en_t_x := #_S_Idle_X AND "naut_Tags".a;
+	#_en_t_y := #_S_Idle_X AND "naut_Tags".b;
+	#_en_t_w := #_S_Idle_X AND "naut_Tags".c;
+	#_en_t_xr := #_S_X_X AND "naut_Tags".reset;
+	#_en_t_yr := #_S_Y_X AND "naut_Tags".reset;
+	#_en_t_wr := #_S_W_X AND "naut_Tags".reset;
+	#_en_t_zg := #_S_Z_X AND TRUE;
+	#_en_t_gi := #_S_Ghost_X AND TRUE;
+	#_f_t_dead := #_en_t_dead;
+	#_f_t_x := #_en_t_x AND NOT #_f_t_dead;
+	#_f_t_y := #_en_t_y AND NOT (#_f_t_dead OR #_f_t_x);
+	#_f_t_w := #_en_t_w AND NOT (#_f_t_dead OR #_f_t_x OR #_f_t_y);
+	#_f_t_xr := #_en_t_xr;
+	#_f_t_yr := #_en_t_yr;
+	#_f_t_wr := #_en_t_wr;
+	#_f_t_zg := #_en_t_zg;
+	#_f_t_gi := #_en_t_gi AND NOT #_f_t_dead;
+	IF #_f_t_dead THEN
+		#_S_Idle_X := FALSE;
+		#_S_Ghost_X := FALSE;
+	END_IF;
+	IF #_f_t_x THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_y THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_w THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_xr THEN
+		#_S_X_X := FALSE;
+	END_IF;
+	IF #_f_t_yr THEN
+		#_S_Y_X := FALSE;
+	END_IF;
+	IF #_f_t_wr THEN
+		#_S_W_X := FALSE;
+	END_IF;
+	IF #_f_t_zg THEN
+		#_S_Z_X := FALSE;
+	END_IF;
+	IF #_f_t_gi THEN
+		#_S_Ghost_X := FALSE;
+	END_IF;
+	IF #_f_t_dead THEN
+		#_S_Z_X := TRUE;
+	END_IF;
+	IF #_f_t_x THEN
+		#_S_X_X := TRUE;
+	END_IF;
+	IF #_f_t_y THEN
+		#_S_Y_X := TRUE;
+	END_IF;
+	IF #_f_t_w THEN
+		#_S_W_X := TRUE;
+	END_IF;
+	IF #_f_t_xr THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	IF #_f_t_yr THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	IF #_f_t_wr THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	IF #_f_t_zg THEN
+		#_S_Ghost_X := TRUE;
+	END_IF;
+	IF #_f_t_gi THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	IF #_act_sfc_Idle_lvl AND NOT #_S_Idle_X THEN
+		"naut_Tags".sfc_idle := FALSE;
+	END_IF;
+	IF #_S_Idle_X THEN
+		"naut_Tags".sfc_idle := TRUE;
+	END_IF;
+	#_act_sfc_Idle_lvl := #_S_Idle_X;
+	IF #_act_sfc_X_lvl AND NOT #_S_X_X THEN
+		"naut_Tags".sfc_x := FALSE;
+	END_IF;
+	IF #_S_X_X THEN
+		"naut_Tags".sfc_x := TRUE;
+	END_IF;
+	#_act_sfc_X_lvl := #_S_X_X;
+	IF #_act_sfc_Y_lvl AND NOT #_S_Y_X THEN
+		"naut_Tags".sfc_y := FALSE;
+	END_IF;
+	IF #_S_Y_X THEN
+		"naut_Tags".sfc_y := TRUE;
+	END_IF;
+	#_act_sfc_Y_lvl := #_S_Y_X;
+	IF #_act_sfc_W_lvl AND NOT #_S_W_X THEN
+		"naut_Tags".sfc_w := FALSE;
+	END_IF;
+	IF #_S_W_X THEN
+		"naut_Tags".sfc_w := TRUE;
+	END_IF;
+	#_act_sfc_W_lvl := #_S_W_X;
+	IF #_act_sfc_Z_lvl AND NOT #_S_Z_X THEN
+		"naut_Tags".sfc_z := FALSE;
+	END_IF;
+	IF #_S_Z_X THEN
+		"naut_Tags".sfc_z := TRUE;
+	END_IF;
+	#_act_sfc_Z_lvl := #_S_Z_X;
+END_FUNCTION_BLOCK

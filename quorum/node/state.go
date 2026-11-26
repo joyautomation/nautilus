@@ -95,6 +95,17 @@ func writeAtomic(path string, b []byte, write func(*os.File, []byte) (int, error
 
 func (s *State) writeFile(path string, b []byte) error { return writeFile(path, b, s.write) }
 
+// firstWrite is the first of a package test's write and an Options
+// StateWrite that is set (nil: the file's own).
+func firstWrite(w ...func(*os.File, []byte) (int, error)) func(*os.File, []byte) (int, error) {
+	for _, f := range w {
+		if f != nil {
+			return f
+		}
+	}
+	return nil
+}
+
 // writeFile writes b to path from its start, truncating it, and fsyncs it.
 func writeFile(path string, b []byte, write func(*os.File, []byte) (int, error)) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)

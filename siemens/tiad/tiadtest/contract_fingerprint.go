@@ -30,7 +30,7 @@ func fpValue(t *testing.T, r tiad.FingerprintResult, id string) string {
 	return v
 }
 
-var benchSoftwareLoad = tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+var benchSoftwareLoad = tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 
 // contractFingerprintRead: TIA's items in TIA's order; DownloadId and the
 // counters change with every load, Hardware with a hardware load (#789
@@ -64,7 +64,7 @@ func contractFingerprintRead(t *testing.T, start Starter) {
 	if fpValue(t, r2, "Hardware") != fpValue(t, r, "Hardware") {
 		t.Errorf("a software load changed Hardware: %+v -> %+v", r.Items, r2.Items)
 	}
-	if _, err := s.Download(ctx, AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})); err != nil {
+	if _, err := s.Download(ctx, AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})); err != nil {
 		t.Fatal(err)
 	}
 	r3, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
@@ -150,7 +150,7 @@ func contractFingerprintBlindTrust(t *testing.T, start Starter) {
 	}
 	// The yes is a decision like any other: a bad type is a bad request.
 	status, b := rawJSON(t, a.Client(), "POST", "/v1/sessions/"+s.ID+"/download", map[string]any{"address": benchCPU, "software": true, "announced": true,
-		"decisions": map[string]any{"startAfter": false, "acceptBlindTrust": "yes"}})
+		"decisions": map[string]any{"resetData": true, "startAfter": false, "acceptBlindTrust": "yes"}})
 	if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest {
 		t.Errorf("acceptBlindTrust as a string: HTTP %d %s", status, b)
 	}

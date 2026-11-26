@@ -262,8 +262,15 @@ func TestPairAckDoesNotCarryToANewOccurrence(t *testing.T) {
 // only later. That is a new occurrence: it annunciates unacknowledged, on
 // a new ID, and the new leader's journal says the carried ack was for an
 // occurrence that ended. (The tests above hold the field: the ack carries.)
+// Trip here is a tag the test writes, which a hot takeover carries (#710
+// S2b), as it never carries a field input: the takeover is made cold
+// (hot-max-age 0), so Trip reads false at the new leader as a dropped
+// input would.
 func TestPairFieldDropsAtTheTakeover(t *testing.T) {
-	r := newPairRig(t) // Trip starts false on both
+	r := newPairRigFull(t, func(_ string, p *project.Project) {
+		cold := project.Duration(0)
+		p.Redundancy.HotMaxAge = &cold
+	}, nil) // Trip starts false on both
 	lead := r.leader()
 	stand := other(lead)
 	r.setTrip(t, lead, true)

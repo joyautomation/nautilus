@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,11 +36,14 @@ var errCut = errors.New("link cut by the test")
 
 // cluster is one pair and its witness.
 type cluster struct {
-	t    *testing.T
-	pair string
-	mu   sync.Mutex
-	cut  map[[2]quorum.NodeID]bool // [from, to]
-	mute map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
+	// began is when the cluster was made: a failure prints every vote
+	// since (#710 d1d).
+	began time.Time
+	t     *testing.T
+	pair  string
+	mu    sync.Mutex
+	cut   map[[2]quorum.NodeID]bool // [from, to]
+	mute  map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
 	// noAdopt: every Adopt to or from it is lost (the rest goes through).
 	noAdopt map[quorum.NodeID]bool
 	// noHello: its hellos to the peer are lost (the rest goes through).
@@ -50,27 +54,61 @@ type cluster struct {
 	real    map[string]string // name -> the address it listens on now
 	ctl     map[quorum.NodeID]*member
 	wit     *witnessMember
-	tok     map[quorum.NodeID]string // peer token per node
-	ctok    map[quorum.NodeID]string // client token per node
-	led     map[uint64]quorum.NodeID // term -> who led it
-	stop    chan struct{}
-	done    chan struct{}
-	evMu    sync.Mutex
-	evs     []Event
-	bytes   map[quorum.NodeID]*tap
+	// witRunning is the running witness: its peer TLS names each pair's
+	// incarnation by it (#710 2b).
+	witRunning atomic.Pointer[Witness]
+	// witCertLie is added to the incarnation the witness's certificate
+	// names: a witness whose certificate is not its replies' (#710 2b).
+	witCertLie atomic.Uint64
+	tok        map[quorum.NodeID]string // peer token per node
+	ctok       map[quorum.NodeID]string // client token per node
+	led        map[uint64]quorum.NodeID // term -> who led it
+	stop       chan struct{}
+	done       chan struct{}
+	evMu       sync.Mutex
+	evs        []Event
+	bytes      map[quorum.NodeID]*tap
 	// plain: the node runs with peer TLS off (its listener and its calls
 	// plain HTTP). Every other node runs the pair's peer TLS, keyed by its
 	// peer token (#710), as naut run does by default.
 	plain map[quorum.NodeID]bool
-	pairs map[string]*peertls.Pair // by token
+	pairs map[string]*peertls.Peer // by node and token
+	keys  string                   // the peers' key and pin directories
 	// fail reports an oracle breach: t.Errorf, or a recorder in the
 	// monitor's own test.
 	fail func(format string, args ...any)
 	// lease is every member's: loopLease, unless a measurement sets
-	// another before the start.
-	lease time.Duration
+	// another before the start. leaseOf overrides it for one member (the
+	// witness's --lease, or one controller's manifest) at its next start.
+	lease   time.Duration
+	leaseOf map[quorum.NodeID]time.Duration
+	// evBy is every event, by the controller that raised it.
+	evBy map[quorum.NodeID][]Event
 	// votes is every vote request sent, as it left (faultRT).
 	votes []sentVote
+	// release is the naut release each node runs, for a rolling upgrade
+	// across a vote protocol version: a vote or adopt frame between two
+	// nodes on different releases is refused as the receiver refuses
+	// another version (409 "version"). Unset: one release for all.
+	release map[quorum.NodeID]int
+	// slowWrite delays every state write, the witness's and both
+	// controllers', by this much (a slow eMMC or SD card); writes counts
+	// them. Set before the start.
+	slowWrite time.Duration
+	writes    atomic.Int64
+}
+
+// writeFn is the state write every member starts with: the file's own,
+// after slowWrite.
+func (c *cluster) writeFn() func(*os.File, []byte) (int, error) {
+	if c.slowWrite == 0 {
+		return nil
+	}
+	return func(f *os.File, b []byte) (int, error) {
+		c.writes.Add(1)
+		time.Sleep(c.slowWrite)
+		return f.Write(b)
+	}
 }
 
 type sentVote struct {
@@ -81,8 +119,14 @@ type sentVote struct {
 	// took and its error (nil: an answer of any status). For steady()'s
 	// report when a lease lapses (#1120).
 	done bool
-	took time.Duration
-	err  error
+	// gateOpen: a RESIGN left while its sender's gate was open (#710 d1).
+	gateOpen bool
+	took     time.Duration
+	err      error
+	// verdict is what the answer said (voteVerdict): granted, or why not.
+	// Answered in time says nothing of which voter refused a lapsing
+	// leader, or why (#1329).
+	verdict string
 }
 
 type member struct {
@@ -119,12 +163,12 @@ func newCluster(t *testing.T) *cluster {
 // newClusterHere is newCluster without t.Parallel: a measurement that
 // times one cluster at a time.
 func newClusterHere(t *testing.T) *cluster {
-	c := &cluster{t: t, pair: NewClusterID(), lease: loopLease, cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
+	c := &cluster{t: t, began: time.Now(), pair: NewClusterID(), lease: loopLease, cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
 		byHP: map[string]quorum.NodeID{}, noHello: map[quorum.NodeID]bool{}, hellos: map[quorum.NodeID]int{}, real: map[string]string{}, ctl: map[quorum.NodeID]*member{},
 		tok:  map[quorum.NodeID]string{"a": testToken, "b": testToken, WitnessID: testToken},
 		ctok: map[quorum.NodeID]string{"a": "client", "b": "client"}, led: map[uint64]quorum.NodeID{},
 		stop: make(chan struct{}), done: make(chan struct{}), bytes: map[quorum.NodeID]*tap{}, fail: t.Errorf,
-		plain: map[quorum.NodeID]bool{}, pairs: map[string]*peertls.Pair{}}
+		plain: map[quorum.NodeID]bool{}, pairs: map[string]*peertls.Peer{}, keys: t.TempDir()}
 	// Peers address each other by name (test plan §8.2 case 2): the
 	// dialer maps each name to wherever its node listens now, so a
 	// restarted node binds a fresh port.
@@ -139,12 +183,15 @@ func newClusterHere(t *testing.T) *cluster {
 	}
 	t.Cleanup(c.shutdown)
 	// Any failure, not only steady()'s, says what each controller's votes
-	// did in its last two leases: a /dup or a wait that timed out on a
-	// stalled process shows as a gap in the sends (#1120).
+	// did, with every voter's answer: a /dup or a wait that timed out on a
+	// stalled process shows as a gap in the sends (#1120). The whole test's,
+	// not its last leases: a switchover's lost campaign came seconds before
+	// the wait that timed out on it (#710 d1d). Only on a failure: a
+	// passing run prints nothing.
 	t.Cleanup(func() {
 		if t.Failed() {
 			for _, id := range []quorum.NodeID{"a", "b"} {
-				t.Logf("%s", c.voteTrail(id, leases(2)))
+				t.Logf("%s", c.voteTrail(id, time.Since(c.began)))
 			}
 		}
 	})
@@ -170,45 +217,66 @@ func (c *cluster) listen(id quorum.NodeID) net.Listener {
 	if plain {
 		return ln
 	}
-	return tls.NewListener(ln, c.peerTLS(id).Server)
+	return tls.NewListener(ln, c.peerTLS(id).Server())
 }
 
-// peerTLS is id's peer TLS, from its peer token.
-func (c *cluster) peerTLS(id quorum.NodeID) *peertls.Pair {
+// handler is h as id's peer listener serves it: behind peer TLS's
+// per-request check (Bind), unless id is plain.
+func (c *cluster) handler(id quorum.NodeID, h http.Handler) http.Handler {
+	c.mu.Lock()
+	plain := c.plain[id]
+	c.mu.Unlock()
+	if plain {
+		return h
+	}
+	return bindPeer(c.peerTLS(id), h)
+}
+
+// peerTLS is id's peer TLS under its peer token: its box key and pins kept
+// across its restarts (#710 per-box keys).
+func (c *cluster) peerTLS(id quorum.NodeID) *peertls.Peer {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	tok := c.tok[id]
-	if p := c.pairs[tok]; p != nil {
+	k := string(id) + "/" + tok
+	if p := c.pairs[k]; p != nil {
 		return p
 	}
-	p, err := peertls.New(tok)
-	if err != nil {
-		c.t.Fatal(err)
-	}
-	c.pairs[tok] = p
+	p := newTestPeerInc(c.t, tok, c.pair, id, filepath.Join(c.keys, fmt.Sprintf("%s-%d", id, len(c.pairs))), func(cl string) uint64 {
+		w := c.witRunning.Load()
+		if w == nil {
+			return 0
+		}
+		return w.Incarnation(cl) + c.witCertLie.Load()
+	})
+	c.pairs[k] = p
 	return p
 }
 
 // clientTLS is the TLS id's calls dial with: nil when id is plain.
-func (c *cluster) clientTLS(id quorum.NodeID) *tls.Config {
+func (c *cluster) clientTLS(id quorum.NodeID) TLSWrap {
 	c.mu.Lock()
 	plain := c.plain[id]
 	c.mu.Unlock()
 	if plain {
 		return nil
 	}
-	return c.peerTLS(id).Client
+	return wrapAs(c.peerTLS(id), func(addr string) (quorum.NodeID, bool) {
+		to, ok := c.byHP[addr]
+		return to, ok
+	})
 }
 
 func (c *cluster) startWitness() {
 	c.t.Helper()
-	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: c.lease})
+	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: c.leaseFor(WitnessID), write: c.writeFn()})
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	h, _ := Guard(c.tok[WitnessID], w.Handler())
+	h, _ := Guard(c.tok[WitnessID], c.handler(WitnessID, w.Handler()))
 	ctx, cancel := context.WithCancel(context.Background())
 	c.wit.w, c.wit.cancel, c.wit.ran = w, cancel, make(chan struct{})
+	c.witRunning.Store(w)
 	go func() { w.Run(ctx); close(c.wit.ran) }()
 	c.wit.srv = &http.Server{Handler: h}
 	go c.wit.srv.Serve(c.listen(WitnessID))
@@ -234,12 +302,16 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 		peer = "a"
 	}
 	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
-		Lease: c.lease, StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
-		SelfAPI: apiAddr(id), TLS: c.clientTLS(id),
+		Lease: c.leaseFor(id), StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
+		SelfAPI: apiAddr(id), TLS: c.clientTLS(id), write: c.writeFn(),
 		client: &http.Client{Transport: &faultRT{c: c, from: id, base: c.transportFor(id)}},
 		OnEvent: func(ev Event) {
 			c.evMu.Lock()
 			c.evs = append(c.evs, ev)
+			if c.evBy == nil {
+				c.evBy = map[quorum.NodeID][]Event{}
+			}
+			c.evBy[id] = append(c.evBy[id], ev)
 			c.evMu.Unlock()
 		}})
 	if err != nil {
@@ -252,7 +324,7 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 			return LogState{Synced: synced, Stuck: m.logStuck.Load() && e.IsLeader(), CanSync: synced && !m.logCannotSync.Load()}
 		})
 	}
-	h, _ := Guard(c.tok[id], e.Handler())
+	h, _ := Guard(c.tok[id], c.handler(id, e.Handler()))
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel, m.ran = cancel, make(chan struct{})
 	go func() { e.Run(ctx); close(m.ran) }()
@@ -318,9 +390,8 @@ func (c *cluster) transport() http.RoundTripper { return c.transportFor("a") }
 
 // transportFor is the production peer transport with id's peer TLS.
 func (c *cluster) transportFor(id quorum.NodeID) http.RoundTripper {
-	tr := newClient(nil, c.clientTLS(id)).Transport.(*http.Transport).Clone()
 	var d net.Dialer
-	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return newClient(func(ctx context.Context, network, addr string) (net.Conn, error) {
 		c.mu.Lock()
 		real, ok := c.real[addr]
 		c.mu.Unlock()
@@ -328,8 +399,7 @@ func (c *cluster) transportFor(id quorum.NodeID) http.RoundTripper {
 			return nil, fmt.Errorf("no such host %s", addr)
 		}
 		return d.DialContext(ctx, network, real)
-	}
-	return tr
+	}, c.clientTLS(id)).Transport
 }
 
 // faultRT applies the cuts: a request on a cut link never arrives; one
@@ -338,6 +408,14 @@ type faultRT struct {
 	c    *cluster
 	from quorum.NodeID
 	base http.RoundTripper
+}
+
+// CloseIdleConnections closes the transport's kept connections, as an
+// elector's CloseIdle and a reply refused by its certificate do.
+func (f *faultRT) CloseIdleConnections() {
+	if c, ok := f.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -350,18 +428,66 @@ func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
 		if q.UnmarshalBinary(b) == nil {
 			f.c.mu.Lock()
 			sent = len(f.c.votes)
-			f.c.votes = append(f.c.votes, sentVote{from: f.from, to: to, at: time.Now(), req: q})
+			sv := sentVote{from: f.from, to: to, at: time.Now(), req: q}
+			if q.Resign {
+				if e := f.c.elector(f.from); e != nil {
+					sv.gateOpen = e.IsLeader() // read without c.mu's help: the gate is an atomic
+				}
+			}
+			f.c.votes = append(f.c.votes, sv)
 			f.c.mu.Unlock()
 		}
 	}
 	resp, err := f.roundTrip(r, to)
 	if sent >= 0 {
+		verdict := ""
+		if err == nil {
+			verdict = voteVerdict(resp)
+		}
 		f.c.mu.Lock()
 		v := &f.c.votes[sent]
-		v.done, v.took, v.err = true, time.Since(v.at), err
+		v.done, v.took, v.err, v.verdict = true, time.Since(v.at), err, verdict
 		f.c.mu.Unlock()
 	}
 	return resp, err
+}
+
+// voteVerdict reads a vote's answer, leaving resp's body for the caller,
+// and says what it was: "granted"; "refused, promised <term>" with the
+// promise the voter relayed and a mark; or a refusal by status, with its
+// RefusedHeader reason and the voter's words.
+func voteVerdict(resp *http.Response) string {
+	b, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(b))
+	if err != nil {
+		return "unread: " + err.Error()
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg := strings.TrimSpace(string(b))
+		if len(msg) > 160 {
+			msg = msg[:160] + "..."
+		}
+		if why := resp.Header.Get(RefusedHeader); why != "" {
+			return fmt.Sprintf("%d %s: %s", resp.StatusCode, why, msg)
+		}
+		return fmt.Sprintf("%d: %s", resp.StatusCode, msg)
+	}
+	var rep quorum.Reply
+	if err := rep.UnmarshalBinary(b); err != nil {
+		return "unreadable: " + err.Error()
+	}
+	if rep.Granted {
+		return "granted"
+	}
+	out := fmt.Sprintf("refused, promised %d", rep.Promised)
+	if rep.Promise.To != "" {
+		out += fmt.Sprintf(" (its promise: to %s, %v left)", rep.Promise.To, rep.Promise.Left.Round(time.Millisecond))
+	}
+	if rep.Marked {
+		out += ", marked"
+	}
+	return out
 }
 
 func (f *faultRT) roundTrip(r *http.Request, to quorum.NodeID) (*http.Response, error) {
@@ -372,12 +498,21 @@ func (f *faultRT) roundTrip(r *http.Request, to quorum.NodeID) (*http.Response, 
 	if strings.HasSuffix(r.URL.Path, "/hello") {
 		f.c.hellos[f.from]++
 	}
+	mixed := f.c.release[f.from] != f.c.release[to] &&
+		(strings.HasSuffix(r.URL.Path, "/vote") || strings.HasSuffix(r.URL.Path, "/adopt"))
 	mute := f.c.mute[f.from] && strings.HasSuffix(r.URL.Path, "/vote") ||
 		f.c.noHello[f.from] && strings.HasSuffix(r.URL.Path, "/hello") ||
 		(f.c.noAdopt[f.from] || f.c.noAdopt[to]) && strings.HasSuffix(r.URL.Path, "/adopt")
 	f.c.mu.Unlock()
 	if mute {
 		return nil, errCut
+	}
+	if mixed {
+		// What the receiver's release answers a frame of another version
+		// (serveVote, serveAdopt, the witness's serveVote).
+		rec := httptest.NewRecorder()
+		refuse(rec, "version", fmt.Sprintf("%s speaks another vote protocol version", f.from))
+		return rec.Result(), nil
 	}
 	resp, err := f.base.RoundTrip(r)
 	if err == nil && f.c.isCut(to, f.from) {
@@ -480,11 +615,19 @@ func (c *cluster) leader() quorum.NodeID {
 func (c *cluster) settledLeader(d time.Duration) quorum.NodeID {
 	c.t.Helper()
 	who := c.waitLeader(d)
-	c.waitFor("the witness to back the leader", d, func() bool {
+	end := time.Now().Add(d)
+	for {
 		ps := c.wit.w.Pairs()
-		return len(ps) == 1 && ps[0].GrantedTo == string(who) && c.leader() == who
-	})
-	return who
+		lead := c.leader()
+		if len(ps) == 1 && ps[0].GrantedTo == string(who) && lead == who {
+			return who
+		}
+		if time.Now().After(end) {
+			// Which of the three it was (CI run 45406566988, #710 d1d).
+			c.t.Fatalf("timed out after %v waiting for the witness to back the leader %s: the witness's pairs %+v, the gate's leader %q; a=%+v b=%+v", d, who, ps, lead, c.status("a"), c.status("b"))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func (c *cluster) waitLeader(d time.Duration) quorum.NodeID {
@@ -560,16 +703,18 @@ func (c *cluster) steady(id quorum.NodeID, n int) {
 // voteTrail sums up, then lists, the vote requests id sent in the last
 // span, with each call's outcome: when a lease lapses it tells a renewal
 // never sent (the process stalled: a long gap between sends) from one sent
-// and answered late, or not at all (#1120). The summary is one line, so
+// and answered late, or not at all (#1120), and an answer in time from
+// what it said: granted, or refused and why (#1329). The summary is one
+// line, so
 // the mutation runner, which keeps only report lines, keeps it.
 func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	type sum struct {
-		sent, answered, failed, pending int
-		slowest                         time.Duration
-		lastErr                         error
+		sent, answered, refused, failed, pending int
+		slowest                                  time.Duration
+		lastErr                                  error
 	}
 	per := map[quorum.NodeID]*sum{}
 	var detail strings.Builder
@@ -599,10 +744,20 @@ func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
 			s.answered++
 			s.slowest = max(s.slowest, v.took)
 			out = fmt.Sprintf("answered in %v", v.took.Round(time.Millisecond))
+			if v.verdict != "" {
+				out += ": " + v.verdict
+			}
+			if v.verdict != "" && v.verdict != "granted" {
+				s.refused++
+			}
 		default:
 			s.pending++
 		}
-		fmt.Fprintf(&detail, "\n  -%v to %s term %d renewal=%v %s", now.Sub(v.at).Round(time.Millisecond), v.to, v.req.Term, v.req.Renewal, out)
+		kind := fmt.Sprintf("renewal=%v", v.req.Renewal)
+		if v.req.Resign {
+			kind = fmt.Sprintf("RESIGN epoch %d seq %d gateOpen=%v", v.req.Epoch, v.req.Seq, v.gateOpen)
+		}
+		fmt.Fprintf(&detail, "\n  -%v to %s term %d %s %s", now.Sub(v.at).Round(time.Millisecond), v.to, v.req.Term, kind, out)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "votes %s sent in the last %v:", id, span)
@@ -613,7 +768,7 @@ func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
 	}
 	for _, to := range []quorum.NodeID{"a", "b", WitnessID} {
 		if s := per[to]; s != nil {
-			fmt.Fprintf(&b, " to %s: %d sent, %d answered (slowest %v), %d failed, %d pending", to, s.sent, s.answered, s.slowest.Round(time.Millisecond), s.failed, s.pending)
+			fmt.Fprintf(&b, " to %s: %d sent, %d answered (slowest %v), %d refused, %d failed, %d pending", to, s.sent, s.answered, s.slowest.Round(time.Millisecond), s.refused, s.failed, s.pending)
 			if s.lastErr != nil {
 				fmt.Fprintf(&b, " (last: %v)", s.lastErr)
 			}
@@ -621,6 +776,26 @@ func (c *cluster) voteTrail(id quorum.NodeID, span time.Duration) string {
 		}
 	}
 	return b.String() + detail.String()
+}
+
+// leaseFor is id's lease at its next start.
+func (c *cluster) leaseFor(id quorum.NodeID) time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if d, ok := c.leaseOf[id]; ok {
+		return d
+	}
+	return c.lease
+}
+
+// setLease gives id a lease of its own from its next start.
+func (c *cluster) setLease(id quorum.NodeID, d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.leaseOf == nil {
+		c.leaseOf = map[quorum.NodeID]time.Duration{}
+	}
+	c.leaseOf[id] = d
 }
 
 func (c *cluster) startAll() {

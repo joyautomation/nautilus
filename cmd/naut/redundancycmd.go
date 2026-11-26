@@ -20,6 +20,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
+	"github.com/joyautomation/nautilus/internal/peertls"
+	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/quorum"
 	"github.com/joyautomation/nautilus/quorum/node"
@@ -91,6 +94,42 @@ Usage:
       answer, and together they must hear one process named <name>, else
       nothing is cleared. It clears each member, and checks again a lease
       later: a mark that comes back means a copy still runs.
+  naut redundancy [flags] unpin <name>
+      on the SURVIVING controller, after the other one (<name>, a or b)
+      had its box replaced or lost its state directory: its new peer key
+      is refused wherever its old one is pinned. It drops the old key's
+      pin here and at the witness; that key stays refused, so a box still
+      holding it never comes back as <name>. Then start the replacement:
+      its new key is pinned at its first contact (check its fingerprint
+      with naut redundancy status on that box). Run it a second time to
+      lift the old key's refusal (an unpin by mistake): the next box to
+      contact with the token is pinned, so do that only with the real box
+      ready to connect. Journalled under your name.
+  naut redundancy [flags] release-hold
+      release the takeover hold (redundancy.takeover-hold) on the leader:
+      the program's outputs go out on its next scan, before its release
+      tag said they may. For a program that cannot release by itself (a
+      hold at its max). Journalled under your name. On a standby it is
+      forwarded to the leader.
+  naut redundancy [flags] switchover
+      hand the lead to the standby now, without a seam: each task finishes
+      its scan, the standby acknowledges the final state image, and the
+      leader resigns so the standby takes over hot at once (no waiting out
+      the lease). Refused, saying why, unless the standby is current, may
+      lead, and its inputs are live, and the leader holds no force and no
+      takeover hold. The standby's I/O must be healthy and reach every
+      field driver the leader has connected (a driver the standby cannot
+      see, "waiting", is skipped); the refusal names the ones it does not.
+      Writes to the controllers are refused ("switching") for the moment
+      it takes. Run on the preferred controller of a pair with
+      redundancy.failback, it suspends failback. Journalled under your
+      name. On a standby it is forwarded to the leader.
+  naut redundancy [flags] failback suspend [<why>...]
+  naut redundancy [flags] failback resume
+      suspend or resume the pair's failback (redundancy.failback): while
+      suspended the pair stays on whichever controller leads. Resume also
+      ends the ping-pong stop (and its alarm). Journalled under your name.
+      On a standby it is forwarded to the leader.
 
 Flags:
   --url <url>         the controller's tag API (default $NAUTILUS_URL, else
@@ -109,7 +148,10 @@ Under an auth: block the commands need the redundancy permission
 (administrator by default). Without one they take only NAUTILUS_TOKEN.
 Every command but new-pair is written to the controller's audit journal
 (redundancy.commission, redundancy.recommission, redundancy.vouch,
-redundancy.clear-duplicate), accepted or refused, with what was accepted.
+redundancy.clear-duplicate, redundancy.release-hold, redundancy.switchover,
+redundancy.failback),
+accepted or refused,
+with what was accepted.
 
 Exit status: 0 done; 1 refused, incomplete or failed; 2 usage.
 `
@@ -339,6 +381,104 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 			return 1
 		}
 		return 0
+	case "release-hold":
+		if len(pos) != 1 {
+			fmt.Fprint(stderr, redundancyUsage)
+			return 2
+		}
+		code, b, err := do(http.MethodPost, "/api/cluster/release-hold", map[string]any{})
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *asJSON {
+			stdout.Write(b)
+		} else if code == http.StatusOK {
+			fmt.Fprintln(stdout, "takeover hold released: the program's outputs go out on its next scan")
+		} else {
+			var ans struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(b, &ans) == nil && ans.Error != "" {
+				fmt.Fprintf(stdout, "refused (%d): %s\n", code, ans.Error)
+			} else {
+				fmt.Fprintf(stdout, "refused (%d): %s\n", code, bytes.TrimSpace(b))
+			}
+		}
+		if code != http.StatusOK {
+			return 1
+		}
+		return 0
+	case "failback":
+		if len(pos) < 2 || (pos[1] != "suspend" && pos[1] != "resume") || (pos[1] == "resume" && len(pos) != 2) {
+			fmt.Fprint(stderr, redundancyUsage)
+			return 2
+		}
+		body := map[string]any{"suspend": pos[1] == "suspend"}
+		if len(pos) > 2 {
+			body["why"] = strings.Join(pos[2:], " ")
+		}
+		code, b, err := do(http.MethodPost, "/api/cluster/failback", body)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *asJSON {
+			stdout.Write(b)
+		} else if code == http.StatusOK {
+			if pos[1] == "suspend" {
+				fmt.Fprintln(stdout, "failback suspended: the pair stays on whichever controller leads until naut redundancy failback resume")
+			} else {
+				fmt.Fprintln(stdout, "failback resumed: the pair fails back to the preferred controller once it has been ready for redundancy.failback.after")
+			}
+		} else {
+			var ans struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal(b, &ans) == nil && ans.Error != "" {
+				fmt.Fprintf(stdout, "refused (%d): %s\n", code, ans.Error)
+			} else {
+				fmt.Fprintf(stdout, "refused (%d): %s\n", code, bytes.TrimSpace(b))
+			}
+		}
+		if code != http.StatusOK {
+			return 1
+		}
+		return 0
+	case "switchover":
+		if len(pos) != 1 {
+			fmt.Fprint(stderr, redundancyUsage)
+			return 2
+		}
+		code, b, err := do(http.MethodPost, "/api/cluster/switchover", map[string]any{})
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *asJSON {
+			stdout.Write(b)
+		} else {
+			printSwitchoverAnswer(stdout, code, b)
+		}
+		if code != http.StatusOK {
+			return 1
+		}
+		return 0
+	case "unpin":
+		if len(pos) != 2 {
+			fmt.Fprint(stderr, redundancyUsage)
+			return 2
+		}
+		code, b, err := do(http.MethodPost, "/api/cluster/unpin", map[string]any{"name": pos[1]})
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *asJSON {
+			stdout.Write(b)
+		} else {
+			printUnpinAnswer(stdout, code, b)
+		}
+		if code != http.StatusOK {
+			return 1
+		}
+		return 0
 	case "clear-duplicate":
 		if len(pos) != 2 {
 			fmt.Fprint(stderr, redundancyUsage)
@@ -366,6 +506,29 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 	return 2
 }
 
+// printUnpinAnswer prints POST /api/cluster/unpin's answer for a person:
+// its message, which says what each store found and what to do next.
+func printUnpinAnswer(w io.Writer, code int, b []byte) {
+	var a struct {
+		Error  string `json:"error"`
+		Report struct {
+			Message string `json:"message"`
+		} `json:"report"`
+	}
+	if json.Unmarshal(b, &a) != nil {
+		fmt.Fprintf(w, "%d %s\n", code, bytes.TrimSpace(b))
+		return
+	}
+	switch {
+	case a.Report.Message != "":
+		fmt.Fprintln(w, a.Report.Message)
+	case a.Error != "":
+		fmt.Fprintln(w, a.Error)
+	default:
+		fmt.Fprintf(w, "%d %s\n", code, bytes.TrimSpace(b))
+	}
+}
+
 // printClusterStatus prints GET /api/cluster for a person.
 func printClusterStatus(w io.Writer, b []byte) {
 	var st struct {
@@ -386,6 +549,9 @@ func printClusterStatus(w io.Writer, b []byte) {
 			Superseded  string   `json:"superseded"`
 			Forked      []string `json:"forked"`
 		} `json:"log"`
+		Stream    *leader.StreamStatus `json:"stream"`
+		WritesCut map[string]int       `json:"writesCut"`
+		PeerKeys  *leader.PeerKeys     `json:"peerKeys"`
 	}
 	if json.Unmarshal(b, &st) != nil {
 		w.Write(b)
@@ -438,9 +604,105 @@ func printClusterStatus(w io.Writer, b []byte) {
 			fmt.Fprintf(bw, "FORKED: the log of %s forked from this one: choose one with naut redundancy vouch\n", strings.Join(l.Forked, ", "))
 		}
 	}
+	if s := st.Stream; s != nil {
+		fmt.Fprintln(bw, streamLine(s))
+	}
+	if k := st.PeerKeys; k != nil {
+		fmt.Fprintln(bw, peerKeysLine(k))
+	}
+	if line := fence.CutLine(st.WritesCut); line != "" {
+		fmt.Fprintf(bw, "writes cut at the send deadline (last %d min): %s\n", int(fence.CutWindow.Minutes()), line)
+	}
 	for _, x := range st.Warnings {
 		fmt.Fprintf(bw, "warning: %s\n", x)
 	}
+}
+
+// peerKeysLine is the peer TLS keys' line in naut redundancy status (#710
+// per-box keys): this box's key and each pinned one, to compare on the
+// boxes themselves.
+func peerKeysLine(k *leader.PeerKeys) string {
+	self := k.Self
+	if self == "" {
+		self = "none yet (" + k.Error + ")"
+	}
+	pinned := "none yet"
+	if len(k.Pinned) > 0 {
+		var ps []string
+		for _, n := range peertls.Names(k.Pinned) {
+			ps = append(ps, n+" "+k.Pinned[n])
+		}
+		pinned = strings.Join(ps, ", ")
+	}
+	line := "peer keys: this box " + self + "; pinned: " + pinned
+	for _, n := range peertls.Names(k.Refused) {
+		line += "; refused (unpinned): " + n + " " + k.Refused[n]
+	}
+	if k.WitnessWaiting != "" {
+		line += "\nnew witness key waiting: " + k.WitnessWaiting + " (compare it with the key the witness prints at its start; allow it with naut redundancy unpin witness on BOTH controllers)"
+	}
+	if k.WitnessAllowed != "" {
+		line += "\nthis controller takes the new witness key " + k.WitnessAllowed + ", once (naut redundancy unpin witness)"
+	}
+	return line
+}
+
+// streamLine is the state stream's line in naut redundancy status (#710
+// S1b).
+func streamLine(s *leader.StreamStatus) string {
+	ms := func(v int64) string { return (time.Duration(v) * time.Millisecond).String() }
+	line := "state stream: " + s.State
+	switch s.Role {
+	case "leader":
+		if s.Seq > 0 {
+			line += fmt.Sprintf("; image %d of term %d, %d bytes every %s (budget %d B/s)", s.Seq, s.Term, s.Bytes, ms(s.IntervalMs), s.BudgetBytes)
+		}
+	default:
+		if s.AgeMs >= 0 {
+			line += fmt.Sprintf("; image %d of term %d, %s old (lag %s), %d bytes every %s; retain file at image %d of term %d", s.Seq, s.Term, ms(s.AgeMs), ms(s.LagMs), s.Bytes, ms(s.IntervalMs), s.PersistedSeq, s.PersistedTerm)
+		}
+	}
+	if s.Detail != "" {
+		line += " (" + s.Detail + ")"
+	}
+	if s.TakeoverImageAgeMs >= 0 {
+		line += fmt.Sprintf("; last takeover loaded an image %s old, flushed in %.1f ms", ms(s.TakeoverImageAgeMs), s.FlushMs)
+	}
+	switch {
+	case s.Takeover == "hot":
+		line += fmt.Sprintf("; last takeover hot (oldest task state %s old)", ms(s.TakeoverOldestFrameMs))
+	case s.Takeover != "":
+		line += "; last takeover cold (" + s.TakeoverCold + ")"
+	}
+	if s.TakeoverCause != "" {
+		line += ", by " + s.TakeoverCause
+	}
+	if s.RetainInMemory {
+		line += "; retained values only in memory: no retain save has succeeded since the takeover"
+	}
+	if f := s.Failback; f != nil {
+		switch {
+		case f.Suspended:
+			line += fmt.Sprintf("; FAILBACK to %s SUSPENDED (%s, by %s at %s)", f.Prefer, f.Why, f.By, time.UnixMilli(f.AtMs).UTC().Format(time.RFC3339))
+		case f.ReadyMs > 0:
+			line += fmt.Sprintf("; failback to %s in %s (ready for %s)", f.Prefer, ms(f.AfterMs-f.ReadyMs), ms(f.ReadyMs))
+		case f.NotReady != "":
+			line += fmt.Sprintf("; failback to %s waits: %s", f.Prefer, f.NotReady)
+		}
+		if f.Count > 0 {
+			line += fmt.Sprintf(" (ping-pong %d of %d)", f.Count, f.Max)
+		}
+	}
+	if h := s.TakeoverHold; h != nil && h.Holding {
+		line += fmt.Sprintf("; TAKEOVER HOLD: outputs held for %s until %s is TRUE or release-hold", ms(h.AgeMs), h.Release)
+		if h.AtMax {
+			line += fmt.Sprintf(", past its max %s", ms(h.MaxMs))
+		}
+		if len(h.Undelivered) > 0 {
+			line += ", safe values not delivered: " + strings.Join(h.Undelivered, ", ")
+		}
+	}
+	return line
 }
 
 // printClearAnswer prints POST /api/cluster/clear-duplicate's answer for a
@@ -802,4 +1064,36 @@ func bootList(bs []quorum.BootSeq) string {
 		s = append(s, fmt.Sprintf("boot %x", b.Nonce))
 	}
 	return strings.Join(s, ", ")
+}
+
+// printSwitchoverAnswer says how a switchover went, in words.
+func printSwitchoverAnswer(w io.Writer, code int, b []byte) {
+	var ans struct {
+		Outcome string `json:"outcome"`
+		Error   string `json:"error"`
+		Report  struct {
+			From     string  `json:"from"`
+			To       string  `json:"to"`
+			StopMs   float64 `json:"stopMs"`
+			ImageMs  float64 `json:"imageMs"`
+			ResignMs float64 `json:"resignMs"`
+			TotalMs  float64 `json:"totalMs"`
+		} `json:"report"`
+	}
+	if json.Unmarshal(b, &ans) != nil || ans.Outcome == "" {
+		fmt.Fprintf(w, "refused (%d): %s\n", code, bytes.TrimSpace(b))
+		return
+	}
+	r := ans.Report
+	switch ans.Outcome {
+	case "done":
+		fmt.Fprintf(w, "switched over: %s handed the lead to %s, which takes over hot now (scans stopped in %.0f ms, final image acknowledged in %.0f ms, resign %.0f ms; %.0f ms in all)\n",
+			r.From, r.To, r.StopMs, r.ImageMs, r.ResignMs, r.TotalMs)
+	case "failover":
+		fmt.Fprintf(w, "switchover fell back to a failover: %s\n", ans.Error)
+	case "aborted":
+		fmt.Fprintf(w, "switchover aborted: %s\n", ans.Error)
+	default:
+		fmt.Fprintf(w, "refused (%d): %s\n", code, ans.Error)
+	}
 }

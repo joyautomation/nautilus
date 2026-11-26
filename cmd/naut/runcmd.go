@@ -87,8 +87,6 @@ func electorWith(proj *project.Project, addr, dir string, deps pairDeps) (leader
 		if err != nil {
 			return nil, nil, err
 		}
-		// /api/cluster and the dashboard say it until state streaming.
-		m.q.Warn(project.PairRetainNotReplicated)
 		wireRedundancy(proj, m.q)
 		proj.Member = string(m.o.Self)
 		return m.q, m, nil
@@ -317,9 +315,6 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// Registered first, so it runs last: the peer listener answers
 		// votes until the election below has stopped and released.
 		defer pair.Close()
-		// Until state streaming (#710 step 4) the opt-in is required
-		// (Load refuses a pair without it), and said out loud.
-		fmt.Fprintln(os.Stderr, "naut run: redundancy: WARNING: experimental pair: "+project.PairRetainNotReplicated)
 		for _, h := range pair.untrustedAPIs(append(server.EnvAllowedHosts(), proj.Server.AllowedHosts...)) {
 			fmt.Fprintf(os.Stderr, "naut run: redundancy: the pair advertises a tag API at %s, which NAUTILUS_ALLOWED_HOSTS does not list: a browser HMI that follows the leader there is refused (403). Add it to NAUTILUS_ALLOWED_HOSTS on both controllers, or name the controllers by IP in redundancy.peers\n", h)
 		}
@@ -333,6 +328,15 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: compile:", err)
 		return 1
+	}
+	if pair != nil {
+		// The takeover hold (#710 (b2)): set before the first scan.
+		if err := pair.setupHold(rt, proj.Redundancy); err != nil {
+			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
+			return 1
+		}
+		// Failback (#710 d2): its state keeper, before the first load.
+		pair.setupFailback(rt, proj.Redundancy)
 	}
 	// The write gate needs live scans, with redundancy or without (#621,
 	// #625). Set before gate.Run below.
@@ -350,16 +354,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// The audit journal's system alarm reads the server, which is built
 	// after the alarms (it serves them): srvRef is set once it exists.
 	var srvRef atomic.Pointer[server.Server]
-	sysAlarms := []project.SystemAlarm{auditAlarm(&srvRef)}
-	if proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
-		sysAlarms = append(sysAlarms, usersAlarm(&srvRef))
-	}
-	if proj.Alarms != nil && proj.Alarms.Channels != nil && proj.Alarms.Channels.Push != nil {
-		sysAlarms = append(sysAlarms, pushHeldAlarm(&srvRef))
-	}
-	if proj.Alarms != nil && proj.Alarms.Oncall.Inbound.Takes("sms") {
-		sysAlarms = append(sysAlarms, smsAckSuspendedAlarm(&srvRef))
-	}
+	sysAlarms := systemAlarms(proj, pair, &srvRef)
 	proj.PushSend = pushChannel(&srvRef)
 	alarmStateDir, err := openAlarmContacts(proj, dir, os.Getenv, os.Stderr, proj.Runtime.Coordinator != nil)
 	if err != nil {
@@ -379,6 +374,13 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if ackLinks != nil {
 		proj.AckLink, proj.AckCode = ackLinkHook(&srvRef), ackCodeHook(&srvRef)
+	}
+	// The plant's cameras (#724): built before the alarm engine, which hears the
+	// pictures they keep when an alarm activates.
+	camOpts, camClose := cameraOptions(proj, dir, rt, gate.IsLeader, os.Getenv, os.Stderr)
+	defer camClose()
+	if camOpts != nil && camOpts.Snaps != nil {
+		proj.AlarmNotifiers = append(proj.AlarmNotifiers, camOpts.AlarmNotifier())
 	}
 	alarms, err := startAlarms(proj, rt, sysAlarms...)
 	if err != nil {
@@ -409,6 +411,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
 			return 1
 		}
+		// The state stream (#710 S1b): the leader's images to the standby,
+		// and the takeover's flush of the newest one before the store loads.
+		pair.setIOStatus(proj.DriverStatus(nil, nil)) // the field drivers: a switchover's standby I/O check
+		pair.startStream(rt, proj.Redundancy.StreamBudgetBytes(), proj.Redundancy.HotMaxAgeOr(-1))
 		if alarmLog != nil && alarms.Escalation != nil {
 			// The occurrences a takeover continues (#715): those an
 			// escalation policy covers, so a page goes on at its level.
@@ -506,8 +512,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// users in and journals their writes.
 	}
 
-	// Sparkplug B retransmission, when the manifest asks for it.
-	spNode, err := proj.Sparkplug(rt)
+	// Sparkplug B retransmission, when the manifest asks for it. Under
+	// redundancy only the leader holds the edge node's session (#798,
+	// sparkplugpair.go).
+	spNode, err := proj.Sparkplug(rt, sparkplugPairOptions(el, pair, rt)...)
 	if err != nil {
 		// Its errors name sparkplug already ("sparkplug: …"); add it only
 		// to one that does not.
@@ -643,6 +651,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		defer co.Stop()
 		co.Install(&sopts)
 	}
+	// The plant's cameras (#724), when the manifest lists any.
+	if camOpts != nil {
+		camOpts.Install(&sopts)
+	}
 	// Program provenance: a built binary decodes the history its archive
 	// carries; a checkout captures live from git. Lazy (first request pays,
 	// not startup) and nil-safe — no repo just means an empty history.
@@ -752,11 +764,20 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		if id := sparkplugIdentity(proj, srv); id != nil {
 			spNode.SetIdentity(id)
 		}
-		if err := spNode.Start(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "sparkplug:", err, "(continuing without it)")
-		} else {
-			defer spNode.Stop()
+		switch {
+		case el != nil:
+			// Started and stopped with the leadership; stopped (its NDEATH
+			// out) before the gate is released, as the defer above runs
+			// after this one.
+			defer startSparkplugLeader(spNode, el, pair, rt)()
 			sparkplugUp = true
+		default:
+			if err := spNode.Start(ctx); err != nil {
+				fmt.Fprintln(os.Stderr, "sparkplug:", err, "(continuing without it)")
+			} else {
+				defer spNode.Stop()
+				sparkplugUp = true
+			}
 		}
 	}
 
@@ -807,7 +828,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		warnStaleHMI("naut run", fsys, proj, os.Stderr)
 	}
 	if sparkplugUp {
-		banner += " — sparkplug up"
+		if el != nil {
+			banner += " — sparkplug on the leader"
+		} else {
+			banner += " — sparkplug up"
+		}
 	}
 	if opc != nil && opc.Status().Listening {
 		banner += " — opc ua on " + opc.URL()
@@ -925,6 +950,28 @@ func bindAPI(addr, dir string, redundant bool) (net.Listener, string, error) {
 // TimeoutStopSec=10, Kubernetes' 30 s grace period, systemd's default 90 s.
 const runStopTimeout = 5 * time.Second
 
+// systemAlarms are the alarms nautilus raises itself for proj, beside the
+// manifest's: read from the server srv will hold, and from the pair member
+// (nil outside a pair).
+func systemAlarms(proj *project.Project, pair *pairMember, srv *atomic.Pointer[server.Server]) []project.SystemAlarm {
+	sys := []project.SystemAlarm{auditAlarm(srv)}
+	if proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
+		sys = append(sys, usersAlarm(srv))
+	}
+	if proj.Alarms != nil && proj.Alarms.Channels != nil && proj.Alarms.Channels.Push != nil {
+		sys = append(sys, pushHeldAlarm(srv))
+	}
+	if proj.Alarms != nil && proj.Alarms.Oncall.Inbound.Takes("sms") {
+		sys = append(sys, smsAckSuspendedAlarm(srv))
+	}
+	if pair != nil && !mutNaut("witness_lease_no_alarm") {
+		sys = append(sys, witnessLeaseAlarm(pair))
+	}
+	sys = append(sys, holdAlarms(pair)...)
+	sys = append(sys, failbackAlarms(pair)...)
+	return sys
+}
+
 // AuditAlarmID is the system alarm raised while the audit journal could
 // not be opened or cannot be written (#709, design §6 question 5).
 const AuditAlarmID = "nautilus.audit-journal"
@@ -1018,6 +1065,25 @@ func pushHeldAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 			s := srv.Load()
 			return s != nil && s.PushHeld() > 0
 		},
+	}
+}
+
+// WitnessLeaseAlarmID is the system alarm raised while the witness
+// refuses a pair member's votes for their lease (#710): the pair has no
+// fault tolerance left.
+const WitnessLeaseAlarmID = "nautilus.witness-lease"
+
+// witnessLeaseAlarm is raised while the witness refuses this controller's
+// lease (WitnessLeaseCondition), cleared once it takes it again.
+func witnessLeaseAlarm(m *pairMember) project.SystemAlarm {
+	return project.SystemAlarm{
+		Def: alarm.Def{
+			ID: WitnessLeaseAlarmID, Tag: "__nautilus.witness-lease",
+			Name:     "Redundancy: the witness refuses this pair's lease, so the pair has no fault tolerance (start the witness with this pair's --lease)",
+			Priority: alarm.High, Class: "system",
+			AckRequired: true, AutoClear: true,
+		},
+		Active: m.WitnessLeaseRefused,
 	}
 }
 
@@ -2075,8 +2141,8 @@ func pairServiceLevel(st leader.Status) byte {
 }
 
 // opcuaRedundancy is a pair member's OPC UA redundancy (nil outside a pair):
-// RedundancySupport Cold (a takeover starts from the new leader's own
-// retained values, PairRetainNotReplicated, not a running image), both
+// RedundancySupport Cold (a takeover keeps the retained values the state
+// stream brought, not a running image), both
 // members' ApplicationUris, and the ServiceLevel from the elector. A client
 // may sample the level every 100 ms; the elector's status copies several
 // slices under its tick lock, so the level is held for 250 ms.

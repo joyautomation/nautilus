@@ -1,0 +1,66 @@
+FUNCTION_BLOCK "naut_main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      s : String;
+      t : String;
+      r : String;
+      named : String := 'T#5s';
+      l : INT;
+      p : INT;
+      ln : INT;
+      k : INT;
+      d : DINT;
+      li : LINT;
+      us : USINT;
+      ui : UINT;
+      ul : ULINT;
+      x : REAL;
+      lx : LREAL;
+      b : BOOL;
+      eq : BOOL;
+   END_VAR
+
+BEGIN
+	#r := LEFT(IN := #s, L := #l);
+	#r := RIGHT(IN := #s, L := #l);
+	#r := MID(IN := #s, L := #l, P := 2);
+	#ln := LEN(#s);
+	#k := FIND(IN1 := #s, IN2 := 'LL');
+	#r := MID(IN := #s, L := #l, P := MAX(IN1 := #p, IN2 := 1));
+	#r := INSERT(IN1 := #s, IN2 := 'XY', P := MAX(IN1 := #p, IN2 := 0));
+	#r := DELETE(IN := #s, L := MAX(IN1 := #l, IN2 := 0), P := MAX(IN1 := #p, IN2 := 1));
+	#r := REPLACE(IN1 := #s, IN2 := 'ab', L := MAX(IN1 := #l, IN2 := 0), P := MAX(IN1 := #p, IN2 := 1));
+	#r := MID(IN := #s, L := 2, P := 1);
+	#r := INSERT(IN1 := #s, IN2 := 'XY', P := 0);
+	#r := DELETE(IN := #s, L := 0, P := 2);
+	#r := LEFT(IN := #s, L := 254);
+	#r := LEFT(IN := #s, L := LINT_TO_INT(LIMIT(MN := LINT#0, IN := INT_TO_LINT(LEN(#s)) - 1, MX := LINT#254)));
+	#r := MID(IN := #s, L := LINT_TO_INT(LIMIT(MN := LINT#0, IN := DINT_TO_LINT(#d), MX := LINT#254)), P := LINT_TO_INT(LIMIT(MN := LINT#1, IN := #li, MX := LINT#255)));
+	#r := RIGHT(IN := #s, L := LINT_TO_INT(LIMIT(MN := LINT#0, IN := USINT_TO_LINT(#us), MX := LINT#254)));
+	#r := DELETE(IN := #s, L := LINT_TO_INT(LIMIT(MN := LINT#0, IN := UINT_TO_LINT(#ui), MX := LINT#254)), P := LINT_TO_INT(LIMIT(MN := LINT#1, IN := INT_TO_LINT(#p) + 1, MX := LINT#255)));
+	#r := CONCAT(IN1 := #s, IN2 := '-', IN3 := #t, IN4 := '<', IN5 := #r, IN6 := '>');
+	#r := CONCAT(IN1 := 'a', IN2 := 'b');
+	IF LEN(LEFT(IN := #s, L := 3)) > 0 AND FIND(IN1 := CONCAT(IN1 := #s, IN2 := #t), IN2 := 'x') = 0 THEN
+		#r := SEL(G := "naut_Tags".Go, IN0 := '', IN1 := CONCAT(IN1 := #s, IN2 := ','));
+	END_IF;
+	#r := MUX(K := #k, IN0 := #s, IN1 := #t, IN2 := 'none');
+	#eq := #s = #t;
+	#eq := #s <> '';
+	#r := "naut_STR_LINT"(A := INT_TO_LINT(#l));
+	#r := "naut_STR_LINT"(A := DINT_TO_LINT(#d));
+	#r := "naut_STR_LINT"(A := #li);
+	#r := "naut_STR_LINT"(A := USINT_TO_LINT(#us));
+	#r := "naut_STR_LINT"(A := UINT_TO_LINT(#ui));
+	#r := "naut_STR_ULINT"(A := #ul);
+	#r := "naut_STR_LINT"(A := DINT_TO_LINT("naut_Tags".N));
+	#r := SEL(G := #b, IN0 := 'FALSE', IN1 := 'TRUE');
+	#l := STRING_TO_INT(#s);
+	#d := STRING_TO_DINT(#s);
+	#x := STRING_TO_REAL(#s);
+	#lx := STRING_TO_LREAL(#s);
+	#r := '';
+	#r := 'it$'s $$5$N';
+	"naut_Tags".Msg := CONCAT(IN1 := "naut_Tags".Msg, IN2 := #named);
+	"naut_Tags".N := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".N) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+END_FUNCTION_BLOCK

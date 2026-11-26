@@ -466,7 +466,7 @@ func TestAgentRefusesDownloadsBeforeTIA(t *testing.T) {
 	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(tiad.DeviceModule{Slot: 1, Subslot: 1, Module: "M"}), tiadtest.BenchSecrets); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true}); tiad.Kind(err) != tiad.KindNotCompiled {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true}); tiad.Kind(err) != tiad.KindNotCompiled {
 		t.Fatalf("not compiled: %v", err)
 	}
 	if n := countCalls(p.Calls(t), "Download"); n != 0 {
@@ -477,7 +477,7 @@ func TestAgentRefusesDownloadsBeforeTIA(t *testing.T) {
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true}); tiad.Kind(err) != tiad.KindDecisionRequired || len(tiad.Questions(err)) != 1 || tiad.Questions(err)[0].ID != tiad.QuestionStartAfter {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true}); tiad.Kind(err) != tiad.KindDecisionRequired || len(tiad.Questions(err)) != 1 || tiad.Questions(err)[0].ID != tiad.QuestionStartAfter {
 		t.Fatalf("no start-after: %v", err)
 	}
 	if n := countCalls(p.Calls(t), "Download"); n != 0 {
@@ -485,7 +485,7 @@ func TestAgentRefusesDownloadsBeforeTIA(t *testing.T) {
 	}
 	// So is one that loads hardware without the opt-in and the
 	// attestation (#789 hardware gate), on this CPU as on any.
-	hw := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
+	hw := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	if _, err := s.Download(ctx, hw); tiad.Kind(err) != tiad.KindDecisionRequired || len(tiad.Questions(err)) != 1 || tiad.Questions(err)[0].ID != tiad.QuestionUnverifiedHardware {
 		t.Fatalf("hardware without the opt-in: %v", err)
 	}
@@ -497,10 +497,10 @@ func TestAgentRefusesDownloadsBeforeTIA(t *testing.T) {
 		t.Fatalf("TIA heard of a hardware download without the opt-in or the attestation (%d)", n)
 	}
 	// A dry run and an unanswered download reach TIA and load nothing.
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}); err != nil {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}); tiad.Kind(err) != tiad.KindDecisionRequired {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}); tiad.Kind(err) != tiad.KindDecisionRequired {
 		t.Fatalf("unanswered: %v", err)
 	}
 	if n := countCalls(p.Calls(t), "Download"); n != 2 {
@@ -518,12 +518,12 @@ func TestAgentRefusesDownloadsBeforeTIA(t *testing.T) {
 // it, works.
 func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 	p, s := downloadReady(t)
-	dry := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}
-	real := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dry := tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}
+	real := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	no := real
-	no.Decisions = tiad.Decisions{StopCPU: tiad.No(), StartAfter: tiad.No()}
+	no.Decisions = tiad.Decisions{ResetData: tiad.Yes(), StopCPU: tiad.No(), StartAfter: tiad.No()}
 	yes := real
-	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}
+	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No()}
 	stop := []tiad.Question{{ID: tiad.QuestionStopCPU}}
 	cases := []struct {
 		name   string
@@ -594,7 +594,7 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 	// the request says start-after yes (#1154 review).
 	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
 	dryStart := dry
-	dryStart.Decisions = tiad.Decisions{StartAfter: tiad.Yes()}
+	dryStart.Decisions = tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.Yes()}
 	if _, err := s.Download(ctx, dryStart); tiad.Kind(err) != tiad.KindOutcomeUnknown {
 		t.Fatalf("a dry run TIA asks nothing about: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 	// A real download that said start it and then fails in doubt names
 	// start-after: TIA may have started the CPU after loading.
 	start := real
-	start.Decisions = tiad.Decisions{StartAfter: tiad.Yes()}
+	start.Decisions = tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.Yes()}
 	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), CompareDiffers: true})
 	if _, err := s.Download(ctx, start); tiad.Kind(err) != tiad.KindOutcomeUnknown || strings.Join(tiad.ActingAnswers(err), ",") != "start-after" || !strings.Contains(err.Error(), "started the CPU") {
 		t.Fatalf("start-after yes, then the compare differs: %v (acting %v)", err, tiad.ActingAnswers(err))
@@ -635,7 +635,7 @@ func TestAgentAnswersConsistentDownload(t *testing.T) {
 	p, s := downloadReady(t)
 	qs := []tiad.Question{{ID: tiad.QuestionStopCPU}, {ID: tiad.QuestionConsistentDownload, Message: "Download software to device"}}
 	req := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}}
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}}
 	p.SetScript(t, tiadtest.Script{Questions: qs})
 	_, err := s.Download(ctx, req)
 	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "ConsistentBlocksDownload") ||
@@ -653,7 +653,7 @@ func TestAgentAnswersConsistentDownload(t *testing.T) {
 	// A CPU already in STOP: TIA asks consistent-download first, then a
 	// check the request leaves unanswered. The yes was acting, so the
 	// cancel is outcome_unknown naming it, never a clean refusal.
-	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{{ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionReinitialize, Objects: []string{"Tags"}}}})
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{{ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionIdentificationData}}})
 	_, err = s.Download(ctx, req)
 	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(strings.Join(tiad.ActingAnswers(err), ","), "consistent-download") ||
 		!strings.Contains(err.Error(), "may already have loaded the software") {
@@ -681,7 +681,7 @@ func TestAgentAnswersTheSoftwareLoadFamily(t *testing.T) {
 	qs := []tiad.Question{{ID: tiad.QuestionStopCPU}, {ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionAlarmTexts},
 		{ID: tiad.QuestionAllBlocks}, {ID: tiad.QuestionUserManagement}, {ID: tiad.QuestionIdentificationData}}
 	req := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ConsistentDownload: tiad.Yes(), AlarmTexts: tiad.Yes(), AllBlocks: tiad.Yes(),
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), ConsistentDownload: tiad.Yes(), AlarmTexts: tiad.Yes(), AllBlocks: tiad.Yes(),
 			UserManagementKeepOnline: tiad.Yes(), IdentificationDataLoadNothing: tiad.Yes(), StartAfter: tiad.Yes()}}
 	// The bench spec sets access control: keeping the CPU's users is
 	// refused at that check, after the loading answers were written.
@@ -763,7 +763,7 @@ func TestAgentAnswersTheSoftwareLoadFamily(t *testing.T) {
 func TestAgentNeverCallsAnEmptyCompareEqual(t *testing.T) {
 	p, s := downloadReady(t)
 	start := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}}
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.Yes()}}
 	// The bench-shaped equal tree passes, both ways.
 	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
 	if r, err := s.Download(ctx, start); err != nil || !r.Downloaded || !r.CompareEqual {
@@ -818,7 +818,7 @@ func TestAgentSeesTheBlockItSent(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}}
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.Yes()}}
 	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
 	r, err := s.Download(ctx, start)
 	if err != nil || !r.Downloaded || !r.CompareEqual || strings.Join(r.Blocks, ", ") != "Main [OB1], Pump [FB1]" {
@@ -854,9 +854,9 @@ func TestAgentSeesTheBlockItSent(t *testing.T) {
 // gate failed, and a close drops the session instead of keeping it broken.
 func TestAgentSaysUnknownWhenTIADiesInsideTheDownload(t *testing.T) {
 	const fix = "Restart the agent, then compare in a fresh session"
-	dry := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}
+	dry := tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}
 	real := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	for _, dies := range []string{"downloading", "preparing"} {
 		for _, req := range []tiad.DownloadRequest{dry, real} {
 			name := fmt.Sprintf("TIA dies %s, dry run %v", dies, req.DryRun)
@@ -906,7 +906,7 @@ func TestAgentRefusesACallQueuedBehindTheOneTIADiedIn(t *testing.T) {
 	p.SetScript(t, tiadtest.Script{TiaDies: "downloading", Delays: []tiadtest.ScriptedCall{{Call: "Download", MS: 1500}}})
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
+		_, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
 		done <- err
 	}()
 	for deadline := time.Now().Add(10 * time.Second); countCalls(p.Calls(t), "Download") < 1; time.Sleep(20 * time.Millisecond) {
@@ -933,7 +933,7 @@ func TestAgentRefusesACallQueuedBehindTheOneTIADiedIn(t *testing.T) {
 func TestAgentDecidesEveryDryRun(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "The modules are stopped for downloading to device."}, {ID: tiad.QuestionOverwrite}, {ID: tiad.QuestionStartAfter}})
-	r, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
+	r, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
 	if err != nil || !r.DryRun || !r.Provisional || !r.QuestionsIncomplete || r.Downloaded || len(r.Questions) != 1 || r.Questions[0].ID != tiad.QuestionStopCPU {
 		t.Fatalf("a dry run: %+v %v", r, err)
 	}
@@ -946,7 +946,7 @@ func TestAgentDecidesEveryDryRun(t *testing.T) {
 	}
 	// Decisions that answer every check yes never make a dry run load.
 	r, err = s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}})
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}})
 	if err != nil || !r.DryRun || r.Downloaded || len(r.Questions) != 1 {
 		t.Fatalf("a dry run with every check answered yes: %+v %v", r, err)
 	}
@@ -1040,7 +1040,7 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "TIA text\nmust not be logged"}, {ID: tiad.QuestionPassword}, {ID: tiad.QuestionConfigurationPassword}})
 	req := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No(), Reinitialize: []string{"evil\naudit download forged"}},
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No(), TrustCertificate: "evil\naudit download forged"},
 		Secrets:   &tiad.Secrets{Protection: "audit-must-not-leak", ConfigurationPassword: "Audit-must-not-leak-2", FullAccessPassword: tiadtest.BenchFullAccessPassword}}
 	if _, err := s.Download(ctx, req); err != nil {
 		t.Fatal(err)
@@ -1053,7 +1053,7 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"address=\"192.0.2.10\"", "dryRun=False", "announced=True", "stopCpu=yes", "startAfter=no",
-		"protection=set", "configurationPassword=set", `asked=["stop-cpu","password","configuration-password"]`, `acting=["stop-cpu"]`, `reinitialize=["evil\naudit download forged"]`} {
+		"protection=set", "configurationPassword=set", `asked=["stop-cpu","password","configuration-password"]`, `acting=["stop-cpu"]`, `trustCertificate="evil\naudit download forged"`} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the audit line lacks %s:\n%s", want, line)
 		}
@@ -1064,7 +1064,7 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 		t.Fatalf("the audit log is forged, carries TIA's text or a secret:\n%s", log)
 	}
 	// A refusal is audited too.
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.99", Software: true, Announced: true}); err == nil {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.99", Software: true, Announced: true}); err == nil {
 		t.Fatal("a download to another CPU was taken")
 	}
 	waitLog(t, p, "outcome=bad_request")
@@ -1077,7 +1077,7 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 func TestAgentCarriesTheModeOfADoubtfulDownload(t *testing.T) {
 	p, s := downloadReady(t)
 	stop := []tiad.Question{{ID: tiad.QuestionStopCPU}}
-	req := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
+	req := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 	for _, sc := range []tiadtest.Script{{Questions: stop, CompareDiffers: true}, {Questions: stop, Failures: []tiadtest.ScriptedCall{{Call: "Compare", Message: "the CPU went offline"}}}} {
 		p.SetScript(t, sc)
 		_, err := s.Download(ctx, req)
@@ -1102,7 +1102,7 @@ func TestAgentJournalsTheHardwareAttestation(t *testing.T) {
 	p, s := downloadReady(t)
 	att := &tiad.Attestation{By: "op\naudit download forged", Text: "hardware as intended\r\u2028audit download forged"}
 	req := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.No(), AcceptUnverifiedHardware: tiad.Yes()}, Attestation: att}
+		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No(), AcceptUnverifiedHardware: tiad.Yes()}, Attestation: att}
 	quoted := `by="op\naudit download forged" at=20`
 	text := `text="hardware as intended\r\u2028audit download forged" cpuAccessControl=unset}`
 	auditLine := func(outcome string) string {
@@ -1181,10 +1181,10 @@ func TestAgentKeepsTheProtectionPasswordOut(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionPassword}})
 	sec := &tiad.Secrets{Protection: "protection-must-not-leak", FullAccessPassword: tiadtest.BenchFullAccessPassword}
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Secrets: sec, Decisions: tiad.Decisions{StartAfter: tiad.No()}}); err != nil {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Secrets: sec, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true, Secrets: sec}); err != nil {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Address: "192.0.2.10", Software: true, DryRun: true, Announced: true, Secrets: sec}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Save(ctx, true); err != nil {
@@ -1211,7 +1211,7 @@ func TestAgentKeepsTheProtectionPasswordOut(t *testing.T) {
 // earlier compile.
 func TestAgentForgetsACompileWhenAChangeFails(t *testing.T) {
 	p, s := downloadReady(t)
-	dl := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	dl := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})
 	fail := func(call string) {
 		t.Helper()
 		p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: call, Message: call + " failed part-way"}}})
@@ -1347,14 +1347,14 @@ func intp(i int) *int { return &i }
 func TestAgentRefusesADryRunTIACannotCancel(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetScript(t, tiadtest.Script{NoDryRun: true})
-	_, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
+	_, err := s.Download(ctx, tiad.DownloadRequest{Decisions: tiad.Decisions{ResetData: tiad.Yes()}, Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
 	if tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "dry runs are refused") || !strings.Contains(err.Error(), "nothing was sent to the CPU") {
 		t.Fatalf("a dry run TIA cannot cancel: %v, want bad_request: dry runs are refused", err)
 	}
 	if n := countCalls(p.Calls(t), "Download"); n != 0 {
 		t.Fatalf("TIA heard of %d refused dry runs", n)
 	}
-	if r, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}); err != nil || !r.Downloaded {
+	if r, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}); err != nil || !r.Downloaded {
 		t.Fatalf("a real download: %+v %v", r, err)
 	}
 }
@@ -1412,7 +1412,7 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	// on it, so it is refused before anything reaches the CPU until it
 	// says decisions.acceptBlindTrust yes.
 	dl := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}})
+		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}})
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindDecisionRequired || tiad.BlindTrustOf(err) == nil || tiad.BlindTrustOf(err).Call != "upload" {
 		t.Fatalf("a download in the instance the upload trusted: %v, want decision_required naming the upload's trust", err)
 	}
@@ -1449,7 +1449,7 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 func TestAgentBackstopsATrustGivenAfterTheCheck(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetScript(t, tiadtest.Script{SeamTrustBeforeDownload: true})
-	_, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	_, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})
 	b := tiad.BlindTrustOf(err)
 	if tiad.Kind(err) != tiad.KindDecisionRequired || b == nil || b.Call != "test seam" || !strings.Contains(err.Error(), "TIA's download was not called") || tiad.DeployIDOf(err) != "" {
 		t.Fatalf("a download whose trust came after its check: %v %+v, want decision_required naming that trust", err, b)
@@ -1496,7 +1496,7 @@ func TestAgentKeepsATrustingInstanceWhileASessionIsReserved(t *testing.T) {
 	if _, err := s2.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s2.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}); tiad.Kind(err) != tiad.KindDecisionRequired || tiad.BlindTrustOf(err) == nil {
+	if _, err := s2.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}); tiad.Kind(err) != tiad.KindDecisionRequired || tiad.BlindTrustOf(err) == nil {
 		t.Fatalf("a download in the instance that was kept: %v, want the trust still gating it", err)
 	}
 	if err := s2.Close(ctx); err != nil {
@@ -1672,7 +1672,7 @@ func TestAgentJournalsTheFingerprintRead(t *testing.T) {
 func TestAgentRecordsTheTrustAtTheCheck(t *testing.T) {
 	p, s := downloadReady(t)
 	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true})
-	r, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()},
+	r, err := s.Download(ctx, tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()},
 		Fingerprint: &tiad.FingerprintRequest{TrustUnverifiedCertificate: true}})
 	if err != nil {
 		t.Fatal(err)
@@ -1826,7 +1826,7 @@ func TestAgentResetsAtTIAsCheckOnlyOnItsEvidence(t *testing.T) {
 	}
 	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}})
 	on := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: bench, Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
 	on.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
 	if res, err := s.Download(ctx, on); err != nil || res.UserManagementReset != tiad.ResetRouteAttestation {
 		t.Fatalf("turning access control on: %+v %v", res, err)
@@ -2029,7 +2029,7 @@ func TestAgentJournalsTheInstanceLogon(t *testing.T) {
 	}
 	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}, KeepsLogon: true})
 	on := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: bench, Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
 	on.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
 	if res, err := s.Download(ctx, on); err != nil || res.UserManagementReset != tiad.ResetRouteAttestation {
 		t.Fatalf("turning access control on: %+v %v", res, err)
@@ -2077,7 +2077,7 @@ func TestAgentForgetsTheInstanceLogonAfterACancelThatActed(t *testing.T) {
 	}
 	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}, KeepsLogon: true})
 	on := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: bench, Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
 	on.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
 	if res, err := s.Download(ctx, on); err != nil || res.UserManagementReset != tiad.ResetRouteAttestation {
 		t.Fatalf("turning access control on: %+v %v", res, err)
@@ -2134,7 +2134,7 @@ func TestAgentKeepsASessionUnusableWhenAnImportFailsAfterReplacing(t *testing.T)
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	dl := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.Yes()}}
+	dl := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.Yes()}}
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindUncleanSession {
 		t.Fatalf("a download after it: %v, want unclean_session", err)
 	}

@@ -348,3 +348,6 @@ func httpFetch(ctx context.Context, url string, headers map[string]string, insec
 	}
 	return body, nil
 }
+
+// SetCutLabel names this driver for the writes-cut counter (fence.CutLabel).
+func (d *Driver) SetCutLabel(driver string, multi bool) { d.base.SetCutLabel(driver, multi) }

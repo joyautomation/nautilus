@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/internal/peertls"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/quorum/node"
 	"github.com/joyautomation/nautilus/server"
@@ -36,7 +37,7 @@ func (r *pairRig) witnessLog(method, path, body string) (int, string) {
 	}
 	req.Header.Set(node.TokenHeader, r.token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := r.peerHTTP().Do(req)
+	resp, err := r.peerHTTPAs("a", "w").Do(req)
 	if err != nil {
 		return 0, err.Error()
 	}
@@ -116,10 +117,22 @@ func TestPairWitnessLogAdmitsOnlyItsGrantedLeader(t *testing.T) {
 	if code, body := r.witnessLog("POST", "/api/oplog/propose", `{"kind":"ack","ids":["x"],"by":"op"}`); code != http.StatusConflict {
 		t.Errorf("a propose to the witness's copy: %d %s, want 409", code, body)
 	}
-	// A cluster the witness has never voted for has no log there.
+	// Another cluster's log is not this pair's controllers' to read: one
+	// witness token serves every cluster, so the certificate's cluster
+	// must be the path's (#710 per-box keys).
 	req, _ := http.NewRequest("GET", "https://"+r.wit+node.Prefix+node.NewClusterID()+"/log/api/quorum", nil)
 	req.Header.Set(node.TokenHeader, r.token)
-	if resp, err := peerClient(t, r.token).Do(req); err != nil || resp.StatusCode != http.StatusNotFound {
+	if resp, err := r.peerHTTPAs("a", "w").Do(req); err != nil || resp.StatusCode != http.StatusForbidden {
+		t.Errorf("another cluster's log: %v %v, want 403", resp, err)
+	} else {
+		resp.Body.Close()
+	}
+	// A cluster the witness has never voted for has no log there, even for
+	// a member of it.
+	fresh := node.NewClusterID()
+	req, _ = http.NewRequest("GET", "https://"+r.wit+node.Prefix+fresh+"/log/api/quorum", nil)
+	req.Header.Set(node.TokenHeader, r.token)
+	if resp, err := memberClient(t, r.token, fresh, "a", peertls.Witness).Do(req); err != nil || resp.StatusCode != http.StatusNotFound {
 		t.Errorf("an unbound cluster's log: %v %v, want 404", resp, err)
 	} else {
 		resp.Body.Close()
@@ -140,15 +153,28 @@ func TestPairRebuiltWitnessIsRecopiedAndCarriesATakeover(t *testing.T) {
 	r.stopWitness()
 	files, _ := filepath.Glob(filepath.Join(r.witDir, "*"))
 	for _, f := range files {
+		if filepath.Base(f) == peerKeyFile {
+			continue // a rebuild keeps the witness's box key (#710 2b): its new incarnation is taken by itself
+		}
 		if err := os.RemoveAll(f); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// A rebuilt witness has a new key and a new incarnation: no operator
+	// step, its name is new, and the adoption drops the old one's pin
+	// (#710 2b).
 	r.startWitness(r.wit)
 	pairWait(t, "the pair to adopt the rebuilt witness", 60*time.Second, func() bool {
 		a, b := r.elector("a").Status(), r.elector("b").Status()
 		return a.Incarnation != inc && a.Incarnation == b.Incarnation && a.Commissioned && b.Commissioned
 	})
+	for _, n := range []string{"a", "b"} {
+		newInc := r.elector(n).Status().Incarnation
+		pairWait(t, n+" to keep only the adopted incarnation's pin", 10*time.Second, func() bool {
+			p := r.nodes[n].m.peerTLS.Pinned("")
+			return p[peertls.WitnessName(newInc)] != "" && p[peertls.WitnessName(inc)] == ""
+		})
+	}
 	lead = r.leader()
 	stand = other(lead)
 	pairWait(t, "the leader to re-copy the log to the witness, and count it (after its quiet period)", 15*time.Second, func() bool {
@@ -329,11 +355,14 @@ func TestPairTwoFaultsStopThePairAndLoseNothing(t *testing.T) {
 	r.stopWitness()
 	files, _ := filepath.Glob(filepath.Join(r.witDir, "*"))
 	for _, f := range files {
+		if filepath.Base(f) == peerKeyFile {
+			continue // a rebuild keeps the witness's box key (#710 2b): its new incarnation is taken by itself
+		}
 		if err := os.RemoveAll(f); err != nil {
 			t.Fatal(err)
 		}
 	}
-	r.startWitness(r.wit)
+	r.startWitness(r.wit) // a new key and incarnation: pinned under its new name (#710 2b)
 	pairWait(t, "A to lose its majority", 15*time.Second, func() bool { return !r.nodes[lead].m.q.IsLeader() })
 	r.nodes[lead].crash()
 	r.restart(stand)
@@ -447,6 +476,10 @@ func (r *pairRig) wipeState(n string) {
 			r.t.Fatal(err)
 		}
 	}
+	// Its peer key went with the disk (#710 per-box keys): each test runs
+	// the operator's step, naut redundancy unpin on the survivor
+	// (unpinOn) or, with no survivor, naut witness unpin on the witness
+	// box (witnessUnpinOffline).
 }
 
 // recommissionA re-commissions a at the witness's incarnation, once both
@@ -480,6 +513,11 @@ func TestPairBothControllersLostRecoverFromTheWitness(t *testing.T) {
 	}
 	for _, n := range []string{"a", "b"} {
 		r.wipeState(n)
+	}
+	// Both keys lost: no survivor holds a pin to drop but the witness,
+	// so the operator unpins both on the witness box.
+	r.witnessUnpinOffline("a", "b")
+	for _, n := range []string{"a", "b"} {
 		r.restart(n)
 	}
 	if err := r.recommissionA(); err != nil {
@@ -522,8 +560,11 @@ func TestPairRefusedVouchStillCommissions(t *testing.T) {
 		}
 	}
 	r.startWitness(r.wit)
-	r.restart("a")
+	// b survived (its pins kept): the operator unpins a there, which
+	// drops a's pin at the witness too.
 	r.restart("b")
+	r.unpinOn("b", "a")
+	r.restart("a")
 	refused := r.recommissionA()
 	if refused == nil || !strings.Contains(refused.Error(), "controller b") || !strings.Contains(refused.Error(), "does not count") {
 		t.Fatalf("the vouch's refusal: %v", refused)

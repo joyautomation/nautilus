@@ -1,0 +1,15 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      WL101 : "naut_Well";
+   END_VAR
+   VAR RETAIN
+      WL102 : "naut_Well";
+   END_VAR
+
+BEGIN
+   WL101.Pump.Run := TRUE;
+   WL101.Depth := 0.45;
+
+END_DATA_BLOCK

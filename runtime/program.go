@@ -35,6 +35,14 @@ type Program struct {
 	// swap and a rollback keep it, as Logix's S:FS does across an online
 	// edit: the state carried over is not a start.
 	ran bool
+	// tookOver, tookOverHot: the next scan is this program's first after
+	// a takeover (a hot one): TAKEOVER_SCAN() and HOT_TAKEOVER() for that
+	// scan only (#710 (b)). A swap (an online edit, a deploy) clears them.
+	tookOver, tookOverHot bool
+	// switching is its runtime's Tags.switching (nil for a program no
+	// runtime runs): an online edit is refused while a planned switchover
+	// is under way (ErrSwitching), read under mu.
+	switching *atomic.Bool
 
 	// bootSource is what Compile was first given — the program the deployed
 	// binary embeds. A running source that differs is an online edit in
@@ -59,6 +67,13 @@ type Program struct {
 	// Rollback). Atomic and outside mu: Quality reads it from the server's
 	// goroutine, and mu is held through every scan's logic.
 	written atomic.Pointer[map[string]bool]
+
+	// carry is the runtime's carried tags (imagetags.go), set by New;
+	// carryIdx their places this program writes (written ∩ carry), kept
+	// with prog under mu: what the end of a scan copies for the state
+	// stream.
+	carry    *carrySet
+	carryIdx []int
 
 	// img is the frame copy a pair's state stream asks for (image.go):
 	// taken at the end of a scan, outside of it encoded.
@@ -186,6 +201,15 @@ func (p *Program) Check(src string) error {
 	return err
 }
 
+// switchingLocked is ErrSwitching while its runtime switches over (an
+// online edit then would miss the final image), else nil. Under p.mu.
+func (p *Program) switchingLocked() error {
+	if p.switching != nil && p.switching.Load() && !mutRuntime("switch_writes_allowed") {
+		return ErrSwitching
+	}
+	return nil
+}
+
 // Swap replaces the running program with newly-compiled source, resetting the
 // retained frame. On a compile error the old program keeps running.
 func (p *Program) Swap(src string) error {
@@ -193,10 +217,16 @@ func (p *Program) Swap(src string) error {
 	if err == nil {
 		written := writtenOf(prog)
 		p.mu.Lock()
+		if err := p.switchingLocked(); err != nil {
+			p.mu.Unlock()
+			return err
+		}
 		p.prog, p.frame = prog, ir.NewFrame(prog)
 		p.written.Store(written)
+		p.carryIdx = p.carry.idxOf(*written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
 		p.ran = false
+		p.tookOver, p.tookOverHot = false, false
 		p.mu.Unlock()
 		return nil
 	}
@@ -239,8 +269,12 @@ func (p *Program) Run(tags *Tags) error {
 	}
 	p.view.snapshot(p.exts)
 	p.view.firstScan = !p.ran
+	p.view.latchRed(p.tookOver, p.tookOverHot)
 	err := ir.Run(p.prog, p.frame, p.view)
 	p.ran = true
+	if !mutRuntime("takeover_flag_kept") {
+		p.tookOver, p.tookOverHot = false, false
+	}
 	p.view.commit()
 	if p.img.want.Load() {
 		p.captureLocked(tags)
@@ -271,11 +305,17 @@ func (p *Program) SwapWarm(src string) (SwapReport, error) {
 	if err == nil {
 		written := writtenOf(prog)
 		p.mu.Lock()
+		if err := p.switchingLocked(); err != nil {
+			p.mu.Unlock()
+			return SwapReport{}, err
+		}
 		frame, resets := ir.MigrateFrame(prog, p.prog, p.frame)
 		p.prevSource, p.prevProg, p.prevFrame = p.source, p.prog, p.frame
 		p.prog, p.frame = prog, frame
 		p.written.Store(written)
+		p.carryIdx = p.carry.idxOf(*written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
+		p.tookOver, p.tookOverHot = false, false // an online edit's first scan is not a takeover's
 		p.mu.Unlock()
 		return SwapReport{Hash: sourceHash(src), Resets: resets}, nil
 	}
@@ -291,13 +331,18 @@ func (p *Program) SwapWarm(src string) (SwapReport, error) {
 func (p *Program) Rollback() (SwapReport, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := p.switchingLocked(); err != nil {
+		return SwapReport{}, err
+	}
 	if p.prevProg == nil {
 		return SwapReport{}, errors.New("runtime: nothing to roll back")
 	}
 	p.source, p.prog, p.frame = p.prevSource, p.prevProg, p.prevFrame
 	p.written.Store(writtenOf(p.prog))
+	p.carryIdx = p.carry.idxOf(p.writtenKeys())
 	p.prevSource, p.prevProg, p.prevFrame = "", nil, nil
 	p.compiledAt, p.scans, p.lastErr = time.Now(), 0, ""
+	p.tookOver, p.tookOverHot = false, false
 	return SwapReport{Hash: sourceHash(p.source)}, nil
 }
 
@@ -340,14 +385,22 @@ func sourceHash(src string) string {
 
 // ResetFrame discards retained state — call on a redundancy takeover so the
 // program warm-starts against live field values. A reset frame is a start:
-// the next scan's FIRST_SCAN() is TRUE, on every takeover, also by a box
-// that led before (#710).
+// the next scan's FIRST_SCAN() is TRUE, on every cold takeover, also by a
+// box that led before (#710). A hot takeover keeps the state going and
+// FIRST_SCAN() FALSE (hot_install.go).
 func (p *Program) ResetFrame() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.frame = ir.NewFrame(p.prog)
 	if !mutRuntime("takeover_keeps_first_scan") {
 		p.ran = false
+	}
+	// A frame copy made before the reset is of the old frame: a pair's
+	// stream must never send it as this leadership's (#710 S1b).
+	if !mutRuntime("stream_stale_capture_sent") {
+		p.img.mu.Lock()
+		p.img.ready = false
+		p.img.mu.Unlock()
 	}
 }
 

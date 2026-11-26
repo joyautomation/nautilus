@@ -22,7 +22,28 @@ namespace Tiad
         // longer matches its spec, but compare and export still know the
         // CPU.
         public string Address = "";
+        // HeldOnline is the CPU address a UI agent's online call holds the
+        // project online to (POST /v1/sessions/{id}/online), "" when
+        // offline. Written on the TIA thread, by the online call; read by
+        // HeldOnlineRefuses on the request thread, which is safe since a
+        // session has one call in flight at a time and the reaper skips one
+        // with a call in flight. While it is set, nothing else on the
+        // session goes online; a close goes offline first
+        // (ITia.CloseProject, which keys off the TIA side's own record).
+        public string HeldOnline = "";
         public bool Compiled;           // fully compiled since the last change
+        // Untouched is set by an open (POST /v1/sessions) and cleared, for
+        // good, by the first call on the session that UntouchedRule does
+        // not keep: only an untouched project is what was opened, so only
+        // its equal compare may make an adopt baseline (#1347).
+        public volatile bool Untouched;
+        // Adopted is the data layout baseline an equal compare of the
+        // untouched project took (POST .../compare layoutBaseline), null
+        // without one (#1347).
+        public AdoptBaseline Adopted;
+        // AdoptRefused is why the last compare that asked for an adopt
+        // baseline took none, "" otherwise: the layout check's reason.
+        public string AdoptRefused = "";
         // Unclean is set while an apply or an upload runs and stays set
         // when it fails part-way: the project then matches no spec, and
         // a later apply or save refuses (CpuReuse.Unclean).
@@ -43,6 +64,20 @@ namespace Tiad
         // fullAccessRecordOnly, failed or not: its record shows what tiad
         // was told, so UserManagementRule refuses a reset to tiad's user.
         public bool AccessRecordOnly;
+        // AccessTurnOn is set once an apply on this session turned, or
+        // set out to turn, a kept CPU's access control on
+        // (accessControlTurnOn, TurnOnRule), failed or not; AccessTurnOnLoaded
+        // once a download on it then loaded. Until then a download goes
+        // ahead only as TurnOnRule.DownloadRefusal lets it, and the
+        // project is not saved.
+        public bool AccessTurnOn, AccessTurnOnLoaded;
+        // AccessTurnOnTried is set once a download on this session that the
+        // turn-on gate let through reached the deploy record (so TIA may
+        // have loaded it and the CPU may now ask credentials), or the
+        // session opened a project marked turn-on pending (TurnOnPending):
+        // the gate then lets attestation.cpuAccessControl "enabled" too,
+        // whose logon route needs tiad logged on as "nautilus".
+        public bool AccessTurnOnTried;
         // UploadedFrom is the address this session last uploaded from
         // successfully (its CPU's identity checked), "" for none: the
         // project's CPU settings are then that CPU's, a later apply that
@@ -60,6 +95,10 @@ namespace Tiad
         // the session is never saved, archived for a deploy or imported
         // into again, only closed.
         public bool ForeignChanged;
+        // ImportGroup is the group of the session's last software import
+        // ("" before any): a compile then checks every block and data type
+        // outside it, and a compare requires the data types in it by name.
+        public string ImportGroup = "";
         public bool Closed;
         // Broken is set when closing the project failed: TIA may still
         // hold it. Every call but another close refuses.
@@ -195,6 +234,17 @@ namespace Tiad
             lock (mu)
             {
                 byId.Remove(s.Id);
+            }
+        }
+
+        // Touch marks session id touched, if it is in the table: a call
+        // UntouchedRule does not keep is about to run on it.
+        public void Touch(string id)
+        {
+            lock (mu)
+            {
+                Session s;
+                if (byId.TryGetValue(id, out s)) s.Untouched = false;
             }
         }
 

@@ -1,0 +1,99 @@
+FUNCTION_BLOCK "naut_SfcStepMaxtime"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      _S_Idle_X : BOOL := TRUE;
+      _S_Fill_X : BOOL;
+      _S_Fill_prev : BOOL;
+      _S_Fill_t : TON_TIME;
+      "naut__S_Fill_t_last" : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      _S_Fill_err : BOOL;
+      _S_Done_X : BOOL;
+      _S_Aborted_X : BOOL;
+      _S_Aborted_prev : BOOL;
+      _en_t_go : BOOL;
+      _f_t_go : BOOL;
+      _en_t_abort : BOOL;
+      _f_t_abort : BOOL;
+      _en_t_full : BOOL;
+      _f_t_full : BOOL;
+      _en_t_done : BOOL;
+      _f_t_done : BOOL;
+      _en_t_reset : BOOL;
+      _f_t_reset : BOOL;
+      _act_sfc_Fill_lvl : BOOL;
+      _act_sfc_Aborted_lvl : BOOL;
+   END_VAR
+
+BEGIN
+	#_en_t_go := #_S_Idle_X AND "naut_Tags".go;
+	#_en_t_abort := #_S_Fill_X AND #_S_Fill_err;
+	#_en_t_full := #_S_Fill_X AND "naut_Tags".full;
+	#_en_t_done := #_S_Done_X AND "naut_Tags".reset;
+	#_en_t_reset := #_S_Aborted_X AND "naut_Tags".reset;
+	#_f_t_go := #_en_t_go;
+	#_f_t_abort := #_en_t_abort;
+	#_f_t_full := #_en_t_full AND NOT #_f_t_abort;
+	#_f_t_done := #_en_t_done;
+	#_f_t_reset := #_en_t_reset;
+	IF #_f_t_go THEN
+		#_S_Idle_X := FALSE;
+	END_IF;
+	IF #_f_t_abort THEN
+		#_S_Fill_X := FALSE;
+	END_IF;
+	IF #_f_t_full THEN
+		#_S_Fill_X := FALSE;
+	END_IF;
+	IF #_f_t_done THEN
+		#_S_Done_X := FALSE;
+	END_IF;
+	IF #_f_t_reset THEN
+		#_S_Aborted_X := FALSE;
+	END_IF;
+	IF #_f_t_go THEN
+		#_S_Fill_X := TRUE;
+	END_IF;
+	IF #_f_t_abort THEN
+		#_S_Aborted_X := TRUE;
+	END_IF;
+	IF #_f_t_full THEN
+		#_S_Done_X := TRUE;
+	END_IF;
+	IF #_f_t_done THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	IF #_f_t_reset THEN
+		#_S_Idle_X := TRUE;
+	END_IF;
+	#_S_Fill_t(IN := #_S_Fill_X, PT := T#86400000ms, Q => #"naut__S_Fill_t_last".Q, ET => #"naut__S_Fill_t_last".ET);
+	IF #_S_Fill_X AND NOT #_S_Fill_prev THEN
+		#_S_Fill_err := FALSE;
+	END_IF;
+	IF #_S_Fill_X AND #"naut__S_Fill_t_last".ET > T#100ms THEN
+		#_S_Fill_err := TRUE;
+	END_IF;
+	"naut_Tags".sfc_fillerr := #_S_Fill_err;
+	IF #_S_Aborted_X AND NOT #_S_Aborted_prev THEN
+		"naut_Tags".sfc_cause := #_S_Fill_err;
+	END_IF;
+	IF #_act_sfc_Fill_lvl AND NOT #_S_Fill_X THEN
+		"naut_Tags".sfc_fill := FALSE;
+	END_IF;
+	IF #_S_Fill_X THEN
+		"naut_Tags".sfc_fill := TRUE;
+	END_IF;
+	#_act_sfc_Fill_lvl := #_S_Fill_X;
+	IF #_act_sfc_Aborted_lvl AND NOT #_S_Aborted_X THEN
+		"naut_Tags".sfc_aborted := FALSE;
+	END_IF;
+	IF #_S_Aborted_X THEN
+		"naut_Tags".sfc_aborted := TRUE;
+	END_IF;
+	#_act_sfc_Aborted_lvl := #_S_Aborted_X;
+	#_S_Fill_prev := #_S_Fill_X;
+	#_S_Aborted_prev := #_S_Aborted_X;
+END_FUNCTION_BLOCK

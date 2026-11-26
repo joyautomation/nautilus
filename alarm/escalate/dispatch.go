@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,19 @@ type Message struct {
 	// AckCode is the code an SMS reply acknowledges with ("ACK <code>",
 	// Options.AckCode); "" for none. A credential, as AckURL.
 	AckCode string
+
+	// Chatter is set on a chattering alarm's notice (#1249): each level
+	// goes once per episode in place of a page per bounce. It carries no
+	// AckURL or AckCode: the occurrence they bind changes at every bounce.
+	Chatter *alarm.Chatter
+	// Group is set on a grouped page during a flood (#1249): Alarm is
+	// zero, and there is no AckURL or AckCode (they bind one occurrence),
+	// so a call asks for no keypress.
+	Group *Group
+	// Link opens the HMI screen the page is about (the alarm, or a
+	// flood's focus view) under alarms.oncall.ack-url; the person signs
+	// in as usual, so it is not a credential. "" without an ack-url.
+	Link string
 }
 
 // Channel delivers a Message by one means. Send may block up to its own
@@ -96,12 +110,24 @@ type Options struct {
 	// (inbound SMS, #715); "" for none. Nil: no codes.
 	AckCode func(m Message, via string) string
 
+	// Chatter pages a chattering alarm once per level per episode in the
+	// modes that page per bounce (#1249, alarms.chatter.page).
+	Chatter bool
+	// Flood groups pages during a flood (#1249, alarms.flood.group-pages
+	// and individual). It needs an Engine that is a Flooder.
+	Flood FloodPaging
+	// Home is alarms.oncall.ack-url, the HMI as a person paged reaches it:
+	// chatter notices and grouped pages link to the right screen under
+	// it. "" for none.
+	Home string
+
 	Log *slog.Logger
 }
 
 // sendKey names one send: one step of one escalation to one person by one
 // channel. An escalation is an alarm id plus the moment it began waiting.
 type sendKey struct {
+	kind  sendKind
 	id    string
 	since int64
 	step  int
@@ -119,22 +145,15 @@ const (
 // episode is one escalation of one alarm: it began when the alarm began
 // waiting on a person and ends when it stops waiting.
 type episode struct {
-	wait   int64     // the record's WaitMs: one wait is one episode
-	since  time.Time // when its clock started (the wait, or the activation under ack-or-rtn)
-	policy *Policy   // chosen at the wait's start; nil when none covers the alarm
-	// skip marks the steps that fell due before this controller saw the
-	// escalation, sent by nobody here: a controller that joins late sends
-	// only the latest due step, never a burst of stale levels.
-	skipBelow int
-	late      bool
-	// lateWhy is why it joined late: a resend after a restart or a
-	// takeover when it was first seen in this leadership's first look (an
-	// occurrence carried across, #715), else a join late of its own.
-	lateWhy string
-	// people holds each step's recipients, resolved once, when the step
-	// first fell due: a roster's handover after that pages the new person
-	// at the next level, never with the levels already sent.
-	people map[int][]string
+	wait int64 // the record's WaitMs: one wait is one episode
+
+	// escClock is its clock: since is when it started (the wait, or the
+	// activation under ack-or-rtn); policy is chosen at the wait's start,
+	// nil when none covers the alarm. lateWhy is why it joined late: a
+	// resend after a restart or a takeover when it was first seen in this
+	// leadership's first look (an occurrence carried across, #715), else a
+	// join late of its own.
+	escClock
 }
 
 type queued struct {
@@ -153,6 +172,10 @@ type Dispatcher struct {
 	term     func() uint64
 	ackLink  func(Message, string) string
 	ackCode  func(Message, string) string
+	chatter  bool
+	flood    FloodPaging
+	flooder  Flooder
+	home     string
 	every    time.Duration
 	failN    int
 	log      *slog.Logger
@@ -164,6 +187,15 @@ type Dispatcher struct {
 	episodes map[string]*episode
 	sends    map[sendKey]sendState
 	fails    map[string]int // consecutive failures by channel kind
+	// chats are the chattering alarms' pinned clocks, by alarm id: they
+	// last as long as the episode, not the wait (#1249).
+	chats map[string]*chatClock
+	// batches are the grouped pages in flight, by number (seq); lastBatch
+	// when each policy step's last batch went in the flood floodID.
+	batches   map[int64]*batch
+	lastBatch map[batchKey]time.Time
+	floodID   string
+	seq       int64
 	// gen counts bookkeeping resets (a new leadership). A queued send of
 	// an earlier generation touches nothing when it is delivered: its key
 	// may already belong to a send of this one.
@@ -206,9 +238,20 @@ func New(o Options) (*Dispatcher, error) {
 		cfg: o.Config, eng: o.Engine, channels: o.Channels,
 		gate: o.Gate, term: o.Term, ackLink: o.AckLink, ackCode: o.AckCode,
 		every: o.Every, failN: o.FailAfter, log: o.Log,
-		episodes: map[string]*episode{},
-		sends:    map[sendKey]sendState{},
-		fails:    map[string]int{},
+		chatter: o.Chatter, flood: o.Flood, home: strings.TrimRight(o.Home, "/"),
+		episodes:  map[string]*episode{},
+		sends:     map[sendKey]sendState{},
+		fails:     map[string]int{},
+		chats:     map[string]*chatClock{},
+		batches:   map[int64]*batch{},
+		lastBatch: map[batchKey]time.Time{},
+	}
+	if o.Flood.Group {
+		f, ok := o.Engine.(Flooder)
+		if !ok {
+			return nil, fmt.Errorf("escalate: grouping pages in a flood needs an Engine that reports its flood (Flooder)")
+		}
+		d.flooder = f
 	}
 	if d.every <= 0 {
 		d.every = time.Second
@@ -333,11 +376,34 @@ func (d *Dispatcher) Tick(now time.Time) {
 		d.episodes = map[string]*episode{}
 		d.sends = map[sendKey]sendState{}
 		d.fails = map[string]int{}
+		d.chats = map[string]*chatClock{}
+		d.batches = map[int64]*batch{}
+		d.lastBatch = map[batchKey]time.Time{}
+		d.floodID = ""
 		d.failing.Store(false)
 		d.gen++
 		d.lastTerm, d.termSeen = term, true
 	}
+	// A flood groups the pages of the alarms it covers (#1249). After a
+	// takeover the engine carries the flood, so this leadership's first
+	// look groups its resends too.
+	var flood *alarm.Flood
+	if d.flooder != nil {
+		flood = d.flooder.Flood()
+	}
+	if flood == nil || flood.ID != d.floodID {
+		clear(d.lastBatch)
+		d.floodID = ""
+		if flood != nil {
+			d.floodID = flood.ID
+		}
+	}
+	var cands map[batchKey][]cand
+	if flood != nil {
+		cands = map[batchKey][]cand{}
+	}
 	seen := make(map[string]bool, 16)
+	pinned := map[string]bool{}
 	for _, r := range d.eng.Active() {
 		wait := waitKey(r)
 		if wait == 0 || wait > now.UnixMilli() {
@@ -350,7 +416,8 @@ func (d *Dispatcher) Tick(now time.Time) {
 			if ep != nil {
 				d.end(r.ID)
 			}
-			ep = &episode{wait: wait, policy: d.cfg.Select(r.Def, time.UnixMilli(wait))}
+			ep = &episode{wait: wait}
+			ep.policy = d.cfg.Select(r.Def, time.UnixMilli(wait))
 			d.episodes[r.ID] = ep
 		}
 		seen[r.ID] = true
@@ -364,27 +431,81 @@ func (d *Dispatcher) Tick(now time.Time) {
 			// escalation, from that activation.
 			since = time.UnixMilli(r.ActiveMs)
 		}
+		grouped := flood != nil && (!d.individual(r) || mutEscalate("group_individual_ignored")) &&
+			!(firstLook && mutEscalate("takeover_resend_individual"))
+		// A bounce that restarted the clock inside a chattering episode is
+		// held: the alarm escalates on the episode's clock instead. A wait
+		// that began with the episode (or before it) is the latched case,
+		// already once per level, and keeps its own clock.
+		if d.chatter && r.Chatter != nil && (since.UnixMilli() > r.Chatter.SinceMs ||
+			(mutEscalate("chatter_pin_latched") && since.UnixMilli() == r.Chatter.SinceMs)) {
+			cc := d.chatClockFor(r, p, now, firstLook)
+			pinned[r.ID] = true
+			d.hold(r, cc, since.UnixMilli())
+			if !mutEscalate("chatter_pages_per_bounce") {
+				if cc.policy != nil && chatterWants(r) {
+					d.due(r, &cc.escClock, kindChatter, now, term, grouped, cands)
+				}
+				continue
+			}
+		}
 		if !pagesNow(r, p.Stop) {
 			continue // unack-rtn under ack-or-rtn: waits, but pages nobody
 		}
 		if !ep.since.Equal(since) {
-			d.endSends(r.ID, ep)
-			ep.since = since
-			ep.people = map[int][]string{}
+			d.endSends(kindAlarm, r.ID, ep.since)
+			ep.restart(since)
 			ep.skipBelow, ep.late = joinLate(p.steps, now.Sub(since), d.every)
 			ep.lateWhy = joinedLate
+			if d.chats[r.ID] != nil {
+				// Its chatter just ended with this activation standing.
+				ep.lateWhy = afterChatter
+			}
 			if firstLook {
 				// Only the leader sends, and what it sent is not kept: the
 				// current level goes again, once.
 				ep.lateWhy = d.resendWhy()
 			}
 		}
-		d.due(r, ep, now, term)
+		if cc := d.chats[r.ID]; cc != nil && (cc.heldAt == since.UnixMilli() || mutEscalate("chatter_end_skips_new")) &&
+			!mutEscalate("chatter_end_burst") {
+			// The chatter just ended with the clock it held standing: the
+			// pinned clock, which began no later and sent each level due
+			// on it, covered the levels due here now; only later ones
+			// page. An activation it never held began after the episode
+			// ended (one before would have continued it): new, it pages.
+			ep.skipBelow, ep.late = max(ep.skipBelow, dueSteps(p.steps, now.Sub(ep.since))), false
+		}
+		d.due(r, &ep.escClock, kindAlarm, now, term, grouped, cands)
 	}
 	for id := range d.episodes {
 		if !seen[id] {
 			d.end(id) // waits on nobody now: acknowledged, normal, shelved, gone
 		}
+	}
+	// A pinned clock outlives a look with its alarm in normal or
+	// acknowledged: it ends when the engine says the episode did.
+	for id, cc := range d.chats {
+		if pinned[id] {
+			continue
+		}
+		occ := ""
+		if r, ok := d.eng.Lookup(id); ok {
+			if r.Chatter != nil && r.Chatter.SinceMs == cc.since.UnixMilli() && !mutEscalate("chatter_clock_per_wait") {
+				// Between bounces (in normal, with no acknowledgement to
+				// wait on): its levels still fall due.
+				if cc.policy != nil && chatterWants(r) {
+					grouped := flood != nil && !d.individual(r)
+					d.due(r, &cc.escClock, kindChatter, now, term, grouped, cands)
+				}
+				continue
+			}
+			occ = r.Occurrence
+		}
+		d.endChat(id, cc, occ)
+	}
+	if len(cands) > 0 {
+		d.sendBatches(flood, cands, now, term)
 	}
 }
 
@@ -403,6 +524,18 @@ func (d *Dispatcher) resendWhy() string {
 		return ResendTakeover
 	}
 	return ResendRestart
+}
+
+// dueSteps is how many of steps have fallen due after elapsed.
+func dueSteps(steps []Step, elapsed time.Duration) int {
+	n := 0
+	for _, s := range steps {
+		if s.At > elapsed {
+			break
+		}
+		n++
+	}
+	return n
 }
 
 // joinLate decides which of an escalation's due steps a controller that
@@ -432,46 +565,60 @@ func joinLate(steps []Step, elapsed, every time.Duration) (int, bool) {
 
 func (d *Dispatcher) end(id string) {
 	if ep := d.episodes[id]; ep != nil {
-		d.endSends(id, ep)
+		d.endSends(kindAlarm, id, ep.since)
 	}
 	delete(d.episodes, id)
 }
 
-// endSends forgets the finished sends of ep's current clock. A pending
-// one stays until the sender resolves it, so it is never queued twice.
-func (d *Dispatcher) endSends(id string, ep *episode) {
-	since := ep.since.UnixMilli()
+// endSends forgets the finished sends of one clock. A pending one stays
+// until the sender resolves it, so it is never queued twice.
+func (d *Dispatcher) endSends(kind sendKind, id string, since time.Time) {
+	ms := since.UnixMilli()
 	for k, st := range d.sends {
-		if k.id == id && k.since == since && st == done {
+		if k.kind == kind && k.id == id && k.since == ms && st == done {
 			delete(d.sends, k)
 		}
 	}
 }
 
-// due queues the sends of every step that has fallen due and is neither
-// queued nor done. Recipients are resolved now, so a roster's handover
-// between two levels pages the new person.
-func (d *Dispatcher) due(r alarm.Record, ep *episode, now time.Time, term uint64) {
-	elapsed := now.Sub(ep.since)
-	for i, s := range ep.policy.steps {
+// due queues the sends of every step of clk that has fallen due and is
+// neither queued nor done. Recipients are resolved now, so a roster's
+// handover between two levels pages the new person. Under a flood that
+// groups r (grouped), a due step joins its policy step's next batch
+// instead (cands), unless a grouped page already covers it or is in
+// flight: then only the people a failed grouped page missed are paged.
+func (d *Dispatcher) due(r alarm.Record, clk *escClock, kind sendKind, now time.Time, term uint64, grouped bool, cands map[batchKey][]cand) {
+	elapsed := now.Sub(clk.since)
+	for i, s := range clk.policy.steps {
 		if s.At > elapsed {
 			break
 		}
-		if i < ep.skipBelow {
+		if i < clk.skipBelow || clk.skip[i] {
 			continue
 		}
-		lvl := ep.policy.Levels[s.Level]
+		lvl := clk.policy.Levels[s.Level]
 		reason := ""
-		if ep.late {
-			reason = ep.lateWhy
+		if clk.late {
+			reason = clk.lateWhy
 		}
-		people, ok := ep.people[i]
+		if sg := clk.steps[i]; sg != nil && (sg.pending > 0 || sg.covered) {
+			for _, tv := range sg.fallback {
+				d.queue(r, clk, kind, i, s, tv.to, tv.via, reason, term)
+			}
+			continue
+		}
+		if grouped && (clk.steps[i] == nil || len(clk.steps[i].fallback) == 0) {
+			bk := batchKey{policy: clk.policy.ID, step: i}
+			cands[bk] = append(cands[bk], cand{r: r, kind: kind, clk: clk, reason: reason})
+			continue
+		}
+		people, ok := clk.people[i]
 		if !ok {
 			people = d.recipients(lvl.Notify, now)
-			ep.people[i] = people
+			clk.people[i] = people
 		}
 		if len(people) == 0 {
-			k := sendKey{id: r.ID, since: ep.since.UnixMilli(), step: i, to: "", via: ""}
+			k := sendKey{kind: kind, id: r.ID, since: clk.since.UnixMilli(), step: i}
 			if d.sends[k] == 0 {
 				d.sends[k] = done
 				d.eng.Notified(r.ID, alarm.Notice{Level: s.Level + 1, Via: strings.Join(lvl.Via, ","),
@@ -482,21 +629,31 @@ func (d *Dispatcher) due(r alarm.Record, ep *episode, now time.Time, term uint64
 		}
 		for _, to := range people {
 			for _, via := range lvl.Via {
-				k := sendKey{id: r.ID, since: ep.since.UnixMilli(), step: i, to: to, via: via}
-				if d.sends[k] != 0 {
-					continue
-				}
-				msg := Message{Alarm: r, Policy: ep.policy.ID, Level: s.Level + 1, Repeat: s.Repeat, To: to, Reason: reason}
-				d.inflight.Add(1)
-				select {
-				case d.q[via] <- queued{key: k, term: term, gen: d.gen, msg: msg}:
-					d.sends[k] = pending
-				default:
-					d.inflight.Done()
-					d.dropped.Add(1) // tried again on the next look
-				}
+				d.queue(r, clk, kind, i, s, to, via, reason, term)
 			}
 		}
+	}
+}
+
+// queue queues one individual send (an alarm's own page, or its chatter
+// notice) unless it is queued or done.
+func (d *Dispatcher) queue(r alarm.Record, clk *escClock, kind sendKind, i int, s Step, to, via, reason string, term uint64) {
+	k := sendKey{kind: kind, id: r.ID, since: clk.since.UnixMilli(), step: i, to: to, via: via}
+	if d.sends[k] != 0 {
+		return
+	}
+	msg := Message{Alarm: r, Policy: clk.policy.ID, Level: s.Level + 1, Repeat: s.Repeat, To: to, Reason: reason}
+	if kind == kindChatter {
+		c := *r.Chatter
+		msg.Chatter, msg.Link = &c, d.alarmLink(r.ID)
+	}
+	d.inflight.Add(1)
+	select {
+	case d.q[via] <- queued{key: k, term: term, gen: d.gen, msg: msg}:
+		d.sends[k] = pending
+	default:
+		d.inflight.Done()
+		d.dropped.Add(1) // tried again on the next look
 	}
 }
 
@@ -545,10 +702,14 @@ func (d *Dispatcher) deliver(q queued) {
 		d.release(q)
 		return
 	}
-	if d.ackLink != nil && q.msg.Alarm.Occurrence != "" {
+	// A chatter notice and a grouped page carry no ack link or code: they
+	// bind one occurrence, which a chatter changes at every bounce and a
+	// grouped page does not have.
+	plain := q.key.kind == kindAlarm || mutEscalate("notice_carries_ack")
+	if plain && d.ackLink != nil && q.msg.Alarm.Occurrence != "" {
 		q.msg.AckURL = d.ackLink(q.msg, q.key.via)
 	}
-	if d.ackCode != nil && q.msg.Alarm.Occurrence != "" {
+	if plain && d.ackCode != nil && q.msg.Alarm.Occurrence != "" {
 		q.msg.AckCode = d.ackCode(q.msg, q.key.via)
 	}
 	ctx, cancel := context.WithTimeout(d.ctx, d.sendTimeout)
@@ -584,10 +745,19 @@ func (d *Dispatcher) deliver(q queued) {
 			f += "; " + reason
 		}
 		reason = f
-		d.log.Warn("alarm notification failed", "id", q.msg.Alarm.ID, "to", q.key.to, "via", q.key.via, "level", q.msg.Level, "reason", Failure(err))
+		id := q.msg.Alarm.ID
+		if q.msg.Group != nil {
+			id = alarm.FloodJournalID
+		}
+		d.log.Warn("alarm notification failed", "id", id, "to", q.key.to, "via", q.key.via, "level", q.msg.Level, "reason", Failure(err))
 	}
+	var b *batch
 	d.mu.Lock()
 	if q.gen == d.gen {
+		if q.key.kind == kindGroup {
+			b = d.resolveBatch(q.key.since, toVia{q.key.to, q.key.via}, err == nil, err != nil)
+			delete(d.sends, q.key) // a batch number is never queued again
+		}
 		if d.sends[q.key] == pending {
 			// A failed send is not tried again: the next level, or a
 			// repeat, comes on its own timer.
@@ -605,8 +775,40 @@ func (d *Dispatcher) deliver(q queued) {
 		d.failing.Store(failing)
 	}
 	d.mu.Unlock()
+	if q.key.kind == kindGroup {
+		// Who was told what stays auditable per alarm: each alarm the page
+		// listed gets its row, grouped (or failed, and then paged on its
+		// own to this person by this channel).
+		if b == nil {
+			return // bookkeeping since reset: an earlier leadership's page
+		}
+		result, why := alarm.NotifyGrouped, "flood "+b.floodID
+		if err != nil {
+			result, why = alarm.NotifyFailed, "flood "+b.floodID+" grouped page: "+Failure(err)+"; paged on its own"
+		}
+		if q.msg.Reason != "" {
+			why += "; " + q.msg.Reason
+		}
+		for _, ref := range b.listed {
+			d.eng.Notified(ref.id, alarm.Notice{Level: q.msg.Level, To: q.key.to, Via: q.key.via,
+				Result: result, Reason: why, Occurrence: ref.occ})
+		}
+		return
+	}
+	if q.msg.Chatter != nil && err == nil {
+		reason = chatterWhy(q.msg.Chatter, reason)
+	}
 	d.eng.Notified(q.msg.Alarm.ID, alarm.Notice{Level: q.msg.Level, To: q.key.to, Via: q.key.via,
 		Result: result, Reason: reason, Occurrence: q.msg.Alarm.Occurrence})
+}
+
+// chatterWhy is a chatter notice's row reason.
+func chatterWhy(c *alarm.Chatter, reason string) string {
+	s := fmt.Sprintf("chattering: %d times in %s", c.Activations, time.Duration(c.WindowMs)*time.Millisecond)
+	if reason != "" {
+		s += "; " + reason
+	}
+	return s
 }
 
 // transient reports a failure worth another attempt: no answer, no
@@ -631,30 +833,67 @@ func (d *Dispatcher) release(q queued) {
 	d.mu.Lock()
 	if q.gen == d.gen && d.sends[q.key] == pending {
 		delete(d.sends, q.key)
+		if q.key.kind == kindGroup {
+			d.resolveBatch(q.key.since, toVia{q.key.to, q.key.via}, false, false)
+		}
 	}
 	d.mu.Unlock()
 }
 
-// waiting reports whether the escalation a send belongs to is still on:
-// the dispatcher still tracks it at the same clock, and the engine, asked
-// now, still has the alarm waiting on a person under the policy's stop
-// rule, since that same moment.
+// waiting reports whether the escalation a send belongs to is still on,
+// judged from the engine now. A grouped page is wanted while any alarm it
+// lists still is.
 func (d *Dispatcher) waiting(k sendKey) bool {
+	if k.kind != kindGroup {
+		return d.clockWaiting(k.kind, k.id, k.since)
+	}
 	d.mu.Lock()
-	ep := d.episodes[k.id]
-	ok := ep != nil && ep.policy != nil && ep.since.UnixMilli() == k.since
+	var refs []clockRef
+	if b := d.batches[k.since]; b != nil {
+		refs = slices.Clone(b.listed)
+	}
+	d.mu.Unlock()
+	for _, ref := range refs {
+		if d.clockWaiting(ref.kind, ref.id, ref.since) {
+			return true
+		}
+	}
+	return false
+}
+
+// clockWaiting reports whether one clock of alarm id is still on: the
+// dispatcher still tracks it at the same start, and the engine, asked
+// now, still has the alarm waiting on a person under the policy's stop
+// rule since that same moment (an alarm's own clock), or still in the
+// same chattering episode and wanting its notice (a pinned clock).
+func (d *Dispatcher) clockWaiting(kind sendKind, id string, since int64) bool {
+	d.mu.Lock()
 	var stop string
 	var wait int64
-	if ok {
-		stop, wait = ep.policy.Stop, ep.wait
+	var ok bool
+	if kind == kindChatter {
+		cc := d.chats[id]
+		ok = cc != nil && cc.policy != nil && cc.since.UnixMilli() == since
+	} else {
+		ep := d.episodes[id]
+		ok = ep != nil && ep.policy != nil && ep.since.UnixMilli() == since
+		if ok {
+			stop, wait = ep.policy.Stop, ep.wait
+		}
 	}
 	d.mu.Unlock()
 	if !ok {
 		return false
 	}
-	r, found := d.eng.Lookup(k.id)
-	return found && waitKey(r) == wait && pagesNow(r, stop) &&
-		(stop != StopAckOrRTN || r.ActiveMs == k.since)
+	r, found := d.eng.Lookup(id)
+	if !found {
+		return false
+	}
+	if kind == kindChatter {
+		return r.Chatter != nil && r.Chatter.SinceMs == since && chatterWants(r)
+	}
+	return waitKey(r) == wait && pagesNow(r, stop) &&
+		(stop != StopAckOrRTN || r.ActiveMs == since)
 }
 
 // waitKey is what one escalation of r is keyed on, zero while r pages

@@ -94,10 +94,21 @@ var actionClass = map[string]string{
 	// while the journal is down like the other operator actions.
 	"push.subscribe":   operator,
 	"push.unsubscribe": operator,
-	"alarm.ack":        operator,
-	"alarm.shelve":     operator,
-	"alarm.unshelve":   operator,
-	"sfc.step":         operator,
+	// Watching a camera live (#724): journalled when it starts and ends, and, like
+	// the other operator actions, allowed while the journal is down (the entry is
+	// kept in memory and written later).
+	"camera.view": operator,
+	// a picture kept when an alarm activates is the system's own record; purging
+	// them is an engineer's, never unrecorded (#724)
+	"camera.snapshot":       operator,
+	"camera.snapshot-view":  operator, // a person looking at a kept picture
+	"camera.snapshot-purge": strict,
+	"camera.ptz":            operator, // a move or a preset: allowed while the journal is down like a tag write
+	"camera.ptz-stop":       recovery, // a stop is a way back
+	"alarm.ack":             operator,
+	"alarm.shelve":          operator,
+	"alarm.unshelve":        operator,
+	"sfc.step":              operator,
 	// Back in service shows alarms again: a way back, as a force's clear.
 	"alarm.in-service": recovery,
 	"sfc.transition":   operator,
@@ -153,6 +164,13 @@ var actionClass = map[string]string{
 	// A person's word for the operator-intent log, which may accept losing
 	// what other copies hold (#1029 3c-3c-2a).
 	"redundancy.vouch": strict,
+	// Outputs to the field before the program released them (#710 (b2)).
+	"redundancy.release-hold": strict,
+	// Hands the lead to the standby (#710 d1c).
+	"redundancy.switchover": strict,
+	"redundancy.failback":   strict,
+	// Which key a pair takes as the other controller's (#710 2b).
+	"redundancy.unpin": strict,
 }
 
 const (

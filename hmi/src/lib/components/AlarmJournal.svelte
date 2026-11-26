@@ -14,6 +14,8 @@
 	import Button from './Button.svelte';
 	import { pagingEvent, pagingOutcome, visibleKind } from '../alarmjournal.js';
 	import { detectionEvent, detectionOutcome } from '../alarmchatter.js';
+	import { defaultSnapshotClient, NO_SNAP_VIEW, type SnapshotClient } from '../alarmsnaps.js';
+	import AlarmSnaps from './AlarmSnaps.svelte';
 
 	const EVENT_LABEL: Record<AlarmEventKind, string> = {
 		active: 'Activated',
@@ -66,7 +68,8 @@
 		to,
 		onrange,
 		sites,
-		loading = false
+		loading = false,
+		snapshotClient = defaultSnapshotClient
 	}: {
 		events: AlarmEvent[];
 		/** Epoch ms range currently loaded — reflected in the picker. */
@@ -76,7 +79,12 @@
 		onrange: (from: number, to: number) => void;
 		sites?: string[];
 		loading?: boolean;
+		/** The pictures kept at activation (#724); null: ask for none. */
+		snapshotClient?: SnapshotClient | null;
 	} = $props();
+
+	// The person may read the journal but not view cameras: said once, not per row.
+	let picturesDenied = $state(false);
 
 	let preset = $state<Preset>('24h');
 	// Seeded once from the initial `from`/`to` props — the picker is the
@@ -226,6 +234,10 @@
 		</div>
 	</div>
 
+	{#if picturesDenied}
+		<p class="snapnote" role="status">{NO_SNAP_VIEW}</p>
+	{/if}
+
 	<div class="tablescroll">
 		<table>
 			<thead>
@@ -244,7 +256,7 @@
 					{#each filtered as e (rowKey(e))}
 						<tr>
 							<td class="col-time num">{fmtTime(e.ts)}</td>
-							<td class="col-alarm" title={e.id}>{e.name}</td>
+							<td class="col-alarm" title={e.id}>{e.name}{#if snapshotClient && e.kind === 'active' && e.occurrence}<AlarmSnaps client={snapshotClient} occurrence={e.occurrence} name={e.name} ondenied={() => (picturesDenied = true)} />{/if}</td>
 							<td class="col-event">{eventText(e)}</td>
 							<td class="col-state" data-label="now">{afterText(e)}</td>
 							<td class="col-who" class:blank={!e.by} data-label="by">{e.by ?? '—'}</td>
@@ -353,6 +365,11 @@
 		font: inherit;
 		font-size: var(--font-xs);
 		padding: 5px 8px;
+	}
+	.snapnote {
+		margin: 0;
+		font-size: var(--font-xs);
+		color: var(--muted);
 	}
 	.tablescroll {
 		overflow-x: auto;

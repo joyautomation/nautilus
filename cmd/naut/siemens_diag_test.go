@@ -156,3 +156,20 @@ func TestSiemensDiagRefusalsNameTheFix(t *testing.T) {
 		})
 	}
 }
+
+func TestSiemensDiagReadsThePasswordFromAFile(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "pw")
+	if err := os.WriteFile(f, []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := resolveSiemensDiag(siemensDiagConfig{count: 5}, "192.0.2.10", "naut", "ab", t.TempDir(),
+		env(map[string]string{"NAUTILUS_SIEMENS_PASSWORD_FILE": f}))
+	if err != nil || c.password != "from-file" {
+		t.Fatalf("password %q, err %v", c.password, err)
+	}
+	_, err = resolveSiemensDiag(siemensDiagConfig{count: 5}, "192.0.2.10", "naut", "ab", t.TempDir(),
+		env(map[string]string{"NAUTILUS_SIEMENS_PASSWORD_FILE": f + ".missing"}))
+	if err == nil || !strings.Contains(err.Error(), "NAUTILUS_SIEMENS_PASSWORD_FILE") {
+		t.Fatalf("a missing file must name the variable: %v", err)
+	}
+}

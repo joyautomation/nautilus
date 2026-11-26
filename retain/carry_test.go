@@ -10,8 +10,8 @@ import (
 // what stays the standby's own. A field added to State fails
 // TestCarryClassifiesEveryField until it is put in one of them.
 var (
-	carried = []string{"Tags", "ParamBases", "ParamEdits", "ParamCommitted", "Locals", "Programs", "ProgramBases", "DiscardedPrograms", "Push"}
-	kept    = []string{"Alarms", "AlarmFlood", "Substitutes", "IO"}
+	carried = []string{"Tags", "ParamBases", "ParamEdits", "ParamCommitted", "Locals", "Programs", "ProgramBases", "DiscardedPrograms", "Push", "Failback"}
+	kept    = []string{"Alarms", "AlarmFlood", "Substitutes", "IO", "Stream"}
 )
 
 func TestCarryClassifiesEveryField(t *testing.T) {
@@ -49,10 +49,12 @@ func TestCarry(t *testing.T) {
 		ProgramBases:      map[string]string{"main": "own base"},
 		DiscardedPrograms: map[string]string{"main": "own discarded"},
 		Push:              &PushState{Rows: []PushRow{{ID: "own"}}},
+		Failback:          &FailbackState{Count: 1},
 		Alarms:            map[string]AlarmRetain{"A1": {Acked: true, AckBy: "own"}},
 		AlarmFlood:        &AlarmFlood{ID: "own"},
 		Substitutes:       &SubstituteState{HighID: 7},
 		IO:                &IOState{Units: map[string]IOUnit{"own": {}}},
+		Stream:            &StreamPos{Term: 4, Seq: 2},
 	}
 	lead := State{
 		Tags:        map[string]any{"SP": 3.0},
@@ -60,10 +62,12 @@ func TestCarry(t *testing.T) {
 		ParamEdits:  map[string]ParamEdit{"SP": {By: "lead"}},
 		Locals:      map[string]map[string]any{"main": {"n": 9.0}},
 		Push:        &PushState{Rows: []PushRow{{ID: "lead"}}},
+		Failback:    &FailbackState{Suspended: true, By: "user:op"},
 		Alarms:      map[string]AlarmRetain{"A1": {Acked: false}},
 		AlarmFlood:  &AlarmFlood{ID: "lead"},
 		Substitutes: &SubstituteState{HighID: 99},
 		IO:          &IOState{Units: map[string]IOUnit{"lead": {}}},
+		Stream:      &StreamPos{Term: 5},
 		// no online edits, no ParamCommitted: the standby's must go too
 	}
 	got := Carry(own, lead)

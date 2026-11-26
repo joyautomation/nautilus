@@ -69,6 +69,45 @@ type ScanInfo interface {
 	FirstScan() bool
 }
 
+// RedundancyInfo is an optional Host extension: what a redundant pair's
+// runtime knows about the scan in progress (#710 (b)). Every answer is
+// latched at the scan's start and holds for the whole of it, per task. A
+// host without it is not in a pair: every flag FALSE, the count 0.
+type RedundancyInfo interface {
+	// TakeoverScan is true for the whole of a program's first scan after
+	// this process took the lead over from its peer, hot or cold: every
+	// leadership it acquires except its boot's first when it had seen no
+	// peer lease. Not on a same-term resume, nor after an online edit.
+	TakeoverScan() bool
+	// HotTakeover is true for the whole of the first scan after a hot
+	// takeover (one that went on from the peer's state image).
+	HotTakeover() bool
+	// PeerReady is true while a takeover by this leader's standby would go
+	// hot: the standby current, on this build and layouts, no forces held.
+	PeerReady() bool
+	// Takeovers is how many takeovers this process made since it started.
+	Takeovers() int64
+	// TakeoverHold is true while a takeover hold keeps the outputs back.
+	TakeoverHold() bool
+}
+
+// SystemFunctions are the nautilus system functions a user POU or tag may
+// not be named (#710 (b)): calls to them would bind to the user's
+// declaration instead. FIRST_SCAN is not among them: user code that
+// declares its own predates the rule, and keeps it.
+var SystemFunctions = []string{"TAKEOVER_SCAN", "HOT_TAKEOVER", "PEER_READY", "TAKEOVERS", "TAKEOVER_HOLD"}
+
+// IsSystemFunction reports whether name (any case) is one of
+// SystemFunctions.
+func IsSystemFunction(name string) bool {
+	for _, f := range SystemFunctions {
+		if NameKey(f) == NameKey(name) {
+			return true
+		}
+	}
+	return false
+}
+
 func registerHostBuiltins() {
 	RegisterBuiltin(BuiltinSig{
 		Name:   "FIRST_SCAN",
@@ -76,6 +115,31 @@ func registerHostBuiltins() {
 		HostFn: func(host Host, _ []Value) (Value, error) {
 			si, ok := host.(ScanInfo)
 			return BoolVal(ok && si.FirstScan()), nil
+		},
+	})
+	flag := func(name string, f func(RedundancyInfo) bool) {
+		RegisterBuiltin(BuiltinSig{
+			Name:   name,
+			Result: BoolT,
+			HostFn: func(host Host, _ []Value) (Value, error) {
+				ri, ok := host.(RedundancyInfo)
+				return BoolVal(ok && f(ri)), nil
+			},
+		})
+	}
+	flag("TAKEOVER_SCAN", RedundancyInfo.TakeoverScan)
+	flag("HOT_TAKEOVER", RedundancyInfo.HotTakeover)
+	flag("PEER_READY", RedundancyInfo.PeerReady)
+	flag("TAKEOVER_HOLD", RedundancyInfo.TakeoverHold)
+	RegisterBuiltin(BuiltinSig{
+		Name:   "TAKEOVERS",
+		Result: IntNamed("DINT"),
+		HostFn: func(host Host, _ []Value) (Value, error) {
+			ri, ok := host.(RedundancyInfo)
+			if !ok {
+				return IntVal(0), nil
+			}
+			return IntVal(ri.Takeovers()), nil
 		},
 	})
 }

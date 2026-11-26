@@ -51,8 +51,8 @@ VS Code ── edit .st/.ld ──▶ naut check --target siemens   (one rule ta
        1. writer: project → SCL sources (.scl/.db/.udt) + tag table XML + station spec
        2. tiad: create/open project, apply station, import sources, compile
           (messages mapped back to nautilus lines)
-       3. tiad: download dry run (provisional, §3.5) → "software only, stays in RUN"
-          or "needs STOP / reinitialises DB X"; the second needs an explicit yes
+       3. tiad: data layout check (§3.5) → "unchanged, keeps the data"
+          or "may reset DB X"; the second needs an explicit yes (--reset-data)
        4. tiad: download, start; online compare (project == CPU)
                 │
                 ▼
@@ -69,9 +69,9 @@ VS Code ── edit .st/.ld ──▶ naut check --target siemens   (one rule ta
 | Live values, write, RUN/STOP, diagnostics | **Maps** via the Web API (§4) |
 | Ladder overlay | **Maps** for named operands, since values arrive by name. Power flow inside a rung is shown only if the writer keeps it in statics (an option, at a memory cost) |
 | HMI, alarms, history, Sparkplug publish | **Maps**: `naut siemens serve` hosts them against the CPU's values |
-| Download of a change | **Partly.** Changed blocks load in RUN. An interface change reinitialises a DB unless it has a memory reserve *(verify)*, so the writer reserves memory on generated DBs and the download's checks name any DB that would be reinitialised (through the dry run once S2 proves it, §3.5). There is no warm reload with state migration |
+| Download of a change | **Keeps the data when no layout changed** (#1341, §3.5 "Data layout"). A download loads only what changed (`SoftwareOnlyChanges`): a body change loads in RUN and keeps every value, retained or not. A layout change needs `--reset-data`, and the plan names the data blocks it reaches. There is no warm reload with state migration |
 | Force | **No direct mapping** (D4). The Web API writes but does not force, and Siemens' own force is I/O-only and a TIA online function. D4: in v1 `/api/forces` answers 501, as the Logix facade does. The opt-in override layer for I/O-bound tags comes after the loop works, and it is required. A write is never called a force |
-| SFC | Not in the first writer subset. v1.x: an SCL state machine with step flags and step timers in statics, so the SFC view shows active steps live |
+| SFC | **Maps** (#1302): the chart is written as the ST state machine nautilus runs (`sfc.TranspileWithLines`), so step flags, `Step.T` and the timed qualifiers' timers are statics and TONs of the program's FB, named as in nautilus (`_S_<Step>_X`). A body-only edit loads in RUN and keeps the active step; adding a step changes the FB's layout and needs `--reset-data`, which restarts the chart. GRAPH may come later as an option |
 | Field drivers (Modbus, OPC UA client, EtherNet/IP, MQTT, IT) | **Do not map**: they run in `naut`. `naut check --target siemens` refuses them. The CPU's I/O comes from its local modules and its PROFINET devices |
 | Tests | `naut test` runs on nautilus in virtual time. `naut test --target siemens` replays the same scenarios on the CPU in real time |
 
@@ -90,7 +90,8 @@ the TIA project is not saved. The steps:
    `NAUTILUS_SIEMENS_CONFIG_PASSWORD`, `NAUTILUS_SIEMENS_FULL_ACCESS_PASSWORD`,
    `NAUTILUS_SIEMENS_PROTECTION_PASSWORD`, and
    `NAUTILUS_SIEMENS_WEB_PASSWORD_<USER>` for each web user
-   (`NAUTILUS_SIEMENS_PASSWORD` for `online.user`).
+   (`NAUTILUS_SIEMENS_PASSWORD`, or `NAUTILUS_SIEMENS_PASSWORD_FILE`, for
+   `online.user`, and for `naut siemens diag` and `serve`).
 3. **With `--download`, the CPU's deploy record first.** The newest record
    that may have loaded is verified (`POST /v1/deploys/verify`) before the
    deploy opens its own session. A CPU that compares different, or a
@@ -190,8 +191,14 @@ the TIA project is not saved. The steps:
    after a stop, in doubt with the CPU possibly left in STOP. The operator
    types `yes`, or passes `--yes`, which answers exactly what was printed.
    Acting answers each have a flag and are never implied:
-   - `--allow-stop` (otherwise `stopCpu: false`);
-   - `--reinit DB,...` (otherwise none);
+   - `--reset-data` (`resetData: true`, #1341): the load may return data
+     blocks to their start values, retained ones included. The data
+     layout check (§3.5 "Data layout") says when a download needs it,
+     before the plan; the refusal names why and the data blocks, and
+     prints the command to rerun with `--reset-data --allow-stop`
+     (without `--yes`). With `--allow-stop` too, TIA's reinitialize
+     check, which stops the CPU, is answered yes;
+   - `--allow-stop` (otherwise `stopCpu: false`), only with `--reset-data`;
    - `--start` or `--no-start`, one of them always (TIA's start-after
      acts, also on a CPU that was in STOP before);
    - `--hardware` with `--attest-hardware "<statement>"`, plus
@@ -225,6 +232,44 @@ the TIA project is not saved. The steps:
 The NDJSON route for the extension's Download button comes later. It will
 call the same steps.
 
+**Built (verify):** `naut siemens verify [--deploy ID] [dir]`
+(`cmd/naut/siemens_verify.go`). It asks whether the CPU at
+`target.siemens.station.cpu.address` still runs a deploy. By default the
+deploy is the newest record that may have loaded the CPU (`--deploy` names
+another one). The call is `POST /v1/deploys/verify`: TIA Portal's own
+online compare, through Openness, on a copy of that deploy's archive.
+It is read-only and reaches the CPU. It prints the deploy, the blocks the
+compare saw, any differences and the verdict. It exits 0 only on equal. A
+different verdict on the CPU's latest deploy says the CPU was changed
+outside nautilus. An older deploy names the latest one instead. A broken
+archive, a record whose CPU is another address, an open session (tiad
+holds one project at a time) and a verify that left its session open
+each exit 1 and say why. The password, when the CPU asks credentials
+going online, comes from `NAUTILUS_SIEMENS_FULL_ACCESS_PASSWORD`.
+
+**Built (show, viewing only):** an agent started with `TIAD_UI=1`
+(`install-tiad.ps1 -Ui`) runs TIA Portal with its user interface on the
+logged-on console desktop. `POST /v1/sessions/{id}/show` then opens a
+block of the session's project in TIA's own editor (§3.4). Such an agent
+refuses every download, dry runs included: a click or a modal dialog in the
+visible Portal could change or stall a load. Restart the agent without
+`TIAD_UI` to download.
+
+`naut siemens show <block> [dir]` (`cmd/naut/siemens_show.go`) drives it.
+It opens the project the last deploy saved and shows the block (TIA's
+name, such as `naut_main`) in TIA's editor. An agent without the window is
+refused before anything opens, and the refusal names `install-tiad.ps1
+-Ui`. The project stays open, so another show reuses it, and `--close`
+closes it. A show of a block the project lacks closes the session only
+when that show opened it. `--online` also takes the project online to the
+CPU in TIA's window (`POST /v1/sessions/{id}/online`, §3.4). TIA's project
+tree then shows its own online/offline compare, and the device its state,
+the proof a person can see that the CPU runs what was deployed. It goes
+online read-only and stays online until `--close`, which goes offline
+first. For a demo, the order is: deploy, `naut siemens verify`, then
+`naut siemens show --online naut_main`. The verify needs the agent
+free of sessions, and the show keeps one open.
+
 ## 2. Codegen
 
 **Everything is emitted as SCL source, LD and FBD included.** Nobody opens
@@ -234,13 +279,14 @@ Native LAD (SimaticML FlgNet) is D3.
 | nautilus | SCL / TIA |
 |---|---|
 | Program | FB `"naut_Main"` with an instance DB `"naut_Main_DB"`, called from its task's OB `"naut_OB_main"`. Every generated block name carries the block prefix (below) |
-| The task (`scan:`) | Cyclic interrupt OB30 at that cycle, 1 ms to 60 s. **One task in v1**: nautilus copies shared tags in at a task's scan start and commits them at its end, while cyclic interrupt OBs preempt each other and touch the tags DB in place. Copy-in/copy-out for several tasks is its own later item. nautilus has no free-running task, so there is no OB1 |
+| Each task (`scan:`) | A cyclic interrupt OB at its cycle, 1 ms to 60 s: OB30 to OB38, then from OB123. nautilus copies shared tags in at a task's scan start and commits what the scan assigned at its end (runtime/scanview.go); the writer does the same per task (#1300, siemens/writer/tasks.go): a tag two or more tasks name is read and written in a per-task copy (`naut_Scan_<task>`), copied in by the OB before the FB call, and committed after it under per-member / per-bit "assigned" flags. Every OB keeps TIA's default priority (13 on V21, measured 2026-11-23, equal for OB30/31/123), so no task OB preempts another; rate-monotonic priorities with the copy under DIS_AIRT are the follow-up. nautilus has no free-running task, so there is no OB1 |
 | Manifest tags | Global DB `"naut_Tags"` (optimized), the Web API symbol `"naut_Tags".Level`. Members are visible and writable to Web API/HMI/OPC UA *(verify the attribute spelling in SCL source)* |
 | I/O-bound tags | PLC tag table, `%I`/`%Q` addresses from the station spec |
-| UDT | PLC data type (`.udt`) |
-| User FB / function | FB / FC |
-| TON TOF TP R_TRIG F_TRIG | The IEC instructions as multi-instances (`TON_TIME`, …); the members already match (`.Q` `.ET`) |
-| CTU CTD CTUD | `CTU_LINT` etc.: nautilus's counter value is its 64-bit int and keeps counting past 32767 |
+| UDT | Every STRUCT the written SCL reaches is a PLC data type `"<prefix><Name>"` (a `.udt` source, `TYPE … END_TYPE` with the members' initial values), each after the types it holds and all ahead of the blocks; tiad generates them into the data types group named like the block group (D1b, #1301). Variables, tags, members and pins name the type, so a user FB's STRUCT pin and a function's STRUCT result work. A tag's `init:` map is written as BEGIN-section assignments in the tags DB (`WL101.Pump.Run := TRUE;`, kept by TIA V21). A type takes a name like a block (TIA's one name space), and needs the block prefix. A function writing its own STRUCT input is refused: TIA passes it by reference |
+| User FB / function | The project's FUNCTION_BLOCK → FB `"naut_<Name>"`, each instance a multi-instance in the block that declares it (`m101 : "naut_MotorStarter";`, `#m101(...)`), so its data lives inside the caller's as in nautilus. FUNCTION → FC with its return type; the body works on a temp named like the function, sets every local first (an FC's temps start undefined, nautilus starts each call afresh) and copies the result to the return value at the end and at each RETURN. Only the blocks a program reaches are written, callees first (TIA generates a block only once those it instantiates exist, measured on V21). Arguments are stored as nautilus stores them (store rule, `=>` as an assignment after the call); a VAR_IN_OUT is TIA's InOut. `VAR CONSTANT` → SCL `VAR CONSTANT`; a library's global constant → a `VAR CONSTANT` copy, same name, in each block that names it (a PLC constant tag table is the later native form) (#1301, D1) |
+| TON TOF TP R_TRIG F_TRIG | The IEC instructions as multi-instances (`TON_TIME`, …); the members already match (`.Q` `.ET`). An S7-1500 IEC timer updates `Q`/`ET` on every read, not only at its call (bench 1510SP, #1385), where nautilus returns the last call's values: each timer `t` gets a static `"<prefix>t_last" : Struct Q : Bool; ET : Time; END_STRUCT` beside it (a number after it if the block declares that name), its call binds `Q =>`/`ET =>` into it, and every read of `t.Q`/`t.ET` (in the block, or from a caller through `m.t.Q`) reads the static, so the program touches the timer only through its call and the instance's own `Q`/`ET`, which the Web API reads (`Output.Symbol`, `naut siemens serve`), hold the last call's values too; an `=>` binding of the timer's own call is an assignment from it after the call. A write to a timer's `Q`/`ET` is refused. A timer in a program's `VAR RETAIN` goes in the plain VAR section with its latch, as nautilus starts every clock block over (siemens/writer/timers.go) |
+| CTU CTD CTUD | An `IEC_LCOUNTER` multi-instance (nautilus's counter value is its 64-bit int), called by its method: `#c.CTU(CU := …, R := …, PV := …)`, `#c.CTD(CD, LD, PV)`, `#c.CTUD(CU, CD, R, LD, PV)`, every input in that order, one the call leaves out as the counter's own member (`R := #c.R`), which keeps its last value as nautilus does. CTU's `Q` is `.QU`, CTD's `.QD`; an `=>` binding is read after the call (TIA takes none at the method). TIA V21 refuses `CTU_LINT`/`CTD_LINT` (their `.Q` is "not defined", and a LINT variable as PV is an "invalid data type"); the method form compiles, and on the bench 1510SP behaves as nautilus's counters do (#1338, #1371; `siemens/writer/testdata/instances`) |
+| PID | nautilus's own PID as an SCL FB `"naut_PID"` (`siemens/writer/pid.scl`, a line-by-line twin of `lang/ir/builtins_pid.go`; TIA's PID_Compact and CONT_C behave otherwise), each instance a multi-instance like a user FB's. Pins as nautilus names them, LREAL where nautilus's are REAL (nautilus's REAL is 64-bit), `"DT"`/`"DB"` quoted; dt when DT is 0 from RUNTIME on the instance's own MEM. Never retained: a program's `VAR RETAIN` PID goes in its plain VAR section, as nautilus starts every clock block over. Proven on the bench CPU (D2, #1301; "PID" below) |
 | SR RS | Written inline as set/reset logic on a static, since they are believed to be LAD/FBD boxes that SCL cannot call *(verify)* |
 | Elementary types, arrays, structs | Direct. DT becomes one of DT, LDT or DTL, chosen and documented *(verify each on FW 3.1)* |
 | `VAR RETAIN` | Retentive members *(verify the SCL source syntax for per-member retain)* |
@@ -266,17 +312,260 @@ The rules:
   refused before anything else.
 - **Integer arithmetic** is 64-bit in nautilus, wrapped only at the store
   (#800). The writer widens every narrow operand to LINT and wraps
-  explicitly at the store. Where it cannot (an FB input, a function
-  argument, a CASE selector, a REAL target), integer arithmetic is refused.
-- **Refused in the first subset:** division by anything but a non-zero
-  constant (nautilus gives 0 and counts it; the CPU's answer is not pinned
-  down), TRUNC (LINT in nautilus, DINT in TIA), LTIME (milliseconds in
-  nautilus, nanoseconds in TIA), TIME arithmetic (64-bit against 32-bit
-  milliseconds), bitwise operators, STRING (TIA's holds 254 characters, a
-  nautilus STRING has no length), arrays, UDTs, enums, user POUs and SR/RS.
-- **Known divergence, documented rather than refused:** a REAL → integer
-  conversion out of range faults the scan in nautilus, while the CPU sets
-  ENO FALSE and carries on.
+  explicitly at the store, an argument of the project's own FB or
+  function included (nautilus stores an argument by the same rule). Where
+  it cannot (an input of a standard block, an argument of a standard
+  function, a CASE selector, a REAL target), integer arithmetic is refused.
+- **What it does not translate yet is a writer gap,** never a rule for
+  the person: the diagnostic reads "the Siemens writer doesn't translate X
+  yet (#N)", N the issue that closes it. B #1299 (closed: structs and
+  their start values are written, the library is in scope; enumerations
+  are written as their integer and arrays as TIA's Array with checked
+  indices, below); C #1300
+  more than one task (written since C: per-task copies of shared tags);
+  D #1301 (closed: the project's FUNCTIONs, FUNCTION_BLOCKs, dialect
+  blocks such as TONR and VAR CONSTANT are written since D1, STRUCT pins
+  and results as PLC data types since D1b, nautilus's PID since D2); E #1302 SFC (written since E as the ST state machine
+  nautilus runs; GRAPH maybe later as an option, James 11-23); F #1303 STRING and the string
+  functions (written since F; a WSTRING or a non-ASCII literal is still a
+  gap there), #1375 the conversions to and from STRING it cannot write yet
+  (REAL and LREAL text, TIME, bit strings, STRING_TO_BOOL); G #1304 TIME arithmetic, LTIME and dates (64-bit milliseconds against
+  TIA's 32-bit TIME and nanosecond LTIME); #1305 the rest (ULINT and LWORD
+  arithmetic, ATAN2, integer ABS, an instance of the project's block in a
+  program's VAR RETAIN, which could hold a PID, …). Real limits keep their own words (a
+  task interval over 60 s, a block name collision).
+- **Coverage PR A (#789)** writes:
+  - bitwise AND/OR/XOR of one integer or bit string type on the bit string
+    of its width (`WORD_TO_INT(INT_TO_WORD(a) AND INT_TO_WORD(b))`), a
+    literal taking the other operand's type when it holds it; any other
+    mix, and NOT, at 64 bits through LWORD as nautilus computes them, the
+    store wrapping; NOT stored into its operand's own type at that width;
+  - bit access `.3` / `.%X3` as TIA's `.%X3`; bit strings in arithmetic as
+    the unsigned integer of their width (LWORD arithmetic is a gap);
+  - division and MOD by anything but a non-zero constant through a
+    generated FC per type (`"naut_DIV_LINT"`, `MOD_LINT`, `DIV_REAL`,
+    `DIV_LREAL`) that answers 0 for a zero divisor, as nautilus does,
+    written only when used and first in the file list;
+  - TRUNC as `TRUNC_LINT` (nautilus's 64-bit int), `TRUNC_<int>`, the
+    overloaded `TO_<type>` as the explicit conversion from the argument's
+    type, MIN/MAX of 2 to 32 inputs, MUX of 2 to 32, SHL/SHR/ROL/ROR on the
+    bit string of the operand's width (so SHR of an INT is logical, as in
+    nautilus), named arguments put in IEC order (`ir.FormalNames`);
+  - SR and RS, which TIA has only as LAD/FBD boxes, as a static STRUCT of
+    their slots (inputs persist across calls as an instance's do) and the
+    latch inline.
+  - An untyped manifest tag takes the type a program's VAR_EXTERNAL binds
+    it as, as the runtime does (it used to take its init's REAL).
+- **Coverage PR F (#1303)** writes STRING as TIA's `String` (254 bytes;
+  both count bytes). Measured offline (TIA V21) and on the bench 1510SP
+  (FW 3.1), 2026-11-25:
+  - the string functions with formal parameters (TIA refuses positional
+    ones, LEN aside); CONCAT of up to 32 inputs, a chain of CONCATs as one
+    call, since TIA refuses calls nested 8 deep (the general case is
+    #1374);
+  - a clamp only where the CPU differs: MID, DELETE and REPLACE with a
+    position below 1, INSERT with one below 0, DELETE and REPLACE with a
+    negative length give an empty string on the CPU, where nautilus clamps
+    the argument. The writer clamps it first (`MAX(IN1 := #p, IN2 := 1)`),
+    a constant at write time; a length or position wider than INT is
+    computed at 64 bits and clamped before it narrows. LEFT, RIGHT, FIND,
+    LEN, CONCAT, a position or length past the end, and empty strings
+    agree as they are;
+  - the integer conversions to STRING through `"naut_STR_LINT"` /
+    `"naut_STR_ULINT"`, which drop the `+` TIA writes before a value >= 0;
+    BOOL_TO_STRING as `SEL(G := b, IN0 := 'FALSE', IN1 := 'TRUE')`;
+  - a literal over 254 bytes is refused (TIA's limit), a non-ASCII one is
+    a gap until the code page is measured.
+- **PID (D2, #1301).** `"naut_PID"` is `siemens/writer/pid.scl`, a
+  line-by-line twin of nautilus's PID, written when a program reaches one.
+  Measured on TIA V21 and the bench 1510SP (FW 3.1), 2026-11-25:
+  - TIA refuses `DT` and `DB` as names unquoted ("The specified value "DT"
+    is invalid"); quoted, as pins and as named arguments, they compile.
+    SCL names are case-insensitive, so the twin's temps are `t_…` (a temp
+    `pv` is the pin `PV`).
+  - An FB's SCL source has no NON_RETAIN section ("The specified value
+    "NON_RETAIN" is invalid"): a multi-instance keeps its data with the
+    caller's section, and one in a RETAIN section compiles (and would be
+    kept). nautilus keeps no clock block across a restart
+    (`runtime/retainlocals.go`), so a program's `VAR RETAIN` PID is written
+    in its plain VAR section, with a comment saying why, and a project
+    block's instance in `VAR RETAIN` stays refused (it could hold a PID).
+    On the CPU a STOP to RUN (Web API mode request, no reset) started
+    every PID over, nested and moved ones included, while a `VAR RETAIN`
+    DINT in the same program kept its value.
+  - LREAL pins: with REAL ones, a program binding LREAL tags (booster-1)
+    compiled with a "sign or accuracy may be lost" warning per argument;
+    with LREAL pins it compiles 0/0, and a REAL tag reading CV gets that
+    warning instead, as any LREAL stored into a REAL does.
+  - **The trace compare** (the proof `TestPIDTwinMatchesNautilus` asks
+    for again whenever `lang/ir/builtins_pid.go` changes): a hand-written
+    SCL harness in a cyclic OB (50 ms) takes one row per scan from a DB of
+    inputs (400 scans that hit every branch: the first call, MANUAL
+    tracking and the scan into AUTO, both anti-windup freezes, DIRECT,
+    deadband, RESET, KP 0, KI 0, KD > 0, CV_MIN/CV_MAX 0/0 and swapped),
+    feeds three instances of `pid.scl`, and logs every scan's outputs into
+    an LREAL array DB, read over the Web API afterwards (the Web API's
+    text for a REAL carries 7 significant digits, too few to compare a
+    32-bit value exactly; an LREAL comes back whole). The same rows go
+    through nautilus's PID `Step` in Go. With DT given, all 400 scans were
+    equal, every output to the last bit. With DT 0, the instance measures
+    its own dt, which the harness cannot read (RUNTIME's MEM reads back
+    null over the Web API), so the replay takes the harness's own RUNTIME
+    just before the call: CV within 2.7e-4 relative, and 1.4e-3 on one
+    D_TERM near zero, the difference being the microseconds between the
+    two RUNTIME calls; SAT_HI/SAT_LO equal on every scan. An instance
+    called every third scan agreed the same way (CV within 6.5e-5), and
+    replaying it with one scan's dt instead put I_TERM off by 200%: dt is
+    the time since the instance's own last call, as in nautilus
+    (`TestPIDConditionalCallDtIsSinceLastCall`). A nautilus project
+    through the writer (`naut siemens deploy`; a PID with DT bound, one
+    nested in a user FB, one declared `VAR RETAIN`) ended with the same
+    values as `naut run` gave.
+  - Where it differs, by design: with DT 0, nautilus measures dt in whole
+    milliseconds of the host's wall clock, RUNTIME continuously. Two calls
+    of one instance less than a millisecond apart get dt 0 in nautilus (no
+    integral step, the derivative reset) and a few microseconds on the
+    CPU; a wall clock stepped forward gives nautilus one long dt, which the
+    CPU never sees. Bind DT to a task's dt-tag, as the examples do, to
+    have neither. "Bit for bit" was measured against nautilus on amd64;
+    Go may fuse a multiply and add on arm64, which moves the last bit.
+    Not measured on the CPU: NaN or Inf inputs, a KP*KI that underflows
+    to 0 in MANUAL.
+- **SFC (E, #1302).** A chart goes through `toST` like LD and FBD: its
+  ST is `sfc.TranspileWithLines`, the state machine the runtime itself
+  runs (`runtime/program.go`), so the CPU runs the same per-scan
+  evolution: transitions from the scan's starting step flags, clears
+  before sets, step timers, then actions. Every hidden slot is a plain
+  static of the program's FB under nautilus's own name (`_S_Fill_X`,
+  `_S_Fill_t`, `_q_<Step>_<Target>_<Q>_tmr`); TIA accepts the leading
+  underscore. A diagnostic names the `.sfc` line through the transpile's
+  line map. `Step.T`, MAXTIME and the timed qualifiers read a TON's `ET`
+  or `Q` before its call in the scan, which is exactly what the #1385
+  latch makes read as nautilus does. Measured on TIA V21 and the bench
+  1510SP (FW 3.1), 2026-11-25 (`siemens/writer/testdata/sfc/README.md`):
+  - the nine `lang/conformance/sfc-*` charts compile 0/0;
+  - lift-station (five tasks, the chart PumpSequence) compiles with 0
+    errors once REAL and LREAL to and from TIME, which TIA V21 lacks ("Tag
+    REAL_TO_TIME not defined"; every integer and bit-string conversion
+    with TIME compiles), go through DINT: `DINT_TO_TIME(REAL_TO_DINT(x))`.
+    Compiled only: no trace covers the conversion; that REAL_TO_DINT rounds
+    half to even, as nautilus does, is TIA's documentation. A constant
+    beyond 32-bit milliseconds is refused, a variable warned (what the CPU
+    stores then is not measured);
+  - **trace compare**: all nine in one load, each its own writer output
+    (block prefix per chart), a hand-written harness in a cyclic OB at
+    40 ms (no chart time constant, 100 ms or 50 ms, is a multiple of it,
+    so no timed transition sits on a scan boundary) drives each chart's
+    BOOL inputs from a table of 300 scans and logs step flags, BOOL, INT
+    and TIME outputs every scan; nautilus runs the same conformance
+    projects at 40 ms on the virtual clock (`acceptance`) with the same
+    inputs. All 300 scans of all nine charts were equal, TIME outputs to
+    the millisecond. The same compare shifted by one scan fails on every
+    chart, on the CPU's own log;
+  - STOP to RUN (Web API mode request, no reset), with seven charts away
+    from their initial step: every chart started over at its initial
+    step and the rerun was again equal on every scan, as nautilus starts
+    a chart over (its step flags are plain VAR);
+  - online edit: a chart held in a step, then a change to one
+    transition's condition only (the FB's VAR section unchanged): the
+    deploy loaded in RUN with neither `--reset-data` nor `--allow-stop`,
+    the step stayed active, its P1 action did not run again, and the new
+    condition took effect. Whatever adds or renames a static (a step, a
+    qualifier or timed association, a first `Step.T` read, a line added
+    above an unnamed transition, whose `_en_t<line>`/`_f_t<line>` carry
+    its line) changes the layout, so the check asks for `--reset-data` and
+    the chart restarts at its initial step, where nautilus keeps it live
+    (documented, not measured; `_en_`/`_f_` could become temps, #616).
+- **Arrays (B, #1299)** (`siemens/writer/arrays.go`). An ARRAY is TIA's
+  `Array` of the same bounds (any lower bound, several dimensions,
+  `a[i, j]`; a[i][j] on a 2-D array is merged), bounds folded as nautilus
+  folds them. The bench CPU STOPs on any index out of bounds, read or
+  write (randd/siemens-target/oob-1299), where nautilus faults the scan,
+  keeps what it wrote, counts LogicErrors and runs the next scan. naut-lead
+  ruled (11-26) a guard that mirrors the fault: an index not proved in
+  bounds (a literal inside them, or a FOR variable with a constant range
+  inside them and a body that never writes it) is computed into a LINT
+  temp and checked; out of bounds the block records the fault (flag,
+  nautilus line, block) in its own `naut_fault` (a `<prefix>Fault`: a
+  static of an FB or program, an output of an FC, cleared first thing)
+  and RETURNs. Every caller of a block that can fault (an
+  over-approximation: any index; such a block declares `naut_fault` even
+  when it checks nothing) reads the callee's fault right after the call,
+  takes it over and RETURNs, before the call's `=>` outputs, which
+  nautilus stores only when the block finishes. The task's OB reads its
+  program's `naut_fault` and counts into the task's record in
+  `<prefix>Faults` last, after the copy-out, since nautilus commits a
+  faulted scan. The fault never passes through a global (naut-lead,
+  #1394): a first version kept one flag in the faults DB, which an OB of
+  a higher priority could clear between a lower one's call and its check
+  (tiad sets no OB priority; whether TIA's defaults differ by OB number
+  is not measured), and a block run by two tasks has no one task's flag
+  to name. The checks
+  follow nautilus's order of evaluation (lang/ir vm.go): an assignment's
+  value before its target; an ELSIF's condition only in its branch; a
+  WHILE's before each pass; an FB's inputs one by one into the instance
+  (with a check past the first input the inputs become assignments to
+  the instance's pins, so a fault leaves the earlier ones copied, as in
+  nautilus); a FUNCTION that can fault into a temp, flag checked, ahead
+  of the statement. nautilus does not short-circuit, so a check lifted
+  above its statement is exact. What would move a check across something
+  nautilus does first is refused (#1305): a FUNCTION that writes a tag
+  before the check in one statement, an index in an UNTIL, an index in
+  an in-out argument (nautilus reads it twice), an in-out bound to a block
+  that can fault (nautilus copies it back only when the block finishes;
+  TIA passes it by reference), an index in an input of a TIA instruction
+  past the first. The printer refuses any index no statement checked.
+  TIA hands an FC an ARRAY input by reference, as a STRUCT, so the same
+  refusals apply. A shared array tag is copied whole; a write into an
+  element of one is refused, since nautilus lands element by element.
+- **Enumerations (B, #1299)** (`siemens/writer/enums.go`). TIA has no
+  enumerated type. An enumeration is the integer nautilus carries for it
+  (`ir.EnumDef`, an int64 value): a DInt, because nautilus's OPC UA server
+  serves every enumeration as an Int32 (`opcua/server/value.go` dataType),
+  so a client reading the tag from nautilus or from the CPU sees one type
+  (Sparkplug sends every integer as Int64, and HTTP shows the member's
+  name). A declared base (`(A, B) INT`) is ignored, since nautilus's
+  lowering does not keep it. A LInt is used only when a member's value
+  needs 64 bits, which nautilus's own Int32 cannot serve either. Each member a block names becomes a VAR
+  CONSTANT of that block, `<Enum>_<Member>`, read as `#Mode_Run`. TIA V21
+  compiles a local constant as a CASE label and as a range bound
+  (`#A..#B`), checked 2026-11-26. A variable named like the constant is
+  refused, never shadowed. Start values are the member's number, since
+  SCL declarations take a literal. A declaration with no initial value
+  starts at the type's initial member, as nautilus's does: tags,
+  statics, UDT members and temps, whose reset at the start of each call
+  uses the same number. An unqualified member that two enumerations
+  declare resolves as nautilus's lowering hints it: from an assignment's
+  target, a CASE selector, or a comparison's other side. Anywhere else
+  it is refused, with the qualified spellings to write instead.
+  `TO_<int>` of an enumeration converts its integer under the usual
+  wrapping rule. `TO_<Enum>(n)` keeps n's value, as nautilus does, so a
+  source the enumeration's integer does not hold is refused. Converting
+  an enumeration to anything other than an integer (`TO_STRING`) is
+  #1305.
+- **Known divergences, documented rather than refused:** where nautilus
+  faults the scan the CPU sets ENO FALSE and carries on. Each is a
+  `naut check --target siemens` (and deploy) **warning**, never silent
+  (`writer.Output.Warnings`): a MUX or shift at its use site
+  (`[siemens/divergence]`); REAL → integer conversions, common and seldom
+  provably in range, as ONE summary line per program
+  (`[siemens/conversion-range]`, naut-lead 11-23) whose sites `-v` lists:
+
+  | Construct | Warned unless | nautilus | S7-1500 |
+  |---|---|---|---|
+  | `MUX(K, IN0, …)` | K is a constant in range | K out of range faults the scan | MUX sets ENO FALSE, the scan carries on |
+  | `SHL`/`SHR`/`ROL`/`ROR` | the count N is unsigned or a constant | a negative N faults the scan | N is converted to TIA's unsigned count, beyond the width |
+  | `TRUNC`, `TRUNC_<int>` (summarized per program) | the argument is a constant in range | a value beyond the integer (or NaN) faults the scan | the conversion sets ENO FALSE, the scan carries on |
+  | `REAL_TO_<int>`, `TO_<int>` of a REAL (summarized per program) | the same | the same | the same |
+  | `CONCAT`, `INSERT`, `REPLACE` (summarized per program, `[siemens/string-length]`) | the operands are literals of 254 bytes or fewer in all | the result keeps every byte | the result keeps the first 254 bytes, the scan carries on |
+  | `STRING_TO_<int>`, `STRING_TO_REAL`/`LREAL` (`[siemens/string-parse]`) | never | text that is not a number (or out of range) faults the scan | the PLC silently uses 0 or a partial number (`'4x'` reads as 4, `'2,5'` as 25.0) |
+
+  Only the out-of-range case differs: the rounding is the same (REAL →
+  integer half to even in nautilus, as TIA documents CONVERT and ROUND;
+  TRUNC toward zero in both; TIA's side from its documentation, not yet
+  measured on a CPU). A REAL source is seldom provably in range, which is
+  why those are a per-program count, not a line each.
+
 - Temps have no start value in TIA. nautilus re-sets a temp to its init on
   every scan (#203), so the body starts by assigning each one.
 - Generated state lives in DB members (FB statics), never in temps, so the
@@ -340,8 +629,9 @@ for the owned blocks. Each deploy then:
 ### 3.1 Process
 
 A C# agent on a Windows VM built from the `STACK=tia` golden image. It runs
-TIA Portal Openness without a user interface and serves JSON over HTTP. It
-copies `logixd`, the Logix agent:
+TIA Portal Openness without a user interface (with one under `TIAD_UI=1`,
+for viewing only) and serves JSON over HTTP. It copies `logixd`, the Logix
+agent:
 
 - **Stateless across clones (D1).** The TIA VM is recreated from the golden
   image, so tiad keeps nothing that must survive a clone. Every deploy
@@ -374,6 +664,7 @@ copies `logixd`, the Logix agent:
   | `TIAD_RETIRE_WATCH` | `3m` | How long a retire of a TIA instance that trusted blindly may take before tiad counts TIA as gone (§3.8; a Go duration, at most `1h`). TIA's dispose has no bound of its own |
   | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
   | `TIAD_NO_TIA` | — | `1` fails the `tia` gate, so no call can start TIA. tiad is installed and tested this way before a clone's trial may start |
+  | `TIAD_UI` | — | `1` starts TIA Portal with its user interface, for viewing only: `show` opens a block in TIA's editor, and every download is refused (§1, "Built (show)"). Anything but `1` or unset refuses to start |
 
 - **No browser ever calls tiad.** A request that carries an `Origin`
   header is refused (403), whatever token it has. A JSON body must be
@@ -429,7 +720,7 @@ closes forgotten sessions. `fatal: true` means the session is gone.
 | `not_compiled` | 409 | A download of a project not fully compiled since its last change. Nothing reached TIA |
 | `operation_failed` | 500 | Openness threw (the message carries its text), or a device pin file is unreadable (§3.8) |
 | `device_changed` | 409 | The CPU's identity differs from its device pin (§3.8). The message names both; nothing was loaded and the pin stands |
-| `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked (§3.8) |
+| `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked, and the request carries no device attestation that can stand in for it (§3.8). The message names the attestation |
 | `cpu_mismatch` | 409 | An apply's spec does not name the project's CPU (name, order, firmware), or a device of the spec's shares a name or an address with one the project keeps (§3.3). `data.cpu` is the project's CPU; nothing was changed. A deploy verify whose archived project's CPU is not at the record's address (§3.5, "Verifying a deploy"): `data.recordAddress`, `data.projectAddress`; nothing went online |
 | `unclean_session` | 409 | An apply or an upload failed part-way on this session, so its project matches no spec: a later apply or save refuses. Close the session without saving (§3.3). Also every save, deploy archive (so every download) and import after a software import changed blocks outside its group (§3.4) |
 | `foreign_block` | 409 | A software import's sources declare a program block that exists outside the import's group, which TIA would replace (§3.4). The message names each block, its number and its group. Nothing was imported |
@@ -650,10 +941,49 @@ The rules for applying a spec:
     - On a CPU the apply makes, tiad sets access control on (TIA's
       default already is) and reads it back.
     - On a CPU the apply keeps, access control must already be on: tiad
-      never turns it on for a CPU it did not make. Anything else
+      never turns it on for a CPU it did not make unasked. Anything else
       (`Disabled`, as the S2a upload found the bench CPU, the legacy
       access levels, a CPU without the setting) refuses before any write,
       naming `keep`.
+    - **Turning it on for a kept CPU (`accessControlTurnOn`, K,
+      naut-lead 2026-11-23).** Only a request flag on `PUT .../station`
+      (naut: `--turn-on-access-control`), never the spec: `access-control`
+      defaults to `full-access-user`, so an adopted project is never
+      turned on by the default. It goes with `fullAccessUser` only, and
+      turns on exactly `Disabled` (any other state still refuses). Before
+      any write tiad reads the project's anonymous user and local users:
+      an active anonymous user holding any runtime right beyond reading
+      (the protection levels count as writing: HMI access lets an HMI
+      write tags), a right tiad does not know, or a role whose rights it
+      cannot read (a system role) refuses, since the CPU would look
+      protected and not be; read rights only, or no role, give a warning
+      note; the other local users are listed (they may log on once it is
+      on). tiad turns it on, reads it back, and journals it. Until a
+      download on the same session loads it, that session downloads only
+      by a hardware load that resets user management with
+      `attestation.cpuAccessControl` `"disabled"` (the attestation route;
+      software only, `"enabled"`, no attestation and dry runs, which reach
+      the CPU, are refused before anything reaches it), and
+      `POST .../save` refuses. A turn-on after an upload on the same
+      session re-arms a spent gate. tiad.Openness archives the saved
+      project, so the deploy record's archive, made just before TIA's
+      download, saves it in place: before that, tiad marks the project
+      turn-on pending (a file `<project>.ap21.turn-on-pending` beside it,
+      and `accessTurnOn` on the deploy's intent line), and removes the
+      mark only on a verified load. Opening a marked project, or adopting
+      the archive of a turn-on deploy whose record is not `loaded`,
+      re-arms the gate (the open and the adopt say so in `notes`), which
+      then also lets `"enabled"`: that download may have loaded it, and
+      the logon route needs tiad logged on as `nautilus`. The file API
+      neither writes nor deletes a mark; an apply that finds the
+      project's access control off (the archive failed before it saved,
+      or an upload brought the CPU's off state back) removes it. After the
+      apply, tiad reads the anonymous user again with access control on
+      (TIA may read a role's runtime rights only then); a refusal there
+      leaves the session unclean. A project archive the operator brings
+      (`--adopt FILE.zap21`) carries no mark. A loosening on the
+      operator's word: tiad cannot read a CPU's access control online
+      (#616 tighten-later).
     - The user and the role are found or made, by name. tiad takes over
       neither unasked: a found role must carry tiad's comment, and a
       found user tiad's record (below), or the apply refuses before any
@@ -724,7 +1054,9 @@ The rules for applying a spec:
     without a login (only a project administrator does that, which tiad
     never makes).
   - In `nautilus.yaml` the field is `access-control`: `full-access-user`
-    (the default, left out) or `keep`.
+    (the default, left out) or `keep`. Turning a kept CPU's access
+    control on is `naut siemens deploy --turn-on-access-control`, never a
+    value here (above).
   - A download raises TIA's `UserManagementDownload` (keep the CPU's
     users, update them but keep its passwords, or load the project's).
     tiad answers it with keep (`user-management`,
@@ -844,7 +1176,7 @@ state across the first start, to find a read that works before it.
 
 | Call | Body → data |
 |---|---|
-| `GET /v1/health` | → `{version, tia, openness, sessions, targets}` |
+| `GET /v1/health` | → `{version, tia, openness, sessions, targets, ui}`. `ui`: the agent runs TIA with its user interface (`TIAD_UI=1`) |
 | `GET /v1/probe` | → `{usable, gates: [{name, ok, state, detail, remedy}]}`. Gates: `tia`, `openness-group`, `openness-allowlist`, `licence`, `workdir`. `usable`: no gate blocks. Always 200 |
 | `PUT /v1/files/{path}` | raw bytes → `{path, size}` |
 | `GET /v1/files/{path}` | → raw bytes. `GET /v1/files` lists the work dir: `{files: [{path, size}]}` |
@@ -867,17 +1199,19 @@ The client checks each path and the agent checks again.
 | `GET /v1/sessions` | → `{sessions: [{session, project, idleSeconds}]}` |
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
 | `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, the Full access user made or found, devices kept as found). On the first apply to an opened or uploaded project, `changes` compares the spec with the project as found (`CpuReuse.Found`, #1272): each interface node value that differs (address, subnet mask, router, PROFINET name, a name TIA generated), the configuration protection step, and whether the access and web steps wrote anything (a user, role, right, password or web server switch); empty is "no change". A node the agent could not read counts as a change, never none |
-| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune, obs?: [{name, number, cycleMs}]}` → `{results: [{path, ok, messages}], blocks: [{name, kind}], obs?: [{name, action, was?, now?}]}`. Generates blocks into the group named `group`; `blocks` lists that group's. `obs` are the cyclic interrupt OBs the agent makes first (see "Cyclic interrupt OBs" below). With `prune`, blocks in that group that no source produced are deleted. An import never touches a block outside the group: see "Blocks outside the group" below |
+| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune, prunePrefix?, obs?: [{name, number, cycleMs}]}` → `{results: [{path, ok, messages}], blocks: [{name, kind}], obs?: [{name, action, was?, now?}], foreign: [{name, kind, number, group, dataType?}]}`. Generates blocks into the group named `group`, and a source of data types (`TYPE … END_TYPE` only) into the PLC data types' user group of the same name; `blocks` lists that group's blocks and data types (`UDT`). `foreign` lists every program block, then every data type (`dataType: true`, its group a path from the data types' root), outside the group after the import, by group path (`""`, the root, first) and then name: what a download loads besides nautilus's own, for the deploy plan (#1326). `kind` is OB, FB, FC, DB or UDT, or the block's Openness type name for one tiad has no kind for. An agent older than #1326 sends no `foreign`, which naut says in the plan rather than showing none `obs` are the cyclic interrupt OBs the agent makes first (see "Cyclic interrupt OBs" below). With `prune`, blocks and then data types in that group that no source produced are deleted; with `prunePrefix` (naut sends the block prefix), the call is refused first, naming each, when the group holds a block or data type that no source declares and whose name lacks the prefix (a customer's object there). An agent older than D1b refuses `prunePrefix` as an unknown field, and naut says to reinstall it. An import never touches a block or data type outside the group: see "Blocks outside the group" below |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text, path?}]}`. Each message is a leaf of TIA's message tree; `path` is its parents, outermost first. For an error in an SCL block, `object` is the line in the block's body (1 is the `BEGIN` line) and the block is the last parent: `{object: "4", path: ["PLC_1", "Program blocks", "nautilus", "naut_Main (FB1)"]}` (measured on TIA V21, #789) |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
-| `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}}` (§3.9) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null`. A project opened as found, with no spec applied yet (an adopted one), compares with its own CPU at the address the project holds; still only a target. `address` is the CPU compared with, which naut checks is the deploy's |
-| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
+| `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}, deviceAttestation?: {by, order, firmware}}` (§3.9, §3.8) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null`. A project opened as found, with no spec applied yet (an adopted one), compares with its own CPU at the address the project holds; still only a target. `address` is the CPU compared with, which naut checks is the deploy's |
+| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
 | `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
-| `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
-| `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, outsideChanges?, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
-| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
+| `POST /v1/sessions/{id}/online` | `{online, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{online, address, state?}`. Holds the session's project online to its CPU (`OnlineProvider.GoOnline`) and keeps it online, so TIA's window shows the CPU's state and its own online/offline compare; `{online: false}` takes it offline (`address` is then the CPU it was held to, `""` if none). Refused (`bad_request`) unless the agent runs with `TIAD_UI=1`. The CPU is the spec's (or, for a project opened as found, the project's own), a target, pin checked; TIA's questions are answered as a compare's (§3.9), with no blind trust. It loads, compares and writes nothing. While held online, compare, fingerprint and upload on the session are `busy`; a close goes offline first, and an offline step that fails keeps the project held (the close fails and keeps the session, to be closed again), so no close drops a live connection unasked. tiad's question handler stays attached while held, so a question TIA asks then (say, from something a person starts in the window) gets tiad's answer, never a dialog. A second `{online: true}` to the same CPU changes nothing |
+| `POST /v1/sessions/{id}/show` | `{block}` → `{block, type, number, group}`. Opens the program block named `block` (compared without case) in TIA Portal's editor, with Openness's `ShowInEditor`. Refused (`bad_request`) unless the agent runs with `TIAD_UI=1`, before TIA is asked anything; a block the project lacks is `not_found`. It changes nothing in the project. `group` is the block's group path (`""` for the root) |
+| `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; every other online call (verify, compare, download, online, fingerprint) checks the pin first, on the operator's `deviceAttestation` while tiad cannot read a CPU's identity online |
+| `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, outsideChanges?, tia, archive, attestation, deviceAttestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
+| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
 
 **Blocks outside the group (#789).** TIA's generate-from-source does not
 stop at the group it is given. On the TIA VM a source declaring
@@ -899,8 +1233,44 @@ blocks is carried through untouched. So:
   naming it. That session is then never saved, archived for a deploy (so
   never downloaded) or imported into again (`unclean_session`); it can
   only be closed without saving.
-- Not covered yet: data types (`TYPE`). Where TIA puts a type that a
-  source generates is unproven, so no rule is guessed.
+- Data types (D1b, #1301, measured on the TIA VM 2026-11-24). TIA V21's
+  `GenerateBlocksFromSource(PlcTypeUserGroup, …)` generates a `TYPE`
+  source straight into a PLC data types user group, so a source of data
+  types goes into the data types' group named like the block group (a
+  source declaring a data type and a block is refused: each goes to its
+  own group). Regenerating a type there replaces it in place; the
+  compile then recompiles what uses it and moves their modified dates.
+  TIA keeps one name for blocks and data types ("Type conflict: Object …
+  cannot be overwritten"), and a type generated for the group while a
+  same-named type sat in another user group came back where it sat, with
+  no error. So the checks read blocks and data types as one list: a
+  declared block or data type that names either outside the group (the
+  root or any user group however deep, any case) refuses the call
+  before anything is imported; the after-import check covers data types
+  outside the group too (gone, moved, modified, new); and the glue fails
+  the import when TIA hands back any object that is not a block in the
+  block group or a data type in the data types' group, which leaves the
+  session unusable whatever a check after it shows (the regenerated
+  type may have kept its content and date).
+- After an import, a compile on the session checks every block and data
+  type outside the group the same way: TIA's date bump on nautilus's own
+  objects is accepted, while a customer's object whose date moves (it
+  uses something the import changed, such as one of nautilus's types)
+  makes the session unusable, naming it (`unclean_session`), a
+  fail-closed rule (D1b). Closing without saving recovers the session,
+  not the deploy: while the project's own objects use nautilus's blocks
+  or data types (or the project was not compiled as found), every deploy
+  is refused the same way, and that needs the project changed outside
+  nautilus (#616 lists it as a rule to loosen narrowly if a site needs
+  it). Proven on the TIA VM: an adopted copy of the bench's as-found
+  archive never trips it.
+- The import group, the compile check after it and the by-name data
+  type check in compares are per session: the session records the group
+  of its import, and a deploy's record keeps it for a verify. A session
+  that only opens a saved project imports nothing and checks neither;
+  naut's deploy always imports first.
+- Prune deletes data types only when the caller sent `prunePrefix`
+  (naut does): an older caller's prune never deletes them.
 
 **Cyclic interrupt OBs (#789).** A nautilus task runs in a cyclic
 interrupt OB at the task's cycle, and SCL source cannot make one. Proven on
@@ -963,7 +1333,7 @@ Request:
   "address": "192.0.2.10",
   "hardware": true, "software": true,
   "dryRun": false,
-  "decisions": { "stopCpu": true, "reinitialize": ["Tags"], "overwrite": true,
+  "decisions": { "stopCpu": true, "resetData": true, "overwrite": true,
                  "consistentDownload": true, "alarmTexts": true, "allBlocks": true,
                  "identificationDataLoadNothing": true,
                  "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
@@ -974,7 +1344,9 @@ Request:
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" },
   "source": { "commit": "<git commit id>", "hash": "sha256:<hash of the sources sent>" },
   "outsideChanges": { "by": "<who>", "verdict": "different", "deploy": "<the verified deploy's id>" },
-  "fingerprint": { "trustUnverifiedCertificate": true }
+  "fingerprint": { "trustUnverifiedCertificate": true },
+  "deviceAttestation": { "by": "<who>", "order": "<order number off the CPU>", "firmware": "<firmware off the CPU>" },
+  "layoutDigest": "<the digest POST /v1/sessions/{id}/layout returned>"
 }
 ```
 
@@ -1104,7 +1476,15 @@ behaviour. So, until then:
   read. So a download's success proves every block it sent landed, by
   name: the response's `blocks` (and `/compare`'s) and the audit line
   list them, so a caller checks the blocks it sent are among them.
-  System blocks, software units, data types and tag tables are not
+  The data types of the session's import group (D1b) are required by
+  name the same way, as an identical element labelled with the bare type
+  name; the deploy record keeps the group, so a verify of the deploy
+  requires them too. That label is unmeasured (no loaded type has been
+  compared yet): a wrong guess can only refuse, since a type the CPU lacks
+  shows in a non-identical state and one the tree leaves out is not
+  compared. A session with no import group (a fingerprint read, a bare
+  compare, a verify of an older deploy) requires none, as before.
+  System blocks, software units, other data types and tag tables are not
   required by name, only never different; and a tag table named exactly
   like a block the tree leaves out would stand in for it (no object
   tiad makes is so named).
@@ -1216,7 +1596,9 @@ behaviour. So, until then:
   there is one). The
   `id` is one of:
   - `stop-cpu`
-  - `reinitialize` (`objects` lists the DBs)
+  - `reinitialize` (TIA names no DB. Its yes is `StopPlcAndReinitialize`,
+    so it is answered only by `resetData: true` with `stopCpu: true`;
+    without `resetData`, a gate miss)
   - `overwrite`
   - `consistent-download` (TIA's `ConsistentBlocksDownload`, "Download
     software to device": loading the PLC software as one consistent
@@ -1426,7 +1808,12 @@ behaviour. So, until then:
     `decision_required`, naming that one, and nothing is loaded; answer
     it, and TIA may ask another. After an acting answer it is
     `outcome_unknown` instead (above).
-  - A `reinitialize` answer must name every DB the check named.
+  - `stopCpu: true` needs `resetData: true`, and a download without
+    `resetData: true` needs `layoutDigest`; both checked before anything
+    reaches the CPU (`bad_request`, nothing sent). The data layout gate
+    (below) decides the rest. An agent older than #1341 refuses
+    `decisions.resetData`, one older than the gate has no layout call, and
+    naut says to reinstall it.
   - A download that loads hardware needs `acceptUnverifiedHardware: true`
     and an `attestation`, checked before anything reaches the CPU
     ("What a download verifies", above).
@@ -1437,12 +1824,9 @@ behaviour. So, until then:
   - tiad never picks a default.
   - An `other` question always refuses, so a check tiad has never seen
     cannot be answered by accident.
-  - `tiad.Openness` does not read a `reinitialize` check's DBs or a
-    `certificate` check's fingerprint yet, so on a real CPU both always
-    refuse. After a `stop-cpu` yes that refusal is `outcome_unknown` (the
-    CPU may be in STOP): until those are read, a download that would
-    reinitialize DBs cannot run, and the next bench window must not
-    expect one.
+  - `tiad.Openness` does not read a `certificate` check's fingerprint
+    yet, so on a real CPU it always refuses. TIA's `reinitialize` check
+    names no DB (bench 1510SP, 2026-11-24); the layout gate names them.
   - A password answer is passive: a decline after it is still a clean
     refusal, though TIA may already have used the password to log on to
     the CPU. That changes neither the CPU's program nor its mode.
@@ -1618,6 +2002,122 @@ have loaded), and while the journal has lines tiad cannot read
 (`unreadableLines`), since one of them may be a newer deploy. A changed
 `DownloadId` is reported beside it, not folded in.
 
+#### Data layout (#1341)
+
+Measured on the bench S7-1500 (FW 3.1, TIA V21, 2026-11-24):
+`DownloadOptions.Software` loads every block, and TIA's first check is
+StopModules; the load in STOP returns every data block to its start
+values, retained ones included. `SoftwareOnlyChanges` loads in RUN and
+keeps every value for an unchanged redeploy, a byte-identical re-import
+and a body change. A data block whose layout changed makes TIA ask
+`DataBlockReinitialization` in RUN, naming no block; with the CPU already
+in STOP it asks nothing and resets that block, retained values included.
+So the agent decides before anything reaches the CPU.
+
+- **Signal.** Each program block's and PLC data type's XML export
+  (`ExportOptions.WithDefaults`), the root object's `<AttributeList>` as
+  the XML parser reads it back, hashed (SHA-256) with the object's
+  Openness type. It holds the interface with every member and start
+  value, the number, memory layout and reserve, retain settings and an
+  instance DB's FB. Measured on the TIA VM (2026-11-23): stable over
+  byte-identical re-imports and a body change; it moves exactly where a
+  layout changed, a UDT's holders and an FB's instance DB included (TIA
+  writes their members out). TIA's dates are no signal: every import
+  recreates every block and moves them all. Every block and type in the
+  PLC is read, a customer's too: the download loads the whole program.
+  One that does not export is unreadable, never left out. A PLC tag
+  table's user constant (an array bound) is an object too, its data type
+  and value hashed; a data block names it in quotes, so the naming reaches
+  it. Technology objects and software units are read as unreadable (tiad
+  reads neither's layout yet): a PLC that holds one needs `resetData` on
+  every download.
+- **Baseline.** The layout is recorded in the deploy's intent line
+  (`layout: {scheme, tia, objects: [{name, kind, type, hash}]}`), from the
+  same work item that archives what loads. It is the baseline only when a
+  verify by this agent found the CPU equal to that very deploy, its newest
+  load (loaded or in doubt), within the last hour, and the journal holds no
+  line the agent cannot read, and that deploy loaded this session's
+  project (another project's layout is no baseline, an equal one too).
+  Any download forgets that verify. The verify's age is read off a
+  monotonic clock.
+- **Adopt baseline (#1347).** The first deploy after an adopt has no
+  record of its own project on the CPU, so the session can hold its own
+  baseline: `POST /v1/sessions/{id}/compare {layoutBaseline: true}` reads
+  the layout of the project as opened, in the compare's own TIA work item,
+  right after the compare found it equal to the CPU. tiad takes it only
+  when the session is untouched, the compare was equal, the agent has no
+  UI (a person could change the project in TIA's window) and the CPU's
+  journal reads whole; the answer says `taken` with an id
+  (`adopted:<16 hex of the objects' hash>`), or why not, and the layout
+  check gives that reason as its `noBaseline`. Untouched is default-deny:
+  the router marks a session touched before any call under
+  `/v1/sessions/{id}` runs, failed or not, except compare and export,
+  which only read (`UntouchedRule`; a contract test walks every
+  route the agent registers, so a route added later touches it unless
+  someone puts it on that list). The baseline stands for the hour, while
+  no download reached that CPU since (a per-CPU load count every download
+  bumps, the session's own included) and the CPU's journal head is the one
+  it was taken at. It wins over the journal's baseline; the record names
+  what the gate compared with (`layoutBaseline`), and later deploys use
+  the journal as before. Measured on the TIA VM (2026-11-24): an adopted
+  project's layout reads with nothing compiled in the session, the same
+  hashes as the source project compiled, stable over reads and the
+  station apply; after nautilus's import and full compile no customer
+  object moved (8 and 308 objects), about 10 s for 308. An object archived
+  inconsistent does not export: unreadable, so changed.
+- **Read after the compile.** Blocks just imported are inconsistent until
+  the full compile, and TIA exports no inconsistent object, so a layout
+  read between import and compile finds nautilus's own blocks unreadable
+  (TIA VM, 2026-11-24). The layout check and the download's read stay
+  after the compile; never move them earlier.
+- **Scheme and TIA version.** The record names the hashing scheme
+  (`attributes-v1`) and the TIA version that read it. A record of another
+  scheme or another TIA version is no baseline. Any change to what is
+  hashed bumps the scheme, and a TIA upgrade changes the version: either
+  invalidates every recorded layout, so the next deploy to each CPU needs
+  `resetData`, and the refusal says which of the two it was.
+- **Rule.** Any object whose hash moved, or that was removed or is
+  unreadable, needs `resetData`; so does a download with no baseline (the
+  whole program loads, `Software`), and one that loads hardware. An object
+  whose hash did not move passes, which covers a body-only change. So
+  does an added object of a kind in `AddedKeepsData` (OB, FB, FC, global
+  DB, instance DB, PLC data type, #1347): no unchanged object can use it
+  (its own hash would have moved), and a new data block holds nothing to
+  lose; each kind is there because a bench row in RUN and in STOP showed a
+  load adding it keeps the CPU's data. Any other kind added needs
+  `resetData`. Every further exemption needs its own bench row in RUN and
+  in STOP.
+- **Naming.** The data blocks that may be reset are each data block whose
+  own layout changed, and each whose layout uses a changed, added or
+  unreadable object, however deep, by the names its export uses (quoted
+  data types, an instance DB's FB). Holders do not carry a UDT's own start
+  values, so naming walks the names, not TIA's expansion. A new data block
+  holds nothing to lose; a removed one is named last (its values go). No
+  baseline, hardware, or any unreadable object (its layout and references
+  are unknown): every data block. Only changes that reach no data block
+  (a function's or an OB's interface, an FB with no instance, a new block,
+  a constant no data block uses) name none.
+- **Call.** `POST /v1/sessions/{id}/layout {address, hardware}` on a
+  compiled session answers `{scheme, tia, baseline, noBaseline, changes:
+  [{name, kind, type, change}], dataBlocks, allDataBlocks,
+  resetDataNeeded, why, digest}`. It reads the project only. The digest
+  names the layout, the baseline and the hardware flag. A download reads
+  the layout again in its own work item, before the deploy record: a
+  `layoutDigest` that is not the layout's, or a layout that needs
+  `resetData` the request does not give, is `decision_required` (the
+  agent's own `reset-data` question, its objects the data blocks),
+  nothing recorded, nothing sent.
+- **Options.** `Software` only with `resetData` and no baseline, or with
+  hardware; otherwise `SoftwareOnlyChanges`.
+- **RUN backstop (gate miss).** Without `resetData`, TIA asking
+  `stop-cpu`, `reinitialize` or `all-blocks` means the gate missed a
+  change: tiad never answers it, cancels the download there
+  (`decision_required`, or `outcome_unknown` after an acting answer), and
+  logs `audit layout-gate-miss`. `NoAction` is never written.
+- **Tighten later (#616).** The one-hour verify window; whether a start
+  value change alone keeps the data (hashed today, so it needs the
+  consent).
+
 ### 3.6 PROFINET's requirements (#723)
 
 | | Need | Call |
@@ -1683,15 +2183,54 @@ and the audit line names the fields the pin holds. From then on:
   and before TIA's download begins;
 - a different identity fails with `device_changed`, naming the pinned and
   the new values. The pin stands;
-- an identity that cannot be read fails with `device_unverified`.
-  `tiad.Openness` has no proven online read yet (a read-only probe is
-  planned on #789). **So today, once a CPU is pinned, its compare and
-  download are refused** until an online read is proven: that is the
-  fail-closed design (decided on #789, 2026-11-20). A re-pin records a new
-  identity but does not lift this, and no call removes a pin. A CPU can
-  be compared before its first upload and cannot after it: going online
-  and comparing ask no TLS question on the bench CPU (#789 stage 1b), so
-  nothing but the pin refuses them.
+- an identity that cannot be read fails with `device_unverified`, unless
+  the request carries the operator's **device attestation** (below).
+  `tiad.Openness` has no proven online read yet (#789), so today every
+  online call to a pinned CPU (verify, compare, download and dry run,
+  online, fingerprint read) reads no identity. The fail-closed design
+  (decided on #789, 2026-11-20) refused them all, so an `--adopt upload`
+  locked its CPU against every later download, the restore path included
+  (#1325). A re-pin records a new identity but does not lift this, and no
+  call removes a pin.
+
+**The device attestation (#1325, a loosening to tighten later on #616).**
+Where tiad cannot read the identity, a request may carry
+`deviceAttestation: {by, order, firmware}`: the CPU's order number and
+firmware as the operator read them off the device itself (its label or
+display), and who did. naut sends it with `--attest-order` and
+`--attest-firmware` (deploy, verify, show --online). Decided by the
+coordinator on 2026-11-23 under the rule that a refusal of our own that
+blocks a needed load is loosened narrowly, audited, and named here.
+
+- It is used only when tiad's TIA side read no identity at all. An
+  identity tiad does read wins: a read that differs is `device_changed`
+  whatever is attested, and one read but unusable (a field missing) stays
+  `device_unverified`. To an unpinned CPU it is not used.
+- It is compared with the pin at the pin's precision: the order number
+  without spaces or ASCII case, the firmware on the pin's parts (a `V3.1`
+  pin matches `3.1.3`, `V3.1.3`, `V3.01`; not `V3.10.1`). A difference is
+  `device_changed`, named as the attestation's, and nothing is sent.
+- It cannot stand in for every pin: a pin holding a serial number or a
+  MAC (an attestation states neither), a pin whose firmware is no version
+  (re-pin it as one), or a firmware stated less precisely than the pin's
+  (`V3` against `V3.1`), is `device_unverified`.
+- It never adds or changes a pin: no call that takes one writes the pins
+  directory, and the upload, which pins on first trust, does not take it.
+- Every use is audited (`audit pin attested call=... pinned=...
+  attestation={by=... order=... firmware=...}`, and a refused one as
+  `device-changed` or `unverified`). A download's response and its deploy
+  record keep it as `deviceAttestation: {by, order, firmware, pinned, at}`.
+- A malformed one (`by`, `order` or `firmware` empty, a control character,
+  an order or firmware that is not printable ASCII, a field over its cap,
+  a firmware that is not `V3.1.3` or `3.1.3`) is `bad_request` on every
+  call that takes it, before anything else. It is never accepted inside a
+  verify's or a download's `fingerprint` options.
+- Only a download's response says the check rested on an attestation;
+  verify, compare, online and fingerprint say it in the audit log only
+  (a follow-up on #616).
+
+It is weaker than a read: it trusts what a person says the label shows.
+It goes once an online identity read is proven.
 
 **What it catches, and what it does not.** The device pin catches a
 different model, or firmware of another major.minor version, at the

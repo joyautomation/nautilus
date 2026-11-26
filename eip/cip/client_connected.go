@@ -13,7 +13,7 @@ import (
 // fence: the send deadline passed, or the pair's gate closed): the
 // connection is untouched, and a caller keeps it rather than dialling
 // again (#1048 review).
-var ErrNotStarted = errors.New("cip: request not started")
+var ErrNotStarted = fence.ErrNotStarted
 
 // SendUnitData sends a connected explicit (Class 3) message on an established
 // connection and returns the inner MessageRouterResponse. The caller owns the
@@ -94,4 +94,5 @@ func (c *Client) resetIfFenced(ctx context.Context) {
 	}
 	_ = fence.Reset(c.tcp)
 	c.tcp = nil
+	fence.CutSend(ctx, false) // the send began and its deadline passed: one write cut
 }

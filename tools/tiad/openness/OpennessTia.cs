@@ -45,6 +45,7 @@ using Siemens.Engineering.SW.Blocks;
 using Siemens.Engineering.SW.ExternalSources;
 using Siemens.Engineering.SW.Tags;
 using Siemens.Engineering.SW.Types;
+using Siemens.Engineering.SW.Units;
 using Siemens.Engineering.Umac;
 using Siemens.Engineering.Upload;
 using Siemens.Engineering.Upload.Configurations;
@@ -57,6 +58,10 @@ namespace Tiad.Openness
     {
         public Project Project;
         public string Full = "";
+        // Held and HeldAsks are the connection a HoldOnline keeps online,
+        // and the handler answering its questions; null when offline.
+        public OnlineProvider Held;
+        public OnlineAsks HeldAsks;
     }
 
     // OnlineAsks answers what TIA asks when it goes online to a CPU
@@ -296,17 +301,21 @@ namespace Tiad.Openness
         readonly System.Diagnostics.Process process;
         readonly object processMu = new object();
 
-        // OpennessTia starts TIA Portal, without its user interface. This
-        // is the one place tiad starts TIA.
+        // OpennessTia starts TIA Portal, without its user interface unless
+        // TIAD_UI is 1 (Config.Ui, which the agent checked at its start:
+        // a window to show blocks in, for viewing only). This is the one
+        // place tiad starts TIA.
         public OpennessTia()
         {
+            bool ui = Environment.GetEnvironmentVariable("TIAD_UI") == "1";
             pcInterface = Environment.GetEnvironmentVariable("TIAD_PC_INTERFACE") ?? "";
             // Before TIA starts: every selection tiad may write must exist
             // in this Openness, since enum names are strings to the compiler.
             CheckSelections();
             try
             {
-                portal = new TiaPortal(TiaPortalMode.WithoutUserInterface);
+                portal = new TiaPortal(ui ? TiaPortalMode.WithUserInterface : TiaPortalMode.WithoutUserInterface);
+                if (ui) Log.Line("TIA Portal started WITH its user interface (TIAD_UI=1): viewing only, downloads are refused");
             }
             catch (Exception e)
             {
@@ -563,7 +572,82 @@ namespace Tiad.Openness
 
         public void CloseProject(object project)
         {
+            // A project held online goes offline first, so TIA closes no
+            // project with a live connection.
+            ReleaseOnline(project);
             Tia(delegate { Of(project).Project.Close(); });
+        }
+
+        // HoldOnline goes online as Compare does, and stays online: TIA's
+        // window then shows the CPU's state and the online/offline compare.
+        // It reads and loads nothing itself.
+        public string HoldOnline(object project, string address, LoginUse use)
+        {
+            return Tia(delegate
+            {
+                OpenProject o = Of(project);
+                if (o.Held != null) throw new TiaException("the project is already online");
+                HwDevice d = StationOf(o.Project);
+                if (d == null) throw new TiaException("the project has no CPU");
+                DeviceItem cpu = CpuOf(d);
+                OnlineProvider op = cpu.GetService<OnlineProvider>();
+                ConfigurationPcInterface pc = PcInterface(op.Configuration);
+                ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
+                var online = new OnlineAsks(op.Configuration, Detached, use, address);
+                bool held = false;
+                try
+                {
+                    OnlineState st = op.GoOnline(at);
+                    if (st != OnlineState.Online)
+                    {
+                        if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
+                        if (online.LoggedIn) throw new TiaException(TiaNames.LoginFailed(address, "online state " + st));
+                        throw new TiaException("TIA could not go online to " + address + ": " + st);
+                    }
+                    online.Check(address, "going online");
+                    o.Held = op;
+                    o.HeldAsks = online;
+                    held = true;
+                    return st.ToString();
+                }
+                catch (TiaException)
+                {
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    TiaException refused = online.Explain(address, e);
+                    if (refused != null) throw refused;
+                    throw;
+                }
+                finally
+                {
+                    if (!held)
+                    {
+                        DownloadSteps.Quietly(delegate { op.GoOffline(); }, "online: going offline after a failed go-online (if TIA is alive, the project may still be online)");
+                        online.Stop();
+                    }
+                }
+            });
+        }
+
+        public void ReleaseOnline(object project)
+        {
+            Tia<bool>(delegate
+            {
+                OpenProject o = Of(project);
+                if (o.Held == null) return true;
+                // Held until TIA says offline: a GoOffline that throws
+                // leaves the project held, so a retried release (or the
+                // retried close of the session it broke) tries again, and
+                // no close drops a live connection unasked.
+                o.Held.GoOffline();
+                OnlineAsks asks = o.HeldAsks;
+                o.Held = null;
+                o.HeldAsks = null;
+                asks.Stop();
+                return true;
+            });
         }
 
         // ArchiveInto writes a compressed archive of o, already saved, into
@@ -739,7 +823,7 @@ namespace Tiad.Openness
             return null;
         }
 
-        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made)
+        public void ApplyStation(object project, Station next, string decision, Secrets secrets, bool turnOn, List<string> notes, AccessMade made)
         {
             string cannot = CannotApply(next);
             if (cannot != null) throw new TiaException(cannot);
@@ -770,7 +854,7 @@ namespace Tiad.Openness
                     "PnDeviceName", next.Cpu.ProfinetName);
                 ProtectionSteps.Run(new MasterSecret(station, cpu), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
                 var access = new Access(p, station, cpu);
-                AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+                AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, turnOn, made, notes);
                 access.LogRights();
                 WebSteps.Run(new Web(this, cpu), access, next.WebServer, secrets, decision == CpuReuse.Create, made, notes);
                 return true;
@@ -1072,8 +1156,14 @@ namespace Tiad.Openness
 
             public List<string> RoleRights(string role)
             {
+                return RightsOf(Role(role));
+            }
+
+            // RightsOf is every runtime right r holds on this CPU.
+            public List<string> RightsOf(CustomRole r)
+            {
                 var l = new List<string>();
-                foreach (DeviceFunctionRight x in Role(role).GetAssignedDeviceFunctionRights(Device())) l.Add(x.Identifier);
+                foreach (DeviceFunctionRight x in r.GetAssignedDeviceFunctionRights(Device())) l.Add(x.Identifier);
                 l.Sort(StringComparer.Ordinal);
                 return l;
             }
@@ -1268,15 +1358,19 @@ namespace Tiad.Openness
 
         // ---- software ----
 
-        public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune)
+        public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune, bool pruneTypes)
         {
             return Tia(delegate
             {
                 PlcSoftware sw = Software(Of(project).Project);
                 PlcBlockUserGroup ug = sw.BlockGroup.Groups.Find(group);
                 if (ug == null) ug = sw.BlockGroup.Groups.Create(group);
+                // The data types' user group of the same name, made only
+                // when a source declares data types.
+                PlcTypeUserGroup tg = sw.TypeGroup.Groups.Find(group);
                 var res = new SoftwareResult();
                 var made = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var madeTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (var src in sources)
                 {
                     var sr = new SourceResult { Path = src.Path };
@@ -1284,18 +1378,48 @@ namespace Tiad.Openness
                     // under the file's name is never replaced or deleted.
                     string name = "tiad-" + Guid.NewGuid().ToString("N") + "-" + Path.GetFileName(src.FullPath);
                     PlcExternalSource es = sw.ExternalSourceGroup.ExternalSources.CreateFromFile(name, src.FullPath);
+                    // outside: the failure of an object handed back outside
+                    // the group, kept so a failing delete of the source
+                    // below cannot replace it and lose the mark.
+                    TiaException outside = null;
                     try
                     {
-                        foreach (IEngineeringObject b in es.GenerateBlocksFromSource(ug, GenerateBlockOption.None))
+                        IList<IEngineeringObject> gen;
+                        if (src.DataTypes)
                         {
-                            PlcBlock pb = b as PlcBlock;
-                            if (pb == null) continue;
-                            // TIA replaces a same-named block where it is:
-                            // one generated outside the group fails the
-                            // import (the agent then compares and keeps the
-                            // session unusable).
-                            if (!InGroup(pb, ug)) throw new TiaException(src.Path + ": TIA generated \"" + pb.Name + "\" outside group \"" + group + "\", replacing the project's block of that name");
-                            made.Add(pb.Name);
+                            // Straight into the data types' user group (TIA
+                            // V21's type-group overload, TIA VM 2026-11-24).
+                            if (tg == null) tg = sw.TypeGroup.Groups.Create(group);
+                            gen = es.GenerateBlocksFromSource(tg, GenerateBlockOption.None);
+                        }
+                        else
+                        {
+                            gen = es.GenerateBlocksFromSource(ug, GenerateBlockOption.None);
+                        }
+                        foreach (IEngineeringObject o in gen)
+                        {
+                            // TIA regenerates a same-named object where it
+                            // sits and hands it back with no error (a data
+                            // type in another user group, TIA VM
+                            // 2026-11-24): anything but a block in the block
+                            // group or a data type in the data types' group
+                            // fails the import, and the agent keeps the
+                            // session unusable.
+                            PlcBlock pb = o as PlcBlock;
+                            PlcType pt = o as PlcType;
+                            if (pb != null && InGroup(pb, ug))
+                            {
+                                made.Add(pb.Name);
+                                continue;
+                            }
+                            if (pt != null && tg != null && InTypeGroup(pt, tg))
+                            {
+                                madeTypes.Add(pt.Name);
+                                continue;
+                            }
+                            string what = pb != null ? "block \"" + pb.Name + "\"" : pt != null ? "data type \"" + pt.Name + "\"" : "an object (" + o.GetType().Name + ")";
+                            outside = new TiaException(src.Path + ": TIA generated " + what + " outside group \"" + group + "\", where a same-named one sits") { OutsideGroup = true };
+                            throw outside;
                         }
                         sr.Ok = true;
                     }
@@ -1305,7 +1429,14 @@ namespace Tiad.Openness
                     }
                     finally
                     {
-                        es.Delete();
+                        try
+                        {
+                            es.Delete();
+                        }
+                        catch (EngineeringException)
+                        {
+                            if (outside == null) throw;
+                        }
                     }
                     res.Results.Add(sr);
                 }
@@ -1325,15 +1456,29 @@ namespace Tiad.Openness
                 }
                 if (prune)
                 {
+                    // The blocks first: a data type may be in use by one.
                     foreach (PlcBlock b in new List<PlcBlock>(ug.Blocks))
                     {
                         if (!made.Contains(b.Name)) b.Delete();
+                    }
+                    // Data types only when the agent says so (pruneTypes): an
+                    // older caller's prune never deletes them.
+                    if (pruneTypes && tg != null)
+                    {
+                        foreach (PlcType t in new List<PlcType>(tg.Types))
+                        {
+                            if (!madeTypes.Contains(t.Name)) t.Delete();
+                        }
                     }
                 }
                 foreach (PlcBlock b in ug.Blocks)
                 {
                     string kind = TiaNames.BlockKind(b.GetType().Name);
                     if (kind != "") res.Blocks.Add(new Block { Name = b.Name, Kind = kind });
+                }
+                if (tg != null)
+                {
+                    foreach (PlcType t in tg.Types) res.Blocks.Add(new Block { Name = t.Name, Kind = "UDT" });
                 }
                 res.Blocks.Sort(delegate(Block a, Block b) { return string.CompareOrdinal(a.Name, b.Name); });
                 return res;
@@ -1409,7 +1554,7 @@ namespace Tiad.Openness
 
         // ---- download ----
 
-        public DownloadOutcome Download(object project, string address, bool hardware, bool software,
+        public DownloadOutcome Download(object project, string address, bool hardware, bool software, bool everyBlock,
             Secrets secrets, bool? startAfter, Func<Question, Answer> answer, LoginUse use)
         {
             var decider = new DownloadDecider(answer, startAfter);
@@ -1440,7 +1585,11 @@ namespace Tiad.Openness
                     // interface, for Download's address overload.
                     at = target.Addresses.Create(address);
                     if (hardware) options |= DownloadOptions.Hardware;
-                    if (software) options |= DownloadOptions.Software;
+                    // Only what changed, unless the caller consented to
+                    // the whole program (#1341): Software loads every
+                    // block, and TIA stops the CPU for it and resets every
+                    // data block (bench 1510SP, 2026-11-24).
+                    if (software) options |= (DownloadOptions)Enum.Parse(typeof(DownloadOptions), LayoutRule.SoftwareOption(everyBlock));
                 },
                 delegate
                 {
@@ -1656,6 +1805,19 @@ namespace Tiad.Openness
             foreach (PlcBlockUserGroup u in g.Groups) ProjectBlocks(u, path == "" ? u.Name : path + "/" + u.Name, into);
         }
 
+        // InTypeGroup is InGroup for a data type and a data types group.
+        static bool InTypeGroup(PlcType t, PlcTypeUserGroup g)
+        {
+            IEngineeringObject p = t.Parent;
+            while (p != null)
+            {
+                if (ReferenceEquals(p, g) || p.Equals(g)) return true;
+                if (!(p is PlcTypeUserGroup)) return false;
+                p = p.Parent;
+            }
+            return false;
+        }
+
         // InGroup is whether b sits in g or one of its user groups.
         static bool InGroup(PlcBlock b, PlcBlockUserGroup g)
         {
@@ -1707,6 +1869,29 @@ namespace Tiad.Openness
             });
         }
 
+        // Show opens the block in TIA's editor (IShowable.ShowInEditor):
+        // only a portal with its user interface has one.
+        public void Show(object project, string group, string name)
+        {
+            Tia<bool>(delegate
+            {
+                PlcBlockGroup g = Software(Of(project).Project).BlockGroup;
+                if (group != "")
+                {
+                    foreach (string part in group.Split('/'))
+                    {
+                        g = g.Groups.Find(part);
+                        if (g == null) throw new TiaException("no block group \"" + group + "\" to show a block of");
+                    }
+                }
+                PlcBlock b = null;
+                foreach (PlcBlock x in g.Blocks) if (string.Equals(x.Name, name, StringComparison.OrdinalIgnoreCase)) b = x;
+                if (b == null) throw new TiaException("no block \"" + name + "\" in group \"" + group + "\" to show");
+                b.ShowInEditor();
+                return true;
+            });
+        }
+
         static PlcBlock FindIn(PlcBlockGroup g, string name)
         {
             foreach (PlcBlock b in g.Blocks) if (string.Equals(b.Name, name, StringComparison.OrdinalIgnoreCase)) return b;
@@ -1727,6 +1912,34 @@ namespace Tiad.Openness
                 ProjectBlocks(Software(Of(project).Project).BlockGroup, "", blocks);
                 return blocks;
             });
+        }
+
+        public List<ProjectBlock> Types(object project)
+        {
+            return Tia(delegate
+            {
+                var types = new List<ProjectBlock>();
+                ProjectTypes(Software(Of(project).Project).TypeGroup, "", types);
+                return types;
+            });
+        }
+
+        // ProjectTypes reads every data type in g and its user groups, each
+        // with its group path and modified time in ticks, as blocks are.
+        static void ProjectTypes(PlcTypeGroup g, string path, List<ProjectBlock> into)
+        {
+            foreach (PlcType t in g.Types)
+            {
+                into.Add(new ProjectBlock
+                {
+                    Name = t.Name,
+                    Type = t.GetType().Name,
+                    Group = path,
+                    DataType = true,
+                    Modified = t.ModifiedDate.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),
+                });
+            }
+            foreach (PlcTypeUserGroup u in g.Groups) ProjectTypes(u, path == "" ? u.Name : path + "/" + u.Name, into);
         }
 
         // Node copies one element of TIA's compare tree, and its children,
@@ -1779,6 +1992,158 @@ namespace Tiad.Openness
                 }
                 return written;
             });
+        }
+
+        // Layout exports every program block and PLC data type, one at a
+        // time, into a directory of its own, and reads each export
+        // (LayoutRule.FromExport). An object TIA does not export (know-how
+        // protection, ...) is unreadable, never left out (#1341).
+        public List<LayoutObject> Layout(object project)
+        {
+            return Tia(delegate
+            {
+                PlcSoftware sw = Software(Of(project).Project);
+                string dir = Path.Combine(Path.GetTempPath(), "tiad-layout-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(dir);
+                var into = new List<LayoutObject>();
+                try
+                {
+                    int n = 0;
+                    LayoutBlocks(sw.BlockGroup, dir, ref n, into);
+                    LayoutTypes(sw.TypeGroup, dir, ref n, into);
+                    // What else sets a data block's layout (Fable, #1341):
+                    // a tag table's user constant (an array bound), and
+                    // what the walk above cannot read, which counts as
+                    // changed on every download.
+                    LayoutConstants(sw.TagTableGroup, into);
+                    LayoutTechnologyObjects(sw, into);
+                    LayoutSoftwareUnits(sw, into);
+                }
+                finally
+                {
+                    try
+                    {
+                        Directory.Delete(dir, true);
+                    }
+                    catch (IOException e)
+                    {
+                        Log.Line("layout: removing {0} failed: {1}", dir, e.Message);
+                    }
+                    catch (UnauthorizedAccessException e)
+                    {
+                        Log.Line("layout: removing {0} failed: {1}", dir, e.Message);
+                    }
+                }
+                return into;
+            });
+        }
+
+        static LayoutObject LayoutOf(string name, string kind, string type, string file, Action<FileInfo> export)
+        {
+            try
+            {
+                export(new FileInfo(file));
+                return LayoutRule.FromExport(name, kind, type, File.ReadAllText(file, System.Text.Encoding.UTF8));
+            }
+            catch (EngineeringException e)
+            {
+                return new LayoutObject { Name = name, Kind = kind, Type = type, Unreadable = "TIA did not export it: " + TiaNames.Message(e) };
+            }
+            catch (IOException e)
+            {
+                return new LayoutObject { Name = name, Kind = kind, Type = type, Unreadable = "its export could not be read: " + e.Message };
+            }
+            catch (UnauthorizedAccessException e)
+            {
+                return new LayoutObject { Name = name, Kind = kind, Type = type, Unreadable = "its export could not be read: " + e.Message };
+            }
+        }
+
+        // LayoutConstants adds every user constant of every PLC tag table
+        // as an object of its own: its data type and value hashed. A data
+        // block's export names a constant it uses in quotes (an array
+        // bound), so the naming reaches it.
+        static void LayoutConstants(PlcTagTableGroup g, List<LayoutObject> into)
+        {
+            foreach (PlcTagTable t in g.TagTables)
+            {
+                foreach (PlcUserConstant c in t.UserConstants)
+                {
+                    var o = new LayoutObject { Name = c.Name, Kind = "constant", Type = "PlcUserConstant" };
+                    try
+                    {
+                        string type = c.DataTypeName ?? "";
+                        string value = c.Value ?? "";
+                        o.Hash = LayoutRule.Sha256Hex("PlcUserConstant\n" + c.Name + "\n" + type + "\n" + value);
+                    }
+                    catch (EngineeringException e)
+                    {
+                        o.Unreadable = "TIA did not read the constant: " + TiaNames.Message(e);
+                    }
+                    into.Add(o);
+                }
+            }
+            foreach (PlcTagTableUserGroup u in g.Groups) LayoutConstants(u, into);
+        }
+
+        // LayoutTechnologyObjects adds each technology object as
+        // unreadable: tiad does not read its layout yet, so a download of a
+        // PLC that holds one always needs the consent.
+        static void LayoutTechnologyObjects(PlcSoftware sw, List<LayoutObject> into)
+        {
+            var seen = new List<string>();
+            TechnologyObjectNames(sw.TechnologicalObjectGroup, seen);
+            foreach (string name in seen)
+            {
+                into.Add(new LayoutObject { Name = name, Kind = "block", Type = "TechnologicalInstanceDB", Unreadable = "a technology object: tiad does not read its layout yet" });
+            }
+        }
+
+        static void TechnologyObjectNames(Siemens.Engineering.SW.TechnologicalObjects.TechnologicalInstanceDBGroup g, List<string> into)
+        {
+            foreach (Siemens.Engineering.SW.TechnologicalObjects.TechnologicalInstanceDB t in g.TechnologicalObjects) into.Add(t.Name);
+            foreach (Siemens.Engineering.SW.TechnologicalObjects.TechnologicalInstanceDBUserGroup u in g.Groups) TechnologyObjectNames(u, into);
+        }
+
+        // LayoutSoftwareUnits adds one unreadable object per software unit
+        // and safety unit: tiad reads no unit's blocks yet (TIA VM
+        // 2026-11-24: V21's PlcUnitProvider, its UnitGroup.Units and
+        // .SafetyUnits). A unit read that fails
+        // throws, which fails the whole read: never left out.
+        static void LayoutSoftwareUnits(PlcSoftware sw, List<LayoutObject> into)
+        {
+            PlcUnitProvider p = sw.GetService<PlcUnitProvider>();
+            if (p == null) return;
+            foreach (PlcUnit u in p.UnitGroup.Units)
+            {
+                into.Add(new LayoutObject { Name = "unit:" + u.Name, Kind = "unit", Type = "PlcUnit", Unreadable = "a software unit: tiad does not read the blocks in it yet" });
+            }
+            foreach (PlcSafetyUnit u in p.UnitGroup.SafetyUnits)
+            {
+                into.Add(new LayoutObject { Name = "unit:" + u.Name, Kind = "unit", Type = "PlcSafetyUnit", Unreadable = "a safety unit: tiad does not read the blocks in it yet" });
+            }
+        }
+
+        static void LayoutBlocks(PlcBlockGroup g, string dir, ref int n, List<LayoutObject> into)
+        {
+            foreach (PlcBlock b in g.Blocks)
+            {
+                PlcBlock x = b;
+                into.Add(LayoutOf(b.Name, "block", b.GetType().Name, Path.Combine(dir, (n++).ToString(CultureInfo.InvariantCulture) + ".xml"),
+                    delegate(FileInfo f) { x.Export(f, Siemens.Engineering.ExportOptions.WithDefaults); }));
+            }
+            foreach (PlcBlockUserGroup u in g.Groups) LayoutBlocks(u, dir, ref n, into);
+        }
+
+        static void LayoutTypes(PlcTypeGroup g, string dir, ref int n, List<LayoutObject> into)
+        {
+            foreach (PlcType t in g.Types)
+            {
+                PlcType x = t;
+                into.Add(LayoutOf(t.Name, "type", t.GetType().Name, Path.Combine(dir, (n++).ToString(CultureInfo.InvariantCulture) + ".xml"),
+                    delegate(FileInfo f) { x.Export(f, Siemens.Engineering.ExportOptions.WithDefaults); }));
+            }
+            foreach (PlcTypeUserGroup u in g.Groups) LayoutTypes(u, dir, ref n, into);
         }
 
         static void ExportBlocks(PlcSoftware sw, PlcBlockGroup g, string dir, bool scl, List<string> written)
@@ -1859,6 +2224,35 @@ namespace Tiad.Openness
         {
             TiaNames.CheckAttribute("the CPU " + cpu.Name, Attributes("DeviceItem", cpu), name);
             return Convert.ToString(cpu.GetAttribute(name), System.Globalization.CultureInfo.InvariantCulture) ?? "";
+        }
+
+        // ReadTurnOn reads the project's local users and its anonymous
+        // user: whether it is active, and the runtime rights on the
+        // project's CPU of each role it holds (a custom role's; any other
+        // role's rights are read as unreadable).
+        public TurnOnFacts ReadTurnOn(object project)
+        {
+            return Tia(delegate
+            {
+                Project p = Of(project).Project;
+                HwDevice d = StationOf(p);
+                if (d == null) throw new TiaException("the project holds no CPU");
+                var access = new Access(p, d, CpuOf(d));
+                var f = new TurnOnFacts { Users = access.UserNames() };
+                ProjectUser a = Users.Umac(p).AnonymousUser;
+                f.AnonymousActive = a != null && a.IsActive;
+                if (a != null)
+                {
+                    foreach (Role r in a.Roles)
+                    {
+                        var ar = new AnonymousRole { Name = r.Name ?? "" };
+                        CustomRole cr = r as CustomRole;
+                        if (cr != null) ar.Rights = access.RightsOf(cr);
+                        f.AnonymousRoles.Add(ar);
+                    }
+                }
+                return f;
+            });
         }
 
         // ReadCpu reads the project's CPU: the CPU device item's name,

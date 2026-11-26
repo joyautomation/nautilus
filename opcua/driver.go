@@ -1538,8 +1538,9 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 		// (design §3.4): a demotion while a batch is on the wire stops the
 		// rest of it (G1c, #861), and each chunk runs to the gate's send
 		// budget as its deadline.
-		deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+		deadline, _, ok, done := fence.Begin(d.look, time.Now()) // the budget counts from before the read
 		if !ok || !fence.Started(deadline, time.Now()) {
+			done()
 			// Part of the batch may already have reached the server: say
 			// how much, and name what did not, so an operator can tell
 			// what the PLC got.
@@ -1550,6 +1551,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 			return true
 		}
 		if d.reopens.Load() != gen && !mut("old_term_kept") {
+			done()
 			// A reopen since this flush took its queue (the lease lost and
 			// won again): the rest is the previous leadership's. Forgotten
 			// as written, and the outputs asked for again (#1040).
@@ -1564,8 +1566,12 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 		stop := fence.ArmAbort(sess.Fence, deadline)
 		fence.BeforeSend()
 		resp, err := sess.Client.Write(wctx, &ua.WriteRequest{NodesToWrite: items[start:end]})
-		if stop() {
+		fired := stop()
+		if fired {
 			d.timerAborts.Add(1)
+		}
+		if !deadline.IsZero() && (fired || (err != nil && !time.Now().Before(deadline))) {
+			fence.Cut(d.name) // began, and its deadline passed: one write cut
 		}
 		fcancel()
 		cancel()
@@ -1578,6 +1584,7 @@ func (d *Driver) flushWrites(ctx context.Context, sess *Session) bool {
 				d.aborts.Add(1)
 			}
 		}
+		done() // answered, or failed and reset: ended for a drain
 		if err != nil {
 			d.errs.Add(1)
 			if ctx.Err() == nil {

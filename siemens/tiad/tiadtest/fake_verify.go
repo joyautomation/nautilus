@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/joyautomation/nautilus/siemens/station"
 	"github.com/joyautomation/nautilus/siemens/tiad"
@@ -89,6 +90,12 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
+	if req.Fingerprint != nil && req.Fingerprint.DeviceAttestation != nil {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "body: json: unknown field %q", "fingerprint.deviceAttestation")
+	}
+	if fl := checkDeviceAttestation(req.DeviceAttestation); fl != nil {
+		return nil, fl
+	}
 	if req.Deploy == "" {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "verify: deploy is required")
 	}
@@ -148,6 +155,9 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 	s := f.newSession("deploy:" + d.ID)
 	res.Session = s.id
 	defer func() {
+		if f.VerifyCloseError != "" {
+			return
+		}
 		delete(f.sessions, s.id)
 		f.retireIfTrusted()
 	}()
@@ -162,7 +172,7 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 				d.ID, address, at),
 			data: map[string]any{"recordAddress": address, "projectAddress": held.address}}
 	}
-	if fl := f.checkDevicePin(address, "verify"); fl != nil {
+	if _, fl := f.checkDevicePin(address, "verify", req.DeviceAttestation); fl != nil {
 		return nil, fl
 	}
 	password := onlinePassword(req.Secrets)
@@ -175,6 +185,11 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 	f.noteCompare(address, password, loggedOn, equal)
 	res.BlindTrust = f.blindTrust
 	res.Differences = []tiad.Difference{}
+	// As the agent's compare names them: every program block the
+	// archived project holds ("Main [OB1]").
+	held.project.sessionBlocks(func(b projectBlock) {
+		res.Blocks = append(res.Blocks, fmt.Sprintf("%s [%s%d]", b.name, b.kind, b.number))
+	})
 	res.Verdict = tiad.VerifyEqual
 	if !equal {
 		res.Verdict = tiad.VerifyDifferent
@@ -182,6 +197,13 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 	}
 	if d.Status == tiad.DeployLoaded {
 		res.ChangedOutside = boolp(!equal && res.Latest == d.ID)
+	}
+	// The data layout gate's proof (#1341): the CPU holds its newest load.
+	if equal && res.Latest == d.ID && f.unreadableLines == 0 {
+		if f.verifiedLoads == nil {
+			f.verifiedLoads = map[string]verifiedLoad{}
+		}
+		f.verifiedLoads[address] = verifiedLoad{deploy: d.ID, at: time.Now()}
 	}
 	if req.Fingerprint != nil {
 		fp, fl := f.fingerprintOf(s, address, req.Fingerprint.TrustUnverifiedCertificate, password, verifyTrustFix)
@@ -204,5 +226,17 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 			res.Fingerprint = vf
 		}
 	}
+	if f.VerifyCloseError != "" {
+		res.CloseError = f.VerifyCloseError + ": close it again (DELETE /v1/sessions/" + s.id + ")"
+	}
 	return res, nil
+}
+
+// sessionBlocks calls each with the project's program blocks as a session
+// on it reads them (session.projectBlocks).
+func (p savedProject) sessionBlocks(each func(projectBlock)) {
+	s := &session{blocks: p.blocks, groups: p.groups, obInfo: p.obInfo}
+	for _, b := range s.projectBlocks() {
+		each(b)
+	}
 }

@@ -17,6 +17,14 @@ func (n *Node) scanAndPublish() {
 	n.pubMu.Lock()
 	defer n.pubMu.Unlock()
 
+	// A closed publish gate (a pair's standby, or a leader stepping down)
+	// neither publishes nor buffers: what the store holds is not live, and
+	// buffered it would replay later as history nobody scanned.
+	if !n.gateOpen() {
+		return
+	}
+	extra := n.extraMetrics() // outside n.mu: it reads the pair's status
+
 	n.mu.Lock()
 	// Unborn — the broker is gone, or the node has not birthed yet — the
 	// tick still runs when store-and-forward is on and there has been a
@@ -35,6 +43,7 @@ func (n *Node) scanAndPublish() {
 		n.mu.Unlock()
 		return
 	}
+	msgs = n.withExtraLocked(msgs, extra)
 	// Deliverable = born, the primary host (if any) online, AND the
 	// transport up right now. born alone is not enough: it is cleared by
 	// paho's connection-lost handler, which runs only once paho has noticed
@@ -63,7 +72,9 @@ func (n *Node) scanAndPublish() {
 		sent, _ := n.publishRecords(msgs)
 		msgs = msgs[sent:]
 	}
-	if n.sf != nil {
+	// Not when the gate closed during the tick: what it sampled is not
+	// live, and buffered it would replay later as history.
+	if n.sf != nil && n.gateOpen() {
 		for _, m := range msgs {
 			n.sf.enqueue(m)
 		}
@@ -117,7 +128,7 @@ func (n *Node) publishRecords(recs []sfRecord) (sent int, ok bool) {
 // device DBIRTH/DDEATH): it is born and no rebirth is pending. Caller holds
 // n.mu.
 func (n *Node) liveLocked() bool {
-	return n.born && !n.rebirthPending
+	return n.born && !n.rebirthPending && n.gateOpen()
 }
 
 // bufferingLocked reports whether an unborn node should still sample: it
@@ -176,7 +187,7 @@ func (n *Node) publishPassLocked(now time.Time) (msgs []sfRecord, deviceEvents [
 	}
 
 	// Collect changed metrics per destination.
-	nodeChanged := n.collectChanged(snap, now, "")
+	nodeChanged := n.withoutNamesLocked(n.collectChanged(snap, now, ""), n.extraSet)
 	devChanged := map[string][]Metric{}
 	for _, d := range n.devices {
 		if !n.devHealth[d.ID] {

@@ -32,6 +32,15 @@ type Target interface {
 	SetQuestions(t testing.TB, qs []tiad.Question)
 	// Loaded lists every download that loaded the CPU.
 	Loaded(t testing.TB) []Loaded
+	// Shown lists every block a show opened in TIA's editor, as
+	// "group/name" ("name" at the root), in order.
+	Shown(t testing.TB) []string
+	// OnlineEvents lists every hold online and release, "online <address>"
+	// and "offline <address>", in order.
+	OnlineEvents(t testing.TB) []string
+	// SetReleaseOnlineFails makes taking a project offline fail inside
+	// TIA's side with msg ("" releases again).
+	SetReleaseOnlineFails(t testing.TB, msg string)
 	// SetDevice scripts the CPU's identity, as an upload and an online
 	// read report it, and with noIdentify a TIA side that cannot read it
 	// online (tiad.Openness today).
@@ -69,6 +78,13 @@ type Target interface {
 	// keep what the agent asked, which its check after the import must
 	// catch.
 	SetOBImportIgnoresClass(t testing.TB, on bool)
+	// SetTypes scripts the fake TIA's PLC data types (TypesScript): the
+	// customer's, whether the agent's reading before an import misses
+	// them, whether a compile moves their dates.
+	SetTypes(t testing.TB, ts TypesScript)
+	// SetLayout scripts the fake TIA's layout export (LayoutScript): the
+	// objects it cannot export, and those a customer edited in TIA.
+	SetLayout(t testing.TB, ls LayoutScript)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -76,6 +92,9 @@ type Loaded struct {
 	Address            string
 	Hardware, Software bool
 	State              string
+	// EveryBlock: the load took the whole program, not only what changed
+	// (#1341).
+	EveryBlock bool
 }
 
 // Config is the agent-side configuration a Target starts with: what the
@@ -84,6 +103,8 @@ type Loaded struct {
 type Config struct {
 	Token   string
 	Targets []string
+	// UI is TIAD_UI=1: TIA with its user interface, for viewing only.
+	UI bool
 }
 
 // closeFirst closes s, so the next project can open: TIA opens one project
@@ -105,6 +126,7 @@ func GoFake(t *testing.T, cfg Config) Target {
 		f.Token = cfg.Token
 	}
 	f.Targets = cfg.Targets
+	f.UI = cfg.UI
 	_, c := f.Serve(t)
 	return goFake{f, c}
 }
@@ -127,12 +149,19 @@ func (g goFake) SetAccess(_ testing.TB, a AccessScript) { g.f.SetAccess(a) }
 func (g goFake) SetFingerprint(_ testing.TB, fs FingerprintScript) {
 	g.f.SetFingerprint(fs)
 }
+func (g goFake) Shown(testing.TB) []string        { return g.f.Shown() }
+func (g goFake) OnlineEvents(testing.TB) []string { return g.f.OnlineEvents() }
+func (g goFake) SetReleaseOnlineFails(_ testing.TB, msg string) {
+	g.f.SetReleaseOnlineFails(msg)
+}
 func (g goFake) SetArchiveFails(_ testing.TB, msg string) { g.f.SetArchiveFails(msg) }
 func (g goFake) SetLogon(_ testing.TB, l LogonScript)     { g.f.SetLogon(l) }
 func (g goFake) SetImportReplacesForeign(_ testing.TB, on bool) {
 	g.f.SetImportReplacesForeign(on)
 }
 func (g goFake) SetOBImportIgnoresClass(_ testing.TB, on bool) { g.f.SetOBImportIgnoresClass(on) }
+func (g goFake) SetTypes(_ testing.TB, ts TypesScript)         { g.f.SetTypes(ts) }
+func (g goFake) SetLayout(_ testing.TB, ls LayoutScript)       { g.f.SetLayout(ls) }
 func (g goFake) LoadOutside(_ testing.TB, address, file string) {
 	if file == "" {
 		g.f.LoadOutside(address)
@@ -147,7 +176,7 @@ func (g goFake) SetDeployAddress(_ testing.TB, id, address string) {
 func (g goFake) Loaded(testing.TB) []Loaded {
 	var out []Loaded
 	for _, d := range g.f.Downloads() {
-		out = append(out, Loaded{Address: d.Request.Address, Hardware: d.Request.Hardware, Software: d.Request.Software, State: d.State})
+		out = append(out, Loaded{Address: d.Request.Address, Hardware: d.Request.Hardware, Software: d.Request.Software, State: d.State, EveryBlock: d.EveryBlock})
 	}
 	return out
 }
@@ -169,7 +198,11 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("Fingerprint", func(t *testing.T) { contractFingerprint(t, start) })
 	t.Run("Deploys", func(t *testing.T) { contractDeploys(t, start) })
 	t.Run("Verify", func(t *testing.T) { contractVerify(t, start) })
+	t.Run("LayoutGate", func(t *testing.T) { contractLayoutGate(t, start) })
 	t.Run("Adopt", func(t *testing.T) { contractAdopt(t, start) })
+	t.Run("AdoptBaseline", func(t *testing.T) { contractAdoptBaseline(t, start) })
+	t.Run("Show", func(t *testing.T) { contractShow(t, start) })
+	t.Run("Online", func(t *testing.T) { contractOnline(t, start) })
 	t.Run("Credentials", func(t *testing.T) { contractCredentials(t, start) })
 	t.Run("WebServer", func(t *testing.T) { contractWebServer(t, start) })
 	t.Run("WebUsers", func(t *testing.T) { contractWebUsers(t, start) })

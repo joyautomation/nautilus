@@ -148,7 +148,19 @@ jobs:
           # argument it would leave an empty alternative, which matches every test.
           rig=$(.github/scripts/naut-rig.sh regex)
           [ -n "$rig" ] || { echo "::error::naut-rig.sh gave no regex"; exit 1; }
-          go test -json -count=1 -coverprofile=evidence/cover.out -skip "^TestReleaseTargetsBuildWithoutCgo\$|$rig" ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+          # quorum/node runs in the next step, alone (#1120).
+          pkgs=$(go list ./... | grep -vx 'github.com/joyautomation/nautilus/quorum/node')
+          go test -json -count=1 -coverprofile=evidence/cover.out -skip "^TestReleaseTargetsBuildWithoutCgo\$|$rig" $pkgs | tee evidence/go-test.json | go run ./tools/evidence cat
+      # quorum/node on its own, after the rest, as in the race job (#1120):
+      # its loopback elections on 500 ms leases lost leases to a runner
+      # starved by every other package at once. Its results and coverage
+      # are evidence like the rest (merged in the evidence job).
+      - name: go test quorum/node (alone)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          mkdir -p evidence
+          go test -json -count=1 -coverprofile=evidence/cover-node.out ./quorum/node/ | tee evidence/go-test-node.json | go run ./tools/evidence cat
       # Test plan §3.4 (#710 PR 3b-3a): the quorumtest build's pause hooks
       # between a write's gate check and its send, swept on a real socket
       # (a few seconds). The tag adds the hooks, so it runs apart from ./...
@@ -179,9 +191,11 @@ jobs:
       # internal/project's drivers for simulated ones, so a change that
       # pulls a field driver or a socket into the shared path breaks here.
       - name: playground wasm build
-        run: GOOS=js GOARCH=wasm go vet ./cmd/naut-wasm && GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/naut-wasm
-      # The browser downloads this file, so its size is a budget: the stripped,
-      # gzipped wasm may not pass .github/wasm-budget.txt, and the number is
+        run: GOOS=js GOARCH=wasm go vet ./cmd/naut-wasm ./cmd/naut-wasm-hmi && GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/naut-wasm && GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/naut-wasm-hmi
+      # The browser downloads these files, so their size is a budget: each
+      # stripped, gzipped wasm (naut.wasm; the screen builder, naut-hmi.wasm,
+      # fetched only when a screen is first asked for) may not pass its line in
+      # .github/wasm-budget.txt, and the number is
       # printed (and put in the run summary) on every PR. Controller-only code
       # that leaks into the shared path shows up here, not in review.
       - name: playground wasm size budget
@@ -189,7 +203,7 @@ jobs:
       # Its own tests run under Node (the runner has it): a controller's
       # streams end when naut run replaces it or naut stop stops it.
       - name: playground wasm tests
-        run: GOOS=js GOARCH=wasm go test -exec="$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./cmd/naut-wasm
+        run: GOOS=js GOARCH=wasm go test -exec="$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./cmd/naut-wasm ./cmd/naut-wasm-hmi
       # Every benchmark once, so one that no longer compiles its own program
       # fails here rather than when someone next profiles (#612). The test
       # step above has already built the packages, so this adds little (15-35 s
@@ -430,10 +444,22 @@ jobs:
           restore-keys: |
             go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-
             go-race-${{ runner.os }}-${{ steps.key.outputs.go }}-
-      - name: go test -race (every package but opcua, opcua/server, cmd/naut)
+      - name: go test -race (every package but opcua, opcua/server, cmd/naut, quorum/node)
         run: |
-          pkgs=$(go list ./... | grep -vxE 'github.com/joyautomation/nautilus/(opcua|opcua/server|cmd/naut)')
+          pkgs=$(go list ./... | grep -vxE 'github.com/joyautomation/nautilus/(opcua|opcua/server|cmd/naut|quorum/node)')
           go test -race -count=1 $pkgs
+      # quorum/node on its own, after the rest (#1120): its loopback tests
+      # run real elections on 500 ms leases, and beside quorum/sim,
+      # hmibuild and project (minutes of CPU each under -race) the runner
+      # stalled the whole test process for 130-400 ms at a time. Both the
+      # peer and the witness timed out in the same window and a leader lost
+      # its lease: 35 of 57 failed race runs in 36 hours, over about 25
+      # tests. Alone it costs about a minute more and gets the four cores
+      # to itself. It runs even when the step above failed, so one red run
+      # shows both.
+      - name: go test -race quorum/node (alone)
+        if: ${{ !cancelled() }}
+        run: go test -race -count=1 ./quorum/node/
       - name: Save the Go build cache (main, once a day)
         if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: actions/cache/save@v4
@@ -507,9 +533,15 @@ jobs:
   go-naut-rig:
     needs: changes
     if: needs.changes.outputs.full != 'false'
-    name: Go — naut rig tests (redundancy pairs and clones)
+    name: Go — naut rig tests (redundancy pairs and clones, shard ${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Two shards of the list on two hosted runners, in parallel: the job was
+    # the CI long pole at ~700 s (each shard ~350 s). Round-robin by list order.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -541,7 +573,7 @@ jobs:
           for n in $(.github/scripts/naut-rig.sh names); do
             grep -qx "$n" "$RUNNER_TEMP/all-tests.txt" || { echo "::error::naut-rig-tests.txt lists $n, which is not a test in cmd/naut"; exit 1; }
           done
-          rig=$(.github/scripts/naut-rig.sh regex)
+          rig=$(.github/scripts/naut-rig.sh regex ${{ matrix.shard }} 2)
           [ -n "$rig" ] || { echo "::error::naut-rig.sh gave no regex"; exit 1; }
           go test -json -count=1 -timeout 20m -coverprofile=evidence/cover.out -run "$rig" ./cmd/naut | tee evidence/go-test.json | go run ./tools/evidence cat
       - name: Save the Go build cache (main, once a day)
@@ -555,7 +587,7 @@ jobs:
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-go-naut-rig
+          name: evidence-go-naut-rig-${{ matrix.shard }}
           path: evidence/
           retention-days: 14
 
@@ -781,6 +813,10 @@ jobs:
         with: {node-version: '22'}
       - name: share links (keep.js)
         run: node --test playground/app/keep.test.js
+      # The screen builder module (naut-hmi.wasm) builds a mimic screen and
+      # answers a broken app's errors, under Node in the worker's file system.
+      - name: playground screen builder module
+        run: node --test playground/app/hmi-module.test.mjs
       - run: ./playground/scripts/build.sh
       # The built playground in a real headless Chrome (#906, #833): every
       # example reaches "nautilus: live" (#891's offline bug), and YAML files
@@ -828,6 +864,8 @@ jobs:
           check "share API (the ingress's)" "$(code /playground/api/healthz)" 404
           check "this build's wasm" "$(header "/playground/engine/naut.wasm?v=$version.$build" cache-control)" "public, max-age=31536000, immutable"
           check "another build's wasm" "$(header "/playground/engine/naut.wasm?v=old.000000000000" cache-control)" "no-cache"
+          check "this build's screen builder" "$(header "/playground/engine/naut-hmi.wasm?v=$version.$build" cache-control)" "public, max-age=31536000, immutable"
+          check "precompressed screen builder" "$(curl -s -H 'Accept-Encoding: gzip' -D - -o /dev/null "http://localhost:8080/playground/engine/naut-hmi.wasm?v=$version.$build" | tr -d '\r' | sed -n 's/^content-encoding: //Ip')" gzip
           check "an example" "$(header /playground/engine/examples/lift-station.json cache-control)" "no-cache"
           check "precompressed wasm" "$(curl -s -H 'Accept-Encoding: gzip' -D - -o /dev/null "http://localhost:8080/playground/engine/naut.wasm?v=$version.$build" | tr -d '\r' | sed -n 's/^content-encoding: //Ip')" gzip
           exit $fail
@@ -1360,8 +1398,9 @@ jobs:
           mkdir -p runtime-evidence
           base=()
           [ -f "$RUNNER_TEMP/base/evidence.json" ] && base=(-baseline "$RUNNER_TEMP/base/evidence.json")
-          # cmd/naut's coverage is in two profiles (the Go job and the rig job).
-          .github/scripts/merge-cover.sh "$RUNNER_TEMP/cover.out" evidence/evidence-go/cover.out evidence/evidence-go-naut-rig/cover.out
+          # cmd/naut's coverage is in two profiles (the Go job and the two rig shards);
+          # quorum/node's is a third, from its own step in the Go job.
+          .github/scripts/merge-cover.sh "$RUNNER_TEMP/cover.out" evidence/evidence-go/cover.out evidence/evidence-go/cover-node.out evidence/evidence-go-naut-rig-1/cover.out evidence/evidence-go-naut-rig-2/cover.out
           go run ./tools/evidence build -in evidence -cover "$RUNNER_TEMP/cover.out" -release "$RUNNER_TEMP/release" \
             -o runtime-evidence/evidence.json "${base[@]}" -summary "$RUNNER_TEMP/claims.md"
           cat "$RUNNER_TEMP/claims.md" >> "$GITHUB_STEP_SUMMARY"

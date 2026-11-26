@@ -192,7 +192,17 @@ namespace Tiad
                 if (use.MayHaveAskedCredentials) instanceLogons.Forget(address, call + " failed after TIA asked credentials");
                 throw;
             }
-            equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
+            // The data types of the session's import group are required by
+            // name (TiaNames.CompareEqual); a session with no import group
+            // (a fingerprint read, a bare compare, an older deploy's
+            // verify) requires none.
+            List<ProjectBlock> types = null;
+            if (s.ImportGroup != "")
+            {
+                types = new List<ProjectBlock>();
+                foreach (var ty in t.Types(s.Handle)) if (Ownership.Owned(ty.Group, s.ImportGroup)) types.Add(ty);
+            }
+            equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, types, diffs);
             if (use.MayHaveAskedCredentials && !use.LoggedOn)
             {
                 instanceLogons.Forget(address, call + ": TIA asked credentials and tiad did not log on");
@@ -264,6 +274,7 @@ namespace Tiad
             NeedTia();
             return WithSession(c, delegate(Session s)
             {
+                HeldOnlineRefuses(s, "read the fingerprint");
                 // Every read is journalled, refusals too: the request and
                 // the gates are checked inside the audited read.
                 FingerprintRun run = ReadFingerprintAudited(s, null, TrustFix, delegate(FingerprintRun r)
@@ -272,11 +283,12 @@ namespace Tiad
                     // An explicit, per-call opt-in, as an upload's.
                     r.Trust = req.Bool("trustUnverifiedCertificate");
                     r.Password = OnlinePassword(req);
+                    DeviceAttestation att = ReadDeviceAttestation(req);
                     req.Done();
                     r.Address = CpuOf(s);
                     if (!Target(r.Address)) throw new TiadException(403, Kinds.TargetRefused, r.Address + " is not in TIAD_TARGETS");
                     // An online call: the CPU must still be the pinned one.
-                    CheckDevicePin(s, r.Address, "fingerprint read");
+                    CheckDevicePin(s, r.Address, "fingerprint read", att);
                 });
                 var o = new Obj();
                 o["address"] = run.Address;

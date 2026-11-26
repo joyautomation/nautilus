@@ -109,6 +109,7 @@ func (r *Runtime) replaceDriver(ctx context.Context, name string, d nio.Driver, 
 	}
 	r.bindStatsReaders(d)  // a status driver swapped in reads this runtime too (#850)
 	r.outSent.Store(false) // the next scan hands the new driver every output
+	r.holdDriverReplaced() // or, while a takeover hold holds, the safe values
 	var pushed chan nio.Values
 	if observe {
 		pushed = make(chan nio.Values, 1)

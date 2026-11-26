@@ -85,14 +85,16 @@ namespace Tiad.Test
             Eq(conflicts("function_block MAIN\n"), "src/a.scl declares \"Main\" [OB1] in the program blocks' root", "case-insensitive");
             Eq(conflicts("FUNCTION \"legacy\" : Void\n"), "src/a.scl declares \"Legacy\" [FB3] in group \"Customer\"", "another user group");
             Eq(conflicts("FUNCTION_BLOCK \"naut_Main\"\nFUNCTION \"Deep\" : Void\n"), "", "the group and its user groups are owned");
-            Eq(conflicts("TYPE \"Main\"\nEND_TYPE\n"), "", "a data type is refused on its own (TypesRefused), not here");
+            Eq(conflicts("TYPE \"Main\"\nEND_TYPE\n"), "src/a.scl declares \"Main\" [OB1] in the program blocks' root", "a data type named like a block: one name space");
             Eq(conflicts("FUNCTION_BLOCK \"Main\"\nFUNCTION \"Legacy\" : Void\n").Split('|').Length, 2, "each conflict once");
             var two = new List<Declared> { new Declared { Kind = "FB", Name = "Main", Source = "a.scl" }, new Declared { Kind = "FB", Name = "main", Source = "b.scl" } };
             Eq(string.Join("|", Ownership.Conflicts(two, blocks, "nautilus").ToArray()), "a.scl, b.scl declares \"Main\" [OB1] in the program blocks' root", "every source that declares it");
             var types = new List<Declared> { new Declared { Kind = "UDT", Name = "Recipe", Source = "t.udt" }, new Declared { Kind = "FB", Name = "X", Source = "x.scl" } };
-            TiadException te = Ownership.TypesRefused(types);
-            True(te != null && te.Kind == Kinds.BadRequest && te.Message.Contains("t.udt declares data type \"Recipe\"") && te.Message.Contains("Nothing was imported"), "a data type is refused, naming its source");
-            True(Ownership.TypesRefused(new List<Declared> { types[1] }) == null, "no data type, no refusal");
+            True(Ownership.MixedRefused(types) == null, "data types and blocks in sources of their own");
+            var mixed = new List<Declared> { types[0], types[1], new Declared { Kind = "FC", Name = "Y", Source = "t.udt" } };
+            TiadException te = Ownership.MixedRefused(mixed);
+            True(te != null && te.Kind == Kinds.BadRequest && te.Message.StartsWith("t.udt declares a data type and a block") && te.Message.Contains("Nothing was imported"), "a source with a data type and a block is refused, naming it");
+            Eq(string.Join(",", new List<string>(Ownership.TypeSources(types)).ToArray()), "t.udt", "the data type sources");
             True(Ownership.GroupRefused("a/b") != null && Ownership.GroupRefused("a\\b") != null && Ownership.GroupRefused("nautilus") == null, "a group with a path separator is refused");
             True(Ownership.Owned("NAUTILUS/x", "nautilus"), "a user group of the group, any case");
             True(!Ownership.Owned("nautilus2", "nautilus"), "a group that only starts with the name is not owned");
@@ -104,7 +106,65 @@ namespace Tiad.Test
             Eq(e.Kind, Kinds.ForeignBlock, "kind");
             Contains(e.Message, "\"Main\" [OB1] in the program blocks' root", "names the block, its number and its group");
             Contains(e.Message, "Nothing was imported", "says nothing changed");
-            Contains(e.Message, "Rename the block", "names the fix");
+            Contains(e.Message, "Rename it in the source", "names the fix");
+        }
+
+        static ProjectBlock TY(string name, string group, string modified)
+        {
+            return new ProjectBlock { Name = name, Type = "PlcStruct", Group = group, DataType = true, Modified = modified };
+        }
+
+        // OwnershipRefusesADataTypeOutsideTheGroup (D1b): TIA regenerates a
+        // same-named data type where it sits (TIA VM, 2026-11-24), and
+        // keeps one name for blocks and data types. So a declared data type
+        // or block that names a data type outside the group, in the data
+        // types' root or any user group however deep, any case, conflicts;
+        // and a declared data type that names a foreign block does too.
+        static void OwnershipRefusesADataTypeOutsideTheGroup()
+        {
+            var objects = new List<ProjectBlock>
+            {
+                PB("Main", "OB", 1, ""),
+                TY("Cust", "", "1"),
+                TY("Deep", "custg/sub/subsub", "1"),
+                TY("naut_Recipe", "nautilus", "1"),
+                TY("naut_Sub", "nautilus/x", "1"),
+            };
+            Func<string, string> conflicts = delegate(string src)
+            {
+                var ds = Ownership.Sources(src);
+                foreach (var d in ds) d.Source = "src/t.udt";
+                return string.Join("|", Ownership.Conflicts(ds, objects, "nautilus").ToArray());
+            };
+            Eq(conflicts("TYPE \"Cust\"\nEND_TYPE\n"), "src/t.udt declares data type \"Cust\" in the PLC data types' root", "a customer type at the root");
+            Eq(conflicts("TYPE \"deep\"\nEND_TYPE\n"), "src/t.udt declares data type \"Deep\" in data types group \"custg/sub/subsub\"", "a nested user group, any case");
+            Eq(conflicts("FUNCTION_BLOCK \"CUST\"\n"), "src/t.udt declares data type \"Cust\" in the PLC data types' root", "a block named like a customer type");
+            Eq(conflicts("TYPE \"naut_Recipe\"\nEND_TYPE\nTYPE \"naut_Sub\"\nEND_TYPE\n"), "", "the group's own data types, and its user groups'");
+            Contains(Ownership.Refusal(Ownership.Conflicts(Ownership.Sources("TYPE \"Cust\"\nEND_TYPE\n"), objects, "nautilus"), "nautilus").Message, "would replace it", "the refusal");
+        }
+
+        // OwnershipPrunesOnlyPrefixedObjects: with a prefix, a prune
+        // refuses when the group holds a block or data type that no source
+        // declares and that lacks the prefix; with none, as before.
+        static void OwnershipPrunesOnlyPrefixedObjects()
+        {
+            var objects = new List<ProjectBlock>
+            {
+                PB("Main", "OB", 1, ""),
+                PB("naut_Old", "FB", 1, "nautilus"),
+                PB("Theirs", "FC", 2, "nautilus/sub"),
+                TY("Shared", "nautilus", "1"),
+                TY("Cust", "", "1"),
+            };
+            var declared = new List<Declared> { new Declared { Kind = "FB", Name = "naut_Main" } };
+            TiadException e = Ownership.PruneRefused(objects, declared, "nautilus", "naut_");
+            True(e != null && e.Status == 409, "a prune over objects nautilus did not write is refused");
+            Eq(e.Message.Substring(0, e.Message.IndexOf(':')), "\"Theirs\" [FC2] in group \"nautilus/sub\"; data type \"Shared\" in data types group \"nautilus\"", "each named, block and data type, outside objects left out");
+            Contains(e.Message, "Nothing was imported", "says nothing changed");
+            True(Ownership.PruneRefused(objects, declared, "nautilus", "") == null, "no prefix: the prune as before");
+            declared.Add(new Declared { Kind = "FC", Name = "theirs" });
+            declared.Add(new Declared { Kind = "UDT", Name = "Shared" });
+            True(Ownership.PruneRefused(objects, declared, "nautilus", "NAUT_") == null, "declared ones are kept, not pruned; the prefix in any case");
         }
 
         // OwnershipSeesAChangeOutsideTheGroup: a block outside the group
@@ -129,6 +189,31 @@ namespace Tiad.Test
             m2[0].Modified = "2";
             Eq(string.Join("; ", Ownership.Changed(m1, m2, "nautilus").ToArray()), "\"Main\" [FB1] in the program blocks' root was modified",
                 "a body-only replacement: same kind, number and group, a new modified date");
+            // Data types (D1b): a customer type's date moving is a change,
+            // the group's own are not; a block and a type are one name.
+            var t1 = new List<ProjectBlock> { PB("Main", "OB", 1, ""), TY("Cust", "custg", "1"), TY("naut_R", "nautilus", "1") };
+            Eq(Ownership.Changed(t1, new List<ProjectBlock> { PB("Main", "OB", 1, ""), TY("Cust", "custg", "1"), TY("naut_R", "nautilus", "2") }, "nautilus").Count, 0,
+                "a regenerated type of the group's: its date moves");
+            Eq(string.Join("; ", Ownership.Changed(t1, new List<ProjectBlock> { PB("Main", "OB", 1, ""), TY("Cust", "custg", "2"), TY("naut_R", "nautilus", "1") }, "nautilus").ToArray()),
+                "data type \"Cust\" in data types group \"custg\" was modified", "a customer type's date moved");
+            Eq(string.Join("; ", Ownership.Changed(t1, new List<ProjectBlock> { PB("Main", "OB", 1, ""), TY("Cust", "", "1"), TY("naut_R", "nautilus", "1") }, "nautilus").ToArray()),
+                "data type \"Cust\" in data types group \"custg\" is now data type \"Cust\" in the PLC data types' root", "a customer type moved");
+            Eq(string.Join("; ", Ownership.Changed(t1, new List<ProjectBlock> { PB("Main", "OB", 1, ""), PB("Cust", "FB", 1, "custg"), TY("naut_R", "nautilus", "1") }, "nautilus").ToArray()),
+                "data type \"Cust\" in data types group \"custg\" is now \"Cust\" [FB1] in group \"custg\"", "a type that became a block");
+            Eq(string.Join("; ", Ownership.Changed(t1, new List<ProjectBlock> { PB("Main", "OB", 1, ""), TY("naut_R", "nautilus", "1") }, "nautilus").ToArray()),
+                "data type \"Cust\" in data types group \"custg\" is gone", "a customer type gone");
+            Eq(string.Join("; ", Ownership.Changed(t1, new List<ProjectBlock> { PB("Main", "OB", 1, ""), TY("Cust", "custg", "1"), TY("naut_R", "nautilus", "1"), TY("New", "", "1") }, "nautilus").ToArray()),
+                "data type \"New\" in the PLC data types' root is new", "a new type outside the group");
+            var f = Ownership.Foreign(new List<ProjectBlock> { TY("Cust", "", "1"), PB("Main", "OB", 1, ""), TY("naut_R", "nautilus", "1") }, "nautilus");
+            Eq(f.Count == 2 && !f[0].DataType && f[1].DataType && f[1].Name == "Cust", true, "foreign: blocks, then data types; the group's own left out");
+            TiadException ce = Ownership.CompileChangedError(new List<string> { "x" }, "nautilus");
+            Eq(ce.Kind, Kinds.UncleanSession, "a compile's change: kind");
+            Contains(ce.Message, "close it without saving", "the compile's change names what to do with the session");
+            Contains(ce.Message, "needs the project changed outside nautilus", "and says the deploy needs the project changed");
+            TiadException oe = Ownership.OutsideGroupError("src/t.udt: TIA generated data type \"Cust\" outside group \"nautilus\"", "nautilus");
+            Eq(oe.Kind, Kinds.OperationFailed, "outside group: kind");
+            Contains(oe.Message, "open or adopt the project again", "outside group: the recovery route");
+
             TiadException e = Ownership.ForeignChangedError(new List<string> { "x" }, "nautilus");
             Eq(e.Kind, Kinds.OperationFailed, "the failure's kind");
             Contains(e.Message, "Close it without saving", "the failure names what is left");

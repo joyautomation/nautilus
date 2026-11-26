@@ -59,6 +59,10 @@ type Script struct {
 	ImportReplacesForeign bool `json:"importReplacesForeign,omitempty"`
 	// OBImportIgnoresClass is SetOBImportIgnoresClass.
 	OBImportIgnoresClass bool `json:"obImportIgnoresClass,omitempty"`
+	// Types is SetTypes.
+	Types *TypesScript `json:"types,omitempty"`
+	// LayoutScript is SetLayout (its fields are the script's own keys).
+	LayoutScript
 	// AskFirst is how many times the fake's TIA asks its first check
 	// (nil: once, as TIA does; 0 asks nothing at all and loads; 2 asks
 	// the same configuration twice).
@@ -142,10 +146,14 @@ type Script struct {
 	// on (the bench CPU's is off).
 	UploadWebServer bool `json:"uploadWebServer,omitempty"`
 	// UploadAnonymous makes an upload bring an active anonymous user.
-	UploadAnonymous bool           `json:"uploadAnonymous,omitempty"`
-	AccessRecords   string         `json:"accessRecords,omitempty"`
-	Delays          []ScriptedCall `json:"delays,omitempty"`
-	Failures        []ScriptedCall `json:"failures,omitempty"`
+	UploadAnonymous bool `json:"uploadAnonymous,omitempty"`
+	// UploadAnonymousRoles and UploadUsers are AccessScript's.
+	UploadAnonymousRoles []AnonymousRoleScript `json:"uploadAnonymousRoles,omitempty"`
+	UploadUsers          []string              `json:"uploadUsers,omitempty"`
+	RightsOnlyWhenOn     bool                  `json:"rightsOnlyWhenOn,omitempty"`
+	AccessRecords        string                `json:"accessRecords,omitempty"`
+	Delays               []ScriptedCall        `json:"delays,omitempty"`
+	Failures             []ScriptedCall        `json:"failures,omitempty"`
 }
 
 // ScriptedCall names an ITia call ("Compile", "OpenProject", ...).
@@ -206,6 +214,9 @@ func StartProcess(t testing.TB, bin string, cfg Config, env ...string) *Process 
 	}
 	p := &Process{WorkDir: t.TempDir(), PinsDir: t.TempDir(), DeploysDir: t.TempDir(), done: make(chan struct{})}
 	p.cmd = Command(bin)
+	if cfg.UI {
+		env = append([]string{"TIAD_UI=1"}, env...)
+	}
 	p.cmd.Env = AgentEnv(append([]string{
 		"TIAD_ADDR=http://127.0.0.1:0",
 		"TIAD_WORKDIR=" + p.WorkDir,
@@ -330,6 +341,26 @@ func (p *Process) SetLogon(t testing.TB, l LogonScript) {
 	p.SetScript(t, s)
 }
 
+// SetTypes scripts tiad-fake's data types (Target.SetTypes).
+func (p *Process) SetTypes(t testing.TB, ts TypesScript) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.Types = &ts
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetLayout scripts tiad-fake's layout export (Target.SetLayout).
+func (p *Process) SetLayout(t testing.TB, ls LayoutScript) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.LayoutScript = ls
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
 // SetImportReplacesForeign makes tiad-fake's TIA replace Main [OB1] on
 // every later import (Target.SetImportReplacesForeign).
 func (p *Process) SetImportReplacesForeign(t testing.TB, on bool) {
@@ -382,6 +413,9 @@ func (p *Process) SetAccess(t testing.TB, a AccessScript) {
 	p.script.UploadAccessControl = a.UploadAccessControl
 	p.script.UploadWebServer = a.UploadWebServer
 	p.script.UploadAnonymous = a.UploadAnonymous
+	p.script.UploadAnonymousRoles = a.UploadAnonymousRoles
+	p.script.UploadUsers = a.UploadUsers
+	p.script.RightsOnlyWhenOn = a.RightsOnlyWhenOn
 	p.script.AccessRecords = a.Records
 	s := p.script
 	p.mu.Unlock()
@@ -411,6 +445,26 @@ func (p *Process) SetFingerprint(t testing.TB, fs FingerprintScript) {
 	p.SetScript(t, s)
 }
 
+// SetReleaseOnlineFails makes taking a project offline fail inside TIA's
+// side with msg ("" releases again).
+func (p *Process) SetReleaseOnlineFails(t testing.TB, msg string) {
+	t.Helper()
+	p.mu.Lock()
+	var failures []ScriptedCall
+	for _, f := range p.script.Failures {
+		if f.Call != "ReleaseOnline" {
+			failures = append(failures, f)
+		}
+	}
+	if msg != "" {
+		failures = append(failures, ScriptedCall{Call: "ReleaseOnline", Message: msg})
+	}
+	p.script.Failures = failures
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
 // SetArchiveFails makes every archive for a deploy record fail inside
 // TIA's side with msg ("" archives again).
 func (p *Process) SetArchiveFails(t testing.TB, msg string) {
@@ -431,6 +485,26 @@ func (p *Process) SetArchiveFails(t testing.TB, msg string) {
 	p.SetScript(t, s)
 }
 
+// OnlineEvents lists every hold online and release tiad-fake made.
+func (p *Process) OnlineEvents(t testing.TB) []string {
+	t.Helper()
+	var out struct {
+		Online []string `json:"online"`
+	}
+	p.controlInto(t, http.MethodGet, "/fake/online", nil, &out)
+	return out.Online
+}
+
+// Shown lists every block tiad-fake's show opened.
+func (p *Process) Shown(t testing.TB) []string {
+	t.Helper()
+	var out struct {
+		Shown []string `json:"shown"`
+	}
+	p.controlInto(t, http.MethodGet, "/fake/shown", nil, &out)
+	return out.Shown
+}
+
 // Loaded lists every download tiad-fake loaded.
 func (p *Process) Loaded(t testing.TB) []Loaded {
 	t.Helper()
@@ -439,12 +513,13 @@ func (p *Process) Loaded(t testing.TB) []Loaded {
 			Address            string `json:"address"`
 			Hardware, Software bool
 			State              string `json:"state"`
+			EveryBlock         bool   `json:"everyBlock"`
 		} `json:"downloads"`
 	}
 	p.controlInto(t, http.MethodGet, "/fake/downloads", nil, &out)
 	var l []Loaded
 	for _, d := range out.Downloads {
-		l = append(l, Loaded{Address: d.Address, Hardware: d.Hardware, Software: d.Software, State: d.State})
+		l = append(l, Loaded{Address: d.Address, Hardware: d.Hardware, Software: d.Software, State: d.State, EveryBlock: d.EveryBlock})
 	}
 	return l
 }

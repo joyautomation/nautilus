@@ -22,9 +22,14 @@
 //       the moment the ITia was made, which is when TIA would start.
 //   GET /fake/downloads {"downloads": [{address, hardware, software, state}]}
 //       every download that loaded the CPU. Secrets are never recorded.
+//   GET /fake/shown   {"shown": ["group/name", ...]}: the blocks a show opened
+//   GET /fake/online  {"online": ["online <address>", "offline <address>", ...]}
 //
 // PUT /fake/script also takes "questions": [{id, message, detail,
-// objects}], TIA's pre-download checks for every download.
+// objects}], TIA's pre-download checks for every download;
+// "layoutUnreadable": [name], objects the layout export fails for; and
+// "layoutEdits": [name], objects whose layout changed outside any source
+// (a customer's edit): each listed name's hash moves while it is listed.
 //
 // It exits when its standard input closes, so a test that dies leaves no
 // process behind.
@@ -243,6 +248,8 @@ namespace Tiad.Fake
         Dictionary<string, int> delays = new Dictionary<string, int>(StringComparer.Ordinal);
         Dictionary<string, string> failures = new Dictionary<string, string>(StringComparer.Ordinal);
         List<Question> questions = new List<Question>();
+        List<string> layoutUnreadable = new List<string>();
+        List<string> layoutEdits = new List<string>();
         bool loadDespiteCancel;
         bool onlineGoesOn;
         // keepsLogon makes the fake's TIA keep a logon for its instance's
@@ -260,6 +267,22 @@ namespace Tiad.Fake
         // whatever the SimaticML asks: a TIA that does not keep what the
         // agent asked, which its check after the import must catch.
         bool obImportIgnoresClass;
+        // types scripts the PLC data types (D1b): foreignTypes are the
+        // customer's, in every project (name and group path, as Main [OB1]
+        // is); typesHidden makes Types never list them (the agent's
+        // reading misses them), while an import still hits one as TIA does
+        // on the TIA VM (2026-11-24): it hands the type back where it
+        // sits, no error, and the glue fails with OutsideGroup, the only
+        // sign of it. compileTouchesForeign makes a compile move the
+        // customer types' modified date (a customer type that uses one of
+        // nautilus's); compareDropsTypes leaves the data types out of the
+        // compare tree.
+        List<ProjectBlock> foreignTypes = new List<ProjectBlock>();
+        bool typesHidden, compileTouchesForeign, compareDropsTypes;
+        // importTouchesForeign makes an import move the customer types'
+        // dates without handing them back: only the after-import check
+        // sees it.
+        bool importTouchesForeign;
         int askFirst = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
@@ -286,7 +309,49 @@ namespace Tiad.Fake
         string uploadAccess = UploadedAccessControl;
         bool uploadWeb;
         bool uploadAnonymous;
+        List<AnonymousRole> uploadAnonymousRoles = new List<AnonymousRole>();
+        List<string> uploadUsers = new List<string>();
+        bool rightsOnlyWhenOn;
+
+        // RightsOnlyWhenOn: TIA reads every custom role as holding no
+        // runtime right while the CPU's access control is off.
+        public bool RightsOnlyWhenOn
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return rightsOnlyWhenOn;
+                }
+            }
+        }
         string accessRecords = "";
+
+        // UploadAnonymousRoles are the roles an upload's anonymous user
+        // holds: a custom role with its runtime rights, or (Rights null) a
+        // system role, whose rights tiad cannot read. UploadUsers are the
+        // local users an upload brings besides any the project held.
+        public List<AnonymousRole> UploadAnonymousRoles
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadAnonymousRoles;
+                }
+            }
+        }
+
+        public List<string> UploadUsers
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadUsers;
+                }
+            }
+        }
 
         // UploadAnonymous is whether an upload brings a project whose
         // anonymous user is active.
@@ -507,6 +572,25 @@ namespace Tiad.Fake
             }
         }
 
+        // LayoutUnreadable is whether the layout export fails for name;
+        // LayoutEdit is the salt a scripted edit adds to name's layout
+        // ("" for none).
+        public bool LayoutUnreadable(string name)
+        {
+            lock (mu)
+            {
+                return layoutUnreadable.Exists(delegate(string n) { return string.Equals(n, name, StringComparison.OrdinalIgnoreCase); });
+            }
+        }
+
+        public string LayoutEdit(string name)
+        {
+            lock (mu)
+            {
+                return layoutEdits.Exists(delegate(string n) { return string.Equals(n, name, StringComparison.OrdinalIgnoreCase); }) ? "edited" : "";
+            }
+        }
+
         public bool CleanCancel
         {
             get
@@ -632,6 +716,61 @@ namespace Tiad.Fake
             }
         }
 
+        public List<ProjectBlock> ForeignTypes
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return new List<ProjectBlock>(foreignTypes);
+                }
+            }
+        }
+
+        public bool TypesHidden
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return typesHidden;
+                }
+            }
+        }
+
+        public bool CompileTouchesForeign
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return compileTouchesForeign;
+                }
+            }
+        }
+
+        public bool ImportTouchesForeign
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return importTouchesForeign;
+                }
+            }
+        }
+
+        public bool CompareDropsTypes
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return compareDropsTypes;
+                }
+            }
+        }
+
         public bool ImportReplacesForeign
         {
             get
@@ -681,6 +820,12 @@ namespace Tiad.Fake
         }
         readonly List<object> calls = new List<object>();
         readonly List<object> downloads = new List<object>();
+        // shown is every block a show opened in the (absent) editor, as
+        // "group/name" ("name" at the root), in order.
+        readonly List<object> shown = new List<object>();
+        // onlineEvents is every hold and release: "online <address>" and
+        // "offline <address>", in order.
+        readonly List<object> onlineEvents = new List<object>();
 
         public List<Question> Questions
         {
@@ -769,6 +914,17 @@ namespace Tiad.Fake
             bool credsAfter = r.Bool("credentialsAfterChecks");
             bool replaces = r.Bool("importReplacesForeign");
             bool ignoresClass = r.Bool("obImportIgnoresClass");
+            var fts = new List<ProjectBlock>();
+            bool hidden = false, touches = false, dropsTypes = false, importTouches = false;
+            var ty = r.Child("types");
+            if (ty != null)
+            {
+                foreach (var x in ty.Children("foreign")) fts.Add(new ProjectBlock { Name = x.Str("name"), Group = x.Str("group"), Type = "PlcStruct", DataType = true });
+                hidden = ty.Bool("hidden");
+                touches = ty.Bool("compileTouchesForeign");
+                dropsTypes = ty.Bool("compareDropsTypes");
+                importTouches = ty.Bool("importTouchesForeign");
+            }
             int? first = r.OptInt("askFirst");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
@@ -780,6 +936,8 @@ namespace Tiad.Fake
             bool seamTrust = r.Bool("seamTrustBeforeDownload");
             bool seamReserve = r.Bool("seamReserveBeforeRetire");
             bool clean = r.Bool("cleanCancel");
+            List<string> unreadable = r.Strs("layoutUnreadable");
+            List<string> edits = r.Strs("layoutEdits");
             bool differs = r.Bool("compareDiffers");
             string tree = r.Str("compareTree");
             if (tree != "" && tree != "empty" && tree != "emptyFolders" && tree != "folderDiffers" && tree != "irrelevantRoot" && tree != "dropBlock" && tree != "noBlocks")
@@ -808,6 +966,16 @@ namespace Tiad.Fake
             string upAccess = r.Str("uploadAccessControl");
             bool upWeb = r.Bool("uploadWebServer");
             bool upAnon = r.Bool("uploadAnonymous");
+            var upAnonRoles = new List<AnonymousRole>();
+            foreach (var x in r.Children("uploadAnonymousRoles"))
+            {
+                var ar = new AnonymousRole { Name = x.Str("name") };
+                List<string> rights = x.Strs("rights");
+                if (!x.Bool("system")) ar.Rights = rights;
+                upAnonRoles.Add(ar);
+            }
+            List<string> upUsers = r.Strs("uploadUsers");
+            bool onlyOn = r.Bool("rightsOnlyWhenOn");
             string records = r.Str("accessRecords");
             if (upAccess == "") upAccess = UploadedAccessControl;
             var qs = new List<Question>();
@@ -822,12 +990,19 @@ namespace Tiad.Fake
                 delays = d;
                 failures = f;
                 questions = qs;
+                layoutUnreadable = unreadable;
+                layoutEdits = edits;
                 loadDespiteCancel = despite;
                 onlineGoesOn = goesOn;
                 keepsLogon = keeps;
                 credentialsAfterChecks = credsAfter;
                 importReplacesForeign = replaces;
                 obImportIgnoresClass = ignoresClass;
+                foreignTypes = fts;
+                typesHidden = hidden;
+                compileTouchesForeign = touches;
+                compareDropsTypes = dropsTypes;
+                importTouchesForeign = importTouches;
                 askFirst = first.HasValue ? first.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
@@ -852,9 +1027,50 @@ namespace Tiad.Fake
                 uploadAccess = upAccess;
                 uploadWeb = upWeb;
                 uploadAnonymous = upAnon;
+                uploadAnonymousRoles = upAnonRoles;
+                uploadUsers = upUsers;
+                rightsOnlyWhenOn = onlyOn;
                 accessRecords = records;
             }
             return new Obj();
+        }
+
+        public void OnlineEvent(string e)
+        {
+            lock (mu)
+            {
+                onlineEvents.Add(e);
+            }
+        }
+
+        // Online is GET /fake/online {"online": ["online <address>", "offline <address>", ...]}.
+        public object Online(Call c)
+        {
+            var o = new Obj();
+            lock (mu)
+            {
+                o["online"] = onlineEvents.ToArray();
+            }
+            return o;
+        }
+
+        public void Showed(string group, string name)
+        {
+            lock (mu)
+            {
+                shown.Add(group == "" ? name : group + "/" + name);
+            }
+        }
+
+        // Shown is GET /fake/shown {"shown": ["group/name", ...]}.
+        public object Shown(Call c)
+        {
+            var o = new Obj();
+            lock (mu)
+            {
+                o["shown"] = shown.ToArray();
+            }
+            return o;
         }
 
         public object Calls(Call c)
@@ -871,6 +1087,9 @@ namespace Tiad.Fake
     sealed class FakeProject
     {
         public string Full = "";
+        // HeldOnline is the address a HoldOnline holds the project online
+        // to, "" when offline.
+        public string HeldOnline = "";
         public Station Station;
         public List<Block> Blocks = new List<Block>();
         // GroupOf is each imported block's group (lower-cased name to the
@@ -880,6 +1099,14 @@ namespace Tiad.Fake
         // check missed). Main is then an FB, still at the root.
         public Dictionary<string, string> GroupOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public bool MainReplaced;
+        // Decls is each imported block's declaration part: its source up
+        // to the first line that is BEGIN (the whole source without one).
+        // The fake's layout is made from it (FakeTia.Layout), as TIA's is
+        // from the interface a source declares: a body change leaves it.
+        public Dictionary<string, string> Decls = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // TypeModified is each data type's modified date once something
+        // changed it (by name, any case; absent for one as made).
+        public Dictionary<string, string> TypeModified = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         // ObInfo is each imported OB's class, number and cycle (Class,
         // Number, CycleMicros), as TIA keeps them across a source that
         // replaces the OB's body.
@@ -928,6 +1155,9 @@ namespace Tiad.Fake
         public Dictionary<string, FakeUser> Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
         public Dictionary<string, HashSet<string>> Roles = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         public bool AnonymousActive;
+        // AnonymousRoles are the roles the anonymous user holds: a custom
+        // one is in Roles; any other is a system role.
+        public List<string> AnonymousRoles = new List<string>();
         public Dictionary<string, string> RoleComments = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // CompileError is what a hardware compile of this project fails
@@ -988,6 +1218,7 @@ namespace Tiad.Fake
             Roles = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
             foreach (var kv in from.Roles) Roles[kv.Key] = new HashSet<string>(kv.Value, StringComparer.Ordinal);
             AnonymousActive = from.AnonymousActive;
+            AnonymousRoles = new List<string>(from.AnonymousRoles);
             RoleComments = new Dictionary<string, string>(from.RoleComments, StringComparer.Ordinal);
         }
     }
@@ -1408,6 +1639,10 @@ namespace Tiad.Fake
                 p.WebServer = sp.WebServer;
                 p.WebInterface = sp.WebInterface;
                 p.WebHttpsOnly = sp.WebHttpsOnly;
+                p.Blocks = new List<Block>(sp.Blocks);
+                p.GroupOf = new Dictionary<string, string>(sp.GroupOf, StringComparer.OrdinalIgnoreCase);
+                p.ObInfo = new Dictionary<string, ProjectBlock>(sp.ObInfo, StringComparer.OrdinalIgnoreCase);
+                p.Decls = new Dictionary<string, string>(sp.Decls, StringComparer.OrdinalIgnoreCase);
                 // A project saved unchanged since a load is what that load
                 // put on the CPU.
                 if (sp.RestoredKey != "")
@@ -1435,6 +1670,8 @@ namespace Tiad.Fake
         public void CloseProject(object project)
         {
             script.Enter("CloseProject");
+            // As tiad.Openness: a project held online goes offline first.
+            ReleaseOnline(project);
             openProjects--;
         }
 
@@ -1469,7 +1706,7 @@ namespace Tiad.Fake
         // as TIA makes one, or keeps the project's, as the agent decided;
         // then it applies cpu.configurationProtection through the agent's
         // ProtectionSteps over a configurator that behaves like TIA's.
-        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made)
+        public void ApplyStation(object project, Station next, string decision, Secrets secrets, bool turnOn, List<string> notes, AccessMade made)
         {
             script.Enter("ApplyStation");
             var p = (FakeProject)project;
@@ -1505,13 +1742,35 @@ namespace Tiad.Fake
             p.Station = null;
             ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
             var access = new FakeAccess(p, script.Policy);
-            AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+            AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, turnOn, made, notes);
             WebSteps.Run(new FakeWeb(p), access, next.WebServer, secrets, decision == CpuReuse.Create, made, notes);
             p.Station = next;
             List<string> ch = decision == CpuReuse.Reuse && prev == null
                 ? CpuReuse.Found(found, next, protection, made.Writes != writes)
                 : CpuReuse.Changes(decision, prev, next);
             p.Changed = was || ch.Count > 0;
+        }
+
+        // ReadTurnOn reads the project's users and anonymous user as
+        // tiad.Openness does: a system role's rights are unreadable.
+        public TurnOnFacts ReadTurnOn(object project)
+        {
+            script.Enter("ReadTurnOn");
+            var p = (FakeProject)project;
+            if (p.Cpu == null) throw new TiaException("the project holds no CPU");
+            var f = new TurnOnFacts { Users = new List<string>(p.Users.Keys), AnonymousActive = p.AnonymousActive };
+            foreach (string r in p.AnonymousRoles)
+            {
+                var ar = new AnonymousRole { Name = r };
+                HashSet<string> rights;
+                if (p.Roles.TryGetValue(r, out rights))
+                {
+                    ar.Rights = script.RightsOnlyWhenOn && p.AccessControl != AccessRule.Enabled ? new List<string>() : new List<string>(rights);
+                    ar.Rights.Sort(StringComparer.Ordinal);
+                }
+                f.AnonymousRoles.Add(ar);
+            }
+            return f;
         }
 
         public PasswordPolicy ReadPolicy(object project)
@@ -1555,7 +1814,7 @@ namespace Tiad.Fake
             return c == "" ? null : c;
         }
 
-        public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune)
+        public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune, bool pruneTypes)
         {
             var p = (FakeProject)project;
             // The knob's replacement comes first, so a failure scripted for
@@ -1605,6 +1864,23 @@ namespace Tiad.Fake
                     {
                         if (h.Kind == "OB" && !p.ObInfo.ContainsKey(h.Name))
                             p.ObInfo[h.Name] = new ProjectBlock { Name = h.Name, Type = "OB", Class = "ProgramCycle", Number = FreeOb(p, 123) };
+                        // A data type named like a customer's: TIA
+                        // regenerates that one where it sits and hands it
+                        // back with no error; the glue fails on its group.
+                        if (h.Kind != "UDT" || !src.DataTypes) continue;
+                        foreach (var ft in script.ForeignTypes)
+                        {
+                            if (!string.Equals(ft.Name, h.Name, StringComparison.OrdinalIgnoreCase)) continue;
+                            p.TypeModified[ft.Name] = "regenerated by an import";
+                            throw new TiaException(src.Path + ": TIA generated data type \"" + ft.Name + "\" outside data types group \"" + group + "\", in " + (ft.Group == "" ? "the data types' root" : "\"" + ft.Group + "\"")) { OutsideGroup = true };
+                        }
+                    }
+                    string decl = Decl(File.ReadAllText(src.FullPath, Encoding.UTF8));
+                    foreach (var h in heads) p.Decls[h.Name] = decl;
+                    foreach (var h in heads)
+                    {
+                        // A regenerated type of nautilus's: TIA moves its date.
+                        if (h.Kind == "UDT" && p.GroupOf.ContainsKey(h.Name)) p.TypeModified[h.Name] = "regenerated " + Guid.NewGuid().ToString("N");
                     }
                     made.AddRange(heads);
                 }
@@ -1617,8 +1893,9 @@ namespace Tiad.Fake
             {
                 string g;
                 p.GroupOf.TryGetValue(b.Name, out g);
-                // Prune deletes only in the import's group.
-                if (prune && Ownership.Owned(g ?? "", group))
+                // Prune deletes only in the import's group, data types only
+                // with pruneTypes.
+                if (prune && Ownership.Owned(g ?? "", group) && (b.Kind != "UDT" || pruneTypes))
                 {
                     if (!made.Exists(delegate(Block m) { return string.Equals(m.Name, b.Name, StringComparison.OrdinalIgnoreCase); })) p.ObInfo.Remove(b.Name);
                     continue;
@@ -1629,6 +1906,10 @@ namespace Tiad.Fake
             {
                 byName[b.Name.ToLowerInvariant()] = b;
                 p.GroupOf[b.Name] = group;
+            }
+            if (script.ImportTouchesForeign)
+            {
+                foreach (var ft in script.ForeignTypes) p.TypeModified[ft.Name] = "touched by an import " + Guid.NewGuid().ToString("N");
             }
             p.Blocks = new List<Block>(byName.Values);
             p.Blocks.Sort(delegate(Block a, Block b) { return string.CompareOrdinal(a.Name, b.Name); });
@@ -1644,6 +1925,10 @@ namespace Tiad.Fake
         {
             script.Enter("Compile");
             var p = (FakeProject)project;
+            if (script.CompileTouchesForeign)
+            {
+                foreach (var ft in script.ForeignTypes) p.TypeModified[ft.Name] = "recompiled " + Guid.NewGuid().ToString("N");
+            }
             string err = hardware ? p.CompileError() : null;
             if (err == null) return script.Compile;
             var res = new CompileResult { Result = "error", Errors = 1 };
@@ -1651,7 +1936,7 @@ namespace Tiad.Fake
             return res;
         }
 
-        public DownloadOutcome Download(object project, string address, bool hardware, bool software,
+        public DownloadOutcome Download(object project, string address, bool hardware, bool software, bool everyBlock,
             Secrets secrets, bool? startAfter, Func<Question, Answer> answer, LoginUse use)
         {
             script.Enter("Download");
@@ -1783,6 +2068,7 @@ namespace Tiad.Fake
                     rec["address"] = address;
                     rec["hardware"] = hardware;
                     rec["software"] = software;
+                    rec["everyBlock"] = everyBlock;
                     rec["state"] = state;
                     script.Loaded(rec);
                     loads[address] = Count(loads, address) + 1;
@@ -1902,6 +2188,14 @@ namespace Tiad.Fake
                 Program(leaves),
                 Cmp("PLC tags", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical")),
             };
+            // The data types, each labelled as the agent guesses TIA
+            // labels them (TiaNames.TypeLabel): only the bench can prove it.
+            var typeLeaves = new List<CompareNode>();
+            if (!script.CompareDropsTypes)
+            {
+                foreach (var ty in ProjectTypes(p, script)) typeLeaves.Add(Cmp(TiaNames.TypeLabel(ty), "ObjectsIdentical"));
+            }
+            if (typeLeaves.Count > 0) kids.Add(Cmp("PLC data types", "FolderContentsIdentical", typeLeaves.ToArray()));
             kids.AddRange(EmptyFolders());
             return new OnlineCompare { Tree = Cmp(cpu, equal ? "FolderContentsIdentical" : "ObjectsDifferent", kids.ToArray()), Blocks = blocks };
         }
@@ -2012,10 +2306,158 @@ namespace Tiad.Fake
             p.ObInfo.Remove(name);
         }
 
+        // Layout is the fake's data layout (#1341): each object's hash is
+        // made from its kind, name, type and declaration part, and the
+        // hashes of every project object its declaration names in quotes,
+        // however deep, as TIA's export writes a UDT's members out in each
+        // holder and an FB's statics in its instance DB. Main and the
+        // scripted customer types declare nothing.
+        public List<LayoutObject> Layout(object project)
+        {
+            script.Enter("Layout");
+            var p = (FakeProject)project;
+            var all = new List<LayoutObject>();
+            var decl = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var b in ProjectBlocks(p))
+            {
+                all.Add(new LayoutObject { Name = b.Name, Kind = "block", Type = b.Type });
+            }
+            foreach (var t in ProjectTypes(p, script))
+            {
+                all.Add(new LayoutObject { Name = t.Name, Kind = "type", Type = t.Type });
+            }
+            var byName = new Dictionary<string, LayoutObject>(StringComparer.OrdinalIgnoreCase);
+            foreach (var o in all)
+            {
+                string d;
+                p.Decls.TryGetValue(o.Name, out d);
+                decl[o.Name] = d ?? "";
+                byName[o.Name] = o;
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(d ?? "", "\"([^\"]+)\""))
+                {
+                    string r = m.Groups[1].Value;
+                    if (!string.Equals(r, o.Name, StringComparison.OrdinalIgnoreCase) && !o.Refs.Exists(delegate(string x) { return string.Equals(x, r, StringComparison.OrdinalIgnoreCase); })) o.Refs.Add(r);
+                }
+                o.Refs.Sort(StringComparer.OrdinalIgnoreCase);
+            }
+            var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var o in all)
+            {
+                o.Hash = FakeLayoutHash(o, decl, byName, hashes, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+                if (script.LayoutUnreadable(o.Name))
+                {
+                    o.Hash = "";
+                    o.Unreadable = "TIA did not export it: know-how protected (fake)";
+                }
+            }
+            return all;
+        }
+
+        string FakeLayoutHash(LayoutObject o, Dictionary<string, string> decl, Dictionary<string, LayoutObject> byName, Dictionary<string, string> done, HashSet<string> visiting)
+        {
+            string h;
+            if (done.TryGetValue(o.Name, out h)) return h;
+            if (!visiting.Add(o.Name)) return "cycle";
+            var sb = new StringBuilder();
+            sb.Append(o.Kind).Append('|').Append(o.Name).Append('|').Append(o.Type).Append('|').Append(decl[o.Name]).Append('|').Append(script.LayoutEdit(o.Name));
+            foreach (string r in o.Refs)
+            {
+                LayoutObject x;
+                if (byName.TryGetValue(r, out x)) sb.Append('\n').Append(FakeLayoutHash(x, decl, byName, done, visiting));
+            }
+            h = LayoutRule.Sha256Hex(sb.ToString());
+            done[o.Name] = h;
+            return h;
+        }
+
+        // Decl is a source's declaration part: up to the first line that
+        // is BEGIN, the whole source without one, line ends as LF.
+        static string Decl(string src)
+        {
+            var sb = new StringBuilder();
+            foreach (string raw in src.Replace("\r\n", "\n").Split('\n'))
+            {
+                if (raw.Trim() == "BEGIN") break;
+                sb.Append(raw).Append('\n');
+            }
+            return sb.ToString();
+        }
+
         public List<ProjectBlock> Blocks(object project)
         {
             script.Enter("Blocks");
             return ProjectBlocks((FakeProject)project);
+        }
+
+        public List<ProjectBlock> Types(object project)
+        {
+            script.Enter("Types");
+            return ProjectTypes((FakeProject)project, script);
+        }
+
+        // ProjectTypes is the fake project's PLC data types: the scripted
+        // customer ones (none with typesHidden),
+        // then every type a source made, in its group.
+        static List<ProjectBlock> ProjectTypes(FakeProject p, Script script)
+        {
+            var l = new List<ProjectBlock>();
+            if (!script.TypesHidden)
+            {
+                foreach (var ft in script.ForeignTypes)
+                {
+                    string m;
+                    p.TypeModified.TryGetValue(ft.Name, out m);
+                    l.Add(new ProjectBlock { Name = ft.Name, Type = "PlcStruct", Group = ft.Group, DataType = true, Modified = m ?? "customer" });
+                }
+            }
+            foreach (var b in p.Blocks)
+            {
+                if (b.Kind != "UDT") continue;
+                string g, m;
+                p.GroupOf.TryGetValue(b.Name, out g);
+                p.TypeModified.TryGetValue(b.Name, out m);
+                l.Add(new ProjectBlock { Name = b.Name, Type = "PlcStruct", Group = g ?? "", DataType = true, Modified = m ?? "made" });
+            }
+            return l;
+        }
+
+        // Show records the block, as the editor TIA would open it in.
+        // It refuses a block the project does not hold there, as
+        // Openness finds none.
+        // HoldOnline records the hold: the fake has nothing to show online.
+        // It does not model credentials or certificates going online.
+        public string HoldOnline(object project, string address, LoginUse use)
+        {
+            script.Enter("HoldOnline");
+            var p = (FakeProject)project;
+            if (p.Cpu == null) throw new TiaException("the project has no CPU");
+            if (p.HeldOnline != "") throw new TiaException("the project is already online");
+            p.HeldOnline = address;
+            script.OnlineEvent("online " + address);
+            return "Online";
+        }
+
+        public void ReleaseOnline(object project)
+        {
+            var p = (FakeProject)project;
+            if (p.HeldOnline == "") return;
+            script.Enter("ReleaseOnline");
+            script.OnlineEvent("offline " + p.HeldOnline);
+            p.HeldOnline = "";
+        }
+
+        public void Show(object project, string group, string name)
+        {
+            script.Enter("Show");
+            foreach (ProjectBlock b in ProjectBlocks((FakeProject)project))
+            {
+                if (b.Group == group && b.Name == name)
+                {
+                    script.Showed(group, name);
+                    return;
+                }
+            }
+            throw new TiaException("no block \"" + name + "\" in group \"" + group + "\" to show");
         }
 
         static CompareNode[] EmptyFolders()
@@ -2076,6 +2518,16 @@ namespace Tiad.Fake
             up.WebHttpsOnly = false;
             up.AnonymousActive = script.UploadAnonymous;
             up.DropGrants();
+            up.AnonymousRoles = new List<string>();
+            foreach (AnonymousRole ar in script.UploadAnonymousRoles)
+            {
+                up.AnonymousRoles.Add(ar.Name);
+                if (ar.Rights != null) up.Roles[ar.Name] = new HashSet<string>(ar.Rights, StringComparer.Ordinal);
+            }
+            foreach (string u in script.UploadUsers)
+            {
+                if (!up.Users.ContainsKey(u)) up.Users[u] = new FakeUser();
+            }
             DeviceIdentity d = script.Device;
             up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };
             up.CpuAddress = address;
@@ -2263,6 +2715,10 @@ namespace Tiad.Fake
         {
             script.Enter("Archive");
             var p = (FakeProject)project;
+            // As tiad.Openness: Openness archives the saved project, so the
+            // project is saved in place first.
+            File.WriteAllText(p.Full, "fake TIA project");
+            saved[p.Full] = SavedCopy(p);
             string f = Path.Combine(dir, Path.GetFileNameWithoutExtension(p.Full) + ".zap21");
             int n = System.Threading.Interlocked.Increment(ref archives);
             if (script.ArchiveSame)
@@ -2317,6 +2773,10 @@ namespace Tiad.Fake
                 Obj bo = b.ToJson();
                 string g;
                 if (p.GroupOf.TryGetValue(b.Name, out g)) bo["group"] = g;
+                // Its declaration part, as a real archive keeps the
+                // block: an adopted copy has the same layout (#1347).
+                string dc;
+                if (p.Decls.TryGetValue(b.Name, out dc)) bo["decl"] = dc;
                 ProjectBlock oi;
                 if (p.ObInfo.TryGetValue(b.Name, out oi))
                 {
@@ -2363,6 +2823,7 @@ namespace Tiad.Fake
             foreach (var kv in p.RoleComments) rc[kv.Key] = kv.Value;
             o["roleComments"] = rc;
             o["anonymousActive"] = p.AnonymousActive;
+            o["anonymousRoles"] = new List<object>(p.AnonymousRoles.ConvertAll(delegate(string x) { return (object)x; }));
             File.WriteAllText(f, Json.Write(o));
         }
 
@@ -2437,6 +2898,8 @@ namespace Tiad.Fake
                 p.Blocks.Add(new Block { Name = (string)b["name"], Kind = (string)b["kind"] });
                 object g;
                 if (b.TryGetValue("group", out g) && g != null) p.GroupOf[(string)b["name"]] = (string)g;
+                object dc;
+                if (b.TryGetValue("decl", out dc) && dc != null) p.Decls[(string)b["name"]] = (string)dc;
                 object oc;
                 if (b.TryGetValue("obClass", out oc) && oc != null)
                     p.ObInfo[(string)b["name"]] = new ProjectBlock
@@ -2473,6 +2936,11 @@ namespace Tiad.Fake
                 }
                 foreach (var kv in (IDictionary<string, object>)o["roleComments"]) p.RoleComments[kv.Key] = (string)kv.Value;
                 p.AnonymousActive = (bool)o["anonymousActive"];
+                object ar;
+                if (o.TryGetValue("anonymousRoles", out ar) && ar != null)
+                {
+                    foreach (object x in (System.Collections.IList)ar) p.AnonymousRoles.Add((string)x);
+                }
             }
             return p;
         }
@@ -2505,6 +2973,12 @@ namespace Tiad.Fake
                 RestoredKey = p.Changed ? "" : p.RestoredKey,
             };
             c.CopyAccess(p);
+            // The program, as the Go fake's save keeps it: an open of the
+            // saved project (an adopted one too) holds its blocks (#1347).
+            c.Blocks = new List<Block>(p.Blocks);
+            c.GroupOf = new Dictionary<string, string>(p.GroupOf, StringComparer.OrdinalIgnoreCase);
+            c.ObInfo = new Dictionary<string, ProjectBlock>(p.ObInfo, StringComparer.OrdinalIgnoreCase);
+            c.Decls = new Dictionary<string, string>(p.Decls, StringComparer.OrdinalIgnoreCase);
             return c;
         }
 
@@ -2573,6 +3047,8 @@ namespace Tiad.Fake
             router.Add("PUT", "/fake/script", script.Set);
             router.Add("GET", "/fake/calls", script.Calls);
             router.Add("GET", "/fake/downloads", script.Downloads);
+            router.Add("GET", "/fake/shown", script.Shown);
+            router.Add("GET", "/fake/online", script.Online);
             router.Add("POST", "/fake/load", delegate(Call c) { return FakeTia.LoadOutside(world, c); });
 
             var server = new Server(cfg, router);

@@ -240,6 +240,16 @@ export { NotesClient, DraftKeeper, classifyFailure, notKeptText, canChange, grou
 export type { Note, NoteTarget, NoteTargetKind, NoteRevision, NoteQuery, NoteAnswer, NoteOutcome, SupersededHistory, DayGroup, DraftStorage } from './notes.js';
 export { default as CheckoutPage } from './components/CheckoutPage.svelte';
 export { default as CheckoutBanner } from './components/CheckoutBanner.svelte';
+export { default as CameraPanel } from './components/CameraPanel.svelte';
+export { CameraClient, formatBps, camerasFor, watchingText, nextState as cameraNext, ptzMove, LIVE_CAPTION, LIVE_LIMIT, PTZ_HOLD_MS, PTZ_NUDGE_MS } from './camera.js';
+export { default as PtzPad } from './components/PtzPad.svelte';
+export { default as VirtualCamera } from './components/VirtualCamera.svelte';
+export { drawTestPattern } from './testpattern.js';
+export { playHls, parsePlaylist, codecFromInit, nextSegments, bufferTrim, liveSeek, BitrateMeter } from './hls.js';
+export type { HlsPlaylist, HlsSegment, HlsHandle, HlsOptions } from './hls.js';
+export type { Camera, CameraMode, CameraState, CameraEvent, PtzPreset, PtzCommand, PtzResult, PtzDirection } from './camera.js';
+export { SnapshotClient, parseSnaps, thumbSplit, NO_SNAP_VIEW } from './alarmsnaps.js';
+export type { AlarmSnap, SnapResult, SnapState } from './alarmsnaps.js';
 export { CheckoutClient, FORCE_SECONDS, forceValue, canIn, offersForce, countdown, clock, forceBanner, resultLine, needsNote, runLinks, offersSeal, SEAL_NOTICE } from './checkout.js';
 export type { CheckoutPoint, CheckoutResult, CheckoutRun, CheckoutRunView, CheckoutView, CheckoutForce, CheckoutAnswer, CountdownState, Progress as CheckoutProgress, PointKind } from './checkout.js';
 export { PushClient, pushState, readPushEnv, realPushBrowser, enablePush, disablePush, endpointId, keyBytes } from './push.js';

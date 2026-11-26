@@ -142,19 +142,29 @@ func TestImageTakenAtEachTasksScanEnd(t *testing.T) {
 	if err := rt.ScanTask("aux"); err != nil {
 		t.Fatal(err)
 	}
+	if rt.TakeImage(&img) {
+		t.Fatal("an image from the first copies: the task that copied first is asked again")
+	}
+	aux := clk.Now().UnixMilli()
+	clk.step(100 * time.Millisecond)
+	rt.Scan() // main copies again, after aux's copy
 	if !rt.TakeImage(&img) {
-		t.Fatal("no image after every task scanned")
+		t.Fatal("no image after every task copied and the faster one again")
 	}
 	if len(img.Tasks) != 2 || img.Tasks[0].Task != MainTaskName || img.Tasks[1].Task != "aux" {
 		t.Fatalf("tasks %+v", img.Tasks)
 	}
-	for _, ti := range img.Tasks {
-		if ti.Layout == "" || len(ti.Leaves) == 0 || ti.NowMs != clk.Now().UnixMilli() {
-			t.Fatalf("task %s: layout %q, %d leaves, nowMs %d (clock %d)", ti.Task, ti.Layout, len(ti.Leaves), ti.NowMs, clk.Now().UnixMilli())
+	for i, ti := range img.Tasks {
+		want := clk.Now().UnixMilli() // main's second copy
+		if i == 1 {
+			want = aux
+		}
+		if ti.Layout == "" || len(ti.Leaves) == 0 || ti.NowMs != want {
+			t.Fatalf("task %s: layout %q, %d leaves, nowMs %d (want %d)", ti.Task, ti.Layout, len(ti.Leaves), ti.NowMs, want)
 		}
 	}
-	if img.Seq != 1 || img.Tasks[0].Scans != 3 {
-		t.Fatalf("seq %d, main's scans %d: want the first image, 3 scans completed before the copy", img.Seq, img.Tasks[0].Scans)
+	if img.Seq != 1 || img.Tasks[0].Scans != 4 {
+		t.Fatalf("seq %d, main's scans %d: want the first image, 4 scans completed before main's second copy", img.Seq, img.Tasks[0].Scans)
 	}
 	// Taken once: the next needs a new request and new scans.
 	if rt.TakeImage(&img) {
@@ -206,8 +216,12 @@ func TestImageRoundTripToAStandbysShadow(t *testing.T) {
 		if g := ir.FlattenInto(nil, f); !reflect.DeepEqual(g, want) {
 			t.Fatalf("task %s: shadow frame differs from the leader's", np.name)
 		}
-		if nowMs != clk.Now().UnixMilli() {
-			t.Fatalf("task %s: timer base %d, want the leader's %d", np.name, nowMs, clk.Now().UnixMilli())
+		base := clk.Now().UnixMilli() // main's second copy
+		if np.name != MainTaskName {
+			base -= 100 // aux, the slower, copied one step before
+		}
+		if nowMs != base {
+			t.Fatalf("task %s: timer base %d, want the leader's %d", np.name, nowMs, base)
 		}
 	}
 	if term, scan := sh.Position(); term != 4 || scan != img.Seq {
@@ -227,6 +241,11 @@ func takeOne(t *testing.T, rt *Runtime, clk *imgClock) *Image {
 	rt.RequestImage()
 	scanBoth(t, rt, clk, 1)
 	img := &Image{}
+	if rt.TakeImage(img) { // the first copies: the faster task is asked again
+		return img
+	}
+	clk.step(100 * time.Millisecond)
+	rt.Scan() // the faster task's second copy, after the slower one's
 	if !rt.TakeImage(img) {
 		t.Fatal("no image")
 	}
@@ -341,13 +360,15 @@ func TestImageCopyAddsNoAllocationToTheScan(t *testing.T) {
 	for range 3 { // warm both ping-pong buffers
 		rt.RequestImage()
 		scanBoth(t, rt, clk, 1)
+		rt.TakeImage(&img) // asks the faster task again
+		scanBoth(t, rt, clk, 1)
 		rt.TakeImage(&img)
 	}
 	plain := testing.AllocsPerRun(50, func() { rt.Scan() })
 	asked := testing.AllocsPerRun(50, func() {
 		rt.RequestImage()
 		rt.Scan()
-		rt.prog.takeImage(MainTaskName, &img.Tasks[0])
+		rt.prog.takeImage(MainTaskName, &img.Tasks[0], imageStamp(rt.imgRound, 0))
 	})
 	if asked > plain {
 		t.Fatalf("a scan that copies its frame allocates %v, a plain scan %v", asked, plain)
@@ -393,8 +414,11 @@ func TestImageDecodeRefusesDamage(t *testing.T) {
 // sealed is body as a whole image: the header in front, a valid checksum
 // behind, so a malformed body reaches the parser instead of dying at the
 // checksum.
-func sealed(body []byte) []byte {
-	b := append([]byte{'n', 's', 'i', imageFormat}, body...)
+func sealed(body []byte) []byte { return sealedAs(1, body) }
+
+// sealedAs is body behind a header of the given format and a checksum.
+func sealedAs(format byte, body []byte) []byte {
+	b := append([]byte{'n', 's', 'i', format}, body...)
 	return binary.LittleEndian.AppendUint32(b, crc32.Checksum(b, castagnoli))
 }
 
@@ -405,11 +429,19 @@ func FuzzDecodeImage(f *testing.F) {
 		Task: "main", Layout: "abc", NowMs: -5, Scans: 2,
 		Leaves: leavesOf(ir.BoolVal(true), ir.IntVal(-7), ir.Value{Kind: ir.TypeInt, I: 10, S: "Run"}, ir.RealVal(1.5), ir.TimeVal(300), ir.StringVal("s"), ir.Value{}),
 	}}}
-	wire := mustEncode(f, nil, img)
-	f.Add(wire[4 : len(wire)-4])
-	f.Fuzz(func(t *testing.T, body []byte) {
+	img.Tasks[0].Source, img.TagsLayout = "src", "tl"
+	img.Tasks[0].Tags = TagValues{Idx: []int{0}, Ends: []int{1}, Leaves: leavesOf(ir.IntVal(4))}
+	img.Tags = TagValues{Idx: []int{1, 2}, Ends: []int{1, 3}, Leaves: leavesOf(ir.StringVal("op"), ir.RealVal(1), ir.BoolVal(true))}
+	for _, format := range ImageFormats {
+		wire, err := EncodeImageFormat(nil, img, format)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(format, wire[4:len(wire)-4])
+	}
+	f.Fuzz(func(t *testing.T, format byte, body []byte) {
 		var out Image
-		if err := DecodeImage(sealed(body), &out); err != nil && !errors.Is(err, ErrImage) {
+		if err := DecodeImage(sealedAs(format, body), &out); err != nil && !errors.Is(err, ErrImage) {
 			t.Fatalf("not ErrImage: %v", err)
 		}
 	})
@@ -451,6 +483,31 @@ func TestImageDecodeRefusesMalformedBodies(t *testing.T) {
 	var out Image
 	if err := DecodeImage(sealed(uv(head(), 0)), &out); err != nil {
 		t.Fatalf("the minimal image: %v", err)
+	}
+	// Format 2: the tags sections (#710 S2).
+	tail2 := func(b []byte) []byte { // tags layout "", tagsNowMs 0
+		return binary.AppendVarint(uv(b, 0), 0)
+	}
+	for name, body := range map[string][]byte{
+		"no tags layout":            uv(head(), 0),
+		"a huge tag count":          uv(tail2(uv(head(), 0)), 1<<40),
+		"a tag of huge leaf count":  uv(uv(uv(tail2(uv(head(), 0)), 1), 0), 1<<40),
+		"a tag at a huge place":     uv(uv(uv(tail2(uv(head(), 0)), 1), 1<<40), 0),
+		"a tag leaf of bad kind":    append(uv(uv(uv(tail2(uv(head(), 0)), 1), 0), 1), 99),
+		"a task with no source":     task(uv(head(), 1), 0),
+		"bytes after the tags":      append(uv(tail2(uv(head(), 0)), 0), 7),
+		"a format this build lacks": nil,
+	} {
+		wire := sealedAs(2, body)
+		if body == nil {
+			wire = sealedAs(imageFormat+1, uv(head(), 0))
+		}
+		if err := DecodeImage(wire, &out); !errors.Is(err, ErrImage) {
+			t.Errorf("format 2, %s: got %v, want ErrImage", name, err)
+		}
+	}
+	if err := DecodeImage(sealedAs(2, uv(tail2(uv(head(), 0)), 0)), &out); err != nil || out.Format != 2 {
+		t.Fatalf("the minimal format 2 image: %v (format %d)", err, out.Format)
 	}
 }
 
@@ -494,13 +551,52 @@ func TestImageCodecEveryLeafKind(t *testing.T) {
 		)},
 		{Task: "aux", Layout: "l2"},
 	}}
+	img.Tasks[0].Source, img.Tasks[1].Source, img.TagsLayout, img.TagsNowMs = "s1", "s2", "tl", 1_700_000_000_456
+	img.Tasks[0].Tags = TagValues{Idx: []int{0, 3}, Ends: []int{1, 3}, Leaves: leavesOf(ir.BoolVal(true), ir.RealVal(2.5), ir.Value{Kind: ir.TypeInt, I: 10, S: "Run"})}
+	img.Tags = TagValues{Idx: []int{1}, Ends: []int{1}, Leaves: leavesOf(ir.StringVal("op"))}
+	img.Format = imageFormat
 	var out Image
 	if err := DecodeImage(mustEncode(t, nil, img), &out); err != nil {
 		t.Fatal(err)
 	}
-	out.Tasks[1].Leaves = nil // decoded as an empty slice
+	normImage(&out)
 	if !reflect.DeepEqual(&out, img) {
 		t.Fatalf("got %+v\nwant %+v", out, *img)
+	}
+	// Format 1 is the same image without its tags and sources.
+	wire, err := EncodeImageFormat(nil, img, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := DecodeImage(wire, &out); err != nil {
+		t.Fatal(err)
+	}
+	normImage(&out)
+	want := *img
+	want.Format, want.TagsLayout, want.TagsNowMs, want.Tags = 1, "", 0, TagValues{}
+	want.Tasks = append([]TaskImage(nil), img.Tasks...)
+	for i := range want.Tasks {
+		want.Tasks[i].Source, want.Tasks[i].Tags = "", TagValues{}
+	}
+	if !reflect.DeepEqual(&out, &want) {
+		t.Fatalf("format 1: got %+v\nwant %+v", out, want)
+	}
+}
+
+// normImage turns the empty slices a decode leaves into nil, as a literal
+// writes them.
+func normImage(img *Image) {
+	nilTags := func(tv *TagValues) {
+		if len(tv.Idx) == 0 {
+			*tv = TagValues{}
+		}
+	}
+	nilTags(&img.Tags)
+	for i := range img.Tasks {
+		if len(img.Tasks[i].Leaves) == 0 {
+			img.Tasks[i].Leaves = nil
+		}
+		nilTags(&img.Tasks[i].Tags)
 	}
 }
 
@@ -555,14 +651,18 @@ func TestRetainImageWhileRunning(t *testing.T) {
 	go func() { rt.Run(ctx); close(done) }()
 	var img Image
 	deadline := time.Now().Add(300 * time.Millisecond)
-	taken := 0
+	taken, asked := 0, false
 	for time.Now().Before(deadline) {
 		if _, err := rt.RetainImage(); err != nil {
 			t.Fatal(err)
 		}
-		rt.RequestImage()
+		if !asked { // a new request would start the round over
+			rt.RequestImage()
+			asked = true
+		}
 		if rt.TakeImage(&img) {
 			taken++
+			asked = false
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -570,5 +670,150 @@ func TestRetainImageWhileRunning(t *testing.T) {
 	<-done
 	if taken == 0 {
 		t.Fatal("no image taken from a running runtime")
+	}
+}
+
+// A fast task and a slow one (#710 S2c): the fast task copies right after
+// the request and runs on until the slow task copies. The image is not
+// taken from those copies: every task but the one that copied last copies
+// again, so each task's state is at most one of its own periods older than
+// the image, and the re-copies are from after the slowest copy.
+func TestImageOfTasksOfTwoRatesIsFromAfterTheSlowestCopy(t *testing.T) {
+	clk := &imgClock{t: time.Unix(1_700_000_000, 0)}
+	rt := newImgRuntime(t, clk, imgMain)
+	scanBoth(t, rt, clk, 3)
+	rt.RequestImage()
+	var img Image
+	taken := false
+	for step := 0; step < 100 && !taken; step++ {
+		clk.step(10 * time.Millisecond) // the fast task's period
+		rt.Scan()
+		if step%50 == 49 { // the slow task's, 500 ms
+			if err := rt.ScanTask("aux"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		taken = rt.TakeImage(&img)
+	}
+	if !taken {
+		t.Fatal("no image")
+	}
+	fast, slow := img.Tasks[0], img.Tasks[1]
+	if fast.NowMs <= slow.NowMs {
+		t.Fatalf("the fast task's copy is from %d ms, not after the slow task's %d ms: its state is up to the slow period older than the image", fast.NowMs, slow.NowMs)
+	}
+	if now := clk.Now().UnixMilli(); now-fast.NowMs > 10 || fast.NowMs-slow.NowMs > 10 {
+		t.Fatalf("the fast copy is %d ms older than the image and %d ms after the slow copy, want at most its own 10 ms period", now-fast.NowMs, fast.NowMs-slow.NowMs)
+	}
+}
+
+// One task has no second round: the image is taken after its one copy.
+func TestImageOfOneTaskIsTakenAfterOneCopy(t *testing.T) {
+	clk := &imgClock{t: time.Unix(1_700_000_000, 0)}
+	o := imgOptions(clk, imgMain)
+	o.Tasks = nil
+	rt, err := New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	rt.RequestImage()
+	var img Image
+	if rt.TakeImage(&img) {
+		t.Fatal("an image before a scan since the request")
+	}
+	clk.step(100 * time.Millisecond)
+	rt.Scan()
+	if !rt.TakeImage(&img) {
+		t.Fatal("no image after the one task's one copy")
+	}
+	if len(img.Tasks) != 1 || img.Tasks[0].NowMs != clk.Now().UnixMilli() {
+		t.Fatalf("tasks %+v", img.Tasks)
+	}
+}
+
+// A copy left over from a round whose image was never taken (the stream
+// gave up at its deadline, or lost leadership) is never taken into a later
+// round's image: that image waits for a copy made after its own request.
+func TestImageNeverTakesACopyOfAnEarlierRound(t *testing.T) {
+	clk := &imgClock{t: time.Unix(1_700_000_000, 0)}
+	o := imgOptions(clk, imgMain)
+	o.Tasks = nil
+	rt, err := New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	rt.RequestImage()
+	clk.step(100 * time.Millisecond)
+	rt.Scan() // a copy for the first round, never taken
+	rt.RequestImage()
+	var img Image
+	if rt.TakeImage(&img) {
+		t.Fatal("the first round's copy was taken into the second round's image")
+	}
+	clk.step(100 * time.Millisecond)
+	rt.Scan()
+	if !rt.TakeImage(&img) {
+		t.Fatal("no image from a copy made after the request")
+	}
+	if img.Tasks[0].NowMs != clk.Now().UnixMilli() {
+		t.Fatalf("the image's copy is from %d ms, want the second round's %d", img.Tasks[0].NowMs, clk.Now().UnixMilli())
+	}
+}
+
+// With two tasks the same holds: copies both tasks made for an untaken
+// round are not an image of the next round.
+func TestImageOfTwoTasksNeverTakesAnEarlierRoundsCopies(t *testing.T) {
+	clk := &imgClock{t: time.Unix(1_700_000_000, 0)}
+	rt := newImgRuntime(t, clk, imgMain)
+	scanBoth(t, rt, clk, 2)
+	rt.RequestImage()
+	scanBoth(t, rt, clk, 1) // both copy for round one; never taken
+	rt.RequestImage()
+	var img Image
+	for range 3 {
+		if rt.TakeImage(&img) {
+			t.Fatal("an image with no scan since its request")
+		}
+	}
+	asked := clk.Now().UnixMilli()
+	taken := false
+	for range 3 {
+		scanBoth(t, rt, clk, 1)
+		if taken = rt.TakeImage(&img); taken {
+			break
+		}
+	}
+	if !taken {
+		t.Fatal("no image")
+	}
+	for _, ti := range img.Tasks {
+		if ti.NowMs <= asked {
+			t.Fatalf("task %q copied at %d ms, not after the request at %d ms", ti.Task, ti.NowMs, asked)
+		}
+	}
+}
+
+// The leader's edge session rides in a format 4 image, and in no older
+// format (#798): a standby that reads only 3 learns none.
+func TestImageCarriesTheEdgeSessionFromFormat4(t *testing.T) {
+	img := &Image{Term: 3, Seq: 9, Build: "b", EdgeSession: 201}
+	for _, format := range ImageFormats {
+		b, err := EncodeImageFormat(nil, img, format)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back Image
+		if err := DecodeImage(b, &back); err != nil {
+			t.Fatalf("format %d: %v", format, err)
+		}
+		want := uint64(0)
+		if format >= 4 {
+			want = img.EdgeSession
+		}
+		if back.EdgeSession != want {
+			t.Errorf("format %d: edge session %d, want %d", format, back.EdgeSession, want)
+		}
 	}
 }

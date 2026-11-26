@@ -1,0 +1,88 @@
+FUNCTION_BLOCK "naut_main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      t1 : TON_TIME;
+      naut_t1_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      t2 : TOF_TIME;
+      naut_t2_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      t3 : TP_TIME;
+      naut_t3_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      cu : IEC_LCOUNTER;
+      cd : IEC_LCOUNTER;
+      cud : IEC_LCOUNTER;
+      rt : R_TRIG;
+      ft : F_TRIG;
+      sr1 : Struct
+         S1 : Bool;
+         R : Bool;
+         Q1 : Bool;
+      END_STRUCT;
+      rs1 : Struct
+         S : Bool;
+         R1 : Bool;
+         Q1 : Bool;
+      END_STRUCT;
+      a : BOOL;
+      b : BOOL;
+      c : BOOL;
+      q1 : BOOL;
+      q2 : BOOL;
+      q3 : BOOL;
+      q4 : BOOL;
+      q5 : BOOL;
+      q6 : BOOL;
+      q7 : BOOL;
+      v : LINT;
+      w : LINT;
+      e1 : TIME;
+   END_VAR
+
+BEGIN
+	#a := "naut_Tags".Go;
+	#b := NOT "naut_Tags".Go;
+	#t1(IN := #a, PT := T#2s, Q => #naut_t1_last.Q, ET => #naut_t1_last.ET);
+	#t1(IN := #b, PT := #t1.PT, Q => #naut_t1_last.Q, ET => #naut_t1_last.ET);
+	#q1 := #naut_t1_last.Q;
+	#e1 := #naut_t1_last.ET;
+	#t2(IN := #a, PT := T#1s, Q => #naut_t2_last.Q, ET => #naut_t2_last.ET);
+	#q2 := #naut_t2_last.Q;
+	#t3(IN := #a, PT := T#500ms, Q => #naut_t3_last.Q, ET => #naut_t3_last.ET);
+	#q3 := #naut_t3_last.Q;
+	#cu.CTU(CU := #a, R := #b, PV := 10);
+	#cu.CTU(CU := #a, R := #cu.R, PV := #cu.PV);
+	#q4 := #cu.QU;
+	#v := #cu.CV;
+	#cd.CTD(CD := #a, LD := #b, PV := 5);
+	#cd.CTD(CD := #a, LD := #cd.LD, PV := #cd.PV);
+	#q5 := #cd.QD;
+	#w := #cd.CV;
+	#cud.CTUD(CU := #a, CD := #b, R := #c, LD := #c, PV := 7);
+	#q6 := #cud.QU;
+	#cud.CTUD(CU := #b, CD := #cud.CD, R := #cud.R, LD := #cud.LD, PV := #cud.PV);
+	#q7 := #cud.QD;
+	#cu.CTU(CU := #a, R := #cu.R, PV := #v);
+	#cd.CTD(CD := #a, LD := #b, PV := #w);
+	#cud.CTUD(CU := #a, CD := #cud.CD, R := #cud.R, LD := #cud.LD, PV := #v);
+	#v := #cud.CV;
+	#rt(CLK := #a);
+	#ft(CLK := #a, Q => #c);
+	"naut_Tags".Out := #rt.Q OR #c;
+	#sr1.S1 := #a;
+	#sr1.R := #b;
+	#sr1.Q1 := #sr1.S1 OR (#sr1.Q1 AND NOT #sr1.R);
+	#rs1.S := #a;
+	#rs1.R1 := #b;
+	#rs1.Q1 := NOT #rs1.R1 AND (#rs1.S OR #rs1.Q1);
+	"naut_Tags".Out := #sr1.Q1 AND #rs1.Q1;
+	"naut_Tags".N := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".N) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+END_FUNCTION_BLOCK

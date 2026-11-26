@@ -81,21 +81,51 @@ type VoterState struct {
 	// marks, the boots an operator's clear retired, the clear
 	// generations. Only a file with a record is written in format 7.
 	Dups []DupRecord
+	// RecordsFrom and Epochs are the voter's epoch records (#710 S2c): the
+	// highest epoch it granted each name in a campaign, written with the
+	// grant, so a hot takeover can tell no leadership came after its
+	// image. The records cover every grant from RecordsFrom on; 0 is none
+	// kept yet. Only a file with records is written in format 9.
+	RecordsFrom uint64
+	Epochs      []EpochRecord
+	// HandedBackMs is when (Unix milliseconds, wall clock) this
+	// controller last handed the lead back to its peer because its own
+	// retain store could not be read (#710 S2c-3): a controller does so at
+	// most once per handBackEvery, also across its restarts (a crash
+	// loop). 0: never. Only a file with it, or with a record's boot,
+	// is written in format 10.
+	HandedBackMs int64
+}
+
+// EpochRecord is the highest epoch a voter granted one name in a
+// campaign (VoterState.Epochs). Nonce is the boot the last of those
+// grants went to, and Prior the highest epoch granted to an earlier boot
+// of the name (#710 S2c-3): what a reply to that boot reports as its own
+// record. Both 0 in a file before format 10.
+type EpochRecord struct {
+	Name  NodeID
+	Epoch uint64
+	Nonce uint64
+	Prior uint64
 }
 
 const stateMagic = "nqv"
 
 // stateVersion is the state file's format: 2 since VoterState.Lease, 3
 // since Owner and Cluster, 4 since Box, 5 since GrantNonce, 6 since Spare,
-// 7 since Dups, 8 since DupRecord.Fence. Only a file with a fence is
-// written as 8, only one with a duplicate record is written as 7, and
+// 7 since Dups, 8 since DupRecord.Fence, 9 since the epoch records, 10
+// since a record's boot and prior epoch and HandedBackMs. Only a file with
+// a record's boot or a hand-back is written as 10, only one with epoch
+// records as 9, only one with a fence as 8, only one with a duplicate record is written as 7, and
 // only a spare's without one as 6; every other is still 5, so a member
 // with neither can go back to an earlier release. A version-4
 // file still reads (GrantNonce 0, as before it was kept), so an upgrade
 // keeps the voter's promises; a file of any other version reads as
 // ErrVersion, not as corrupt.
 const (
-	stateVersion      = 8
+	stateVersion      = 10
+	stateVersionEpoch = 9 // a file with epoch records but no boot in them and no hand-back
+	stateVersionFence = 8 // a file with a fence but no epoch records
 	stateVersionDups  = 7 // a file with duplicate records but no fence
 	stateVersionSpare = 6 // a spare's file with no duplicate record
 	stateVersionPlain = 5 // what a file without the spare flag is written as
@@ -126,16 +156,29 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	p = putString(p, s.Box)
 	p = binary.BigEndian.AppendUint64(p, s.GrantNonce)
 	version := byte(stateVersionPlain)
-	if s.Spare || len(s.Dups) > 0 || mut("state_always_v6") {
+	epochs := s.RecordsFrom != 0 || s.HandedBackMs != 0
+	v10 := s.HandedBackMs != 0
+	for _, r := range s.Epochs {
+		if r.Nonce != 0 || r.Prior != 0 {
+			v10 = true
+		}
+	}
+	if s.Spare || len(s.Dups) > 0 || epochs || mut("state_always_v6") {
 		version = stateVersionSpare
 		p = append(p, boolByte(s.Spare))
 	}
-	if len(s.Dups) > 0 {
+	if len(s.Dups) > 0 || epochs {
 		version = stateVersionDups
 		for _, r := range s.Dups {
 			if r.Fence != 0 {
-				version = stateVersion
+				version = stateVersionFence
 			}
+		}
+		if epochs {
+			version = stateVersionEpoch
+		}
+		if v10 {
+			version = stateVersion
 		}
 		p = append(p, byte(len(s.Dups)))
 		for _, r := range s.Dups {
@@ -144,9 +187,24 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 			p = binary.BigEndian.AppendUint64(p, r.Gen)
 			p = putBoots(p, r.Boots)
 			p = putBoots(p, r.Retired)
-			if version >= 8 {
+			if version >= stateVersionFence {
 				p = binary.BigEndian.AppendUint64(p, r.Fence)
 			}
+		}
+	}
+	if epochs {
+		p = binary.BigEndian.AppendUint64(p, s.RecordsFrom)
+		p = append(p, byte(len(s.Epochs)))
+		for _, r := range s.Epochs {
+			p = putString(p, string(r.Name))
+			p = binary.BigEndian.AppendUint64(p, r.Epoch)
+			if v10 {
+				p = binary.BigEndian.AppendUint64(p, r.Nonce)
+				p = binary.BigEndian.AppendUint64(p, r.Prior)
+			}
+		}
+		if v10 {
+			p = binary.BigEndian.AppendUint64(p, uint64(s.HandedBackMs))
 		}
 	}
 	b := append([]byte(stateMagic), version)
@@ -190,16 +248,39 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	}
 	if version >= 7 {
 		k := int(rd.byte1())
-		if k == 0 || k > maxDupRecords {
+		if (k == 0 && version < stateVersionEpoch) || k > maxDupRecords {
 			rd.bad = true
 		}
 		for i := 0; i < k && !rd.bad; i++ {
 			r := DupRecord{Name: NodeID(rd.str()), Marked: rd.boolean(), Gen: rd.u64()}
 			r.Boots, r.Retired = rd.boots(), rd.boots()
-			if version >= 8 {
+			if version >= stateVersionFence {
 				r.Fence = rd.u64()
 			}
 			v.Dups = append(v.Dups, r)
+		}
+	}
+	if version >= stateVersionEpoch {
+		v.RecordsFrom = rd.u64()
+		k := int(rd.byte1())
+		if (v.RecordsFrom == 0 && (version < stateVersion || k > 0)) || k > maxEpochRecords {
+			rd.bad = true
+		}
+		for i := 0; i < k && !rd.bad; i++ {
+			r := EpochRecord{Name: NodeID(rd.str()), Epoch: rd.u64()}
+			if version >= stateVersion {
+				r.Nonce, r.Prior = rd.u64(), rd.u64()
+			}
+			if r.Name == "" || r.Epoch == 0 || r.Prior > r.Epoch {
+				rd.bad = true
+			}
+			v.Epochs = append(v.Epochs, r)
+		}
+		if version >= stateVersion {
+			v.HandedBackMs = int64(rd.u64())
+			if v.HandedBackMs < 0 {
+				rd.bad = true
+			}
 		}
 	}
 	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 || v.Lease < 0 {

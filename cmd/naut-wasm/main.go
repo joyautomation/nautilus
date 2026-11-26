@@ -174,6 +174,7 @@ func load(root string) ([]string, error) {
 		sopts.Alarms = alarms.Engine
 		sopts.AlarmShelveTimes = alarms.ShelveTimes
 	}
+	sopts.Mounts = append(sopts.Mounts, camerasMount(proj.Cameras))
 	srv := server.NewPlayground(rt, sopts)
 
 	stop()

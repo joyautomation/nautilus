@@ -78,6 +78,9 @@ type Multi struct {
 	// stays.
 	mu      sync.Mutex
 	scratch []Values
+	// safeOrphans are the takeover hold's safe outputs the last WriteSafe
+	// could hand no child (multi_hold.go). Under mu.
+	safeOrphans []string
 
 	// gates are the write gates installed so far (SetWriteGate, then any
 	// SetPlainGate), in order, replayed onto a child Replace brings in.

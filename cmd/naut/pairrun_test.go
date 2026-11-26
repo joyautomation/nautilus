@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/joyautomation/nautilus/checkout"
+	"github.com/joyautomation/nautilus/sparkplug"
 	"io"
 	"maps"
 	"net"
@@ -22,6 +23,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/quorum/node"
+	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 )
@@ -197,6 +199,7 @@ type pairNode struct {
 	rt     *runtime.Runtime
 	cancel context.CancelFunc
 	done   chan struct{}
+	sp     *sparkplug.Node // nil without a sparkplug: section
 }
 
 func startPairNode(t *testing.T, files fstest.MapFS, env map[string]string, ln net.Listener) *pairNode {
@@ -218,6 +221,14 @@ func startPairNodeWith(t *testing.T, files fstest.MapFS, env map[string]string, 
 
 // startPairNodeFull is startPairNodeWith with pmod applied to the loaded
 // project first (a driver, a takeover wait).
+// testPairFiles, when set, is the pair rig's project instead of
+// pairProject (the state stream's, #710 S1b).
+var testPairFiles func(a, b, w string) fstest.MapFS
+
+// testPairAPIToken, when set, is each member's NAUTILUS_TOKEN (its tag API's
+// credential), for a test of the operator commands.
+var testPairAPIToken string
+
 // testWantCheckout makes a harness member keep the I/O checkout in the log, as
 // runProject does for a project that turned it on.
 var testWantCheckout bool
@@ -241,14 +252,28 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		t.Fatal(err)
 	}
 	wireRedundancy(proj, m.q)
+	proj.Member = string(m.o.Self) // as electorFor does
 	if testWantCheckout {
 		m.wantCheckout = true
 		os.Chmod(filepath.Dir(m.o.StatePath), 0o700) // the checkout's signing key is made there
+	}
+	if proj.Retain != nil {
+		// As runProject does; the file in the member's own state directory,
+		// as two members on one host need.
+		cm, file := proj.RetainNames()
+		if !filepath.IsAbs(file) {
+			file = filepath.Join(env["STATE_DIRECTORY"], file)
+		}
+		proj.Runtime.Retain = retain.New(cm, file)
 	}
 	rt, err := runtime.New(proj.Runtime)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := m.setupHold(rt, proj.Redundancy); err != nil { // as runProject does
+		t.Fatal(err)
+	}
+	m.setupFailback(rt, proj.Redundancy)
 	var eng *alarm.Engine
 	alarms, err := startAlarms(proj, rt)
 	if err != nil {
@@ -262,9 +287,31 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	m.setIOStatus(proj.DriverStatus(nil, nil)) // as runProject does
+	m.startStream(rt, proj.Redundancy.StreamBudgetBytes(), proj.Redundancy.HotMaxAgeOr(-1))
 	gate := gateOnLiveScans(proj, m.q, rt, localGateLease)
+	// Live I/O configuration, as runProject wires it: its edge re-applies
+	// what the retain store keeps, reading the store before the takeover.
+	if ioc, err := project.NewIOConfig(proj, rt, files, "nautilus.yaml"); err == nil {
+		ioc.Gate = gate.IsLeader
+		ioc.PeersKeepIO = m.peersKeepIO
+		if proj.Runtime.Retain != nil {
+			ioc.Keep = rt.SaveRetained
+			ioc.KeepStore = proj.Runtime.Retain.Kind()
+		}
+		rt.SetIO(ioc)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &pairNode{m: m, rt: rt, cancel: cancel, done: make(chan struct{}), eng: eng, al: al}
+	// The Sparkplug edge node, when the project has one, as runProject
+	// wires it under redundancy (#798).
+	stopSP := func() {}
+	if sp, err := proj.Sparkplug(rt, sparkplugPairOptions(m.q, m, rt)...); err != nil {
+		t.Fatal(err)
+	} else if sp != nil {
+		n.sp = sp
+		stopSP = startSparkplugLeader(sp, m.q, m, rt)
+	}
 	if api != nil {
 		sopts := proj.Server
 		sopts.AuthToken = env["NAUTILUS_TOKEN"] // as runProject takes it from the environment
@@ -284,6 +331,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		go func() { rt.Run(ctx); close(ran) }()
 		gate.Run(ctx)
 		<-ran
+		stopSP()
 		close(n.done)
 	}()
 	t.Cleanup(n.crash)
@@ -543,7 +591,8 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 	}
 	proj := loadPair(t, pairProject("127.0.0.1:9450", "127.0.0.2:9450", "127.0.0.3:9460"))
 	var ln net.Listener
-	el, pair, err := electorWith(proj, "127.0.0.1:8080", "", pairDeps{getenv: pairEnv(pairGoodEnv(t)), listen: func(string) (net.Listener, error) {
+	env := pairGoodEnv(t)
+	el, pair, err := electorWith(proj, "127.0.0.1:8080", "", pairDeps{getenv: pairEnv(env), listen: func(string) (net.Listener, error) {
 		var err error
 		ln, err = net.Listen("tcp", "127.0.0.1:0")
 		return ln, err
@@ -566,10 +615,11 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 	if proj.Member == "" || proj.Member != el.Status().Pod {
 		t.Errorf("proj.Member = %q, want this member's name %q", proj.Member, el.Status().Pod)
 	}
-	// Until state streaming, the pair says its retained values are not
-	// replicated, wherever its status is shown.
-	if w := el.Status().Warnings; len(w) != 1 || !strings.Contains(w[0], "retained state not replicated") {
-		t.Errorf("status warnings %q, want the retain warning", w)
+	// The state stream replicates retained values (#710 S1b): no standing
+	// warning says otherwise, so a healthy leader's OPC UA ServiceLevel is
+	// not held at 200 for it.
+	if w := el.Status().Warnings; len(w) != 0 {
+		t.Errorf("status warnings %q, want none standing", w)
 	}
 	// The peer port speaks TLS by default (#710): plain HTTP gets Go's
 	// 400 for it, and nothing behind it.
@@ -582,7 +632,7 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "HTTP request to an HTTPS server") {
 		t.Errorf("plain HTTP to the peer port got %d %q, want TLS (peer TLS is on by default)", resp.StatusCode, b)
 	}
-	resp, err = peerClient(t, testPeerToken).Get("https://" + ln.Addr().String() + "/quorum/v1/x/hello")
+	resp, err = memberClient(t, testPeerToken, env["NAUTILUS_CLUSTER"], "b", "a").Get("https://" + ln.Addr().String() + "/quorum/v1/x/hello")
 	if err != nil {
 		t.Fatalf("the peer listener does not answer TLS: %v", err)
 	}
@@ -731,6 +781,18 @@ func TestPairClonedMemberNeverLeadsTwice(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cloneDir, pairStateFile), b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Its peer key too, as a whole-disk clone carries it (#710 per-box
+	// keys): on the same box (a second process, or a clone whose box
+	// reads the same) the key passes, and the duplicate marks are what
+	// stop it. A clone on other hardware makes a new key, which the
+	// others refuse (TestPairATokenHolderFirstLocksOutTheRealMemberLoudly).
+	k, err := os.ReadFile(filepath.Join(r.env["a"]["STATE_DIRECTORY"], peerKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cloneDir, peerKeyFile), k, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	env := maps.Clone(r.env["a"])
 	env["STATE_DIRECTORY"] = cloneDir
 	clone := startPairNode(t, r.files, env, r.lns[2])
@@ -809,31 +871,12 @@ func TestPairAPIOnLoopbackRefused(t *testing.T) {
 	}
 }
 
-// peerClient is an HTTP client with the pair's peer TLS for token, as a
-// member's calls have: the tests that call a peer port directly use it,
-// with https.
-func peerClient(t *testing.T, token string) *http.Client {
-	t.Helper()
-	pt, err := buildPeerTLS(token, false, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &http.Client{Transport: &http.Transport{TLSClientConfig: pt.Client}}
-}
-
-// peerScheme and peerHTTP are how the rig's own calls reach a peer port.
+// peerScheme is how the rig's own calls reach a peer port.
 func (r *pairRig) peerScheme() string {
 	if r.plain {
 		return "http://"
 	}
 	return "https://"
-}
-
-func (r *pairRig) peerHTTP() *http.Client {
-	if r.plain {
-		return http.DefaultClient
-	}
-	return peerClient(r.t, r.token)
 }
 
 // testPeerToken is a pair's peer token in these tests: long enough for

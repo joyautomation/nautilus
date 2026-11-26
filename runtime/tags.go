@@ -56,8 +56,15 @@ type Tags struct {
 	// comm serves the programs' READ and WRITE blocks (channels.go); nil
 	// when the runtime has no channels.
 	comm *commHub
-	mu   sync.RWMutex
-	vals map[string]*tagVal
+	// red is a pair's redundancy state the system functions read
+	// (redstate.go); all zero outside a pair.
+	red redState
+	// switching: a planned switchover is under way (switch.go): writes,
+	// forces and substitutes from outside the programs are refused
+	// (ErrSwitching). Set under mu, read under it.
+	switching atomic.Bool
+	mu        sync.RWMutex
+	vals      map[string]*tagVal
 	// fold maps ir.NameKey(name) to the spelling a tag was created under.
 	// Tag names are IEC identifiers, so they are case-insensitive (#197):
 	// a lookup that misses vals exactly falls back here, and a write in
@@ -157,6 +164,9 @@ type tagVal struct {
 	// to it from anyone else is refused (Tags.Write, Force) or dropped (a
 	// program's), as a write to a forced tag is. See substitute_expiry.go.
 	owned bool
+	// releases: the takeover hold's release tag (hold.go). The program
+	// writes it; a write or a force from anyone else is refused.
+	releases bool
 	// held: an output seeded at its type's zero (no init:) that nothing has
 	// written yet. The logic and every reader see the zero; readMany, the
 	// driver push, leaves it out until the first write. See Tags.hold.

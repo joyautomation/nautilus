@@ -137,10 +137,7 @@ func TestLoopbackImpostorAtTheWitnessAddress(t *testing.T) {
 	c.commission()
 	who := c.settledLeader(leases(20))
 	c.stopWitness()
-	other, err := peertls.New(strings.Repeat("another pair's token ", 3))
-	if err != nil {
-		t.Fatal(err)
-	}
+	other := newTestPeer(t, strings.Repeat("another pair's token ", 3), "", WitnessID, t.TempDir())
 	var asked atomic.Int64
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -153,14 +150,14 @@ func TestLoopbackImpostorAtTheWitnessAddress(t *testing.T) {
 	})}
 	// It takes any client, as an impostor would: the controllers' own
 	// check is what keeps them away.
-	srvTLS := other.Server.Clone()
+	srvTLS := other.Server()
 	srvTLS.ClientAuth, srvTLS.VerifyConnection = tls.NoClientCert, nil
 	go srv.Serve(tls.NewListener(&tapListener{Listener: ln, tap: tp}, srvTLS))
 	t.Cleanup(func() { srv.Close() })
 	c.mu.Lock()
 	c.real[c.addr[WitnessID]] = ln.Addr().String()
 	c.mu.Unlock()
-	c.waitLink(EventPeerIdentity, WitnessID, "the witness's TLS key is not this pair's")
+	c.waitLink(EventPeerIdentity, WitnessID, "the witness's TLS certificate is not this pair's")
 	c.steady(who, 4)
 	if n := asked.Load(); n != 0 {
 		t.Fatalf("the impostor got %d requests", n)
@@ -176,14 +173,11 @@ func TestLoopbackImpostorAtTheWitnessAddress(t *testing.T) {
 // faultOf tells each TLS fault apart, and finds none in an error that
 // says nothing about TLS.
 func TestFaultOf(t *testing.T) {
-	a, err := peertls.New(testToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := peertls.New(strings.Repeat("b", 40))
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := newTestPeer(t, testToken, testCluster, "a", t.TempDir())
+	b := newTestPeer(t, testToken, testCluster, "b", t.TempDir())
+	foreign := newTestPeer(t, strings.Repeat("b", 40), testCluster, "b", t.TempDir())
+	b2 := newTestPeer(t, testToken, testCluster, "b", t.TempDir()) // b's box replaced: another key
+	a2 := newTestPeer(t, testToken, testCluster, "a", t.TempDir())
 	serve := func(conf *tls.Config) string {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -198,27 +192,38 @@ func TestFaultOf(t *testing.T) {
 		t.Cleanup(func() { srv.Close() })
 		return ln.Addr().String()
 	}
-	call := func(conf *tls.Config, addr string) error {
-		c := &caller{client: newClient(nil, conf), token: testToken, lease: loopLease, members: "a,b", tls: conf != nil}
-		_, err := c.call(t.Context(), leases(4), http.MethodGet, baseURL(addr, conf != nil)+Prefix+"x/hello", nil)
+	call := func(wrap TLSWrap, addr string) error {
+		c := &caller{client: newClient(nil, wrap), token: testToken, lease: loopLease, members: "a,b", tls: wrap != nil}
+		_, err := c.call(t.Context(), leases(4), http.MethodGet, baseURL(addr, wrap != nil)+Prefix+"x/hello", nil)
 		return err
 	}
-	anyServer := b.Client.Clone()
-	anyServer.VerifyConnection = nil
+	bound := func(p *peertls.Peer) string {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := &http.Server{Handler: bindPeer(p, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))}
+		go srv.Serve(tls.NewListener(ln, p.Server()))
+		t.Cleanup(func() { srv.Close() })
+		return ln.Addr().String()
+	}
+	bAddr := bound(b)
+	pinned := call(wrapTo(a, "b"), bAddr) // a and b pin each other
 	for _, tc := range []struct {
 		name string
 		err  error
 		want linkFault
 	}{
-		{"same key", call(a.Client, serve(a.Server)), faultNone},
-		{"plain peer", call(a.Client, serve(nil)), faultPeerPlain},
-		{"TLS peer", call(nil, serve(a.Server)), faultPeerTLS},
-		{"foreign key", call(a.Client, serve(b.Server)), faultForeignKey},
-		{"key refused", call(anyServer, serve(a.Server)), faultKeyRefused},
+		{"same key", pinned, faultNone},
+		{"plain peer", call(wrapTo(a, "b"), serve(nil)), faultPeerPlain},
+		{"TLS peer", call(nil, serve(b.Server())), faultPeerTLS},
+		{"foreign token", call(wrapTo(a, "b"), serve(foreign.Server())), faultForeignKey},
+		{"another key than the pinned one", call(wrapTo(a, "b"), serve(b2.Server())), faultForeignKey},
+		{"key refused", call(wrapTo(a2, "b"), bAddr), faultKeyRefused},
 		{"unrelated", errors.New("connection refused"), faultNone},
 		// With peer TLS on, a TLS listener's own 400 text from a handler is
 		// just an answer: only a plain call can meet the real one.
-		{"TLS answer quoting the 400", call(a.Client, serveText(t, a.Server, http.StatusBadRequest, "Client sent an HTTP request to an HTTPS server.")), faultNone},
+		{"TLS answer quoting the 400", call(wrapTo(a, "b"), serveText(t, b.Server(), http.StatusBadRequest, "Client sent an HTTP request to an HTTPS server.")), faultNone},
 	} {
 		if got := faultOf(tc.err); got != tc.want {
 			t.Errorf("%s: faultOf(%v) = %d, want %d", tc.name, tc.err, got, tc.want)
@@ -252,14 +257,12 @@ func TestMeasurePeerTLS(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var conf *tls.Config
+		var conf TLSWrap
 		served := ln
 		if !plain {
-			p, err := peertls.New(testToken)
-			if err != nil {
-				t.Fatal(err)
-			}
-			served, conf = tls.NewListener(ln, p.Server), p.Client
+			wp := newTestPeer(t, testToken, "", WitnessID, t.TempDir())
+			p := newTestPeer(t, testToken, testCluster, "a", t.TempDir())
+			served, conf, h = tls.NewListener(ln, wp.Server()), wrapTo(p, WitnessID), bindPeer(wp, h)
 		}
 		srv := &http.Server{Handler: h}
 		go srv.Serve(served)
@@ -344,11 +347,8 @@ func TestStalledHandshakesAreClosed(t *testing.T) {
 			}()
 		}
 	}()
-	p, err := peertls.New(testToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := &caller{client: newClient(nil, p.Client), token: testToken, lease: loopLease, members: "a,b"}
+	p := newTestPeer(t, testToken, testCluster, "a", t.TempDir())
+	c := &caller{client: newClient(nil, wrapTo(p, "b")), token: testToken, lease: loopLease, members: "a,b"}
 	for range 20 {
 		_, err := c.call(t.Context(), 50*time.Millisecond, http.MethodPost, baseURL(ln.Addr().String(), true)+Prefix+testCluster+"/vote", []byte{1})
 		if err == nil {

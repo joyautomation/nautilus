@@ -96,7 +96,7 @@ func RestoreSession(t *testing.T, a Target) *tiad.Session {
 // reset.
 func ResetLoad(address string) tiad.DownloadRequest {
 	return AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: address, Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes(),
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes(),
 			KeptDevices: []string{UploadedIODevice().Name}, UserManagementResetToProject: tiad.Yes()}})
 }
 
@@ -105,7 +105,7 @@ func ResetLoad(address string) tiad.DownloadRequest {
 // reset, with the CPU's access control attested cpu.
 func accessLoad(cpu string, secrets *tiad.Secrets) tiad.DownloadRequest {
 	r := AcceptHardware(tiad.DownloadRequest{Secrets: secrets, Address: benchCPU, Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
 	r.Attestation.CPUAccessControl = cpu
 	return r
 }
@@ -315,7 +315,7 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		a.SetQuestions(t, benchHardwareChecks)
 		load := func(cpu string, secrets *tiad.Secrets) tiad.DownloadRequest {
 			r := AcceptHardware(tiad.DownloadRequest{Secrets: secrets, Address: benchCPU, Hardware: true, Software: true, Announced: true,
-				Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+				Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
 			r.Attestation.CPUAccessControl = cpu
 			return r
 		}

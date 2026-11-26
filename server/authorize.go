@@ -45,13 +45,18 @@ const (
 // one missing here. With an auth: block, an action missing here is
 // refused.
 var actionPerm = map[string]string{
-	"tag.write":            PermWrite,
-	"push.subscribe":       auth.Read, // any person who may read may be paged; read-gated per alarm at send
-	"push.unsubscribe":     auth.Read,
-	"alarm.ack":            PermAck,
-	"alarm.shelve":         PermShelve,
-	"alarm.unshelve":       PermShelve,
-	"alarm.out-of-service": PermOOS,
+	"tag.write":             PermWrite,
+	"push.subscribe":        auth.Read, // any person who may read may be paged; read-gated per alarm at send
+	"push.unsubscribe":      auth.Read,
+	"camera.view":           auth.Camera, // watching a camera live (#724)
+	"camera.snapshot-view":  auth.Camera, // looking at a picture kept for an alarm (#724)
+	"camera.snapshot-purge": PermConfig,  // dropping the pictures kept for alarms (#724)
+	"camera.ptz":            auth.PTZ,    // moving a camera (#724)
+	"camera.ptz-stop":       auth.Camera, // stopping one: a way back, for whoever may see it
+	"alarm.ack":             PermAck,
+	"alarm.shelve":          PermShelve,
+	"alarm.unshelve":        PermShelve,
+	"alarm.out-of-service":  PermOOS,
 	// Back in service shows alarms again: whoever may acknowledge them.
 	"alarm.in-service":         PermAck,
 	"sfc.step":                 PermSFC,
@@ -93,6 +98,14 @@ var actionPerm = map[string]string{
 	"redundancy.commission":      PermRedundancy,
 	"redundancy.recommission":    PermRedundancy,
 	"redundancy.vouch":           PermRedundancy,
+	// Releasing the takeover hold sends the program's outputs to the
+	// field before the program said it may (#710 (b2)).
+	"redundancy.release-hold": PermRedundancy,
+	// A planned switchover moves the lead to the standby (#710 d1c).
+	"redundancy.switchover": PermRedundancy,
+	"redundancy.failback":   PermRedundancy,
+	// Drops the other controller's pinned key (#710 2b).
+	"redundancy.unpin": PermRedundancy,
 }
 
 // presentedToken is the credential a request carries, in either
@@ -248,7 +261,18 @@ func (s *Server) sessionStands(se session) bool {
 		if s.oidc == nil || !s.policy.OIDC() {
 			return false
 		}
+		// a sign-in at another issuer (the other controller of a pair on
+		// another auth.oidc.issuer) acts not here, whatever the pins say
+		if (s.oidcIssuer != "" || s.oidcPair) && se.issuer != s.oidcIssuer {
+			return false
+		}
 		pin, ok, err := s.users.Pin(se.user)
+		if err == nil && !ok && s.oidcPair && !se.local {
+			// from the other controller, adopted before this copy of the
+			// log was known complete: pinned at its first use (#710)
+			s.pinFromLog(se)
+			pin, ok, err = s.users.Pin(se.user)
+		}
 		if err != nil || !ok || !pin.Same(se.issuer, se.sub) {
 			return false
 		}
@@ -711,30 +735,40 @@ func checkoutPermission(p string) bool { return p == auth.Checkout || p == auth.
 
 // elevatedNames is auth.ElevatedPermissions as this project shows them.
 func (s *Server) elevatedNames() []string {
-	if s.checkoutEnabled() {
-		return auth.ElevatedPermissions
-	}
 	out := make([]string, 0, len(auth.ElevatedPermissions))
 	for _, p := range auth.ElevatedPermissions {
-		if !checkoutPermission(p) {
+		if s.permissionShown(p) {
 			out = append(out, p)
 		}
 	}
 	return out
 }
 
+// permissionShown reports whether /api/me lists p: the checkout's two exist
+// only for a project that uses the checkout, and camera only for one with
+// cameras (#724); the roles still define them, so turning the feature on needs
+// no role edit.
+func (s *Server) permissionShown(p string) bool {
+	switch {
+	case checkoutPermission(p):
+		return s.checkoutEnabled()
+	case p == auth.Camera || p == auth.PTZ:
+		return s.shown[auth.Camera]
+	}
+	return true
+}
+
 // visiblePermissions is a principal's permissions as /api/me shows them: the
-// checkout's two are left out of a project that does not use it (the roles
-// still define them, so turning it on needs no role edit).
+// ones of a feature the project does not use are left out.
 func (s *Server) visiblePermissions(in map[string][]string) map[string][]string {
-	if s.checkoutEnabled() {
+	if s.checkoutEnabled() && s.shown[auth.Camera] {
 		return in
 	}
 	out := make(map[string][]string, len(in))
 	for scope, perms := range in {
 		kept := make([]string, 0, len(perms))
 		for _, p := range perms {
-			if !checkoutPermission(p) {
+			if s.permissionShown(p) {
 				kept = append(kept, p)
 			}
 		}

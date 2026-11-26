@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +41,8 @@ type WitnessOptions struct {
 	// MaxPairs caps how many pairs one witness serves (default 64).
 	MaxPairs int
 	Log      *slog.Logger
+	// StateWrite is Options.StateWrite, for the witness's pair files.
+	StateWrite func(*os.File, []byte) (int, error)
 
 	clock func() quorum.Instant
 	draw  func() uint64
@@ -261,6 +265,30 @@ func (w *Witness) Grant(cluster string) (grantedTo quorum.NodeID, promised, inca
 	return st.GrantedTo, st.Promised, st.Incarnation, st.Incarnation != 0
 }
 
+// Incarnation is the cluster's incarnation at this witness, 0 when it has
+// none yet (no vote ever, or its state rebuilt and no vote since): what
+// the witness's peer TLS certificate names to that pair's controllers
+// (#710 2b). Read only: it never starts a voter or binds a cluster, since
+// a handshake asking it has proved nothing yet.
+func (w *Witness) Incarnation(cluster string) uint64 {
+	if !ValidCluster(cluster) {
+		return 0
+	}
+	w.mu.Lock()
+	p, ok := w.pairs[cluster]
+	w.mu.Unlock()
+	if ok {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return p.v.State().Incarnation
+	}
+	st, err := (&State{Path: filepath.Join(w.o.Dir, cluster+stateSuffix)}).Load()
+	if err != nil || st.Cluster != cluster {
+		return 0
+	}
+	return st.Incarnation
+}
+
 // Pairs lists the pairs this witness has answered since it started.
 func (w *Witness) Pairs() []PairStatus {
 	w.mu.Lock()
@@ -319,7 +347,7 @@ func (w *Witness) pair(name, members string) (*witnessPair, error) {
 	case err != nil:
 		return nil, err
 	}
-	file := &State{Path: filepath.Join(w.o.Dir, name+stateSuffix), Owner: w.o.Self, Cluster: name, write: w.o.write}
+	file := &State{Path: filepath.Join(w.o.Dir, name+stateSuffix), Owner: w.o.Self, Cluster: name, write: firstWrite(w.o.write, w.o.StateWrite)}
 	st, err := file.Load()
 	if err != nil && !errors.Is(err, ErrNoState) {
 		// Unreadable since the start checked it: never redrawn quietly.
@@ -375,6 +403,7 @@ func (p *witnessPair) persisted(seq uint64, err error) {
 }
 
 func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
+	rw.Header().Set(VoterLeaseHeader, strconv.FormatInt(int64(w.o.Lease), 10))
 	name := r.PathValue("cluster")
 	if !ValidCluster(name) {
 		http.NotFound(rw, r)
@@ -405,6 +434,14 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	members := r.Header.Get(MembersHeader)
+	if !SenderOK(r, name, string(req.From), "witness_sender_unbound_vote") {
+		// The vote names another member, or another cluster, than the
+		// sender's certificate (#710 per-box keys): a pinned a must never
+		// vote as b, nor in a cluster it is not a member of.
+		w.log.Error("witness: refused a vote whose sender is not the member its certificate names", "cluster", name, "from", req.From)
+		http.Error(rw, "the vote's sender is not the member this connection's certificate names", http.StatusForbidden)
+		return
+	}
 	if !validMembers(members) || (members != memberPair(req.From, members)) {
 		w.log.Error("witness: refused a vote from outside the pair", "cluster", name, "from", req.From, "members", members)
 		http.Error(rw, "not a member of this pair", http.StatusForbidden)
@@ -476,6 +513,17 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		}
 		p.mu.Unlock()
 	})
+}
+
+// witnessSenderOK reports whether a request to the witness about cluster,
+// whose members are members, comes from one of them by its certificate
+// (SenderOK for a request that names no sender).
+func witnessSenderOK(r *http.Request, cluster, members, mutation string) bool {
+	if r.TLS == nil || mut(mutation) {
+		return true
+	}
+	c, n, ok := VerifiedPeer(r)
+	return ok && c == cluster && slices.Contains(strings.Split(members, ","), n)
 }
 
 // memberPair returns members when from is one of its two names, else "".

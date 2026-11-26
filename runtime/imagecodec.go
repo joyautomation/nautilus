@@ -5,18 +5,33 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"math"
+	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
 )
 
-// The wire form of an Image (EncodeImage, DecodeImage), version 1:
+// The wire form of an Image (EncodeImage, DecodeImage), version 4:
 //
-//	"nsi" imageFormat
+//	"nsi" format
 //	uvarint term, uvarint seq, str build, bytes retain
 //	uvarint tasks, then per task:
 //	  str task, str layout, varint nowMs, uvarint scans,
 //	  uvarint leaves, then per leaf: kind byte, payload
+//	  (format 2) str source, tags
+//	(format 2) str tagsLayout, varint tagsNowMs, tags
+//	(format 3) uvarint hold: 0 none, else the takeover hold's age in ms + 1
+//	(format 4) uvarint edge session: Image.EdgeSession
 //	uint32 CRC-32C (Castagnoli) of everything before it, little endian
+//
+// tags is a uvarint count, then per tag a uvarint place in the carried set
+// and its leaves (a uvarint count, then each leaf). Format 1 is the same
+// without the parts marked format 2 (#710 S1b): a leader sends it to a
+// standby that does not ask for 2, so a pair mid rolling update still
+// carries its retained values; such an image is never taken over hot.
+// Format 2 is format 3 without the hold (#710 (b2)): a hot takeover needs
+// the same build anyway, so a format 2 image inherits no hold. Format 3 is
+// format 4 without the edge session (#798): its standby learns none.
 //
 // A str or bytes is a uvarint length and the bytes. A leaf's payload by
 // kind: BOOL one byte (0 or 1); an integer a varint and a str (an
@@ -27,7 +42,25 @@ import (
 // The checksum is end to end, over what the leader encoded: peer TLS
 // already protects the link, so a mismatch means a bug or a torn buffer,
 // and the standby asks for a full image again.
-const imageFormat = 1
+const imageFormat = 4
+
+// ImageFormats are the wire formats this build reads, oldest first; a
+// standby names them when it asks for the stream, and the leader sends
+// the newest one both read (ImageFormatFor).
+var ImageFormats = []byte{1, 2, 3, imageFormat}
+
+// ImageFormatFor is the format a leader of this build sends a standby that
+// reads formats (as its stream request names them): the newest both read,
+// and 1 for a standby that names none (a build before #710 S2).
+func ImageFormatFor(formats []byte) byte {
+	best := byte(1)
+	for _, f := range formats {
+		if f > best && f <= imageFormat {
+			best = f
+		}
+	}
+	return best
+}
 
 var imageMagic = [3]byte{'n', 's', 'i'}
 
@@ -52,17 +85,40 @@ const (
 // the stream reports it rather than send what no standby would read.
 var ErrImageTooBig = errors.New("runtime: the state image is over its size limit")
 
+// ImageTooBigError is EncodeImage's ErrImageTooBig with its numbers:
+// What is over (the image, or one string in it), Bytes how big, Limit the
+// limit. errors.Is(err, ErrImageTooBig) holds for it.
+type ImageTooBigError struct {
+	What         string
+	Bytes, Limit int
+}
+
+func (e *ImageTooBigError) Error() string {
+	return fmt.Sprintf("%v: %s of %d bytes, the limit is %d", ErrImageTooBig, e.What, e.Bytes, e.Limit)
+}
+
+func (e *ImageTooBigError) Is(target error) bool { return target == ErrImageTooBig }
+
 // EncodeImage appends img's wire form to dst and returns it. With a dst
 // whose capacity a previous image filled, it allocates nothing. An image
 // over MaxImageBytes, or with a string over maxImageString (a long STRING
 // variable), is refused with ErrImageTooBig and dst comes back unchanged.
 func EncodeImage(dst []byte, img *Image) ([]byte, error) {
+	return EncodeImageFormat(dst, img, imageFormat)
+}
+
+// EncodeImageFormat is EncodeImage in a given wire format: 1 leaves out
+// the tags and the sources (for a standby of a build before #710 S2).
+func EncodeImageFormat(dst []byte, img *Image, format byte) ([]byte, error) {
+	if format < 1 || format > imageFormat {
+		return dst, fmt.Errorf("runtime: no image format %d, this build writes 1 to %d", format, imageFormat)
+	}
 	start := len(dst)
 	if err := imageStringsFit(img); err != nil {
 		return dst, err
 	}
 	dst = append(dst, imageMagic[:]...)
-	dst = append(dst, imageFormat)
+	dst = append(dst, format)
 	dst = binary.AppendUvarint(dst, img.Term)
 	dst = binary.AppendUvarint(dst, img.Seq)
 	dst = appendStr(dst, img.Build)
@@ -79,9 +135,29 @@ func EncodeImage(dst []byte, img *Image) ([]byte, error) {
 		for j := range t.Leaves {
 			dst = appendLeaf(dst, &t.Leaves[j])
 		}
+		if format >= 2 {
+			dst = appendStr(dst, t.Source)
+			dst = appendTags(dst, &t.Tags)
+		}
+	}
+	if format >= 2 {
+		dst = appendStr(dst, img.TagsLayout)
+		dst = binary.AppendVarint(dst, img.TagsNowMs)
+		dst = appendTags(dst, &img.Tags)
+	}
+	if format >= 3 {
+		// The takeover hold: 0 for none, else its age in ms plus one.
+		var hold uint64
+		if img.Holding {
+			hold = uint64(img.HoldAge.Milliseconds()) + 1
+		}
+		dst = binary.AppendUvarint(dst, hold)
+	}
+	if format >= 4 {
+		dst = binary.AppendUvarint(dst, img.EdgeSession)
 	}
 	if n := len(dst) - start + 4; n > MaxImageBytes && !mutRuntime("image_size_unbounded") {
-		return dst[:start], fmt.Errorf("%w: %d bytes, the limit is %d", ErrImageTooBig, n, MaxImageBytes)
+		return dst[:start], &ImageTooBigError{What: "the image", Bytes: n, Limit: MaxImageBytes}
 	}
 	sum := crc32.Checksum(dst[start:], castagnoli)
 	if mutRuntime("image_crc_unchecked") {
@@ -98,7 +174,7 @@ func imageStringsFit(img *Image) error {
 	}
 	long := func(what string, n int) error {
 		if n > maxImageString {
-			return fmt.Errorf("%w: %s of %d bytes, the limit is %d", ErrImageTooBig, what, n, maxImageString)
+			return &ImageTooBigError{What: what, Bytes: n, Limit: maxImageString}
 		}
 		return nil
 	}
@@ -118,8 +194,37 @@ func imageStringsFit(img *Image) error {
 				return long("task "+t.Task+": a STRING value", n)
 			}
 		}
+		if err := long("a source hash", len(t.Source)); err != nil {
+			return err
+		}
+		for j := range t.Tags.Leaves {
+			if n := len(t.Tags.Leaves[j].S); n > maxImageString {
+				return long("task "+t.Task+": a STRING tag", n)
+			}
+		}
+	}
+	if err := long("the tags' layout", len(img.TagsLayout)); err != nil {
+		return err
+	}
+	for j := range img.Tags.Leaves {
+		if n := len(img.Tags.Leaves[j].S); n > maxImageString {
+			return long("a STRING tag", n)
+		}
 	}
 	return nil
+}
+
+func appendTags(dst []byte, tv *TagValues) []byte {
+	dst = binary.AppendUvarint(dst, uint64(len(tv.Idx)))
+	for i, place := range tv.Idx {
+		leaves := tv.leavesOf(i)
+		dst = binary.AppendUvarint(dst, uint64(place))
+		dst = binary.AppendUvarint(dst, uint64(len(leaves)))
+		for j := range leaves {
+			dst = appendLeaf(dst, &leaves[j])
+		}
+	}
+	return dst
 }
 
 func appendStr(dst []byte, s string) []byte {
@@ -159,13 +264,19 @@ func DecodeImage(b []byte, img *Image) error {
 	if [3]byte(body[:3]) != imageMagic {
 		return fmt.Errorf("%w: no image header", ErrImage)
 	}
-	if body[3] != imageFormat {
-		return fmt.Errorf("%w: format %d, this build reads %d", ErrImage, body[3], imageFormat)
+	format := body[3]
+	if format < 1 || format > imageFormat {
+		return fmt.Errorf("%w: format %d, this build reads 1 to %d", ErrImage, format, imageFormat)
 	}
 	if got, want := crc32.Checksum(body, castagnoli), binary.LittleEndian.Uint32(tail); got != want && !mutRuntime("image_crc_unchecked") {
 		return fmt.Errorf("%w: checksum %08x, the image says %08x", ErrImage, got, want)
 	}
 	d := imageReader{b: body[4:]}
+	img.Format = format
+	img.TagsLayout, img.TagsNowMs = "", 0
+	img.Tags.reset()
+	img.Holding, img.HoldAge = false, 0
+	img.EdgeSession = 0
 	img.Term = d.uvarint()
 	img.Seq = d.uvarint()
 	img.Build = d.str()
@@ -211,6 +322,32 @@ func DecodeImage(b []byte, img *Image) error {
 				return d.err
 			}
 		}
+		t.Source = ""
+		t.Tags.reset()
+		if format >= 2 {
+			t.Source = d.str()
+			d.tags(&t.Tags)
+			if d.err != nil {
+				return d.err
+			}
+		}
+	}
+	if format >= 2 {
+		img.TagsLayout = d.str()
+		img.TagsNowMs = d.varint()
+		d.tags(&img.Tags)
+	}
+	if format >= 3 {
+		if hold := d.uvarint(); d.err == nil && hold > 0 {
+			if hold-1 > uint64(math.MaxInt64/time.Millisecond) {
+				d.fail("a hold age of %d ms", hold-1)
+			} else {
+				img.Holding, img.HoldAge = true, time.Duration(hold-1)*time.Millisecond
+			}
+		}
+	}
+	if format >= 4 {
+		img.EdgeSession = d.uvarint()
 	}
 	if d.err == nil && len(d.b) != 0 {
 		d.fail("%d bytes after the last task", len(d.b))
@@ -267,6 +404,37 @@ func (d *imageReader) str() string {
 	s := string(d.b[:n])
 	d.b = d.b[n:]
 	return s
+}
+
+// tags reads a tags section into tv, reusing its storage.
+func (d *imageReader) tags(tv *TagValues) {
+	tv.reset()
+	n := d.uvarint()
+	if d.err == nil && n > uint64(len(d.b)) { // a tag is at least two bytes
+		d.fail("%d tags", n)
+	}
+	for range n {
+		if d.err != nil {
+			return
+		}
+		place := d.uvarint()
+		leaves := d.uvarint()
+		if d.err == nil && (leaves > uint64(len(d.b)) || place > uint64(MaxImageBytes)) {
+			d.fail("a tag at place %d of %d leaves", place, leaves)
+		}
+		if d.err != nil {
+			return
+		}
+		for range leaves {
+			tv.Leaves = append(tv.Leaves, ir.Leaf{})
+			d.leaf(&tv.Leaves[len(tv.Leaves)-1])
+			if d.err != nil {
+				return
+			}
+		}
+		tv.Idx = append(tv.Idx, int(place))
+		tv.Ends = append(tv.Ends, len(tv.Leaves))
+	}
 }
 
 func (d *imageReader) byte1() byte {

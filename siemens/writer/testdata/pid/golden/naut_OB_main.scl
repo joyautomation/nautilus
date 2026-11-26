@@ -1,0 +1,19 @@
+ORGANIZATION_BLOCK "naut_OB_main"
+TITLE = "Cyclic interrupt, 100ms"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_TEMP 
+      elapsed : LReal;
+   END_VAR
+
+BEGIN
+	// The dt-tag: the seconds since this OB last started. RUNTIME runs every scan so it always has
+	// a start time; on the first scan after RUN (and on a counter wrap) the tag gets the interval.
+	#elapsed := RUNTIME(MEM := "naut_Clock"."main".mem);
+	IF NOT "naut_Clock"."main".started OR #elapsed <= 0.0 THEN
+		#elapsed := 0.1;
+		"naut_Clock"."main".started := TRUE;
+	END_IF;
+	"naut_Tags".LevelDtS := LREAL_TO_REAL(#elapsed);
+	"naut_Main_DB"();
+END_ORGANIZATION_BLOCK

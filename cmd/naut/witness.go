@@ -12,10 +12,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/peertls"
 	"github.com/joyautomation/nautilus/quorum/node"
 )
 
@@ -35,8 +38,11 @@ Usage: naut witness [flags]
                   $STATE_DIRECTORY, which systemd's StateDirectory= sets).
                   Never a temporary directory: a lost state is a new
                   incarnation, which the pair adopts only together.
-  --lease d       this witness's promise (default 2s). At least every
-                  pair's lease: a vote with a longer lease is refused.
+  --lease d       this witness's promise (default 1s). At least every
+                  pair's lease: a vote with a longer lease is refused,
+                  and the pair then runs without fault tolerance. A
+                  pair with its own redundancy.lease gives the witness
+                  the same --lease.
   --rebuild       start over a state file that can't be read: it is moved
                   aside and its pair gets a new incarnation (its log copy
                   is moved aside with it, and the pair's leader fills it
@@ -65,6 +71,9 @@ func runWitness(args []string) int {
 // witnessMain runs the witness until ctx ends. ready, when not nil, gets
 // the address it listens on once it answers.
 func witnessMain(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, ready chan<- string) int {
+	if len(args) > 0 && args[0] == "unpin" {
+		return witnessUnpinMain(args[1:], getenv, stdout, stderr)
+	}
 	fs := flag.NewFlagSet("witness", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprint(stderr, witnessUsage) }
@@ -103,7 +112,30 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 		fmt.Fprintf(stderr, "naut witness: --peer-tls %q: want on (the default) or off\n", *peerTLS)
 		return 2
 	}
-	pt, err := buildPeerTLS(token, peerTLSIsOff(*peerTLS), "--peer-tls=off here and redundancy.peer-tls: off on the pair")
+	stateDir := *state
+	// The witness, once built: its certificate names each pair's
+	// incarnation (#710 2b), witness@0 before.
+	var wit atomic.Pointer[node.Witness]
+	pins := newPinLog("witness")
+	pins.slogOnly = true // the witness has no journal: its log is the record
+	pt, err := buildPeerTLS(peertls.Options{Token: token, Self: peertls.Witness,
+		// One witness serves many pairs: its key is bound to its box (no
+		// links to name, so its physical NICs or its machine-id alone), its
+		// pins kept per cluster beside the cluster's members file.
+		KeyFile: filepath.Join(stateDir, peerKeyFile),
+		Box:     func() (peertls.Box, error) { return witnessKeyBox(nil) },
+		PinsFile: func(cluster string) string {
+			return filepath.Join(stateDir, cluster+"."+peerPinsFile)
+		},
+		Accept:  func(c, n string) bool { return node.ValidCluster(c) && (n == "a" || n == "b") },
+		OnEvent: pins.event,
+		Incarnation: func(cluster string) uint64 {
+			if w := wit.Load(); w != nil {
+				return w.Incarnation(cluster)
+			}
+			return 0
+		},
+	}, peerTLSIsOff(*peerTLS), "--peer-tls=off here and redundancy.peer-tls: off on the pair")
 	if err != nil {
 		fmt.Fprintln(stderr, "naut witness:", err)
 		return 1
@@ -111,19 +143,27 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 	if pt == nil {
 		fmt.Fprintln(stderr, "naut witness: warning: "+peerTLSOff)
 	}
-	w, err := node.NewWitness(node.WitnessOptions{Dir: *state, Token: token, Lease: *lease, Rebuild: *rebuild})
+	w, err := node.NewWitness(node.WitnessOptions{Dir: *state, Token: token, Lease: *lease, Rebuild: *rebuild, StateWrite: testStateWrite})
 	if err != nil {
 		fmt.Fprintln(stderr, "naut witness:", err)
 		return 1
 	}
 	defer w.Close()
+	wit.Store(w)
 	// Each pair's operator-intent log beside its votes (#710 PR 3b-4b).
 	logs := newWitnessLogs(w, *state, token, *lease, slog.Default())
 	defer logs.Close()
 	mux := http.NewServeMux()
 	mux.Handle(node.Prefix, w.Handler())
 	mux.Handle(node.Prefix+"{cluster}/log/", logs.Handler())
-	h, err := node.Guard(token, mux)
+	if pt != nil {
+		mux.Handle("POST "+node.Prefix+"{cluster}"+node.UnpinPath, witnessUnpin(pt, w.Bound))
+	}
+	var bound http.Handler = mux
+	if pt != nil {
+		bound = pt.Bind(mux, node.WithPeer) // every request: the caller's key against its pin
+	}
+	h, err := node.Guard(token, bound)
 	if err != nil {
 		fmt.Fprintln(stderr, "naut witness:", err)
 		return 1
@@ -143,12 +183,17 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 	served := make(chan error, 1)
 	lim := node.LimitListener(ln, witnessMaxConns)
 	if pt != nil {
-		lim = tls.NewListener(lim, pt.Server)
+		lim = tls.NewListener(lim, pt.Server())
 	}
 	go func() { served <- srv.Serve(lim) }()
 	wire := "TLS"
 	if pt == nil {
 		wire = "plain HTTP (peer TLS off)"
+	} else if fp, err := pt.Fingerprint(); err != nil {
+		fmt.Fprintln(stderr, "naut witness: its peer key:", err)
+		return 1
+	} else {
+		wire = "TLS, key " + fp
 	}
 	fmt.Fprintf(stdout, "naut witness — peer port %s, %s — state %s — lease %v — Ctrl+C to stop\n", ln.Addr(), wire, *state, *lease)
 	if ready != nil {

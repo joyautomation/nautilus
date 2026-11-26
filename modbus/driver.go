@@ -164,6 +164,7 @@ type classAssignment struct {
 // values per source; each source's loop pushes them to its device (latest
 // value wins per tag).
 type Driver struct {
+	fence.CutLabel
 	manifest Manifest
 	plan     Plan
 	scanRate time.Duration
@@ -316,6 +317,9 @@ type source struct {
 	// times it was tried (see wroteOK). Touched only by the source loop,
 	// under mu.
 	stuck map[string]*stuckWrite
+	// safe is the takeover hold's safe values (WriteSafe, hold.go) this
+	// source's device has not yet confirmed, under mu.
+	safe map[string]any
 
 	// outputs are this source's writable binding names, so WriteOutputs
 	// can queue a source's share of a snapshot under one hold of mu.
@@ -1875,12 +1879,14 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	// that write and every one after it, and the flush returns, so a drop
 	// is logged at most once per flush.
 	send := func(bi, ri, ci int) (context.Context, context.CancelFunc, bool) {
-		deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+		deadline, _, ok, done := fence.Begin(d.look, time.Now()) // the budget counts from before the read
 		if !ok || !fence.Started(deadline, time.Now()) {
+			done()
 			drop(rest(bi, ri, ci), "the write gate closed, or the send's budget ran out")
 			return nil, nil, false
 		}
 		if d.reopens.Load() != gen && !mut("old_term_kept") {
+			done()
 			// A reopen since this flush read its generation (a lease lost
 			// and won again, seen now or by another look): none of the
 			// rest is sent. It is dropped, not just left: the queue may
@@ -1892,7 +1898,10 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 			return nil, nil, false
 		}
 		wctx, cancel := fence.Context(ctx, deadline)
-		return wctx, cancel, true
+		wctx = fence.WithDevice(wctx, d.CutName(s.cfg.ID))
+		// The caller's cancel, after the request has returned (answered,
+		// failed, or its socket reset), ends the send for a drain.
+		return wctx, func() { cancel(); done() }, true
 	}
 
 	// bit:N writables read-modify-write their register one at a time — the
@@ -2001,6 +2010,7 @@ func (d *Driver) wroteOK(ctx context.Context, s *source, work map[string]any, na
 		s.mu.Lock()
 		s.writeAnsweredLocked()
 		tries := s.landedLocked(names)
+		s.safeLandedLocked(names, work)
 		s.mu.Unlock()
 		if tries > 0 {
 			d.log.Info("modbus: write delivered after it did not run", "source", s.cfg.ID, "tags", names, "attempts", tries)

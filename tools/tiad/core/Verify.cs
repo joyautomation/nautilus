@@ -82,6 +82,7 @@ namespace Tiad
             bool readFp = fpr != null;
             bool trust = readFp && fpr.Bool("trustUnverifiedCertificate");
             string password = OnlinePassword(r);
+            DeviceAttestation att = ReadDeviceAttestation(r);
             r.Done();
             if (id == "") throw TiadException.BadRequest("verify: deploy is required");
             if (!DeployIdShape(id)) throw TiadException.NotFound("no deploy {0}", Json.Quote(id));
@@ -145,9 +146,13 @@ namespace Tiad
             }
             Obj result = null;
             Exception failed = null;
+            // The deploy's import group (its intent line, D1b): the compare
+            // requires the data types in it by name, as the download's did.
+            object group;
+            if (record.TryGetValue("group", out group) && group is string) s.ImportGroup = (string)group;
             try
             {
-                result = VerifyOpen(s, id, address, record, trust, readFp, password, o);
+                result = VerifyOpen(s, id, address, record, trust, readFp, password, att, o);
             }
             catch (Exception e)
             {
@@ -244,7 +249,7 @@ namespace Tiad
 
         // VerifyOpen is the verify's part on its open session: the address
         // check, the device pin, the compare, the optional fingerprint read.
-        Obj VerifyOpen(Session s, string id, string address, IDictionary<string, object> record, bool trust, bool readFp, string password, Obj o)
+        Obj VerifyOpen(Session s, string id, string address, IDictionary<string, object> record, bool trust, bool readFp, string password, DeviceAttestation att, Obj o)
         {
             o["session"] = s.Id;
             string at = OnSession(s, delegate(ITia t) { return t.ProjectCpuAddress(s.Handle); }) ?? "";
@@ -259,7 +264,7 @@ namespace Tiad
                     ": the verify was refused before anything went online (a record and an archive that disagree name no CPU to compare)", data, false);
             }
             s.Address = address;
-            CheckDevicePin(s, address, "verify");
+            CheckDevicePin(s, address, "verify", att);
             var diffs = new List<Difference>();
             BlindTrust rode = null;
             bool eq = false;
@@ -295,6 +300,10 @@ namespace Tiad
                 changed = !equal && (o["latest"] as string) == id;
             }
             o["changedOutside"] = changed;
+            // The data layout gate's proof (#1341): the CPU holds its newest
+            // load, as this record's archive, so its recorded layout is the
+            // next download's baseline (LayoutCalls).
+            if (equal && (o["latest"] as string) == id && (int)o["unreadableLines"] == 0) MarkVerified(address, id);
             if (readFp)
             {
                 FingerprintRun fp = null;

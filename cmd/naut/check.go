@@ -24,6 +24,8 @@ import (
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/logix/writer"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
+	"github.com/joyautomation/nautilus/quorum/node"
+	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 	swriter "github.com/joyautomation/nautilus/siemens/writer"
 	"github.com/joyautomation/nautilus/sparkplug"
@@ -35,16 +37,21 @@ import (
 //
 //	path/to/program.st:12:5: undeclared identifier "y" ...
 //
+// checkVerbose is naut check -v.
+var checkVerbose bool
+
 // Exit code 0 = clean, 1 = diagnostics found, 2 = usage/IO error.
 func runCheck(args []string) int {
 	fset := flag.NewFlagSet("check", flag.ContinueOnError)
 	manifest := fset.String("m", "", manifestFlagUsage)
 	render := fset.Bool("render", true, "render the operator screen in the browser on this machine (Chrome, Chromium or Edge; NAUT_BROWSER names one) and report a page that throws or is blank, a pipe that draws nothing, a drawing far outside its box, sideways scroll on a phone")
 	target := fset.String("target", "", "also check the sources against a deploy target (experimental): \"logix\" runs the Allen-Bradley writer's rules and \"siemens\" the S7-1500 SCL writer's, so a construct the target's writer cannot express is a diagnostic here, not a download failure")
+	verbose := fset.Bool("v", false, "verbose: list every site behind a summary warning (the Siemens target's REAL → integer conversions)")
 	if err := fset.Parse(args); err != nil {
 		return 2
 	}
 	renderScreens = *render
+	checkVerbose = *verbose
 	if *target != "" && *target != "logix" && *target != "siemens" {
 		fmt.Fprintf(os.Stderr, "naut check: unknown target %q (the targets are: logix, siemens)\n", *target)
 		return 2
@@ -498,21 +505,34 @@ func checkSiemensTarget(dir, manifestName, manifestFile string) int {
 		fmt.Printf("%s: siemens target: %s\n", manifestFile, err)
 		return 1
 	}
-	_, diags, err := swriter.Write(in)
+	out, diags, err := swriter.Write(in)
 	if err != nil {
 		fmt.Printf("%s: siemens target: %s\n", manifestFile, err)
 		return 1
 	}
-	for _, d := range diags {
+	report := func(d swriter.Diag, level string) {
 		where := d.Path
 		if where == "" || where == project.ManifestName {
 			where = manifestFile
 		}
 		if d.Line > 0 {
-			fmt.Printf("%s:%d:1: siemens target: %s [%s]\n", where, d.Line, d.Message, d.Rule)
+			fmt.Printf("%s:%d:1: %ssiemens target: %s [%s]\n", where, d.Line, level, d.Message, d.Rule)
 		} else {
-			fmt.Printf("%s: siemens target: %s [%s]\n", where, d.Message, d.Rule)
+			fmt.Printf("%s: %ssiemens target: %s [%s]\n", where, level, d.Message, d.Rule)
 		}
+	}
+	for _, d := range diags {
+		report(d, "")
+	}
+	// Where the CPU can behave differently from nautilus (writer.Output
+	// Warnings): warnings, not errors.
+	for _, l := range siemensWarningLines(out.Warnings, func(p string) string {
+		if p == "" || p == project.ManifestName {
+			return manifestFile
+		}
+		return p
+	}, checkVerbose) {
+		fmt.Println(l)
 	}
 	return len(diags)
 }
@@ -551,6 +571,10 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
 	for _, w := range sendBudgetWarnings(proj) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
+	}
+	for _, w := range leaseWarnings(proj) {
 		warns++
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
@@ -616,6 +640,13 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		// here means the composed resource failed for some other reason.
 		fmt.Printf("%s: %s\n", loc.tag(tagNamedInError(err)), err)
 		return 1, 0
+	}
+
+	// A pair's state stream (#710 S1b): an image too big to send at all,
+	// or too big for the budget at 10 a second.
+	for _, w := range streamWarnings(proj) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
 
 	// A READ or WRITE whose ID names no channel would fail every request
@@ -888,6 +919,28 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 	}
 	if sh := proj.CheckoutSheet(); sh != nil {
 		fmt.Printf("%s: %d checkout points\n", loc.file, len(sh.Points))
+	}
+
+	// Cameras (#724): each names equipment the plant has, and a camera that
+	// needs credentials has them in the secrets file.
+	camErrs, camWarns := proj.CheckCameras()
+	ce, cw := checkCameraAlarms(proj, defs)
+	camErrs, camWarns = append(camErrs, ce...), append(camWarns, cw...)
+	if len(proj.Cameras) > 0 {
+		sd, _ := controllerStateDir("the camera credentials", proj.AuthStateDir, proj.Name, dir, true, os.Getenv)
+		e2, w2 := checkCameraSecrets(proj, sd, false)
+		camErrs, camWarns = append(camErrs, e2...), append(camWarns, w2...)
+	}
+	for _, m := range camErrs {
+		errs++
+		fmt.Printf("%s: error: %s\n", loc.file, m)
+	}
+	for _, m := range camWarns {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, m)
+	}
+	if n := len(proj.Cameras); n > 0 {
+		fmt.Printf("%s: %d cameras\n", loc.file, n)
 	}
 
 	// Scenes: every *.scene.json at the root really binds struct tags the
@@ -1249,6 +1302,36 @@ func caseOnlyBindings(tags []runtime.TagDef, d nio.Driver) []caseMismatch {
 	return out
 }
 
+// shortestMeasuredLease is the shortest pair lease measured on ARM-class
+// controllers under normal scan load with no lapse (#710's soak): naut
+// check warns below it.
+const shortestMeasuredLease = time.Second
+
+// leaseWarnings: a pair's explicit lease under shortestMeasuredLease.
+func leaseWarnings(proj *project.Project) []string {
+	r := proj.Redundancy
+	if !r.Pair() || r.Lease == "" {
+		return nil
+	}
+	lease := r.LeaseTime()
+	if lease >= shortestMeasuredLease || mutNaut("lease_check_unwarned") {
+		return nil
+	}
+	dn, ms := r.FenceParts()
+	return []string{fmt.Sprintf("redundancy.lease %s is under %s, the shortest lease measured on ARM controllers: a leader stalled over about %s (a busy host, a slow disk) stops writing its outputs and loses its lease, and a link outage to the peer and the witness of about %s costs the lease and the plant a takeover. Use it only where the hosts and the links have been measured at it; the witness takes the same --lease", lease, shortestMeasuredLease, stallTolerance(lease, dn+ms).Round(time.Millisecond), (lease / 2).Round(time.Millisecond))}
+}
+
+// stallTolerance is the shortest stall of a leader that closes its write
+// gate (its lease follows): a lease runs lease×(1-ρ) from the send of the
+// round that renewed it, the gate closes the fence margin before its end,
+// and a renewal goes every quarter lease, so a stall that starts just
+// before a renewal was due has the rest. One that starts just after has a
+// quarter lease more. A link outage costs less: a lost renewal is retried
+// only at the next quarter lease, so about half a lease can cost it.
+func stallTolerance(lease, fence time.Duration) time.Duration {
+	return time.Duration(float64(lease)*(1-node.DefaultRho)) - fence - lease/4
+}
+
 // sendBudgetWarnings names, on a redundant pair, each source that takes
 // writes whose manifest SETS a request timeout longer than the pair's send
 // budget (a default is nothing the operator chose; every write on a pair
@@ -1344,3 +1427,50 @@ func plantManifest(dir string, paths []string, manifest string) string {
 	}
 	return ""
 }
+
+// streamWarnings sizes a pair's state stream image (#710 S1b) from the
+// project's frames and retained tags at their initial values (strings
+// empty, so a project that fills long STRINGs streams more): a warning
+// when it is over runtime.MaxImageBytes (the leader would send none), or
+// when ten a second would be over redundancy.stream-budget (the leader
+// sends them less often, so a takeover's values are older).
+func streamWarnings(proj *project.Project) []string {
+	if !proj.Redundancy.Pair() {
+		return nil
+	}
+	// A runtime of its own with a store that keeps nothing: the image's
+	// retain section is what a controller with a retain: section saves.
+	opts := proj.Runtime
+	if proj.Retain != nil {
+		opts.Retain = sizingStore{}
+	}
+	rt, err := runtime.New(opts)
+	if err != nil {
+		return nil // the check reports the compile error itself
+	}
+	img, err := rt.ImageNow()
+	if err != nil {
+		return []string{fmt.Sprintf("redundancy: the state stream's image could not be sized: %v", err)}
+	}
+	var tb *runtime.ImageTooBigError
+	b, err := runtime.EncodeImage(nil, img)
+	switch {
+	case errors.As(err, &tb):
+		return []string{fmt.Sprintf("redundancy: the state stream's image is about %d bytes (%s), over the %d-byte limit: the leader would send none, and a takeover would load the standby's own older retained values. Make the retained and program state smaller (fewer or shorter arrays and STRINGs)", tb.Bytes, tb.What, runtime.MaxImageBytes)}
+	case err != nil:
+		return []string{fmt.Sprintf("redundancy: the state stream's image could not be sized: %v", err)}
+	}
+	budget := proj.Redundancy.StreamBudgetBytes()
+	if int64(len(b))*10 > budget {
+		every := time.Duration(int64(len(b)) * int64(time.Second) / budget)
+		return []string{fmt.Sprintf("redundancy: the state stream's image is about %d bytes, so ten a second (%d B/s) is over redundancy.stream-budget (%d B/s): the leader sends one every %s instead of every 100 ms, and a setpoint written in that time before a crash is lost. Raise stream-budget if the link carries it, or make the state smaller", len(b), int64(len(b))*10, budget, every.Round(time.Millisecond))}
+	}
+	return nil
+}
+
+// sizingStore is a retain store that holds nothing (streamWarnings).
+type sizingStore struct{}
+
+func (sizingStore) Load() (retain.State, error) { return retain.State{}, nil }
+func (sizingStore) Save(retain.State) error     { return nil }
+func (sizingStore) Kind() string                { return "none" }

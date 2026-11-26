@@ -260,6 +260,9 @@ func runLogixDeploy(args []string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 	rep, err := deploy.Run(ctx, p.source, opts)
+	for _, w := range rep.Warnings {
+		fmt.Fprintln(os.Stderr, "naut logix deploy: warning:", w)
+	}
 	for _, d := range rep.Diffs {
 		fmt.Println("  " + d)
 	}

@@ -1,0 +1,22 @@
+FUNCTION_BLOCK "naut_Debounce"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      IN : BOOL;
+      PT : TIME;
+   END_VAR
+   VAR_OUTPUT 
+      Q : BOOL;
+   END_VAR
+   VAR 
+      t : TON_TIME;
+      naut_t_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+   END_VAR
+
+BEGIN
+	#t(IN := #IN, PT := #PT, Q => #naut_t_last.Q, ET => #naut_t_last.ET);
+	#Q := #naut_t_last.Q;
+END_FUNCTION_BLOCK

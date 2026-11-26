@@ -281,6 +281,10 @@ never computes.
   (the account chip says "local session", and the journal records it), and is
   replicated once the log returns. A copy of the log that is not known complete
   honours only local sessions.
+  An operator signed in through an OIDC provider stays signed in across a
+  takeover in the same way; each controller signs in at the provider with its
+  own copy of `auth.oidc`, and the other controller pins the name to the same
+  account ([OIDC on a pair](/guides/auth/#a-redundant-pair)).
   When a controller briefly refuses a request for that reason (the browser sees
   a transient refusal), the operator is asked to sign in again and gets a local
   session, so nobody is locked out.
@@ -346,21 +350,19 @@ env:
     value: "water-scada,water-scada.$(POD_NAMESPACE),water-scada.$(POD_NAMESPACE).svc,water-scada.$(POD_NAMESPACE).svc.cluster.local"
 ```
 
-### A redundant pair without Kubernetes (experimental)
+### A redundant pair without Kubernetes
 
 Two controllers and a small third voter, `naut witness`, can elect a
-leader without a cluster. Commissioning and re-commissioning are below;
-the rest of the operator guide (the takeover time) comes with the rest
-of the work (#710). For now the pair is an explicit opt-in:
+leader without a cluster. The leader streams its retained state to the
+standby, so a takeover keeps it (below). Commissioning and
+re-commissioning are below too.
 
 ```yaml
 redundancy:
-  experimental: true      # required for now: see below
   peers:
     a: ctl-a:9450         # each controller's peer port
     b: ctl-b:9450
   witness: witness-host:9460
-  lease: 2s
   state-dir: /var/lib/nautilus   # optional: default $STATE_DIRECTORY (systemd)
 ```
 
@@ -386,19 +388,277 @@ with mapped ports, whose `peers:` entry is where the others reach it
 rather than an address it has, sets `NAUTILUS_PEER_LISTEN` (for example
 `:9450`) in its own environment to bind that instead.
 
-:::caution[Retained values are not replicated yet]
-Until state streaming lands, each controller keeps its own retained
-values. A takeover starts from the **new** leader's own retain file, so
-a setpoint the old leader took is lost at failover. A pair without
-`experimental: true` is refused for that reason, and a running pair
-says so at start, in `GET /api/cluster` (`warnings`) and on the
-dashboard. Live I/O applies are refused on a pair.
+:::caution[Hot and cold takeovers]
+A takeover goes on **hot** from the old leader's state when the standby
+was in sync with it, and is **cold** otherwise (below). A cold takeover
+is a start: `FIRST_SCAN()` is TRUE on the new leader's first scan, so `IF
+FIRST_SCAN()` start-up code runs again. A hot one is not: the state goes
+on, and `FIRST_SCAN()` stays FALSE. The program can tell what happened
+from [`TAKEOVER_SCAN()`, `HOT_TAKEOVER()`, `PEER_READY()` and
+`TAKEOVERS()`](/reference/functions/#redundancy), and can hold its
+outputs after a takeover until it is ready ([the takeover
+hold](#the-takeover-hold), below). Live I/O applies are refused on a
+pair. (`experimental: true`, the opt-in of earlier releases, is no longer
+needed; a manifest that has it still loads.)
 :::
+
+**What a takeover keeps.** The leader streams its state to the standby
+over the peer port: a full image at most every 100 ms, sent only while
+it leads. The standby keeps each image's retained part in its own retain
+file, written every 2 seconds when it changed, and once more, with an
+fsync, at the start of its takeover. So the new leader starts with the
+old leader's:
+
+- retained tag values: setpoints, structured (UDT) and array setpoints
+  included, with the parameter drift bookkeeping read against them;
+- `VAR RETAIN` variables of every program;
+- online edits not yet pulled into git (applied only on the same build,
+  as after a restart);
+- Web Push subscriptions (#722).
+
+Alarm acknowledgements, shelves and substitutes travel through the
+pair's operator-intent log instead, and are not taken from the stream.
+
+Each image also carries every program's variables and the value of every
+tag the field does not provide (state and memory tags, whoever wrote
+them, retained or not). Inputs are not carried (they come back from the
+field) and neither are outputs (the first scan computes them).
+
+**Hot or cold.** A takeover is **hot** when the standby holds an image of
+every task and of the tags, of the same nautilus build, running the same
+programs (an online edit included), no older than `hot-max-age` when the
+standby wins the election, and its retain file took that image. The
+voters must also vouch for it: no leadership came after the image, and
+the old leader's last word was that this standby was in sync. The new
+leader then goes on from it: timers keep running (the image's age, and
+the wait for live inputs, count as elapsed), counters, SFC steps and
+their step times, every program's variables and the carried tags go on
+where the old leader left them. A READ or WRITE that was waiting for an
+answer reports its request lost (`ERROR`). The old leader's last
+outputs are not reused: the first scan computes them and sends the full
+set.
+
+Otherwise the takeover is **cold**: program state restarts from the
+field as after a restart, and only the retained values above come
+through. A tag an operator set that is not retained goes back to its
+initial value. Anything that must survive a cold takeover, or a
+restart, belongs in `retain`. A cold takeover where the standby did
+hold an image is a warning on the new leader, with the reason, until a
+standby follows it again; every takeover is in the audit journal
+(`redundancy.takeover`, hot or cold, and why).
+
+```yaml
+redundancy:
+  # ...
+  hot-max-age: 4s   # default 3 × lease + 2 × the stream's interval; 0 = always cold
+```
+
+**What the voters vouch for.** Each voter records, in the write it makes
+for every election it grants, the latest leadership it granted each
+controller. The standby acknowledges each image it applies to the
+leader, and the leader's lease renewals tell the voters how far the
+standby is: the last image it acknowledged, and whether it was at most
+one image behind. A standby that wins goes hot only when the voters that
+elected it show no leadership after its image's, and say it was in sync.
+Otherwise the takeover is cold, and the warning names why: a later
+leadership, a voter that lost its state (a rebuilt witness) or runs an
+older release, a standby that was behind, or no word from the old leader
+at all. Both voters that elect the standby must know its position. A
+restarted voter learns it again only once its restart wait is over and
+it grants the leader's next renewal, about a lease and a quarter after
+it starts; a takeover before that goes cold. After the controllers
+re-adopt their witness (a rebuilt witness, or a re-adoption of the same
+one), the witness can't vouch for a leadership that began before that:
+until the next election, a takeover goes cold unless both controllers'
+voters elect the standby (the warning says the pair re-adopted its
+witness, or that the voters can't vouch for the image).
+
+hot-max-age is judged on the image; each task's state is at most one of
+its own scan periods older than the image. The journal entry and `GET /api/cluster`
+(`stream.takeoverOldestFrameMs`) give the oldest task state a hot
+takeover installed. The default covers a crash, a kill and a cut-off leader. Set it lower if
+re-running up to that much of the logic after a takeover is worse for
+your process than a cold start; 0 makes every takeover cold.
+
+**What a takeover can lose.** A setpoint the leader accepted in the last
+stream interval before it crashed (about 100 ms) never reached the
+standby. When the leader is cut off rather than killed, it keeps
+scanning, and accepting writes, until its lease ends, so up to a lease
+of writes is lost on an isolation. Counts go the same way: a hot
+takeover after an isolation resumes from an image about one lease old,
+so the counts taken in that window are lost (5 to 7 pulses of a 5 Hz
+input with a 1 s lease on a test pair). A shorter lease narrows the
+window. A standby that fell behind (a slow
+link, a leader whose image is over the size limit) takes over with the
+last image it kept: it logs how old that image is, and
+`GET /api/cluster` shows it (`stream.takeoverImageAgeMs`).
+
+**Both controllers need the same secrets.** Web Push subscriptions are
+sealed under the pair's push key (`push.vapid-key` in
+`alarm-secrets.json`): a standby with another key keeps them and sends
+none. Keep the secrets file, and the users file when the project signs
+people in, the same on both controllers.
+
+**The stream's budget.** Images go out at most ten a second, and no
+faster than `stream-budget` bytes a second allows (default 1 MB/s): a
+bigger image stretches the interval, and is never dropped. `naut check`
+warns when ten images a second would be over the budget, and when an
+image would be over the 8 MiB limit (the leader then sends none).
+
+```yaml
+redundancy:
+  # ...
+  stream-budget: 1MB/s    # bytes a second: 500kB/s, 2MiB/s or a number
+```
+
+`naut redundancy status` and `GET /api/cluster` (`stream`) show how the
+stream stands. On the standby: `in-sync`, `connecting`, `behind`,
+`layout-differs` (it runs another program for a task, so it keeps no
+frame for it; or its manifest carries another set of tags than the
+leader's; or the leader runs an older nautilus that sends no tags, as
+mid way through an upgrade), `too-big`, `refused` (an image failed its term check, or
+the retain file already stands after the leader's images), `not-persisted`
+(the retain file cannot be written: a full or read-only disk) or `off`,
+with the newest image's place (term, seq), its age on the standby's
+clock, its lag from the leader's copy, and the image the retain file
+holds. On the leader: `sending`, `no-standby`, `too-big`, or `held`.
+Both show the controller's last takeover (`takeover`: `hot` or `cold`,
+and `takeoverCold`, why).
+
+**A leader that could not read its retain file streams nothing.** When
+a takeover finds its retain file unreadable, the file is kept aside and
+the controller runs on the manifest's initial values. Streaming those
+would overwrite the standby's file, the last good copy, so the leader
+holds the stream (`held`) for the rest of that leadership and both say
+why. To run on the good values, stop that controller so the standby
+takes over. To keep values set on that leader instead, stop the standby,
+restart the leader (it takes over again from its own file, which its
+saves made readable), then start the standby: it follows from there.
+Setting values on the held leader alone is not enough, since the next
+takeover is the standby's, from its own file. Anything but in sync (after a start's
+first two leases) is also a warning, which holds a leader's OPC UA
+ServiceLevel at 200.
+
+A hot takeover does not need the file: when the standby's own retain
+file cannot be read but it holds a good image, it takes over hot and
+takes its retained values from the image. Those are then only in
+memory until a save succeeds, and the leader warns of it
+(`stream.retainInMemory` on `GET /api/cluster`) until one does: a power
+cycle before that loses them. Check the disk the retain file is on. A
+takeover over an unreadable file that cannot go hot takes nothing from
+the image: it runs on initial values and holds its stream, as above.
+
+**A controller whose own file is unreadable hands the lead back.**
+Before a cold takeover runs on initial values because the controller's
+own retain file cannot be read, it asks its peer once whether the
+peer's file is good, and waits a quarter lease at most (250 ms at the
+longest). A peer that is down refuses at once. The peer's file is good
+when it reads, holds a place in the state stream at or after the newest
+leadership the voters know of, the peer could lead now, and the peer has
+not handed back itself. Then the controller hands the lead back: it
+stops renewing and campaigning for 3 leases, and the peer takes over on
+its own file. At a 500 ms lease the peer ran about 1 s after the first
+election: about 2 leases, since a peer that has just lost its own lease
+first backs off. The new leader warns that it runs on its own file,
+with that file's place and age, until a standby follows it again. A
+value changed on the other controller after that file's last image is
+not in it. Without a good answer, the controller takes over on initial
+values as above, and its journal entry says why there was no hand-back
+(`noHandBack`). If the peer said yes but has not taken the lead within
+the 3 leases, the controller campaigns again and runs on initial
+values; it was elected again about 3.3 leases after its first election.
+A controller hands back at most once a minute, or once in 20 leases if
+that is longer. This is kept in its voter state, so a crash loop goes
+from A to B to A and stops there. The wait is on the wall clock: a
+hand-back time in the future (the clock went back) is ignored, and a
+clock that jumps forward may end the wait early. A box with no
+battery-backed clock that boots at a fixed date therefore forgets the
+hand-back at each power cycle: give it a clock (NTP before naut starts).
+
+**The lease and the takeover time.** The default lease is 1 s. From
+the fault to the new leader, on loopback with peer TLS (100 runs a row):
+
+| Lease | Leader killed, p50 / p99 | Leader isolated, p50 / p99 |
+|---|---|---|
+| 2 s | 2.01 / 2.77 s | 1.99 / 2.53 s |
+| 1 s (default) | 1.02 / 1.27 s | 0.89 / 1.24 s |
+| 500 ms | 0.57 / 0.70 s | 0.51 / 0.77 s |
+
+On ARM controllers, an armv7 groov EPIC and a Verdin AM62 (PREEMPT_RT
+Yocto image) each led a pair at 1 s for about 30 minutes, with the
+standby and the witness on a PC, a 100 ms scan and the state on flash:
+no lapse, renewals took 4.3 ms and 8.0 ms at p99, and at the worst
+renewal about 720 ms of the lease was still left. The takeover's flush
+adds a few milliseconds of flash write (11 ms at p99 for a 2 kB retain
+file on that EPIC).
+
+**What a lease tolerates.** The leader renews every quarter lease, a
+lease runs 99 % of its length from the send of the renewal that won it,
+and the write gate closes the fence margin (70 ms, below) before it
+ends.
+
+- **A stalled leader** (a hung host, a slow disk): its write gate closes,
+  and its outputs stop, once the stall passes about 0.67 s at 1 s (up to
+  0.92 s, by where it falls between two renewals), or 1.41 s at 2 s. The
+  lease and a takeover follow shortly after.
+- **A link outage** to both voters costs less: a lost renewal is tried
+  again only at the next quarter lease, so an outage of just over half
+  the lease (0.5 s at 1 s, 1 s at 2 s) can cost the lease. A vote round
+  trip longer than an eighth of the lease always fails.
+- **A slow disk** at the voters: a voter answers a vote only once it has
+  written its grant to disk, and a vote waits an eighth of the lease for
+  the answer. A slower write still counts: the controller asks the same
+  vote again every eighth of a lease, and a voter that already granted it
+  answers at once. So each voter's write, with any write waiting ahead
+  of it, must finish within three quarters of a lease (750 ms at 1 s),
+  or no controller wins a vote, after a failover or a switchover alike.
+- **A controller that can send but not hear** (a one-way link fault):
+  it keeps asking for a vote it never hears answered, for three quarters
+  of a lease, and each ask holds the voters to it for a lease. So the
+  controller that can reach both voters takes over within about 1.75
+  leases of that controller's first ask (1.75 s at 1 s), not one.
+
+Choose 2 s for:
+
+- devices that answer a write slower than about 0.7 s (a BMC, a slow
+  gateway): the write budget is below;
+- a WAN or VPN link to the witness: a vote waits an eighth of the lease
+  for its answer, 125 ms at 1 s;
+- a heavily loaded host.
+
+`naut check` warns of a lease under 1 s, the shortest measured on ARM.
+
+**The witness's lease.** `naut witness --lease` defaults to 1 s too, and
+the witness refuses a vote with a longer lease. A pair with a lease of
+its own gives its witness the same `--lease`, before the witness is
+upgraded to this release (a witness that serves several pairs takes the
+longest of their leases). If it doesn't, the pair runs on its two
+controllers alone: if either stops, control stops. Each controller the
+witness refuses says `no fault tolerance: the witness refuses this
+controller's votes` with the fix (`naut redundancy status`,
+`/api/cluster`, the dashboard), the leader's OPC UA ServiceLevel drops
+to 200, and a project with `alarms:` raises the system alarm
+`nautilus.witness-lease`. All of it clears once the witness takes the
+lease. A witness lease longer than the pair's is safe but slows a
+takeover toward it: a witness left at `--lease 2s` keeps a 1 s pair's
+takeover near 2 s.
+
+**Upgrading across the change of the default (2 s to 1 s).** A pair
+without `lease:` moves to 1 s with this release. Upgrade the standby,
+then the leader, the witness last: a 1 s witness would refuse the old
+2 s pair. While the two controllers differ, the upgraded standby says
+`this controller refuses controller <name>'s votes`, and the old leader
+keeps leading on the witness's vote alone: don't restart the witness
+until both controllers are upgraded, since losing it then costs a
+takeover, and keep that window short. It clears once both run the new
+release (the upgraded controller shows it, and its leader a ServiceLevel
+of 200, until the old one's first vote after its restart). A pair that keeps
+2 s sets `lease: 2s` and starts the witness with `--lease 2s`.
 
 **Writes leave in time.** The leader stops writing a little before its
 lease ends, not at the end: the fence margin, `net-delay` (the plant
 network's delivery time) plus `send-margin` (scheduling slack), 70 ms at
-the default 2 s lease. Every write to a device checks leadership just
+the default 1 s lease (and at 2 s). Every write to a device checks leadership just
 before it goes out and must be done within the lease left minus
 `net-delay`; a write still unanswered then has its connection reset, so
 nothing it queued arrives late. Modbus TCP, EtherNet/IP, Redfish, SNMP
@@ -416,8 +676,8 @@ and keep their sum under a quarter of the lease (a longer one is
 refused).
 
 **A slow device costs a write.** A write may take as little as three
-quarters of the lease minus `net-delay` (1.45 s at the default 2 s
-lease). A device that answers slower than that has the write abandoned
+quarters of the lease minus `net-delay` (0.7 s at the default 1 s
+lease, 1.45 s at 2 s). A device that answers slower than that has the write abandoned
 and its connection reset, even with the leader healthy. A Modbus or
 EtherNet/IP write is sent again after the reconnect: a Modbus write sets
 a value and EtherNet/IP writes a tag, so a second one does the same. An
@@ -427,6 +687,13 @@ BMC's reset) after nautilus stopped waiting. A Redfish action is never
 retried, and an SNMP set goes out once (`retries:` applies to polls
 only), so an action-valued object (an outlet reboot) never runs twice
 because an answer was lost.
+
+Each write cut at its send deadline is counted by device. `naut
+redundancy status` and `/api/cluster` (`writesCut`) show about the last five
+minutes, for example `writes cut at the send deadline (last 5 min): plc1
+14, bmc2 3`: a device on that line answers slower than the pair's send
+budget, so lower its `timeout:` or lengthen `redundancy.lease`. A write
+that was not started because the gate was closed is not counted.
 
 A source's `timeout:` is kept as it is (it bounds its polls too): on a
 pair, each write is cut at its own send deadline whatever the timeout
@@ -446,10 +713,43 @@ redundancy:
   send-margin: 20ms       # default: 20 ms, less on a lease under 320 ms
 ```
 
-**No Sparkplug edge node on a pair yet.** Both controllers would publish
-as the same edge node (#798), so a pair whose project has `sparkplug:`
-is refused at load. Run the edge on a controller outside the pair until
-#798 lands.
+**A Sparkplug edge node on a pair.** Only the controller that leads
+holds the edge node's MQTT session. The standby does not connect at all,
+so it publishes nothing and takes no commands. A switchover or a failover
+is a plain death and birth, not a seamless handover:
+
+- On a switchover the old leader sends its NDEATH and disconnects before
+  the standby takes over (it waits at most a quarter lease for that, then
+  goes on, silent). After a failover the broker sends the old leader's
+  NDEATH itself, once it notices the connection is gone (up to one and a
+  half keepalives, 45 s by default). A leader cut off from its peer and
+  witness but not from the broker stops publishing when its lease runs
+  out, and sends its own NDEATH.
+- The new leader connects once its takeover is done and sends an NBIRTH
+  with a bdSeq that differs from the old leader's last one. The standby
+  learns that number from the leader's state images, so a host that
+  matches deaths by bdSeq ignores the old leader's late NDEATH.
+- A host that ignores bdSeq would mark the edge node offline on that late
+  NDEATH. The leader watches its own NDEATH topic and sends its NBIRTH
+  again when one arrives, so the node ends up online.
+- Each controller connects with its own MQTT client id: the `client-id:`
+  (default `<group-id>-<edge-node>`) followed by `-a` or `-b`. Allow both
+  on the broker.
+- The leader publishes the pair's state in a `Redundancy/` folder of node
+  metrics: `Role`, `PeerState` (the state stream: `sending`, `no-standby`),
+  `Takeover` (`hot`, `cold` or `none`), `Hold/Active` and `Hold/Until`
+  (the takeover hold), `LastSwitchoverAt` and `LastSwitchoverReason`.
+  The reason is `switchover` (an operator's), `failback`, `hand-back`
+  (the other controller could not read its retained values and handed
+  the lead back), `failover` (the other controller died or was cut off:
+  the one to alarm on) or `start`, followed by `(cold: why)` when the
+  takeover was cold. `naut redundancy status` and the takeover's audit
+  entry name the same cause. These metrics are in every NBIRTH, and in an
+  NDATA when one changes. A tag of the same name is not published.
+- Store-and-forward stays on each controller. Values the old leader
+  buffered while the broker was down are sent only if that controller
+  leads again. `bdseq-file` and `store-forward-file` are on each
+  controller's own disk.
 
 Each controller also needs, in its environment (`/etc/nautilus/env`
 under `naut deploy`):
@@ -485,6 +785,207 @@ to start its answer. A leader that takes a request and never answers
 gives the client a `502 leader unavailable` after 2 minutes; the request is
 not sent again, because the leader may have applied it. A live stream
 is not cut: the deadline covers only the start of the answer.
+
+#### The takeover hold
+
+After a cold takeover the program starts over. Its first scans may
+compute outputs it is not ready to send: a sequence that has not found
+its step yet, a PID with no history. The takeover hold keeps the new
+leader's outputs from the field until the program says they may go.
+
+```yaml
+redundancy:
+  # ...
+  takeover-hold:
+    release: OutputsReady   # a BOOL state tag; the program sets it TRUE
+    max: 5s                 # alarm time; default 5s, at most 1m
+    on: cold                # cold (default) or always
+    on-max: hold            # hold (default) or release
+    safe:                   # optional: written when the hold starts
+      Pump1Run: false
+```
+
+While the hold holds:
+
+- The program scans as usual. Inputs are live, and `TAKEOVER_HOLD()` is
+  TRUE.
+- Nothing goes to the field. No output is pushed to any driver, a
+  `WRITE` is refused (it reports `ERROR`), and the drivers forget what
+  they sent before, so no keep-alive re-sends an old value. The field
+  keeps the old leader's last values, or does what its comm-loss
+  setting says.
+- The `safe:` values are the one exception. They are written when the
+  hold starts, and again whenever the driver asks for its outputs (after
+  a reconnect, or a driver swapped in); a Modbus `rewrite:` keep-alive
+  re-asserts its safe value. If one has not reached its device 2 seconds
+  after it was written, the hold raises an alarm. Only Modbus writes safe values for now;
+  `naut check` refuses a `safe:` value on another driver.
+- Alarms keep evaluating and paging: outputs are what the hold stops.
+
+The program releases the hold by setting its release tag TRUE. Its
+outputs go out on that same scan, every one of them. The hold sets the
+release tag FALSE when it starts, so a TRUE carried from the old leader
+does not release it at once. Only the program may set the release tag:
+a write from the HMI, the API or OPC UA, and a force, are refused.
+`naut check` refuses a release tag that is an input, an output, a
+setpoint, retained, bound to a driver, or not a BOOL.
+
+**When it holds.** With `on: cold` it holds after a cold takeover, and
+after a hot takeover from a leader that was still holding. With `on:
+always` it holds after every takeover. It never holds on a start: a
+controller that restarts with its peer away starts as usual, and
+`FIRST_SCAN()` covers its start-up code. That includes a controller
+restarted in the middle of a hold: its restart is a start, and does not
+hold. A hold passed on by a hot
+takeover keeps its age, so moving the lead does not restart its alarm
+time.
+
+**At max.** When the hold has held for `max`, it raises an alarm and
+**stays held**. The alarm stays raised until the hold ends, and the
+journal gets a reminder every further `max`. Nobody controls the outputs in that time, so act on it: fix what
+keeps the program from releasing, or release by hand:
+
+```sh
+naut redundancy release-hold
+```
+
+The command needs the redundancy permission. It is journalled under
+your name (`redundancy.release-hold`), and a standby forwards it to the
+leader. `on-max: release` makes the hold release by itself at `max`
+instead, with the alarm. That trades a program that is not ready for
+outputs that are not stuck: choose it only when sending the program's
+outputs is safer than holding them.
+
+**Write the logic for it.** The logic scans while nothing goes out, so
+it moves on without the field following: integrators wind up and
+one-shots fire. Gate them on `TAKEOVER_HOLD()`. The hold is on
+`GET /api/cluster` (`stream.takeoverHold`), in `naut redundancy status`,
+a warning while it holds, and in the journal
+(`redundancy.takeover-hold`: start, max, release and who released). The
+alarms at max and for a safe value not delivered are system alarms,
+raised when the project has an `alarms:` section.
+
+#### Planned switchover
+
+To move the lead to the standby on purpose (before servicing the
+leader, say), run on either controller:
+
+```sh
+naut redundancy switchover
+```
+
+The standby takes over hot from the leader's last scans, with no seam
+in the program's state, and without waiting for the leader's lease to
+run out, which is what a failover must do. In order:
+
+1. The command is refused, saying why, unless the standby is ready:
+   it is current (it has acknowledged the newest state images, as
+   `PEER_READY()` says), it may lead, and its I/O is healthy (no field
+   driver in error, degraded, offline or still connecting), and it
+   reaches every field device this leader reaches: each driver
+   connected here must be connected there too. A driver the standby
+   cannot see without taking over (an EtherNet/IP or IO-Link connection
+   that only the leader opens, shown as `waiting`) is not compared. The
+   refusal names the drivers the standby does not reach. The leader must
+   hold no force and no takeover hold.
+2. Each task on the leader finishes the scan it is in, sends that
+   scan's outputs, and stops. For that moment, writes from the HMI, the
+   API or OPC UA, forces, substitutes, SFC commands, online edits and
+   IO-Link parameter writes are refused with "switching" (HTTP 503 with
+   `Retry-After`); write again on the new leader.
+3. The leader sends a final state image of those last scans, and waits
+   for the standby to acknowledge exactly that image.
+4. The leader resigns: it stops sending, lets every write already on
+   its way finish, and tells the voters. The standby takes over at once.
+
+Until step 4 the switchover can still be called off: if the standby
+does not acknowledge the final image within a quarter lease, or a scan
+does not finish in that time, the leader goes on leading with nothing
+lost, and the command says `aborted`. Once the leader resigns there is
+no going back. If a write on its way does not finish within half a
+lease, the leader tells the voters nothing, and the standby takes over
+when the lease runs out, as after a failover; the command says
+`failover`.
+
+**How long the field goes without a write.** The gap between the old
+leader's last write and the new leader's first is about the fence
+margin (`net-delay` + `send-margin`, 70 ms by default), plus the
+standby's election once it hears the resign, plus up to one scan period
+of the fastest task. The election is almost all the voters' durable
+write of their grant to the standby (two fsyncs each, made before they
+answer; about 16 ms on the bench's storage, and slower on a slow SD card
+or eMMC), so the disk the voters write to shows in the gap. On a bench pair of containers on
+one host, with a 20 ms main task, 100 switchovers at each of a 500 ms
+and a 1 s lease measured a gap of 74 ms at best, about 94 ms typically
+and 126 ms at worst (113 ms at 1 s); a device that hangs on a write
+adds a few milliseconds. On a slow disk the election waits for the
+standby to ask again: with every voter write slowed past an eighth of
+the lease (94 ms at 500 ms, 188 ms at 1 s), 100 switchovers at each
+measured a gap of 169 to 193 ms at 500 ms and 268 to 307 ms at 1 s. The acceptance target is a quarter lease for
+that bench program: met at a 1 s lease; at a 500 ms lease (target
+125 ms) missed by up to 1 ms on the bench program, once in 100 runs on
+a heavily loaded host, still far below a failover, which waits out the
+lease. A pair on a fast, quiet LAN may lower `net-delay` and
+`send-margin` to shorten the gap; the trade is that a write that takes
+longer than they allow to arrive may land after the standby has taken
+over. The defaults stay as they are.
+
+Alarms keep paging across a switchover: a page on its way when the
+leader resigns is sent all the same, and the new leader pages the
+alarm's level again, so a page may arrive twice, but is never lost.
+
+The command needs the redundancy permission, is journalled under your
+name (`redundancy.switchover`, with how long each step took), and a
+standby forwards it to the leader.
+
+#### Failback (opt-in)
+
+A pair runs on whichever controller leads: after a failover the lead
+stays with the standby that took over, even once the other controller
+is back. If one controller should lead whenever it can (the one wired
+to the panel, say), name it:
+
+```yaml
+redundancy:
+  failback:
+    prefer: a      # a name under peers:
+    after: 5m      # default 5m; at least 10 leases
+    max: 3         # default 3
+```
+
+When `a` has been ready to take over for `after` without a break, the
+other controller runs a planned switchover to it, hot, as above.
+"Ready" is everything a switchover checks (current, may lead, healthy
+I/O that reaches every device the leader reaches, no force, no takeover
+hold): any moment it is not ready starts the wait again. Both
+controllers must name the same `prefer`: a manifest deployed to one of
+them only is refused, saying so. Failback needs a `retain:` section,
+where its state is kept.
+
+- **A manual switchover away from `a` suspends failback.** Moving the
+  lead off the preferred controller on purpose (to service it) must not
+  be undone behind your back. `naut redundancy status` and
+  `/api/cluster` say who suspended it and when. Resume it with
+  `naut redundancy failback resume`; `naut redundancy failback suspend
+  [<why>]` suspends it by hand. Both need the redundancy permission, are
+  journalled (`redundancy.failback`), answer once the change is saved
+  to the leader's retain store (the standby gets it with the next state
+  image, a moment later), and a standby forwards them to the leader.
+- **Ping-pong stop.** If `a` fails over back to the other controller
+  within `after` of a failback, `max` times in a row, failback stops
+  itself: it is suspended, the system alarm `nautilus.failback-stopped`
+  is raised (it pages like any alarm), and it stays stopped until an
+  operator resumes it. A failback that holds for `after` resets the
+  count.
+- **Where its state lives.** The suspension and the count are kept in
+  the retain store and carried in the state stream, so they survive a
+  takeover and a restart. If a controller takes over cold on a retain
+  store it cannot read, it cannot know whether an operator suspended
+  failback, so it suspends it, with a warning, until resumed.
+- Every failback is journalled (`redundancy.failback`, with how long
+  `a` had been ready and the switchover's outcome); a switchover that
+  does not hand over is journalled as an error, and the wait starts
+  again.
 
 #### Commissioning a new pair
 
@@ -530,8 +1031,8 @@ operator can commission the pair again.
 #### Re-commissioning a controller by hand
 
 A controller that lost its state normally re-adopts from the other one
-within seconds: 1.3 s after it is back, 2.5 s at most, at the default
-2 s lease (the other controller takes it once its previous process has
+within seconds: 1.3 s after it is back, 2.5 s at most, at a 2 s lease
+(it scales with the lease; the other controller takes it once its previous process has
 gone quiet there for a lease and a quarter, so a wiped old box switched
 on beside its running replacement is not taken). When it can't (the alarm says "re-commission by hand":
 the other controller is down too, or its witness incarnation is gone),
@@ -874,10 +1375,10 @@ release.
 
 **What the check costs:** one more vote round, at most, on a takeover
 after the leader dies. That is at most 0.95 s plus one round trip
-between the controller and the witness at the default 2 s lease
-(`MaxRho × lease + 3/8 × lease + RTT`). In our measurements it came to
-0.3 s at worst on a LAN, 0.6 s with 100 ms links, and 1.2 s with links
-near the largest delay a 2 s lease allows.
+between the controller and the witness at a 2 s lease, 0.48 s at the
+default 1 s (`MaxRho × lease + 3/8 × lease + RTT`). In our measurements
+at 2 s it came to 0.3 s at worst on a LAN, 0.6 s with 100 ms links, and
+1.2 s with links near the largest delay a 2 s lease allows.
 
 :::danger[What the voters can't catch]
 - **A clone booted on the far side of a split that already exists** is
@@ -1129,22 +1630,137 @@ unless it is turned off.
 #### Peer TLS
 
 Every call on a peer port (votes, the handshake, the operator-intent
-log's copies) runs **TLS 1.3 by default**, with nothing to configure. The
-two controllers and the witness derive one key from the peer token they
-already share, and each end of a connection checks that the other holds
-it: a box without the token can neither read peer traffic nor pass as a
-member, and the token itself never crosses the network in the clear. The
-check is the key alone, with no certificate authority, host name or
-dates, so peers can be addressed by name or by IP (and the witness
-through a floating address), and a controller whose clock is off still
-connects. Nothing is
-copied or re-pinned when a box is replaced.
+log's copies, the state stream) runs **TLS 1.3 by default**, with
+nothing to configure. The token itself never crosses the network in the
+clear.
 
-What it does not do yet: anyone who holds the token holds the key, so a
-leaked env file is still enough to act as any member. Keys of each box's
-own, pinned when the pair is commissioned, will follow (#710). Keep the
-env files as secret as before, and keep peer ports off networks that
-don't need them.
+**Each box has a key of its own.** At its first start a controller (and
+the witness) makes a key in its state directory (`peer-key.json`, mode
+0600), and a certificate for it that names the member (`a`, `b`, or
+for the witness `witness@<incarnation>`, the pair's incarnation at that
+witness) and is signed with a key derived from the peer token. The
+key never leaves the box and is not in the env files. A box answering
+for a member must show a certificate signed with the token's key that
+names that member, and once the member's key is **pinned** at the
+others, it must be that key: the token alone is no longer enough to act
+as a member. There is no certificate authority, host name or date check,
+so peers can be addressed by name or by IP (and the witness through a
+floating address), and a controller whose clock is off still connects.
+
+- **Pinned at first contact.** The first time two members talk, each
+  pins the other's key (`peer-pins.json` in a controller's state
+  directory; the witness keeps one pins file per pair). Every pin is
+  journalled on the controllers (`redundancy.peer-pin`, with the
+  member's name, the key's fingerprint, its address and the time) and
+  logged; the witness logs them. Nothing re-pins by itself afterwards.
+- **Check the fingerprints.** `naut redundancy status` (and `GET
+  /api/cluster`) shows this box's own key and the ones it pinned for
+  the others: `peer keys: this box SHA256:...; pinned: b SHA256:...,
+  witness@8817281607883511391 SHA256:...`. Each box's own fingerprint
+  must be what the others pinned for it. The witness prints its own at
+  start.
+- **Whoever answers first is pinned.** After a new pair's first start,
+  a box replacement or an unpin, the first box that answers for a
+  member with the token is pinned. So **do commissioning, upgrades and
+  replacements on a trusted network, and check the fingerprints
+  afterwards.**
+- **A changed key is refused, loudly.** A box answering for a member
+  with another key than the pinned one is refused: the controller that
+  calls names it on `GET /api/cluster` and the banner, the member that
+  refused it raises a condition (`refused a's peer TLS key`, with the
+  address it came from) and journals both fingerprints. The message
+  names the fix.
+- **A replaced box, a lost state directory, or a new NIC.** The key is
+  bound to its box: it is used while the machine-id is the same and at
+  least one of the physical NICs it was made with is still there.
+  Installing docker, adding a bridge (even moving the NIC into it), a
+  VLAN, a VPN or a USB NIC keeps it; a disk cloned onto other hardware,
+  a cloned VM with a new MAC, or a box whose only NIC was replaced makes
+  a new key, and so does a lost or wiped state directory. The other
+  members then refuse it. A controller whose state directory was lost
+  therefore no longer rejoins by itself; a key file that can't be read
+  (wrong owner or mode) is never replaced (the box waits until it can
+  read it, so fix the file rather than delete it). The witness, like the
+  controllers, needs a machine-id.
+- **Replacing a controller, or one that lost its state directory:
+  unpin it on the survivor.** Before starting the replacement, run on
+  the **surviving** controller:
+
+  ```sh
+  naut redundancy unpin b
+  ```
+
+  It drops b's old key here and at the witness, journalled under your
+  name. The old key **stays refused** (in the pins files, across
+  restarts), so the old box, or a copy of its disk, never comes back as
+  b. Then start the replacement: its new key is pinned at its first
+  contact; check its fingerprint with `naut redundancy status` on that
+  box. If the witness was not reachable, the command says so: run it
+  again once it is (a retry only drops the pin at the witness, and never
+  lifts the refusal). The witness drops a pin only on the survivor's
+  word about that same old key, so an unpin never removes a key the
+  witness pinned since. A rerun after an incomplete one only finishes
+  the witness's part: it never touches a replacement already pinned
+  here, and never lifts the refusal.
+- **Unpinned by mistake (the same box)?** Run `naut redundancy unpin b`
+  a second time: once both the survivor and the witness answer that the
+  pin is already dropped, the refusal of the old key is lifted. The
+  next box to contact with the token is pinned: do this only with the
+  real box ready to connect.
+- **Both controllers lost their state directories, or the survivor is
+  down.** No controller holds a pin to drop, but the witness still
+  refuses the new keys. Unpin on the witness box itself, with the
+  witness stopped:
+
+  ```sh
+  # with the witness stopped (its service, or the process)
+  naut witness unpin --state <its state directory> --cluster <cluster ID> a
+  naut witness unpin --state <its state directory> --cluster <cluster ID> b
+  # then start the witness again
+  ```
+
+  Stopping the witness takes the third vote from **every** pair it
+  serves: do it while both controllers of each of those pairs are up
+  and healthy, and start the witness again straight after. The cluster
+  ID is `NAUTILUS_CLUSTER` in the pair's env files. The same command is
+  the way out when the witness refuses an unpin because the survivor's
+  own key is newer than the one it drops (both controllers were
+  replaced in turn): it takes an unpin only from a controller pinned no
+  earlier than the one it drops, so a token holder who answered first
+  for a replacement can't unpin the survivor. A survivor that comes
+  back afterwards still holds the old pin: run `naut redundancy unpin`
+  there too (the witness keeps the key it pinned since).
+- **A rebuilt witness needs nothing.** `naut witness --rebuild` (or a
+  lost state file beside a kept `peer-key.json`) keeps the witness's
+  key: its new incarnation (`witness@<incarnation>`) is taken by itself,
+  its replies count only once both controllers adopt it, and the
+  adoption drops the old incarnation's pin. A controller's calls other
+  than votes (the log's copy, the operator commands' checks) go only to
+  the incarnation the pair adopted.
+- **The witness box replaced** (or its whole state directory lost, key
+  and all). Its new key is refused by both controllers, so a box at the
+  witness's address that holds the token is never taken as the witness
+  by itself:
+  1. `naut redundancy status` on each controller shows `new witness key
+     waiting: SHA256:...`. Compare it with the key the new witness
+     prints at its start (`naut witness — peer port ..., TLS, key
+     SHA256:...`).
+  2. If they match, run `naut redundancy unpin witness` on **both**
+     controllers. Each then takes that very key, once; another key
+     stays refused. An allowance not used by the pair's next adoption
+     ends with it.
+  3. The pair adopts the new witness as it would a rebuilt one.
+
+  A controller whose pins file was reset (see below) has forgotten the
+  witness's key: it takes the counted incarnation's name at first
+  contact, the same trusted-network window as any first pin.
+- **An unreadable pins file** is moved aside, never silently ignored
+  and never an outage: every member is pinned again at its next contact,
+  which is the moment the trusted-network rule above is for, and a
+  condition (`peer-pins-reset`) stands for a day, past the re-pinning,
+  to remind you to check the fingerprints. That includes the witness's
+  key: a controller that lost its pins file learns it again from the
+  witness incarnation it counts, at its first contact.
 
 - **A token under 32 characters is refused at start**, by `naut run`
   and `naut witness`: the key's public half is visible to anyone who
@@ -1155,12 +1771,15 @@ don't need them.
 - **A mismatch is named on the controller that calls.** A controller
   that reaches a peer speaking the other protocol (peer TLS off on one
   side, a release from before peer TLS, or something else answering at
-  that address), or holding another key (another token, or something
-  else answering), says so in `GET /api/cluster` and on the banner,
+  that address), or holding another key (another token, a key other
+  than the pinned one, or something else answering), says so in `GET /api/cluster` and on the banner,
   naming the peer, until a call gets through again. The side that is
   called sees only a failed handshake in its log, and the witness has no
-  `/api/cluster`: look at the controllers. The pair runs on any two
-  members that agree. **Never turn peer TLS off to clear a mismatch**:
+  `/api/cluster`: look at the controllers (a refused key is also a
+  condition on the controller that refused it, and in the witness's
+  log). The pair runs on any two
+  members that agree. **Never turn peer TLS off to clear a mismatch**
+  or a refused key:
   turn it on where it is off, or upgrade the old release; off would send
   the token to whatever answers.
 - **Turning it off is for a lab bench only.** `redundancy: peer-tls:
@@ -1180,17 +1799,50 @@ go in this order:
 2. **The standby.** When it stops, the leader holds only its own vote
    and fences itself. Control stops until the standby is back, has
    waited out its restart lease, and has won the election with the
-   witness: about 5 to 10 seconds at the default 2 s lease, plus the
+   witness: about 5 to 10 seconds at a 2 s lease (less at the default
+   1 s), plus the
    standby's own start time. The takeover is cold, as after any restart.
 3. **The former leader.** It rejoins as the standby.
 
 Turning peer TLS on or off on a running pair costs the same stop, in the
 same order.
 
+**Upgrading across a change of the vote protocol stops control once.**
+Two members on releases with different vote protocols can't vote with
+each other, and each says so (`redundancy.version-mismatch`). Upgrade
+in this order:
+
+1. **The standby.** The leader keeps leading on the witness's vote.
+2. **The witness.** The leader loses its majority and stops. The
+   upgraded standby takes over once the witness is back and has waited
+   out its restart lease. Control stops for the witness's start time
+   plus up to about a lease. The takeover is cold.
+3. **The former leader.** It rejoins as the standby, with no stop.
+
+Going back to the earlier release has the same stop, in the same order.
+A member whose voter has granted an election on the new release keeps a
+newer state file, which the earlier release refuses to start over: it
+says so and names the release that wrote it. To go back anyway on a
+controller, move its `quorum.state` aside: it re-adopts from the other
+controller within seconds, as after a lost file. On the witness, rebuild
+it (`naut witness --rebuild`, below) with both controllers up.
+
+Any other order stops control for longer, because it waits for a
+controller to start instead of the witness. Upgrading the leader first
+stops control twice. **Keep the time between the first two steps
+short.** In it, the leader rests on the witness alone: if the leader
+fails, control stops until the witness is upgraded too. A release that
+doesn't change the vote protocol needs no order: upgrade the standby
+and the witness, then the leader, and only the leader's restart costs
+a takeover.
+
 **Rebuilding the witness loses nothing while both controllers are up**:
 `naut witness --rebuild`, or a fresh state directory, is a new
 incarnation that both controllers adopt after a quiet period, and the
-leader then copies the log to it again. **Never restore the witness's
+leader then copies the log to it again. Adopt or rebuild a witness while
+the controllers' storage writes quickly: the adoption needs a write at
+both, and on slow storage (a state write slower than about a quarter of
+the lease, as on some SD cards) expect one failover during it. **Never restore the witness's
 state directory from a backup**: an older copy of the log under the same
 incarnation can't be told from a current one, and could cost an
 acknowledgement. Rebuild it instead. **Upgrade the witness first**: a

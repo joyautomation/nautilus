@@ -1,3 +1,10 @@
+//go:build !js
+
+// The pair election is controller-only: this file is !js so cmd/naut-wasm
+// (the playground, which runs no redundant pair) does not import quorum or
+// quorum/node (TestWasmStaysFreeOfControllerCode). Status and NewLocal, which
+// the playground uses, are in leader.go.
+
 package leader
 
 import (
@@ -10,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
 	"github.com/joyautomation/nautilus/quorum/node"
 )
 
@@ -46,11 +54,119 @@ var (
 type Quorum struct {
 	n *node.Elector
 
-	mu        sync.Mutex
-	unhealthy string
-	warnings  []string
-	conds     map[string]string // SetCondition, by key
-	logStatus func() *LogStatus // SetLogStatus
+	mu           sync.Mutex
+	unhealthy    string
+	warnings     []string
+	conds        map[string]string                        // SetCondition, by key
+	logStatus    func() *LogStatus                        // SetLogStatus
+	streamStatus func() *StreamStatus                     // SetStreamStatus
+	peerKeys     func() *PeerKeys                         // SetPeerKeys
+	writesCut    func() map[string]int                    // SetWritesCut
+	switchover   SwitchoverFunc                           // SetSwitchover
+	failback     func(suspend bool, by, why string) error // SetFailback
+	unpin        UnpinFunc                                // SetUnpin
+}
+
+// UnpinFunc is `naut redundancy unpin` (#710 2b): name is the other
+// controller, by the person. It returns the report (JSON), the outcome
+// ("done", "refused", "incomplete") and, when not done, why.
+type UnpinFunc func(ctx context.Context, name, by string) (report any, outcome, reason string)
+
+// SetUnpin gives the Quorum its unpin (cmd/naut, which holds the pair's
+// peer TLS).
+func (q *Quorum) SetUnpin(f UnpinFunc) {
+	q.mu.Lock()
+	q.unpin = f
+	q.mu.Unlock()
+}
+
+// Unpin is `naut redundancy unpin <name>` on this controller (SetUnpin);
+// refused when none is set (peer TLS off).
+func (q *Quorum) Unpin(ctx context.Context, name, by string) (report any, outcome, reason string) {
+	q.mu.Lock()
+	f := q.unpin
+	q.mu.Unlock()
+	if f == nil {
+		why := "peer TLS is off on this controller (redundancy.peer-tls: off): nothing is pinned, so there is nothing to unpin"
+		return map[string]string{"message": why}, "refused", why
+	}
+	return f(ctx, name, by)
+}
+
+// The outcomes of Switchover.
+const (
+	SwitchDone     = "done"     // the RESIGN went to the voters: the standby takes over hot now
+	SwitchRefused  = "refused"  // nothing was done: this controller leads on
+	SwitchAborted  = "aborted"  // stopped before the resign: this controller leads on, in the same leadership, nothing lost
+	SwitchFailover = "failover" // past the resign, no RESIGN sent (the drain did not finish): the lease runs out as in a failover
+)
+
+// SwitchoverFunc runs a planned switchover (#710 d1c, the pair's
+// composition in cmd/naut): by is the principal. It returns the report
+// (JSON), the outcome (Switch*) and, when not done, why.
+type SwitchoverFunc func(ctx context.Context, by string) (report any, outcome, reason string)
+
+// SetSwitchover installs the pair's switchover (Switchover).
+func (q *Quorum) SetSwitchover(f SwitchoverFunc) {
+	q.mu.Lock()
+	q.switchover = f
+	q.mu.Unlock()
+}
+
+// SetFailback sets the pair's failback suspend and resume (#710 d2):
+// suspend true suspends, false resumes. by is the principal.
+func (q *Quorum) SetFailback(f func(suspend bool, by, why string) error) {
+	q.mu.Lock()
+	q.failback = f
+	q.mu.Unlock()
+}
+
+// Failback suspends or resumes the pair's failback, on the leader
+// (`naut redundancy failback suspend|resume`, POST /api/cluster/failback).
+func (q *Quorum) Failback(suspend bool, by, why string) error {
+	q.mu.Lock()
+	f := q.failback
+	q.mu.Unlock()
+	if f == nil {
+		return ErrNoFailback
+	}
+	return f(suspend, by, why)
+}
+
+// Switchover hands the lead to the standby in a planned switchover
+// (`naut redundancy switchover`, POST /api/cluster/switchover).
+func (q *Quorum) Switchover(ctx context.Context, by string) (report any, outcome, reason string) {
+	q.mu.Lock()
+	f := q.switchover
+	q.mu.Unlock()
+	if f == nil {
+		return nil, SwitchRefused, "this controller's state stream is not running, so it cannot hand over without a seam"
+	}
+	return f(ctx, by)
+}
+
+// SetWritesCut adds the writes cut at their send deadline, by device, to
+// Status (its WritesCut field). f is called outside the Quorum's lock.
+func (q *Quorum) SetWritesCut(f func() map[string]int) {
+	q.mu.Lock()
+	q.writesCut = f
+	q.mu.Unlock()
+}
+
+// SetStreamStatus adds the pair's state stream to Status (its Stream
+// block). f is called outside the Quorum's lock.
+func (q *Quorum) SetStreamStatus(f func() *StreamStatus) {
+	q.mu.Lock()
+	q.streamStatus = f
+	q.mu.Unlock()
+}
+
+// SetPeerKeys adds the pair's peer TLS keys to Status (its PeerKeys
+// block). f is called outside the Quorum's lock.
+func (q *Quorum) SetPeerKeys(f func() *PeerKeys) {
+	q.mu.Lock()
+	q.peerKeys = f
+	q.mu.Unlock()
 }
 
 // SetLogStatus adds the pair's operator-intent log to Status (its Log
@@ -106,17 +222,43 @@ func (q *Quorum) IsLeader() bool { return q.n.IsLeader() }
 // take it.
 func (q *Quorum) SendGate() (bool, time.Duration, uint64) { return q.n.SendGate() }
 
-func (q *Quorum) Term() uint64             { return q.n.Term() }
+func (q *Quorum) Term() uint64 { return q.n.Term() }
+
+// Resign hands the lead to the standby in a planned switchover (#710 d1,
+// node.Elector.Resign): the gate shuts, every output path is drained
+// (fence.Drain: every send that passed the gate before it closed has
+// ended, cut short where it would wait, and the fence margin has passed
+// after the last one), and only then does RESIGN go to the voters. seq and
+// current are the standby's acknowledgement of the final image. A drain
+// that does not finish sends no RESIGN (node.ErrDrainUnproven): the lease
+// runs out as in a failover. The caller has stopped the scans and their
+// outputs first (d1c).
+func (q *Quorum) Resign(ctx context.Context, seq uint64, current bool) (node.ResignReport, error) {
+	return q.n.Resign(ctx, seq, current, fence.Drain)
+}
+
+// IsTakeover is runtime.TakeoverKnower: whether the leadership acquired
+// last took over from the peer (node.Elector.IsTakeover).
+func (q *Quorum) IsTakeover() bool         { return q.n.IsTakeover() }
 func (q *Quorum) Decided() <-chan struct{} { return q.n.Decided() }
 func (q *Quorum) Run(ctx context.Context)  { q.n.Run(ctx) }
 func (q *Quorum) Release()                 { q.n.Release() }
 func (q *Quorum) Status() Status {
 	st := quorumStatus(q.n.Status())
 	q.mu.Lock()
-	ls := q.logStatus
+	ls, ss, wc, pk := q.logStatus, q.streamStatus, q.writesCut, q.peerKeys
 	q.mu.Unlock()
+	if pk != nil {
+		st.PeerKeys = pk()
+	}
+	if wc != nil {
+		st.WritesCut = wc()
+	}
 	if ls != nil {
 		st.Log = ls()
+	}
+	if ss != nil {
+		st.Stream = ss()
 	}
 	q.mu.Lock()
 	st.Warnings = append([]string(nil), q.warnings...)

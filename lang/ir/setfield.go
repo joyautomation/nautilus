@@ -314,16 +314,24 @@ func assignInto(cur Value, t *Type, v any, sofar string, strict bool) (Value, er
 		if t != nil && t.Kind == TypeArray {
 			lo = t.ArrLoBound
 		}
+		// One copy of the elements, each then assigned in place: a copy per
+		// element made a restore of a long retained array quadratic, and a
+		// pair's takeover loads it within its first scan (#710 S1b).
 		out := cur
+		out.Arr = append([]Value(nil), cur.Arr...)
 		for i, e := range list {
 			if e == nil {
 				continue
 			}
-			nv, err := setFieldTyped(out, t, []string{"[" + strconv.Itoa(lo+i) + "]"}, e, sofar, strict)
+			k, et, err := elementAt(out, t, lo+i, sofar)
 			if err != nil {
 				return Value{}, err
 			}
-			out = nv
+			nv, err := setFieldTyped(out.Arr[k], et, nil, e, sofar+"["+strconv.Itoa(lo+i)+"]", strict)
+			if err != nil {
+				return Value{}, err
+			}
+			out.Arr[k] = nv
 		}
 		return out, nil
 	}

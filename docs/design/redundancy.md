@@ -250,22 +250,22 @@ bumpless, and the measured takeover time is published instead.
 
 ```yaml
 redundancy:
-  experimental: true     # required until the state stream (§4) lands
   peers:                 # the same file on both controllers
     a: ctl-a:9450
     b: ctl-b:9450
   witness: witness-host:9460
-  lease: 2s              # default; the takeover time it gives is published
+  lease: 1s              # default; the takeover time it gives is published
   state-dir: /srv/naut   # optional: default $STATE_DIRECTORY (systemd)
-  stream: every-scan     # or {every: 5}: one image per 5 scans
+  stream-budget: 1MB/s   # the state stream's bytes a second (§4.1)
   stream-link: ctl-a-link:9451   # optional dedicated A–B cable (§6)
 ```
 
-- **An explicit opt-in until §4.** Until the state stream (step 4), a pair needs
-  `experimental: true`, and Load refuses one without it, because a takeover starts from the
-  new leader's own retain file and loses a setpoint the old leader took. A running pair says
-  so at start, in `/api/cluster`'s `warnings` and on the dashboard (#1028, naut-lead's call).
-  The key goes when step 4 lands.
+- **The opt-in, lifted with #710 (2026-11).** A pair no longer needs `experimental: true`
+  (still read, so older manifests load). History: a pair needed it, and Load refused one
+  without it (#1028, naut-lead's call). Since S1b the state stream keeps the leader's retained
+  values across a takeover, but the takeover is cold (program state restarts), and `naut run`
+  says so at every start. The standing `/api/cluster` warning of the interim is gone: the
+  stream's own state raises one when it is not in sync. The key goes when hot takeover lands.
 - **Two modes, one section.** `peers:` selects the pair. Without it, `redundancy:` is the
   Kubernetes Lease as before, and `lease:` is the Lease's name. With it, `lease:` is a time
   (200 ms to 1 min), and a name there is refused. `witness:` or `state-dir:` without `peers:`
@@ -389,11 +389,17 @@ redundancy:
       probe at once (`Voter.RelayChanged`), so the witness hears a new promise within a one-way
       delay rather than a look.
     - **Wire:** vote protocol version 2 (`quorum.WireVersion`; 3 since step 1, 4 since 3c-1, 5
-      since 3c-2, below). A frame of another version
+      since 3c-2, 6 since 3c-3b, 7 since 3c-3c-1b, 8 since #710 S2c-1, §4.2, 9 since #710 d1, §4.7). A frame of another version
       is refused whole. A pair or witness that mixes releases across it can't vote, and says
       so (`redundancy.version-mismatch`, either side, and on the witness's log) rather than
       failing to elect in silence. A release before version 2 answers a new frame with 400
-      "bad frame", which the sender reports the same way.
+      "bad frame", which the sender reports the same way. A rolling upgrade across a version
+      stops control once whatever the order: the old leader's majority and the new one share a
+      member, which must restart. The guide's order (the standby, the witness, the former
+      leader) makes it the witness, the quickest to start (`TestRollingUpgradeAcrossAWireVersion`;
+      every order measured by `TestMeasureRollingUpgrade`). No release has shipped the vote
+      protocol yet; from the first that does, a version change must also read the previous
+      version's frames, so a rolling upgrade keeps a leader (naut-lead's release rule).
     - **What it costs:** only refusals. A promise to another node never ends early, and the
       restart wait covers a voter that forgot what it heard. A takeover can lose one refused
       campaign at the witness (§4.5, `R`).
@@ -1061,7 +1067,17 @@ redundancy:
   term extends the lease, and the old lease keeps running until then. Once the standby's
   promise to itself runs out, its voter grants the leader again. Without this, the pair
   runs on {leader, witness} alone and a witness blip ends a healthy lease (found by the
-  simulator, test plan F13 and F19).
+  simulator, test plan F13 and F19). **Except** a refusal at exactly the leader's term from a
+  voter that already granted this boot that term (#1120): it promised the term to this
+  leader, so it refuses for another reason (its restart wait, a promise relayed to it, a
+  floor at the term). That one re-terms only once the latest renewal has no majority. A
+  re-term needs a write at every voter, and on a slow disk the write outlasted the lease
+  while the other two still granted the old term. A witness adoption raises the floor to
+  exactly the term promised, at the leader's own voter too, which leaves no majority, so
+  it re-terms as before. The leader knows a voter promised the term only from a grant it
+  heard, so for about one write and one look after a new term (a voter whose grant of it
+  timed out on a slow disk) it still re-terms as before; closing that needs the refusal to
+  say the promise is the asker's own, a wire change (#616).
 - **Every request is named, and its grant answers only it.** A request carries a per-boot
   random nonce and an id; a grant echoes both and names the controller it was granted to. A
   grant counts only toward the request it answers: addressed to this controller, from this
@@ -1086,6 +1102,25 @@ redundancy:
   controllers started together would retry in lockstep. A campaign asks for one more than the
   highest term this controller has heard of, **including the terms its own voter was asked
   for by the other controller**, so two campaigners don't keep landing on equal terms.
+- **Asking a campaign again** (#710, the lost switchover campaign). A grant leaves a voter only
+  after its fsync, and a vote waits `lease/8` for its answer. On a disk slower than that (an
+  eMMC or SD card, or a write queued behind another), the campaign's first ask times out at
+  the candidate though the voters granted it. A new campaign would ask a new term, which needs
+  a new write, and time out again: with every write that slow no campaign could ever win,
+  failover included. A switchover lost this way left nobody leading until the old leader's
+  resign hold ran out, and the old leader led again (CI on #1372). So while no majority has
+  answered a campaign, the candidate asks **the same term** again (a new id and Seq) every
+  `lease/8`, up to `3·lease/4` after its first send. A voter that promised that term
+  to that boot grants it again with no write, at once, or once the write it already started
+  lands. A voter that has since promised another, or a higher term, refuses it as it would the
+  first ask arriving late. A grant's reply names the request it answers, and a voter promises
+  from when it took that request, so the lease runs from the send of the request each grant
+  answers (a voter's later one, if it granted two), the earlier of the two latest. A lease from the first send would be safe too, but a
+  campaign won on a late re-ask would keep too little of it: on a slow link its first renewal
+  landed after the lease (found by the simulator). A voter's promise runs a lease from the latest ask it took, so an unheard campaign
+  backs off from its **last** ask (below), and a reachable controller still gets a lease of
+  silence. The working condition: a voter's write, with any write queued ahead of it, must
+  finish within about `3·lease/4` of the campaign's first send (375 ms at a 500 ms lease).
 - **Yield to a higher term.** A failed campaign leaves the candidate's own voter promised to
   it for a lease, and that refuses the other controller. With only the two controllers
   counted (the witness down, or at an incarnation not yet adopted, or a controller that lost
@@ -1124,7 +1159,8 @@ redundancy:
   voters' promises alive with renewals it never hears answered, so nobody else can be elected.
   A leader whose lease has lapsed without a confirmed majority therefore **sends nothing to the
   voters for two leases** after its lease ended before it campaigns again. A campaign that no
-  majority even answered within a lease backs off for two leases from its send. The voters'
+  majority even answered within a lease backs off for two leases from its last ask (its send,
+  or its latest re-ask, above). The voters'
   promises run out and a reachable controller wins first. Two, not one: the standby campaigns
   up to `lease + ρ·lease + lease/4` after the last renewal it saw. A leader back after one
   lease would campaign at about the same moment, win the standby's voter with a campaign it
@@ -1417,15 +1453,66 @@ plan measures it with a pause hook in exactly that spot.
 | Redfish, SNMP, Prometheus (`hw/base.go`) | **once per batch** (`flushWrites`) | check before each command; deadline. **Done (3b-3a)**: a close mid-batch drops the rest, logged once, never put back; each queued command carries the lease's term it was computed in, and one from an earlier term (the lease lost and won again) is dropped, never sent; Redfish's socket is reset at the deadline too (linger 0 set as the request takes its connection, since net/http may close it itself), and a command unanswered by then is "outcome unknown", never sent again (#1040 review) |
 | READ/WRITE channels (#699) | **none**: fixed in #797 (#796) | deadline. **Done (3b-3b-2)**: on a pair a write is judged on one read of gate, budget and term, runs on a fenced context to its deadline, and carries the gate, so a send split into requests (Write Tag Fragmented) reads it before each one (`fence.Check` in `cip.SendUnitData`) |
 | Sparkplug host NCMD/DCMD | gated (#325) | check before each publish. **Done (3b-3b-1)**: a held or parked command is published only under the lease's term it was computed in (a term move drops them, and what the program last handed over). **Residual:** an NCMD published inside the lease reaches the broker in time, but the broker forwards it to the edge on its own timing, which nothing on this controller can fence; the edge's own comm watchdog covers that hop |
-| Sparkplug edge | **none** (#798): every replica publishes | only the leader holds the session; NDEATH on step-down. **Until #798, a pair with `sparkplug:` is refused at load** (3b-3a) |
+| Sparkplug edge | **Done (#798)**: only the leader holds the session | a supervisor in naut run starts the edge node once the leader's takeover is done and stops it (NDEATH, DISCONNECT) when the gate closes or the term moves; until then the node's publish gate (gate open in the session's term) fences every NBIRTH, DBIRTH, DDEATH and DATA and every command write, and samples nothing into store-and-forward. Own client id per member; the new leader's bdSeq skips the old leader's last (carried in the state image, format 4) |
 | PROFINET device (#790) | gate look every 200 ms | check before each RT, DCP and LLDP frame (test plan F33). **Already so** (`Config.MaySend` gates the port and every RPC socket; #790); 3b-3b-2 adds the F33 test, which closes the gate in a running AR with LLDP announcing and finds no frame of any kind after it, and the gate now carries the fence margin (3b-3a) |
 | OPC UA server Write service | refused on a standby | unchanged |
 | HTTP API writes | proxied to the leader, or refused (503) | unchanged |
-| Alarm notifiers (mail, chat) | run from scans, so leader only | unchanged |
+| Alarm notifiers (mail, chat) | run from scans, so leader only | unchanged; not drained before a switchover's RESIGN (below): across a switchover a page may be sent twice, never lost |
 | PLCnext (`plcnext`, `project_full.go`) | **none**: flushes its output image from its own loop | **refused under `redundancy:` for now**, by load and `naut check` (#832). Its `poll()` flushes every scan on the shm route, because that write is the shim's watchdog heartbeat, and on change over gRPC. Gating it is later work. |
 | Floating IP | (new) | §8 |
 
+**Writes cut at the deadline are counted (#710).** A write whose send deadline passed while it
+was on the wire (its socket reset by the timer or by the failure, its outcome unknown) is
+recorded once, by device, in `fence.Cut`: Modbus TCP and EtherNet/IP in the transport that
+resets the socket, OptoMMP and OPC UA client where they reset it, the `hw/base.go` drivers
+(Redfish, SNMP, Prometheus) where the failed send's deadline is seen, and READ/WRITE channels in
+the CIP transport, under the channel's name (`fence.WithDevice`), only for a request on the wire.
+A write refused because the gate was closed, whose deadline had passed before it started
+(`fence.ErrNotStarted`), or that failed before anything was sent (a dial), is not a cut, nor is a
+failure before the deadline. About the last five minutes (15 s buckets, fixed memory per device) are in
+`leader.Status.WritesCut`, so `/api/cluster` and `naut redundancy status` name the devices too
+slow for the budget. The Sparkplug host is not counted: it drops on a term change and has its
+own `WriteDrops`. Device names are the manifest's source or driver id, `driver/id` where the
+project has several drivers.
+
 The test plan's I3 oracle checks every row.
+
+**The drain before a planned switchover's RESIGN (#710 d1b).** RESIGN removes the
+lease-and-fence gap that lets a send which passed the gate just before it closed finish in
+time, so before RESIGN leaves, every such send must have ended (`fence.Drain`):
+
+- **Counted from before the read.** A send is counted (`fence.Enter`, inside `fence.Begin`)
+  *before* the gate read it is judged on, until it has ended (answered, failed or reset). After
+  the gate closes, every send that can still leave read it open earlier, so it was counted
+  earlier; the drain waits until nothing is counted. Counted after the read, a send that read
+  the gate open just before it closed would be missed.
+- **Cut short, not waited out.** While the drain runs, every armed send is reset at once (as at
+  its deadline), a send armed later is reset as it is armed, every fenced context is cancelled,
+  and a send not yet started does not start (`fence.Started`). A hung device cannot stretch the
+  drain to a lease.
+- **Settled.** The drain then waits the fence margin (`m_send + d_net`) after the last send that
+  went out: its bytes have arrived.
+- **Unproven is a failover.** A drain that has not finished within half a lease sends no
+  RESIGN: the leader has stopped leading all the same, and its lease runs out at the voters as
+  in a failover (`node.ErrDrainUnproven`). Its own voter keeps its promise until then too
+  (§4.7), so no standby leads before that lease's end, and a send still to leave on its send
+  deadline goes within it. A drain that ends after that lease (the resigner stalled) frees
+  nothing and sends no RESIGN either: the promise may back a new campaign by then.
+- **A drain's reset is no write cut.** A send the drain cuts short is not counted in
+  `fence.Cut`: its deadline had not passed.
+
+| Path | How it is drained |
+|---|---|
+| Modbus TCP and RTU, EtherNet/IP, OPC UA client, OptoMMP, Redfish, SNMP, Prometheus, READ/WRITE channels | counted by `fence.Begin` before each request's gate read; ended when the request returns (after its socket's reset, where it failed), on every path that drops it after `Begin` |
+| The takeover hold's safe values (#710 (b2)) | queued as commands, so drained as the driver's writes |
+| Sparkplug host NCMD/DCMD | counted before `commandsAllowed` reads the gate; a publish whose wait timed out stays counted until paho's token completes, since it may still leave from paho's queue |
+| Sparkplug edge (#798) | every fenced publish counted (`fence.Enter` via `sparkplug.WithSendCount`) from before its gate read until it has left, a timed-out one until its token completes (at most `tokenLeak`); and the session ends (its NDEATH out) before the RESIGN, bounded at a quarter lease |
+| PROFINET device, PLCnext | refused at load under `redundancy:` (#787 step 6, #832): nothing to drain. A path that lifts its refusal must count its sends first |
+| Alarm notifiers | not drained (naut-lead, 2026-11-24): a page is not a field output, and a send runs to a mail or chat server's timeout, which would break the switchover's bound. Across a switchover a page may be sent twice, never lost: escalation carries across a takeover (#715 PR 1, `TestTakeoverResendLabel`, `TestTermChangeNoDuplicate`; switchover-shaped, a page leaving as the gate shuts: `TestSwitchoverPageSentTwiceNeverLost`) |
+| Sparkplug host NCMD Node Control/Rebirth | not counted: any host may ask for a rebirth (Sparkplug 3.0 §5), and it commands no field device |
+| SNMP, and a send whose gate has no lease (`budget < 0`) | counted, but bounded only by their own timeouts (a UDP datagram has no socket to reset): a slow one makes the drain unproven, and the switchover a failover |
+| OPC UA server writes, HTTP API writes | inbound commands, not scan outputs; refused on a standby as before. d1c's switching state refuses them on the leader too (`ErrSwitching`) |
+| IO-Link ISDU parameter writes (an operator's, through the API) | a write to the device, so it goes through the master driver's write gate (d1c: `opcua.Driver.CallFenced`, counted by `fence.Begin` like a write): refused on a standby by the driver as well as the API, drained before a RESIGN, and refused while switching. Reads stay ungated |
 
 ## 4. The state stream and hot takeover
 
@@ -1439,6 +1526,24 @@ The leader streams **images** of its state to the standby (#710 S1; rulings 2026
   - **Every task's program frame**: every variable, function-block internals (timers,
     counters, edges), SFC steps and their times. An SFC lowers to ST, so its steps are frame
     slots. The frame is flattened by `ir.FlattenInto` into 32-byte `ir.Leaf` values.
+  - **The carried tags** (S2a; naut-lead's ruling 2026-11-23): every tag the field does not
+    provide, whoever writes it, a program or an operator: state, setpoint and memory tags,
+    retained or not. Not the inputs (they come back from the field), not the outputs (the
+    first scan recomputes them), not the substitute companions the runtime owns. So a hot
+    takeover keeps a mode an operator switched on the HMI even when it is not retained; what
+    must survive a **cold** takeover still belongs in retain.
+    - The tags a task's programs write go **with its frame**, copied from the store right
+      after that scan's commit, so a counter in the frame and the tag it set are of one scan.
+    - The others are copied from the store when the image is taken. A retained one is left
+      out there: the retain section, taken at the same moment, already carries it.
+    - A forced tag goes as its **actual** value: forces are not carried (§4.2).
+    - A tag that holds a function block (an FB bound as a global, or a STRUCT or ARRAY of
+      one) is not carried, nor a dt-tag (the runtime writes it each scan).
+    - An image waits for every task's scan, so a slow task paces the images: an operator's
+      write to a tag that task also writes reaches the standby with that task's next copy.
+    - The set is fixed when the runtime starts. Its **tags layout** (each tag's name and
+      declared type, `ir.TagsLayout`) is in the image, and a standby applies the tags only
+      when its own is the same, all or none.
   - Alarm ack and shelve state is **not** taken from an image: it comes from the pair's
     `oplog` (§1).
 - **Where the copy happens.** Each task copies its frame at the **end of its own scan**,
@@ -1454,15 +1559,26 @@ The leader streams **images** of its state to the standby (#710 S1; rulings 2026
   - its place in the stream, `(term, seq)`: `seq` only grows within a leadership (a program's
     scan count does not: an online edit resets it);
   - the leader's build;
-  - per task: the frame's **layout**, the timers' time base `NowMs` at the copy, and the scan
-    count. The layout (`ir.Program.Layout`) is a hash of every slot's name, kind, binding,
+  - per task: the frame's **layout**, the hash of the **source** it ran (S2a: the layout
+    leaves bodies out), the timers' time base `NowMs` at the copy, and the scan count. The layout (`ir.Program.Layout`) is a hash of every slot's name, kind, binding,
     RETAIN/CONSTANT/TEMP flags and declared type (`LREAL` is not `REAL`), walked into every
     STRUCT, ARRAY, enumeration and FB type, plus `ir.FrameFormat`. Initial values and bodies are
     not in it, so a hot takeover (S2) also requires the same build and running sources.
   - A CRC-32C over the whole image.
 
   A timer's internals are absolute on the leader's `NowMs` (its wall clock), so a hot takeover
-  rebases them by the image age (§4.2).
+  rebases them by the image age (§4.2). Each built-in FB lists the slots that hold such a time
+  (`FBDef.TimeBase`: TON and TP's start, TOF's stop, PID's last call), and
+  `ir.RebaseFrame` moves them, into every nested FB and array of FBs; an SFC's step times are
+  hidden TONs. A PID's is cleared rather than moved, so its first scan on the new leader has
+  dt 0 rather than integrating across the takeover (ruling Q4).
+  `TestTimeBaseCoversEveryClockSlot` runs every registered FB on two clocks and fails on a
+  slot that keeps the clock without being listed.
+- **Format.** The standby's stream request names the formats it reads
+  (`X-Nautilus-Image-Formats: 1,2`), and the leader sends the newest both read. Format 2 adds
+  the sources and the carried tags; a standby of a build before S2 names none and gets format
+  1, so a pair mid rolling update still carries its retained values. A format 1 image is never
+  taken over hot, and the status says the leader sends no tags.
 - **Pace.** Full images, at most one every 100 ms, are sent on connect and after any gap.
   - A bytes-per-second budget (default 1 MB/s, configurable) stretches the interval rather
     than dropping images. The status reports the effective interval and the image age.
@@ -1472,13 +1588,25 @@ The leader streams **images** of its state to the standby (#710 S1; rulings 2026
     encoder refuses a bigger one (`ErrImageTooBig`, which the stream reports) rather than send
     what no standby would read, and the decoder reads nothing bigger.
 - **What the standby applies.**
-  - It takes an image only of the term its own voter knows the leader holds, and only in
-    `(term, seq)` order (`Shadow.Apply` refuses an older one too).
+  - It takes an image only when its own voter vouches for the term (`quorum.ImageTermOK`,
+    S1b): the voter sees the peer holding a live lease; the term is above the last term this
+    controller led and not below the newest it already took (its shadow's, or the one its
+    retain file records: a leader's own saves record its term); and the term is at most the
+    highest term the peer asked this voter at. A bound, not an equality: the image carries
+    the fencing term (epoch), and the vote term the voter sees moves above it on a re-term.
+    It rests on every new epoch being above every earlier one (two majorities share a voter
+    whose promises only rise; `TestImageTermBoundAcrossADeposedLeader`). A deposed leader's
+    open stream gets images through only while the standby's voter still sees its lease, all
+    of them of its own epoch and sent while its gate was open; the only later leader is the
+    standby itself, which stops following before it takes over.
+  - It applies images only in `(term, seq)` order (`Shadow.Apply` refuses an older one too),
+    and its retain file never goes back to an earlier `(term, seq)` (`CarryRetained`).
   - It applies each task's frame to a **shadow** frame of its own program (never run), and
     only when the layout matches. A mismatch leaves that task's shadow as it was and is
     reported.
   - It persists the retain section **by name, whatever the layouts**, to its own retain file,
-    on the leader's 2 s cadence. So a rolling update, which is a takeover across builds,
+    on the leader's 2 s cadence, when it changed, through the runtime's retain saver (the
+    file's one writer). So a rolling update, which is a takeover across builds,
     keeps the setpoints.
 - **What the standby carries, and what it keeps.** `retain.Carry` decides; a test fails when
   `retain.State` gains a field that is neither:
@@ -1525,6 +1653,68 @@ hash matches.
 - **Setting it lower.** A project that would rather restart than re-run up to that much logic
   sets `hot-max-age` lower. The isolation case then becomes cold.
 
+**The voters' word (S2c-1, #710).** The image's own checks can't see a leadership the standby
+never heard of: A leads, its stream to B stops, A's lease lapses and A leads again in a later
+epoch, then dies, and B's image is of the first epoch (naut-lead's ruling B on S2b). So the
+voters vouch too:
+
+- **Epoch records.** Each voter records, per name, the highest epoch it granted in a campaign
+  (never a renewal, a re-term included), in the write the grant already makes, so it costs no
+  extra fsync and the grant leaves only once it is durable. `RecordsFrom` says from which term
+  the records cover every grant: a fresh or rebuilt state covers nothing until its first
+  campaign grant; a file with grants but no records covers what came after its `Promised`; a
+  commissioned controller's voter covers what came after its adoption floor (an earlier life's
+  leaderships are at or below it). A voter covers an image's epoch `e` when `RecordsFrom ≤ e+1`.
+  The state file is format 9 only once records are written.
+- **The in-sync mark.** The standby POSTs `(epoch, seq)` for each image it applied whole. The
+  leader keeps the highest of its own epoch, never above the last image it sent, and resets at
+  every takeover. Current is seq-based: at most one image behind the last sent, the oldest
+  unacknowledged one out no longer than 3 measured send-to-send times. A time-only rule went
+  out of sync whenever a slow task stretched the capture. Every renewal carries the leader's
+  epoch and the mark (wire version 8); a voter keeps the mark of a renewal it granted, once
+  the grant is durable, in memory only (unknown after a restart until the next granted renewal).
+- **The rule** (`quorum.HotCheck.Verdict`), on the replies of the round that won, never an
+  earlier round's: the replies that cover the image's epoch must be a majority, and at least
+  two of them must hold a mark of the old leader (a restarted voter has none, and one voter's
+  word may be stale: the old leader's last lease rested on a renewal a majority granted, so two
+  always include one that heard it); this controller led in no epoch after the image's but the
+  current one (`LedBefore`; a granting voter's record for this controller is always the winning
+  term, so the per-reply own-record check only fires from a refusing voter); then, from every
+  winning reply, covering or not: the highest epoch granted the old leader must be the image's,
+  and the newest mark (by epoch, then seq; of two at one position, the one not current) must be
+  of the image's epoch, current, and not ahead of the image. Each failure is a named cold
+  reason. The leader judges Current on its own sends: in step with the last image only while
+  that went out within 3 send-to-send times (a stream that stopped is not current), and the
+  send-to-send time is never measured across a reconnect. A delayed older renewal never
+  replaces a newer mark from the same boot.
+- **Checked by** a simulator oracle (a hot verdict never skips an epoch someone led in between)
+  and the pair test of the ruling-B sequence.
+- **Cold cases left:** a takeover within about `lease/4` of a takeover, or within about a lease
+  and a quarter of a voter's restart (no mark yet), a voter on an older release, a rebuilt
+  witness until it grants a campaign, and an image whose leadership began before the witness's
+  current incarnation was adopted (`witness-readopted`, below).
+- **Residuals (Fable, #1345).** The floor-derived `RecordsFrom` inherits the adoption's own
+  residuals: an operator's `Recommission` with a floor set too low, and
+  `EventReadoptOverSwitch`. A rebuilt witness's first campaign grant may reach it before the
+  adoption that raises the controllers' floors, setting its `RecordsFrom` at or below a
+  leadership its old incarnation granted. **Closed (#710 S3), within adoption's own
+  residuals above:** the witness's records speak only for its own incarnation. A rebuilt one
+  starts them at its first campaign grant, or above the `Promised` of renewals it granted: it
+  grants a leader's renewals before either controller counts it, and keeps that leader's
+  current mark, so the marks rule alone does not save the verdict (Fable on #1365). An earlier
+  incarnation may have granted any term up to the floor of the adoption that made the current
+  one count. So the check (`HotCheck.recordsFrom`) never lets the witness's reply cover an epoch
+  below the controller's own voter's term floor, which that adoption raised and which only
+  rises; it is read when the check is made, so a later rise (a recommission) errs cold. A
+  `RecordsFrom` of 0 stays 0. The hot verdict and the hand-back floor (both of its paths) read
+  coverage only through it: both were open on main, unreleased. The cost: a leadership that
+  began before the pair's last adoption (a rebuilt witness, or a new adoption generation of the
+  same one) gets no coverage from the witness, so a failover before the next election is cold
+  unless both controllers' voters elect the standby (`witness-readopted` when the witness's
+  coverage would have made the majority, else `records-unknown`). The simulator's oracle
+  checks epochs only: it sets every mark current, and it does not run the hand-back, so the
+  unit and candidate tests carry this.
+
 **The new leader, in order:**
 
 1. keeps the image's frames instead of calling `ResetFrame`;
@@ -1562,6 +1752,23 @@ field) when:
   setpoints go back to what it last received. The alarm names how far back that is;
 - the **build hash differs**. A rolling update through `tools/deploy` is therefore a cold
   handover, and the guide says so.
+
+**The bad-retain hand-back (S2c-3, #710).** A cold takeover whose own retain store cannot be
+read asks the peer first, as the edge's gate after the flush and the store's first read
+(before the inputs wait), so nothing has loaded, saved, scanned or written. The peer's file
+is good when it reads, holds a stream position, and that position's term is at or past the
+newest earlier leadership a covering majority of the winning round records. That is the
+peer's epoch record, this controller's records of its EARLIER boots, and this boot's own
+leaderships. A campaign's grant overwrites the asker's record, so each record also keeps
+the boot of its last grant and the highest epoch granted to an earlier boot (state format
+10). A reply reports that earlier-boot value as the asker's own, with no wire change: a
+voter of the S2c-1 build reports the asker's current epoch, which refuses the hand-back.
+A record is a grant, not a leadership (a split vote's lost campaign raises one voter's record),
+so with all three voters answering and covering, the floor is each name's second-highest
+record. The hot check (§4.2) does not read the earlier-boot record: above the image's epoch
+it can only be a campaign that never led. A good peer gets the lead through a hold of 3 leases (no renewal, no campaign, gate shut).
+A controller hands back at most once per max(20 leases, 1 min), on the wall clock, kept in
+its voter state (a future time is ignored).
 
 This reverses the guide's "process state is deliberately not replicated", **for the pair
 only**. The guide gains a section for the pair, and the Kubernetes text stays.
@@ -1632,6 +1839,230 @@ measured rather than assumed.
 
 The test plan defines exactly how it is measured (§4 there).
 
+### 4.6 The takeover hold (#710 (b2))
+
+`redundancy.takeover-hold` (opt-in) holds a new leader's outputs after a takeover until the
+program sets its release tag. Rulings (naut-lead, 2026-11-23): at `max` the hold **stays held**,
+with an alarm repeated every `max`; only the program's release tag or the audited
+`naut redundancy release-hold` releases it. Releasing at `max` is the explicit per-hold opt-in
+`on-max: release`. `max` defaults to 5 s, at most 1 min.
+
+- **Where it sits.** In the runtime, not in the write gate. A closed gate is a standby: it stops
+  keep-alives, and the `safe:` values must go out through the same drivers. The gate stays the
+  leader's; the hold is a second condition on what the scan sends.
+- **What it stops.** The main scan's output push (the only `WriteOutputs` call) is skipped and
+  `outSent` stays false, so the release's push is the whole set (#600/#606). A channel `WRITE`
+  posted while it holds, or due while it holds, is refused (`ERROR`). At its start the drivers
+  that re-send on their own forget what they sent (`io.OutputsForgetter`: Modbus, EtherNet/IP),
+  as they already do on a term move. PROFINET is refused under a pair (§3.4). Alarm notifiers
+  are **not** stopped: alarms describe the process, and during a hold its inputs are live.
+- **Safe values.** `io.SafeWriter` writes them on their own and reports per tag whether each
+  landed (Modbus: a write the device confirmed). The runtime writes them on the hold's first scan
+  and again whenever the driver asks for its outputs. One not delivered within 2 s raises an
+  alarm. Load refuses `safe:` on a driver without it.
+- **When it starts.** On a takeover (`TakeoverKnower`), never a start: cold, or every takeover
+  with `on: always`, or a hot takeover from an image whose leader was holding (image format 3
+  carries the hold's age; an inherited hold keeps it). The release tag is set FALSE at the start.
+- **The release tag.** A BOOL state tag, not retained, bound to no driver (Load). The tag store
+  refuses every write and force on it from outside the program.
+- **Fable round 1** (folded): the pair's hold alarms read only the hold's own lock and the
+  elector's gate, never `leadMu` (they run under the alarm engine's lock, which a takeover takes
+  under `leadMu`); hold events reach the journal from a goroutine of their own, in order; a push
+  that raced a hold's start is forgotten at once; a hot takeover from a holding leader holds
+  whatever the coordinator calls it; `on-max: release` keeps its alarm raised a while after.
+
+### 4.7 Planned switchover (#710 d1)
+
+`naut redundancy switchover` hands the lead to a ready standby faster than a failover, hot and
+bumpless. Without help a planned handover is no faster than a failover: the standby waits out
+the voters' promises to the old leader. Four PRs: d1a the vote protocol's RESIGN (this
+section), d1b the drain of every output path, d1c the runtime's switching state, the final
+image, the command and the bench, d1d the hand-back's end of the resign hold and the simulator's
+follow-ups. The plan and rulings are in #710 (naut-lead, 2026-11-23 and 2026-11-24).
+
+- **RESIGN** (vote protocol 9: a request's `Resign` flag, with its epoch, boot nonce, a Seq
+  above every renewal, and the standby's acknowledgement of the final image as its mark). The
+  leader first stops leading (`quorum.ResignAt`) and its gate closes. Its own voter keeps its
+  promise to it, and does not yield it, until the outputs are drained (d1b, below): sends the
+  lease let start may still be on the wire, and a standby whose own voter heard none of the
+  leader's renewals could otherwise lead beside them with that freed promise (Fable, d1b). Once
+  the drain is proven, its own voter drops the promise (`quorum.ResignDrained`, in one call, as
+  `YieldTo`), and only then does RESIGN leave. A drain that is never proven leaves the promise
+  to run out where the lease would have ended: a failover. It goes
+  to the **witness first**, and to the peer's voter on the witness's answer (or lease/8): the
+  standby campaigns as soon as its own voter takes it, and a campaign that reached the witness
+  before the witness's RESIGN would be refused, its retry a look away.
+- **A voter takes it** only from the boot it promised, for the epoch it knows that boot leads
+  in (its record of the boot's campaign, or the epoch of the boot's last renewal it granted: a
+  standby that started after the leader's campaign holds no record of it), while the promise
+  runs, and never after a campaign or renewal of that boot with a higher Seq (a later
+  leadership whose first renewal here still waits on its write has not moved the epoch it knows)
+  (`Voter.handleResign`). It drops the promise, the renewals it saw from that boot
+  (`LeaderSeen`), and the promises it heard relayed to that boot; it ignores new relays to that
+  boot for a lease and a quarter, or until it grants that boot again (one made before another
+  voter took the RESIGN), and refuses
+  renewals of that leadership for good (one in flight when the RESIGN left). It keeps the
+  RESIGN's mark as the leader's, so the takeover is judged hot on the final image. A duplicate
+  is answered as taken and changes nothing (nor does its controller act on it: an old copy must
+  not make a controller that just resigned campaign); anything else is refused and changes
+  nothing. The Seq gate carries the safety: a voter that heard a later campaign or renewal of
+  the boot refuses an older RESIGN. One that heard nothing of a later leadership may take it,
+  which is safe (no promise of its rests on that leadership) and costs a needless campaign.
+  Nothing is written to disk: a restarted voter grants nothing until its promises ran out.
+- **The resigner's own voter** does the same for relays to its own boot: the standby's voter
+  granted its renewals and relayed that promise, which would refuse the standby's campaign there
+  (`heardRefuses` rule (b)).
+- **The standby** campaigns at once when its voter takes its peer's RESIGN (its next look moves
+  to now), and its own resign hold, if any, ends: the peer is handing the lead back.
+- **The old leader** holds off campaigning for two leases (`quorum.ResignHold`). If the standby
+  never wins, it leads again after that, cold, in a new epoch. Its open rounds go with the
+  resign, so a late grant of a renewal sent before it never makes it lead again, even once the
+  hold has ended early. A lost RESIGN falls back to the
+  lease running out, no worse than before. The hold is not "may not lead" in a bad-retain
+  hand-back (S2c-3): a controller that says yes to its peer's hand-back ends its own hold
+  (`Elector.EndResignHoldFor`, d1d), so it leads again without waiting the two leases out:
+  only for an ask of a leadership after the one it resigned (a stale ask keeps the hold, with a
+  log line), and never before its resign's drain is proven (`Candidate.EndResignHold` refuses
+  then: `ResignDrained` relies on the hold to keep the resigner from campaigning in that window;
+  Fable on d1d found two leaders behind a stale ask without it).
+- **The drain (d1b).** RESIGN removes the lease-and-fence gap that lets a send which passed the
+  gate just before it closed finish, so `Elector.Resign` runs the steps itself, in order: the
+  gate shuts (`ResignAt`), the outputs are drained (§3.4, "The drain before a planned
+  switchover's RESIGN"), and only then does RESIGN leave. `quorum/node` knows no driver, so the
+  drain is handed in (`leader.Quorum.Resign` hands it `fence.Drain`); a drain that does not
+  finish within half a lease sends no RESIGN, and the switchover becomes a failover. Alarm pages
+  are not drained: across a switchover a page may be sent twice, never lost.
+- **The command (d1c, `cmd/naut/pairswitch.go`).** `naut redundancy switchover` (POST
+  `/api/cluster/switchover`, audited `redundancy.switchover`, the redundancy permission; a
+  standby forwards it to the leader) runs, in order:
+  1. *Refuse*, saying why, unless this controller leads; its standby is current by the
+     acknowledgement rule (PEER_READY's predicate); no force is held; no takeover hold holds;
+     `hot-max-age` is not 0; and the standby, asked (`<stream>/switch-ask`), says it may take
+     over: it may lead (`MayLead`), is not in its hand-back guard, has applied this leadership's
+     images, and its field I/O is healthy (no field driver in error, offline, connecting or
+     degraded; its drivers' inputs live). Since d2 the leader also compares (§3.2's I/O-health
+     rule, `ioNotReached`): every field driver connected on the leader must be connected on the
+     standby, whose switch-ask answer carries its driver rows; a standby row `waiting` (a
+     no-session driver the standby cannot see) is skipped. The refusal names the drivers. Vote protocol 9 needs no check: a frame
+     of another version is refused outright, so a leader holding a lease has wire-9 voters.
+  2. *Stop* (`runtime.BeginSwitch`). From here writes, forces, substitutes, SFC commands and
+     online edits from outside the programs are refused with `ErrSwitching` (HTTP 503 with
+     Retry-After, OPC UA `BadInvalidState`). Store changes are checked under the store's lock
+     and frame changes under their program's lock, the locks the final image copies under, so a
+     change either is in the final image or is refused. Each task finishes the scan it is in, its logic and
+     its output push, then scans no more: its loop keeps ticking, so liveness sees it alive and
+     its lease is renewed. The wait is bounded by lease/4. A gate that closes for a tick and
+     reopens in the same term (a late renewal) does not end the switching state: the scans stay
+     stopped, and the switchover goes on. It ends at an abort (`EndSwitch`) or at this
+     controller's next leadership's takeover.
+  3. *Final image* (`runtime.FinalImage`): one off-scan copy of every task's frame and the tags,
+     as the last completed scans left them, numbered after every streamed image. The stream
+     sends it at once (a wake cuts its interval short; the open round of end-of-scan copies is
+     closed first, so no image is numbered after it) and the leader waits, at most lease/4, for
+     the standby's acknowledgement of exactly that image. **S1b restated:** images come only
+     from the end of a scan while the gate is open, except this one, which is still taken and
+     sent before the gate shuts.
+  4. *Resign* (`leader.Quorum.Resign`, above), with the final image's seq as the mark, on a
+     context the client's going away cannot cut, and only if the switching state and the
+     leadership still hold (else an abort).
+
+  **The point of no return is the call to Resign**, not the first RESIGN: `ResignAt` shuts the
+  gate before anything else. Before the call, a refusal or a timeout ends the switching state
+  (`EndSwitch`) and this controller leads on in the same leadership, nothing lost (outcome
+  `aborted`, HTTP 409). After it, this controller has stopped leading whatever comes back: a
+  drain that does not finish sends no RESIGN and the lease runs out (outcome `failover`, HTTP
+  502). The old leader stands down and follows its peer as any standby does. The report gives
+  each step's time.
+- **The standby's side (d1e).** Measured on the bench, most of the standby's time between its
+  election and its first scan was tick latency: the takeover edge's image flush and
+  operator-intent catch-up (each well under a millisecond once waited for in the same tick)
+  were each started on one tick and seen done on the next tick of the fastest task. The edge's tick now waits for a step it
+  started, up to 15 ms (`sameTickWait`), before leaving it to the next tick as before. The
+  flush asks `LeadingTerm` and carries the image into the store while the tick waits under
+  `leadMu`, so `LeadingTerm` reads a snapshot published under that lock instead of taking it,
+  and the carry does the same while the edge waits for that flush (its store load has not begun
+  then; during the catch-up's wait it locks as before). `BeginSwitch` checks the leadership and
+  sets its flag under `leadMu`. The tick samples the lease and its term again, lock-free,
+  before taking over. While it waits, the
+  other loops' ticks answer "do not scan" at once (`edgeWait`) rather than queueing on the
+  lock; a tick that took the lock just before still waits, and the waiting loop itself skips
+  its slots for the wait (at most two waits: well under liveness's stall bound, at least a
+  quarter lease). Nothing scans before the edge is taken either way. What remains is the tick
+  on which the gate is first seen open: up to one period of the fastest task. The loops sleep in
+  an uninterruptible `clock_nanosleep` on a locked real-time thread, and nothing signals into
+  that path to wake them.
+- **Tests.** Unit rules with one mutation each (`quorum/resign_test.go`); four switchovers back
+  and forth on real elections over HTTP, each within lease/4 and with the order checked
+  (`TestLoopbackAResignHandsTheLeadOverAtOnce`); in the simulator, the `Resign` fault under link
+  loss, delay, duplication and replay, with the ledger ending a promise at a taken RESIGN, I3's
+  resign case (no write under the resigned epoch after the resign), the "resign" oracle (no
+  voter takes a RESIGN after receiving a later campaign or renewal of that boot) and the
+  "rejoin" oracle (a resigner leads again only after its peer led, its hold ran out, it took
+  a fresh RESIGN back, or its hold was ended early by a hand-back, the `EndHold` fault). The
+  hold is judged on the resigner's own clock and in its own boot: one whose clock runs fast
+  inside ρ, or that restarted, may lead again before two leases of the simulation's time (d1d).
+  Fable reviewed it on #1355.
+  d1c: the switching state's rules with one mutation each (`runtime/switch_test.go`), the
+  final-image acknowledgement (`TestWaitAckTakesOnlyTheFinalImage`), the parameter write's
+  gate (`TestCallFencedGoesOnlyThroughAnOpenGate`, `TestISDUWriteGoesThroughTheWriteGate`), and
+  the command end to end on a real pair: hot and within a lease, refused, and aborted in the same
+  leadership (`TestPairSwitchover*`).
+
+### 4.8 Failback (#710 d2)
+
+Opt-in: `redundancy.failback: {prefer, after, max}` (after default 5m, at least 10 leases, so
+a flapping link or box is not failed back into; max default 3; pair only; needs `retain:`).
+
+- **The loop** (`cmd/naut/pairfailback.go`) runs on every member and acts only on a leader
+  that is not `prefer`, every lease/4. Its "ready" is the switchover's step-1 refusal set
+  (`switchRefusal`, §4.7, including the I/O comparison), unchanged: one predicate for the
+  manual and the automatic path, plus one check for a failback only: the standby's
+  `failback.prefer` (in its switch-ask answer) must equal the leader's, so a manifest rolled out
+  to one controller does not fail back every `after`. Once ready has held for `after` without
+  a break (any refusal starts the clock again) the leader runs the d1 switchover itself (`by`
+  "failback"), which looks once more, after its own checks, that failback is not suspended. The
+  failback is journalled `redundancy.failback` with the readiness time and the switchover's
+  outcome and report; an outcome other than done is journalled as an error (the field's
+  evidence, should the lost-campaign bug bite unattended).
+- **Suspension.** A switchover that starts on `prefer` (an operator's: the loop never runs
+  there) suspends failback before the final image, so the image carries it to the controller
+  that takes over; a switchover that does not hand over (refused, aborted) puts it back, unless
+  an operator changed it meanwhile. `POST /api/cluster/failback {suspend, why}` (audited, the
+  redundancy permission, on the leader; `suspend` is required, so a bare POST is refused, not a
+  resume) suspends or resumes, and answers only once this leader's retain store holds it (a
+  failover in the moment before the next state image still loses it: the standby gets it with
+  that image); resume also ends the ping-pong stop and its count.
+- **Ping-pong stop.** The non-preferred controller remembers, on its own clock (in memory: a
+  restart forgets it), when it last failed back (done, or past the resign as a failover). If it takes the lead again within `after` of that, with failback not
+  suspended (a manual switchover away would have suspended it), the preferred controller failed
+  over back: the count goes up. At `max` failback suspends itself (`Stopped`), raising the
+  system alarm `nautilus.failback-stopped` until resumed. The preferred controller holding the
+  lead for `after` resets the count.
+- **State** (`retain.FailbackState`: suspended, by, why, at, stopped, count) is a retain section
+  the leader saves (`runtime.FailbackKeeper`), carried by `retain.Carry` in every image, so a
+  hot or cold takeover and a restart keep it. A load that cannot read the store (and no image to
+  carry it) hands the keeper an unknown state, which suspends failback with a warning rather
+  than read it as never set (ruling Q2: an operator's suspend must not be lost to a bad disk).
+  That includes a takeover whose store failed earlier on the same edge (a corrupt file the
+  standby's carry or the edge's I/O read moved aside, which the load then reads as empty):
+  `loadFailed` marks it unknown. This is conservative: a read that failed once on the edge and
+  then succeeded also suspends failback, as that leadership treats its whole store. Journal entries are queued under the failback's lock and
+  written after it (a journal write fsyncs; the lock is taken under the takeover's, the alarm
+  engine's and the saver's), and never while a switchover holds the scans stopped. Fable
+  reviewed it on #1364: one must-fix (that corrupt-file path), five should-fix, all taken; its
+  re-check found the fixes sound and one more should-fix (a journal write while the scans were
+  stopped), taken.
+- **Status.** `/api/cluster`'s stream block carries `failback` on the leader (prefer, after,
+  max, suspended/by/why/at, count, how long the preferred standby has been ready or why it is
+  not), and a warning line while suspended.
+- **Tests.** Loop rules on a fake pair and clock with one mutation each
+  (`cmd/naut/pairfailback_test.go`: the clock's reset, suspension, the ping-pong stop and its
+  reset, the manual switchover's suspend and undo, the unknown state); the runtime's keeper
+  hand-over (`TestAnUnreadableStoreHandsAnUnknownFailbackState`); `TestCarry` for the image;
+  and on the pair rig, the I/O comparison's refusal and a failback end to end (a manual
+  switchover away suspends, carried to the other controller; resumed, it fails back hot after
+  `after`, the counter unbroken). No bench: a failback is the d1c switchover, timed there.
+
 ## 5. Failure cases
 
 | Down | Result |
@@ -1689,29 +2120,129 @@ when its members address each other by DNS name, so peer traffic is kept apart f
   different times.
 - **Peer TLS (#710), on by default.** Every peer port (both controllers' and the witness's)
   serves TLS 1.3 only, and every peer call (votes, adopt, hello, the `oplog` copies) dials it.
-  - **The key is the peer token's.** `internal/peertls` derives an Ed25519 key with
-    `pairkey.Derive(token, "peer-tls")` on each box at start; nothing is written to disk,
-    distributed or re-pinned when a box is replaced. A listener requires a client certificate,
-    and each end accepts the other only if its leaf holds that key (`VerifyConnection`, which
-    also runs on a resumed session; the listener issues no tickets anyway). There is no CA,
-    no host name and no date check: peers are reached by name or IP (the witness also through
-    a floating address), and
-    §3's rule against comparing wall clocks across hosts holds (a test runs the two ends
-    years apart).
-  - **What it buys.** A party without the token can't read peer traffic, can't learn the
-    token from it, and can't pass as a member on either end: a relay in the middle has
-    another key, so the caller refuses it before a request (or the token) leaves. The token
-    header still travels, inside TLS, so the listener's check is unchanged.
-  - **What it doesn't.** Anyone with the token holds the key: one leaked env file is still
-    every member. Per-box keys pinned at commissioning are the next step (#710 PR 2), and
-    `experimental` waits for them. A witness serving several pairs holds one token, so those
-    pairs share a key until then.
+  - **Per-box keys (#710 PR 2a).** Each member makes an Ed25519 key once, in its state
+    directory (`peer-key.json`, 0600), and a certificate for it on the box, signed with the
+    key `pairkey.Derive(token, "peer-tls")` gives every member and naming it:
+    `<cluster>/a`, `<cluster>/b`, or `witness@<incarnation>` (one witness serves many
+    clusters, each with its own incarnation: a controller's call names its cluster in the
+    ClientHello's ALPN, `nautilus-pair/<cluster>`, never negotiated, and the witness answers
+    with that pair's incarnation, read only from its state, `witness@0` before the pair's
+    first vote; PR 2b). A handshake passes only if the other end's leaf is signed by the
+    token's key (`ed25519.Verify` over the TBS bytes: no chain), names a member this end
+    talks to (a call: the very member dialed, from a per-destination check, since a TLS
+    ServerName is empty for an IP; a listener: a controller takes calls from its peer only,
+    the witness from `a` or `b` of a valid cluster), and, once that name is pinned, holds
+    the pinned key. There is no CA, no host name and no date check, and §3's rule against
+    comparing wall clocks across hosts holds.
+  - **Pins (trust on first use, under the token).** The first complete handshake with a
+    name pins its key: on a call before the connection carries a request, on a listener in
+    the per-request check before the handler (`VerifyConnection` runs before the peer's
+    CertificateVerify, so a pin there could hold a key nobody proved). A pin is written
+    atomically and synced; a failed write refuses the contact. Pins live in
+    `peer-pins.json` in a controller's state directory and in `<cluster>.peer-pins.json`
+    beside the witness's `.members` file. Nothing re-pins silently (PR 2b below). An unreadable pins file is moved
+    aside with a `peer-pins-reset` condition and a journal entry, and every name pins again
+    at first contact (never silent, never an outage; the trade is the guide's
+    trusted-network line).
+  - **Bound to the box.** A key file records the machine-id and the physical NICs' MACs
+    (hashed) it was made with (`/sys/class/net/*/device`: a bridge, VLAN, bond, tun, veth
+    or docker's is not physical; no physical NIC at all, as in a container, falls back to
+    the links' interfaces). It is used while the machine-id is equal and one of those NICs
+    is still present: adding interfaces keeps it, a clone on other hardware or a cloned VM
+    with a new MAC makes a new key (the old file moved aside), which the others refuse. A
+    box not known yet (a link that doesn't resolve, no NIC readable yet), or a key file that
+    exists but can't be read (its mode, an I/O error), never makes or replaces a key: its
+    handshakes wait (Fable on 2a: a replaced key is a lockout until an unpin). Only a
+    missing file, a damaged one or another box's makes a new key. The witness needs a
+    machine-id. This is the key's own rule; the voter state's #1029 fingerprint is
+    unchanged (#616 notes whether it should follow).
+  - **Every request, every sender.** The listener's middleware (`peertls.Bind`) re-checks
+    the leaf against the current pin on every request and hands the verified member to the
+    handlers (`node.WithPeer`); every handler that takes a sender from the request checks
+    it (`node.SenderOK`): votes, adopt, hello, the marks (`/dup`), the witness's votes and
+    marks (the certificate's cluster must be the path's: one witness token serves every
+    cluster), the oplog's replication (`oplog.Options.Sender`), and the state stream, its
+    ack, the hand-back and the switch-ask (no sender in the body: the peer only). With TLS
+    on and no verified member, a handler refuses (fail closed). A dropped pin closes this
+    member's own kept connections to that member, and the dropped key is never pinned
+    again (kept in the pins file: until another key is pinned for the name or a second
+    unpin lifts it, PR 2b).
+  - **Re-pin paths (#710 PR 2b).**
+    - *The witness, per incarnation.* Each incarnation's name is pinned on its own, at first
+      contact under the token; `witness@0` never is. A vote reply counts only when it
+      carries the incarnation its certificate names, never 0 (`Elector.witnessBound`,
+      before `reply()` feeds fences, marks, the held state or the adoption): a token holder
+      answering as a fresh incarnation is heard by nothing, and a reply over `witness@0`
+      (a pair's first vote, the witness drawing its incarnation) closes the connection, so
+      the next vote meets the incarnation's certificate. Every other witness call (the
+      marks, the commissioning state, the log's copy) counts only under the certificate of
+      the incarnation this controller adopted (any but 0 while it has adopted none: the
+      uncommissioned flows can't be narrower), so the log's count of the witness copy by
+      the incarnation the witness states is the witness's own word. A reply bound to an
+      incarnation this commissioned controller has not adopted reaches the adoption alone
+      (`Elector.unadoptedWitness`): its marks, fences, held state, relayed promise and
+      grants count only once the pair adopts it, and a refusal under such a certificate
+      raises or clears no condition (Fable on 2b: one Marked reply would otherwise stop a
+      standby campaigning for good).
+    - *A new incarnation, the same key (B', naut-lead).* A controller pins a new
+      incarnation, the counted name included, by itself only under the key of the one it
+      counts, kept in its pins file across adoptions (`witnessKey`, set at `Promote` from the
+      counted name's pin and when the counted name pins): one adopted on the peer's
+      proposal, never heard here, is no exception (Fable re-check). With no key known (a new
+      pair, a reset pins file) the first contact pins; a commissioned controller then takes
+      only its counted name. Another key is a new witness box, or a token holder at the witness's
+      address while the witness is down (adoption needs only the counted incarnation silent
+      for a lease, and a commissioned acceptor accepts without hearing the new one): it is
+      refused, named, and shown waiting on `naut redundancy status` until `naut redundancy
+      unpin witness` on each controller allows that very key, once (durable; refused when
+      none is waiting; ended by the next adoption). An adoption, a re-commission and a start
+      drop every other incarnation's pin (`Peer.Promote`; a start that adopted nothing and
+      knows no witness key drops them all). An uncommissioned controller
+      pins any incarnation at first contact; at most 8 it does not count, a new one past
+      that refused, never one evicted (eviction would let a token holder take the name the
+      pair is about to adopt).
+    - *A controller: `naut redundancy unpin <name>` on the survivor* (audited, the
+      redundancy permission, answered by a standby itself). It drops the pin here and, over
+      this controller's own pinned connection, at the witness; the dropped key stays
+      refused in both pins files. The witness takes it only from a controller of that
+      cluster by its certificate, about the other one, from one pinned no later than the
+      one it drops (pin epochs: a name re-pinned after a drop is newer; otherwise a token
+      holder who won `a`'s first contact after `unpin a` could unpin `b`), and only on the
+      asking controller's key of it, checked under the pins' lock (one re-pinned since
+      stays). Before its local drop the survivor records the dropped key as pending, durably:
+      a retry (the witness not reached, or its answer lost) only finishes the witness's leg
+      about that key, never drops here again (a replacement pinned meanwhile stays) and
+      never lifts. A second unpin, nothing pending and both stores answering "already
+      dropped" (or the witness never pinned it), lifts the refusal. Residual (agreed): equal
+      epochs (a new pair, a witness whose pins were rebuilt or reset) give the epoch rule
+      nothing to compare, the same first-contact window as every first pin. `naut witness unpin --cluster <id> <name>`, on the witness box with the
+      witness stopped (its state lock), is the way out with no survivor (both disks lost)
+      or for the epoch refusal.
+  - **What it buys.** A party without the token can't read peer traffic or pass as a
+    member. A party with the token but without a member's box key can't pass as a member
+    that is pinned: one leaked env file is no longer every member. What remains is the
+    first-contact window (a new pair, a replacement, an unpin, a reset pins file), which
+    the guide's trusted-network rule and the visible fingerprints cover.
+  - **Visible.** Every pin, refusal, drop, reset, failed pin write and new key is
+    journalled on a controller (`redundancy.peer-pin`: name, SHA-256 fingerprint, peer
+    address, time; events before the journal is attached wait for it) and logged (the
+    witness has no journal: its log is the record). A refusal at the handshake comes
+    before the caller proved its key (a member's certificate is public), so one key's
+    refusals of one name are reported once a minute. A reset pins file's condition stands
+    for a day, past the re-pinning, saying to check the fingerprints; `naut redundancy status` and
+    `/api/cluster` show this box's fingerprint and each pinned one; a refusal is a
+    condition on the refusing controller and `redundancy.peer-identity` on the caller,
+    naming `naut redundancy unpin`.
+  - **No upgrade bridge.** #1230's nameless certificate is refused outright: no release
+    carried it, and a pair on main restarts all three members together across this change.
   - **A short token is refused.** The key's public half is visible to anyone who reaches a
     peer port, so a token could be guessed from it offline: `naut run` and `naut witness`
     refuse one under 32 characters, naming `naut redundancy new-pair` (64 hex digits), and
     `naut check` warns about one in its environment.
-  - **Seams.** `quorum` and `oplog` are substrates, so `cmd/naut` builds the configurations
-    and hands them down as `tls.Config` (`node.Options.TLS`, `oplog.Options.TLS`). `oplog`
+  - **Seams.** `quorum` and `oplog` are substrates, so `cmd/naut` builds peer TLS and hands
+    it down as standard-library types: a handshake function per dialed address
+    (`node.TLSWrap`, `oplog.Options.TLS`), the listener's `tls.Config`, and the verified
+    member as a request context value set through `node.WithPeer`. `oplog`
     keeps naming its peers by their `http://` URLs, which its files record (an operator's
     acceptance names peers by them), and only sends them as https.
   - **Mismatches are named on the side that dials:** `redundancy.peer-tls-mismatch` (the
@@ -1760,8 +2291,28 @@ same driver contract as the simulator.
     longer than its own, because the lease would outlive the promise it rests on. That covers
     two controllers with different `lease:` values, and a witness started with a shorter
     `--lease` than the pair's. The refusal is logged and raised on both sides
-    (`redundancy.lease-mismatch`), never silent. A longer witness lease is safe; it only slows
-    a takeover.
+    (`redundancy.lease-mismatch`, with the voter it is about and its direction), never silent,
+    and cleared once that voter takes the lease again: any answer past its lease check, a
+    probe's included, so a standby clears it as well as the leader. The refusal given and the
+    refusal received are kept apart, so two controllers with different leases each report once
+    and never flap. Every vote answer states the voter's own lease (`X-Nautilus-Voter-Lease`),
+    and a dialer clears only when its lease fits it: a voter in its restart wait still takes
+    the longer lease it refuses after, which is no all-clear. A controller shows a lease refusal as a condition (a warning, which holds a leader's
+    ServiceLevel at 200): of its own lease by the witness, `witness-lease`, worded as the loss of
+    fault tolerance it is and naming the fix (`--lease` at least the pair's), plus the system
+    alarm `nautilus.witness-lease` in a project with alarms; of its own lease by the peer,
+    `lease-mismatch/<peer>`; and its own voter's refusal of the peer's, `lease-refused/<peer>`.
+    The refuser shows it too because, while a pair is upgraded across a change of the default
+    lease (standby, then leader, witness last), the refused side runs the old release, which
+    shows nothing. A longer witness lease is safe; it only slows a takeover.
+  - The default lease is 1 s for the pair and the witness alike (it was 2 s): measured on
+    loopback and in a 30-minute soak on two ARM controllers (#710; table in the guide). At 1 s
+    a stalled leader's write gate closes after about 0.67 s (up to 0.92 s by where the stall
+    falls; 1.41 s at 2 s), its lease shortly after: the lease runs `lease·(1−ρ)` from the
+    renewal's send, renewals go every `lease/4`, the gate closes the fence margin before the
+    end. A link outage costs less: a lost renewal is retried only on the `lease/4` grid, so an
+    outage to both voters of just over half the lease can cost it. `naut check` warns of a
+    lease under 1 s.
 - **A change of lease across a restart.** A promise can outlive its process. So the state
   file records the longest lease a promise may still run under (`VoterState.Lease`). A voter
   restarted with a shorter lease waits that longer one out before it grants. Until then it
@@ -1869,6 +2420,11 @@ its own: its last-seen term + 1, marked as an override term in the journal (belo
 frames and on proxied calls. When the override ends, the controller reports that term to the
 voters before it campaigns, so they promise only higher terms, and the next election lands above
 it.
+
+**The override and a hot takeover (S2c-1).** An override takes a term no voter granted, so
+no voter's records can vouch for it: it always takes over cold. When it ends, its report to
+the voters sets their epoch record for its name to the override's term, so a later takeover
+from an image of before it goes cold too. (Not built yet: this is the rule it must follow.)
 
 **The override is the only path to two writers.** It is taken when an engineer asserts
 something that is not true. The record exists for that case. If the other side was in fact

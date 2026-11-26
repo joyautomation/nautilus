@@ -12,17 +12,27 @@
 // selector). nautilus's own lowering runs first, so what nautilus cannot
 // run is refused before anything else.
 //
-// This is the first subset. What it does not write yet it refuses with a
-// rule-tagged diagnostic, never a guess: more than one task, user
-// FUNCTIONs and FUNCTION_BLOCKs, UDTs and enums, arrays, STRING, LTIME,
-// TIME arithmetic, bitwise operators, SR/RS, TRUNC, the overloaded TO_*
-// conversions, division by anything but a non-zero constant (nautilus
-// gives 0 and counts it; the CPU's answer is not pinned down), and every
-// builtin outside the table in expr.go.
+// What it does not translate yet it refuses with a rule-tagged
+// diagnostic, never a guess, worded as the writer's gap with the issue
+// that closes it (gaps.go): WSTRING, LTIME, TIME arithmetic, and every
+// builtin outside the table in expr.go. Arrays are written with their
+// indices checked where nautilus would fault the scan (arrays.go). The project's FUNCTION_BLOCKs and FUNCTIONs are written as FBs
+// (multi-instances in their callers) and FCs (pous.go). Each task is its
+// own cyclic interrupt OB, and
+// the tags tasks share are copied per task as nautilus copies them
+// (tasks.go). STRUCTs the project
+// declares are written inline (structs.go), with nautilus's start
+// values; programs are lowered with the project's library in scope, as
+// naut check compiles them.
+// Bitwise operators, the guarded divisions (division by anything but a
+// non-zero constant: nautilus gives 0), SR/RS, the shifts, MUX, TRUNC and
+// the overloaded TO_* conversions are written (ops.go, expr.go).
 //
-// Known divergence, documented rather than refused: a REAL → integer
-// conversion out of range faults the scan in nautilus, while the CPU sets
-// ENO FALSE and carries on.
+// Known divergences, documented rather than refused: where nautilus
+// faults the scan the CPU sets ENO FALSE and carries on: a REAL → integer
+// conversion out of range (TRUNC included), a MUX selector out of range,
+// a negative shift count. Each is a warning at its use site
+// (Output.Warnings), which check and the deploy print.
 //
 // Comments in the nautilus source are not carried into the SCL: nautilus
 // is where the program is read and edited.
@@ -41,11 +51,13 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ld"
+	"github.com/joyautomation/nautilus/lang/sfc"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -58,15 +70,23 @@ type Program struct {
 	Path   string
 	Source string
 	// Libs are project library sources (ST or LD) whose function block
-	// signatures a ladder file needs in scope.
+	// signatures a ladder file needs in scope. A name the program takes
+	// from one (a TYPE, FUNCTION, block or global constant) is a writer
+	// gap, not nautilus's refusal.
 	Libs []string
 }
 
 // Global is one manifest tag, which becomes a member of the global DB.
 type Global struct {
-	Name   string
-	Type   string // IEC type name, e.g. REAL, BOOL, INT
-	Init   string // ST literal text, or ""
+	Name string
+	// Type is an IEC type name (REAL, BOOL, INT) or a STRUCT the project
+	// declares (#1299).
+	Type string
+	Init string // an elementary tag's start value, as an ST literal, or ""
+	// Start is a structured tag's start value as the manifest gives it
+	// (init: { Depth: 0.45 }): the writer types each member from the
+	// struct, as nautilus seeds it. nil when the tag has none.
+	Start  any
 	Retain bool
 }
 
@@ -77,6 +97,9 @@ type Task struct {
 	Name     string
 	Program  string // the PROGRAM's name
 	Interval time.Duration
+	// DtTag is the task's dt-tag: the tag nautilus writes the measured
+	// scan-to-scan seconds into each scan. "" when it has none.
+	DtTag string
 }
 
 // Input is everything the writer needs from a project.
@@ -121,10 +144,17 @@ type Output struct {
 	// Sources says where each generated file came from, by its Path:
 	// Locate reads a TIA compile message back through it.
 	Sources map[string]Source
+	// Warnings are the places where the CPU behaves differently from
+	// nautilus in a case the writer documents rather than refuses (a MUX
+	// selector out of range, a negative shift count, a REAL beyond an
+	// integer's range: nautilus faults the scan, the CPU sets ENO FALSE
+	// and carries on). They come with the files, and with the
+	// diagnostics when Write refuses.
+	Warnings []Diag
 	// names are the readable names under each root, lower-cased: the
-	// manifest tags under "", a program's statics under its name. The
-	// value says whether the name has members (an FB instance).
-	names map[string]map[string]bool
+	// manifest tags under "", a program's statics under its name, each
+	// with what it holds below it (nil: a scalar).
+	names map[string]map[string]*shape
 }
 
 // Symbol maps a nautilus tag path to the Web API symbol of the same value:
@@ -133,28 +163,106 @@ type Output struct {
 //
 // It answers only for what the CPU holds where the Web API can read it: a
 // manifest tag, or a program's static (not a temp), and members below
-// them.
+// them: a struct's at any depth, an FB instance's one level down.
 func (o Output) Symbol(path string) (string, bool) {
 	if head, rest, ok := strings.Cut(path, "."); ok {
 		for k, root := range o.Roots {
 			if k == "" || !strings.EqualFold(k, head) {
 				continue
 			}
-			v, member, deep := strings.Cut(rest, ".")
-			hasMembers, known := o.names[strings.ToLower(k)][strings.ToLower(v)]
-			if !known || deep && (!hasMembers || strings.Contains(member, ".")) {
-				return "", false
+			if sym, ok := o.member(k, root, rest); ok {
+				return sym, true
 			}
-			return root + "." + rest, true
 		}
 	}
-	// Tags are scalars in the first subset: no member path below one.
-	if root, ok := o.Roots[""]; ok && !strings.Contains(path, ".") {
-		if _, known := o.names[""][strings.ToLower(path)]; known {
-			return root + "." + path, true
-		}
+	if root, ok := o.Roots[""]; ok {
+		return o.member("", root, path)
 	}
 	return "", false
+}
+
+// member maps path, below the root of scope k, to its symbol: each part
+// must be a name the writer declared there.
+func (o Output) member(k, root, path string) (string, bool) {
+	parts := strings.Split(path, ".")
+	head, idx, ok := cutIndex(parts[0])
+	if !ok {
+		return "", false
+	}
+	s, known := o.names[strings.ToLower(k)][strings.ToLower(head)]
+	if !known {
+		return "", false
+	}
+	// Each part as the writer declared it: the caller's case may differ.
+	sym := root + "." + sclName(s.name)
+	if s, sym, ok = s.indexed(sym, idx); !ok {
+		return "", false
+	}
+	for i, p := range parts[1:] {
+		p, idx, ok := cutIndex(p)
+		if !ok {
+			return "", false
+		}
+		switch {
+		case s.instance:
+			if i != len(parts)-2 || p == "" || idx != nil {
+				return "", false
+			}
+			sym += "." + p // an IEC pin, as nautilus names it
+		case s.members == nil:
+			return "", false
+		default:
+			next, ok := s.members[strings.ToLower(p)]
+			if !ok {
+				return "", false
+			}
+			s = next
+			sym += "." + sclName(s.name)
+			if s, sym, ok = s.indexed(sym, idx); !ok {
+				return "", false
+			}
+		}
+	}
+	return sym, true
+}
+
+// cutIndex splits a path part into its name and the indices after it
+// (Recipes[2], B[-1, 3]); idx is nil for a part with none.
+func cutIndex(p string) (name string, idx []int64, ok bool) {
+	open := strings.IndexByte(p, '[')
+	if open < 0 {
+		return p, nil, true
+	}
+	if !strings.HasSuffix(p, "]") || open == 0 {
+		return "", nil, false
+	}
+	for _, f := range strings.Split(p[open+1:len(p)-1], ",") {
+		n, err := strconv.ParseInt(strings.TrimSpace(f), 10, 64)
+		if err != nil {
+			return "", nil, false
+		}
+		idx = append(idx, n)
+	}
+	return p[:open], idx, true
+}
+
+// indexed is the element of the array s at idx, written after sym: every
+// dimension indexed, inside its bounds. No idx is s itself.
+func (s *shape) indexed(sym string, idx []int64) (*shape, string, bool) {
+	if idx == nil {
+		return s, sym, true
+	}
+	if len(idx) != len(s.dims) {
+		return nil, "", false
+	}
+	parts := make([]string, len(idx))
+	for i, n := range idx {
+		if n < s.dims[i].lo || n > s.dims[i].hi {
+			return nil, "", false
+		}
+		parts[i] = strconv.FormatInt(n, 10)
+	}
+	return s.elem, sym + "[" + strings.Join(parts, ",") + "]", true
 }
 
 // Source is where one generated file came from: the nautilus file, and
@@ -205,13 +313,33 @@ func Write(in Input) (Output, []Diag, error) {
 	}
 	tagsDB = in.BlockPrefix + tagsDB
 	prefix := in.BlockPrefix
-	w := &writer{globals: map[string]Global{}, tagsDB: tagsDB, prefix: prefix}
+	w := &writer{globals: map[string]Global{}, tagsDB: tagsDB, prefix: prefix, tasks: len(in.Tasks)}
 	for _, g := range in.Globals {
 		w.globals[strings.ToLower(g.Name)] = g
 	}
-	out := Output{Roots: map[string]string{"": quote(tagsDB)}, names: map[string]map[string]bool{"": {}}, Sources: map[string]Source{}}
+	// The project's library (every program is given the same one) and
+	// the programs' own TYPE blocks: the types the tags and the programs
+	// use (#1299).
+	var libs []string
+	seenLib := map[string]bool{}
+	var own []*st.Program
+	for _, p := range in.Programs {
+		for _, l := range p.Libs {
+			if !seenLib[l] {
+				seenLib[l] = true
+				libs = append(libs, l)
+			}
+		}
+		if src, _, err := toST(p); err == nil {
+			if prog, err := st.Parse(src); err == nil {
+				own = append(own, prog)
+			}
+		}
+	}
+	w.lib = loadLibrary(libs, own)
+	out := Output{Roots: map[string]string{"": quote(tagsDB)}, names: map[string]map[string]*shape{"": {}}, Sources: map[string]Source{}}
 	for _, g := range in.Globals {
-		out.names[""][strings.ToLower(g.Name)] = false
+		out.names[""][strings.ToLower(g.Name)] = w.shapeOf(g.Name, g.Type)
 	}
 	// Every block name, lower-cased (TIA's are case-insensitive): a
 	// program named Tags would make an FB and a DB both "Tags".
@@ -226,7 +354,7 @@ func Write(in Input) (Output, []Diag, error) {
 		return true
 	}
 
-	progs := map[string]bool{}
+	var ready []parsed
 	for _, p := range in.Programs {
 		src, lines, err := toST(p)
 		if err != nil {
@@ -236,14 +364,31 @@ func Write(in Input) (Output, []Diag, error) {
 		if err != nil {
 			return Output{}, nil, fmt.Errorf("%s: %w", p.Path, err)
 		}
-		mark := len(w.diags)
 		if !strings.EqualFold(prog.TopKeyword, "PROGRAM") || prog.Name == "" {
 			w.diag("siemens/program", p.Path, 1, "the source declares no PROGRAM")
 			continue
 		}
-		pw := w.program(p.Path, prog)
+		ready = append(ready, parsed{path: p.Path, src: src, libs: p.Libs, lines: lines, prog: prog})
+		// The blocks the program file declares beside its PROGRAM.
+		w.lib.addPOUs(prog, p.Path, lines, false, false)
+	}
+	// With more than one task, what each task shares with the others
+	// (tasks.go), before any program is written: a program's FB reads a
+	// shared tag from its task's copy.
+	if len(in.Tasks) > 1 {
+		w.shares = w.sharing(in, ready)
+	}
+
+	progs := map[string]bool{}
+	for _, p := range ready {
+		prog, lines := p.prog, p.lines
+		mark, wmark := len(w.diags), len(w.warnings)
+		pw := w.program(p.path, p.libs, p.src, lines, prog)
 		for i := mark; i < len(w.diags); i++ {
 			w.diags[i].Line = mapLine(lines, w.diags[i].Line)
+		}
+		for i := wmark; i < len(w.warnings); i++ {
+			w.warnings[i].Line = mapLine(lines, w.warnings[i].Line)
 		}
 		if pw == nil {
 			continue
@@ -253,6 +398,12 @@ func Write(in Input) (Output, []Diag, error) {
 			continue
 		}
 		progs[strings.ToLower(prog.Name)] = true
+		if pw.faults {
+			if w.faultProgs == nil {
+				w.faultProgs = map[string]bool{}
+			}
+			w.faultProgs[strings.ToLower(prog.Name)] = true
+		}
 		out.names[strings.ToLower(prog.Name)] = pw.statics
 		out.Files = append(out.Files,
 			File{Path: fbName + ".scl", Data: pw.fb},
@@ -261,25 +412,81 @@ func Write(in Input) (Output, []Diag, error) {
 		for i, l := range pw.lines {
 			body[i] = mapLine(lines, l)
 		}
-		out.Sources[fbName+".scl"] = Source{Path: p.Path, Body: body}
-		out.Sources[dbName+".db"] = Source{Path: p.Path}
+		out.Sources[fbName+".scl"] = Source{Path: p.path, Body: body}
+		out.Sources[dbName+".db"] = Source{Path: p.path}
 		out.Roots[prog.Name] = quote(dbName)
 	}
 
-	// One task in v1. nautilus copies shared tags in at a task's scan
-	// start and commits them at its end, while cyclic interrupt OBs
-	// preempt each other and touch the tags DB in place: with two tasks
-	// the CPU would see a different data model. Copy-in/copy-out comes
-	// later, as its own item.
-	if len(in.Tasks) > 1 {
-		w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("%d tasks: the first subset writes one (nautilus's per-task copy of shared tags has no SCL form yet)", len(in.Tasks)))
+	// The project's blocks the programs reach, callees first.
+	pouOrder := w.writePOUs(&out, claim)
+
+	// The helper functions the programs call: the guarded divisions and
+	// the conversions to STRING. Files come out with these first (the
+	// sort below), so tiad, which generates the sources in the order
+	// given, has each FC before an FB that calls it.
+	fns := make([]string, 0, len(w.guarded))
+	for fn := range w.guarded {
+		fns = append(fns, fn)
 	}
-	for i, t := range in.Tasks {
-		if i > 0 {
-			break
+	sort.Strings(fns)
+	for _, fn := range fns {
+		name := prefix + fn
+		src, what := guardedSource, "the guarded division function "
+		if _, ok := stringHelpers[fn]; ok {
+			src, what = stringHelperSource, "the STRING conversion function "
 		}
-		if !progs[strings.ToLower(t.Program)] {
-			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s runs program %s, which was not written", t.Name, t.Program))
+		if !claim(name, what+fn) {
+			continue
+		}
+		out.Files = append(out.Files, File{Path: name + ".scl", Data: src(prefix, fn)})
+		out.Sources[name+".scl"] = Source{Path: w.guarded[fn]}
+	}
+
+	// nautilus writes a task's dt-tag every scan; the task's OB does it
+	// here with RUNTIME() (dt.go), the start times kept in a clock DB.
+	clock := prefix + "Clock"
+	dts := map[string]*dtOf{}
+	for _, t := range in.Tasks {
+		if t.DtTag == "" {
+			continue
+		}
+		d, why := w.dtFor(t, clock)
+		if why != "" {
+			w.diag("siemens/dt-tag", "nautilus.yaml", 0, fmt.Sprintf("task %s's dt-tag %s: %s", t.Name, t.DtTag, why))
+			continue
+		}
+		dts[t.Name] = d
+	}
+	if len(dts) > 0 && claim(clock, "the clock DB of the tasks' dt-tags") {
+		out.Files = append(out.Files, File{Path: clock + ".db", Data: clockDB(clock, in.Tasks, dts)})
+		out.Sources[clock+".db"] = Source{Path: "nautilus.yaml"}
+	}
+	// The faults DB, when a program can fault the scan (arrays.go): a
+	// record for each task whose program can.
+	faults := ""
+	var faultTasks []string
+	for _, t := range in.Tasks {
+		if w.faultProgs[strings.ToLower(t.Program)] {
+			faultTasks = append(faultTasks, t.Name)
+		}
+	}
+	if len(faultTasks) > 0 && claim(prefix+faultsDB, "the faults DB") {
+		faults = prefix + faultsDB
+		out.Files = append(out.Files, File{Path: faults + ".db", Data: faultsSource(faults, faultTasks)})
+		out.Sources[faults+".db"] = Source{Path: "nautilus.yaml"}
+	}
+	// One cyclic interrupt OB per task: OB30 to OB38, then from 123, the
+	// numbers an S7-1500 gives cyclic interrupts.
+	runBy := map[string]string{}
+	for i, t := range in.Tasks {
+		pk := strings.ToLower(t.Program)
+		if other, twice := runBy[pk]; twice {
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s runs program %s, which task %s runs too", t.Name, t.Program, other))
+			continue
+		}
+		runBy[pk] = t.Name
+		if !progs[pk] {
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s runs program %s, which the writer could not write (its diagnostics are above)", t.Name, t.Program))
 			continue
 		}
 		switch {
@@ -293,12 +500,38 @@ func Write(in Input) (Output, []Diag, error) {
 			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: interval %s is over the 60 s an S7-1500 cyclic interrupt allows", t.Name, t.Interval))
 			continue
 		}
-		ob := OB{Name: prefix + "OB_" + t.Name, Number: 30, Cycle: t.Interval}
+		number := 30 + i
+		if i > 8 {
+			number = 123 + i - 9
+		}
+		ob := OB{Name: prefix + "OB_" + t.Name, Number: number, Cycle: t.Interval}
 		if !claim(ob.Name, "the OB of task "+t.Name) {
 			continue
 		}
+		sh := w.shares[pk]
+		if sh != nil {
+			if !claim(sh.db, "the scan DB of task "+t.Name) {
+				continue
+			}
+			db, why := w.scanDB(sh)
+			if why != "" {
+				w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: %s", t.Name, why))
+				continue
+			}
+			out.Files = append(out.Files, File{Path: sh.db + ".db", Data: db})
+			out.Sources[sh.db+".db"] = Source{Path: "nautilus.yaml"}
+		}
+		fdb := ""
+		if w.faultProgs[pk] {
+			fdb = faults
+		}
+		src, why := w.obSource(ob, prefix+t.Program+"_DB", sh, dts[t.Name], fdb, t.Name)
+		if why != "" {
+			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: %s", t.Name, why))
+			continue
+		}
 		out.OBs = append(out.OBs, ob)
-		out.Files = append(out.Files, File{Path: ob.Name + ".scl", Data: obSource(ob, prefix+t.Program+"_DB")})
+		out.Files = append(out.Files, File{Path: ob.Name + ".scl", Data: src})
 		out.Sources[ob.Name+".scl"] = Source{Path: "nautilus.yaml"}
 	}
 
@@ -310,18 +543,96 @@ func Write(in Input) (Output, []Diag, error) {
 		}
 	}
 
-	if len(w.diags) > 0 {
-		return Output{}, w.diags, nil
+	// The PLC data types of the STRUCTs everything above named, last:
+	// the tags DB, the scan DBs, the programs and the project's blocks
+	// each reach some.
+	typeOrder := w.writeTypes(&out, claim)
+	// The data type a block that can fault keeps its fault in (arrays.go),
+	// first: the blocks declare it.
+	if w.faultType && claim(prefix+faultType, "the data type of a block's fault") {
+		name := prefix + faultType + ".udt"
+		out.Files = append(out.Files, File{Path: name, Data: faultTypeSource(prefix + faultType)})
+		out.Sources[name] = Source{Path: "nautilus.yaml"}
+		typeOrder = append([]string{name}, typeOrder...)
 	}
-	sort.Slice(out.Files, func(i, j int) bool { return out.Files[i].Path < out.Files[j].Path })
+
+	if len(w.diags) > 0 {
+		return Output{Warnings: w.warnings}, w.diags, nil
+	}
+	out.Warnings = w.warnings
+	// tiad generates the sources in the order given, and TIA generates a
+	// block only once what it calls exists: the data types first (each
+	// after the types it holds), then the guarded division FCs, then the
+	// project's blocks callees first, then the rest.
+	rank := map[string]int{}
+	for i, f := range typeOrder {
+		rank[f] = i - len(typeOrder)
+	}
+	for _, fn := range fns {
+		rank[prefix+fn+".scl"] = 1
+	}
+	for i, f := range pouOrder {
+		rank[f] = 2 + i
+	}
+	last := 2 + len(pouOrder)
+	rankOf := func(p string) int {
+		if r, ok := rank[p]; ok {
+			return r
+		}
+		return last
+	}
+	sort.SliceStable(out.Files, func(i, j int) bool {
+		a, b := out.Files[i].Path, out.Files[j].Path
+		if ra, rb := rankOf(a), rankOf(b); ra != rb {
+			return ra < rb
+		}
+		return a < b
+	})
 	return out, nil, nil
 }
 
 type writer struct {
 	globals map[string]Global
+	lib     *library
 	tagsDB  string // with the prefix
 	prefix  string
 	diags   []Diag
+	// warnings: Output.Warnings.
+	warnings []Diag
+	// pairWarned: the pair-state warning went out (expr.go).
+	pairWarned bool
+	// guarded are the guarded division functions the programs call
+	// (ops.go), each with the first program that called it.
+	guarded map[string]string
+	// shares is what each program (lower-cased) shares with the other
+	// tasks (tasks.go).
+	shares map[string]*share
+	// tasks is how many tasks the project has (pous.go: a block of a
+	// project with several names no manifest tag).
+	tasks int
+	// needed are the project's blocks the programs reach, each with where
+	// it is first used, and queue those still to write (pous.go).
+	needed map[string]site
+	queue  []string
+	// types are the STRUCTs the written SCL names (lower-cased), each
+	// with the first nautilus file that names it (structs.go).
+	types map[string]string
+	// faulty and impure memoize canFault and fcImpure by block
+	// (lower-cased; arrays.go); faultProgs are the programs (lower-cased)
+	// whose FB checks or propagates a fault.
+	faulty, impure map[string]int
+	faultProgs     map[string]bool
+	// faultType: a block keeps a fault, so the PLC data type is written.
+	faultType bool
+}
+
+func (w *writer) useGuarded(fn, path string) {
+	if w.guarded == nil {
+		w.guarded = map[string]string{}
+	}
+	if _, ok := w.guarded[fn]; !ok {
+		w.guarded[fn] = path
+	}
 }
 
 func (w *writer) diag(rule, path string, line int, msg string) {
@@ -343,18 +654,6 @@ func instanceDB(fb, db string) []byte {
 	return []byte(b.String())
 }
 
-func obSource(ob OB, instDB string) []byte {
-	var b strings.Builder
-	fmt.Fprintf(&b, "ORGANIZATION_BLOCK %s\n", quote(ob.Name))
-	fmt.Fprintf(&b, "TITLE = \"Cyclic interrupt, %s\"\n", ob.Cycle)
-	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\n")
-	b.WriteString("VERSION : 0.1\n")
-	b.WriteString("\nBEGIN\n")
-	fmt.Fprintf(&b, "\t%s();\n", quote(instDB))
-	b.WriteString("END_ORGANIZATION_BLOCK\n")
-	return []byte(b.String())
-}
-
 // globalDB writes the manifest's tags as one optimized global DB, retained
 // tags in a RETAIN section.
 func (w *writer) globalDB() ([]byte, bool) {
@@ -363,25 +662,99 @@ func (w *writer) globalDB() ([]byte, bool) {
 		names = append(names, k)
 	}
 	sort.Strings(names)
-	var plain, retained []string
+	// begin are a struct tag's start values from its init: map, as
+	// assignments in the DB's BEGIN section (TIA keeps them: measured on
+	// V21, #1301 D1b); the members it does not name start at the data
+	// type's own start values.
+	var plain, retained, begin []string
 	ok := true
+	// A type that cannot be written is reported once, at its first tag,
+	// not once per tag of the type.
+	refused := map[string]bool{}
 	for _, k := range names {
 		g := w.globals[k]
-		typ, why := sclType(g.Type)
+		if sd := w.structOf(g.Type); sd != nil {
+			if g.Init != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: init %s is not a struct's start value", g.Name, g.Init))
+				ok = false
+				continue
+			}
+			tk := strings.ToLower(strings.TrimSpace(g.Type))
+			if why := w.typeRefusal(g.Type, map[string]bool{}); why != "" {
+				ok = false
+				if !refused[tk] {
+					refused[tk] = true
+					w.diag("siemens/type", "nautilus.yaml", 0, fmt.Sprintf("tag %s: the type %s: %s", g.Name, strings.TrimSpace(g.Type), why))
+				}
+				continue
+			}
+			if g.Start != nil {
+				if why := w.seedCheck(g.Type, g.Start); why != "" {
+					w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: nautilus refuses the start value: %s", g.Name, why))
+					ok = false
+					continue
+				}
+				ls, why := w.overrides(g.Type, sclName(g.Name), g.Start)
+				if why != "" {
+					w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
+					ok = false
+					continue
+				}
+				begin = append(begin, ls...)
+			}
+			line := fmt.Sprintf("      %s : %s;", sclName(g.Name), w.typeName(sd, "nautilus.yaml"))
+			if g.Retain {
+				retained = append(retained, line)
+			} else {
+				plain = append(plain, line)
+			}
+			continue
+		}
+		typ, why := w.sclType(g.Type)
 		if why != "" {
 			w.diag("siemens/type", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
 			ok = false
 			continue
 		}
-		line := fmt.Sprintf("      %s : %s", g.Name, typ)
+		if g.Start != nil && isArrayType(g.Type) {
+			if g.Init != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: init %s is not an array's start value", g.Name, g.Init))
+				ok = false
+				continue
+			}
+			if why := w.seedCheck(g.Type, g.Start); why != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: nautilus refuses the start value: %s", g.Name, why))
+				ok = false
+				continue
+			}
+			ls, why := w.arrayOverrides(g.Type, sclName(g.Name), g.Start)
+			if why != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
+				ok = false
+				continue
+			}
+			begin = append(begin, ls...)
+		} else if g.Start != nil {
+			w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, gapMessage(gapOther, fmt.Sprintf("the start value %v of a %s", g.Start, g.Type), "")))
+			ok = false
+			continue
+		}
+		line := fmt.Sprintf("      %s : %s", sclName(g.Name), typ)
 		if g.Init != "" {
 			init, why := literal(g.Init)
+			if w.enumOf(g.Type) != nil {
+				init, why = w.enumInit(g.Type, g.Init)
+			}
 			if why != "" {
 				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
 				ok = false
 				continue
 			}
 			line += " := " + init
+		} else if n, isEnum := w.enumStart(g.Type); isEnum {
+			line += " := " + n
+		} else if n := w.arrayStart(g.Type, nil); n != "" {
+			line += " := " + n
 		}
 		line += ";"
 		if g.Retain {
@@ -407,7 +780,11 @@ func (w *writer) globalDB() ([]byte, bool) {
 		b.WriteString(strings.Join(retained, "\n") + "\n")
 		b.WriteString("   END_VAR\n")
 	}
-	b.WriteString("\nBEGIN\n\nEND_DATA_BLOCK\n")
+	b.WriteString("\nBEGIN\n")
+	for _, l := range begin {
+		b.WriteString("   " + l + "\n")
+	}
+	b.WriteString("\nEND_DATA_BLOCK\n")
 	return []byte(b.String()), true
 }
 
@@ -426,12 +803,77 @@ func literal(src string) (string, string) {
 	default:
 		return "", fmt.Sprintf("init %q is not a literal", src)
 	}
-	pw := &progWriter{w: &writer{globals: map[string]Global{}}, locals: map[string]local{}}
-	return pw.expr(a.Value, 0), ""
+	return constValue(loadLibrary(nil, nil), a.Value)
+}
+
+// constValue prints a constant (a manifest init, a TYPE member's initial
+// value) for a declaration, or says why it cannot: a negative number is
+// folded to one literal (SCL's declarations take -5, not an expression),
+// and whatever the expression printer refuses is refused here, never
+// printed as an empty value.
+func constValue(lib *library, e st.Expression) (string, string) {
+	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
+		if n, ok := u.Operand.(*st.NumberLit); ok {
+			return "-" + number(n), ""
+		}
+	}
+	switch e.(type) {
+	case *st.NumberLit, *st.BoolLit, *st.StringLit, *st.TimeLit, *st.TypedLit:
+	default:
+		return "", gapMessage(gapOther, "an initial value written as an expression", "a start value is one literal in SCL")
+	}
+	scratch := &writer{globals: map[string]Global{}, lib: lib}
+	pw := &progWriter{w: scratch, locals: map[string]local{}}
+	s := pw.expr(e, 0)
+	if len(scratch.diags) > 0 {
+		return "", scratch.diags[0].Message
+	}
+	if s == "" {
+		return "", fmt.Sprintf("the value %s has no SCL form here", exprShort(e))
+	}
+	return s, ""
+}
+
+// ExternalTypes is the type the programs declare for each tag they bind
+// in a VAR_EXTERNAL or VAR_GLOBAL block, by lower-cased name. nautilus
+// gives a tag with no type: the type the logic binds it as (runtime
+// tagdef.go: `init: 0` on a tag declared `Counter : DINT` is a DINT), so
+// the CLI asks this before it types such a tag for the tags DB. A source
+// that does not parse declares nothing here (check reports it). Two
+// programs binding one tag as different types is the runtime's refusal
+// (CheckBindings), not the writer's: the last one read wins here.
+func ExternalTypes(progs []Program) map[string]string {
+	out := map[string]string{}
+	add := func(vbs []st.VarBlock) {
+		for _, vb := range vbs {
+			if vb.Kind != "VAR_EXTERNAL" && vb.Kind != "VAR_GLOBAL" {
+				continue
+			}
+			for _, v := range vb.Variables {
+				if t := strings.TrimSpace(v.Datatype); t != "" {
+					out[strings.ToLower(v.Name)] = t
+				}
+			}
+		}
+	}
+	for _, p := range progs {
+		src, _, err := toST(p)
+		if err != nil {
+			continue
+		}
+		if prog, err := st.Parse(src); err == nil {
+			add(prog.VarBlocks)
+		}
+	}
+	return out
 }
 
 // toST returns a program's source as ST, with lines[i] the original line
-// of ST line i+1 (nil when the source is ST already).
+// of ST line i+1 (nil when the source is ST already). A chart is the ST
+// state machine nautilus itself runs (sfc.TranspileWithLines, as the
+// runtime's program loader), so the CPU runs the same per-scan evolution:
+// step flags, Step.T and the timed qualifiers are plain statics and TONs
+// of that ST (#1302).
 func toST(p Program) (string, []int, error) {
 	switch strings.ToLower(path.Ext(p.Path)) {
 	case ".ld":
@@ -450,6 +892,8 @@ func toST(p Program) (string, []int, error) {
 		return s, out, nil
 	case ".fbd":
 		return fbd.TranspileWithLines(p.Source)
+	case ".sfc":
+		return sfc.TranspileWithLines(p.Source)
 	}
 	return p.Source, nil, nil
 }

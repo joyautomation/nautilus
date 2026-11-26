@@ -74,7 +74,13 @@ func checkNetworkSections(m Manifest) error {
 	return nil
 }
 
-func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
+// Sparkplug builds the manifest's Sparkplug edge node, nil without a
+// sparkplug: section. extra are options naut run adds (a redundant
+// pair's, #798). Under redundancy each replica's MQTT client id is its
+// own: the client id (or "<group>-<edge>") then "-<member>", the pair
+// member's name, or the pod's (POD_NAME) under a Lease election, so the
+// broker never drops one replica's session for the other's.
+func (p *Project) Sparkplug(rt *runtime.Runtime, extra ...sparkplug.Option) (*sparkplug.Node, error) {
 	c := p.sparkplug
 	if c == nil {
 		return nil, nil
@@ -99,6 +105,7 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 
 		DeviceDeathDelay: time.Duration(c.DeviceDeathDelay),
 	}
+	cfg.ClientID = sparkplugClientID(c.ClientID, c.GroupID, edge, p.sparkplugMember())
 	if c.PrimaryHostOffline == "disconnect" { // Load refused anything but buffer/disconnect
 		cfg.PrimaryHostOffline = sparkplug.HostOfflineDisconnect
 	}
@@ -144,7 +151,32 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 		// through on the write gate alone (#708 PR 8b).
 		opts = append(opts, sparkplug.WithIdentityRequired())
 	}
-	return sparkplug.New(rt, cfg, opts...)
+	return sparkplug.New(rt, cfg, append(opts, extra...)...)
+}
+
+// sparkplugClientID is the edge node's MQTT client id: the manifest's (or
+// "<group>-<edge>"), then "-<member>" under redundancy. "" leaves the
+// node's default.
+func sparkplugClientID(id, group, edge, member string) string {
+	if member == "" {
+		return id
+	}
+	if id == "" {
+		id = group + "-" + edge
+	}
+	return id + "-" + member
+}
+
+// sparkplugMember names this replica in its MQTT client id: the pair
+// member, the pod under a Lease election, "" without redundancy.
+func (p *Project) sparkplugMember() string {
+	if p.Member != "" {
+		return p.Member
+	}
+	if p.Redundancy != nil {
+		return os.Getenv("POD_NAME")
+	}
+	return ""
 }
 
 // sparkplugDevices makes each field connection a Sparkplug device

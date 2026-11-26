@@ -2,6 +2,7 @@ package optommp
 
 import (
 	"errors"
+	"github.com/joyautomation/nautilus/internal/fence"
 	"io"
 	"net"
 	"sync"
@@ -60,9 +61,15 @@ func TestOptoMMPFencedWriteResetsAtItsDeadline(t *testing.T) {
 	c, done, _ := silentUnit(t)
 	d := fencedOpto(t)
 	d.SetSendGate(func() (bool, time.Duration, uint64) { return true, 200 * time.Millisecond, 1 })
+	d.SetCutLabel("epic1", false)
+	fence.ResetCutsForTest()
 	start := time.Now()
 	if _, err := d.flushCount(c); err == nil {
 		t.Fatal("an unanswered write succeeded")
+	}
+	// #710: one write cut at its deadline, under the driver's name.
+	if got := fence.CutCounts(); len(got) != 1 || got["epic1"] != 1 {
+		t.Fatalf("writes cut = %v, want epic1 1", got)
 	}
 	if took := time.Since(start); took > 2*time.Second {
 		t.Fatalf("the unanswered write held the flush %s; want it ended at its 200 ms deadline", took)

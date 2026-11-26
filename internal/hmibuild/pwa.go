@@ -224,6 +224,14 @@ self.addEventListener('activate', (e) => {
 // alarms.
 const ACK = /^https?:\/\/[^\/?#@\\\s\x00-\x1f\x7f]+(\/[^?#@\\\s\x00-\x1f\x7f]*)?\/alarm-ack\/[A-Za-z0-9_-]+$/;
 
+// A page's screen (#1249): the alarm, or a flood's focus view, on this
+// origin. Anything else opens the alarms.
+const PATH = /^\/alarms(\?[A-Za-z0-9=&%._~+-]{0,512})?$/;
+
+function pagePath(v) {
+	return typeof v === 'string' && PATH.test(v) ? v : '/alarms';
+}
+
 function ackLink(v) {
 	return typeof v === 'string' && v.length <= 4096 && ACK.test(v) ? v : '';
 }
@@ -246,7 +254,7 @@ function describe(d) {
 		body: body,
 		tag: 'alarm-' + (str(d.alarm) || 'page'),
 		renotify: true,
-		data: { url: '/alarms', ack: ack },
+		data: { url: pagePath(d.path), ack: ack },
 	};
 	// Where a browser shows actions, the alarms stay one press away.
 	if (ack) options.actions = [{ action: 'alarms', title: 'Open alarms' }];

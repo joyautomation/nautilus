@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -38,6 +39,9 @@ type ctxChannel struct {
 	mu     sync.Mutex
 	ctxs   []context.Context
 	during func(ctx context.Context) // runs inside the write, as a later fragment would
+	hang   bool                      // the write waits for its context, and fails with its error
+	onWire bool                      // with hang: the request was on the wire, so the transport records the cut (fence.CutSend), as cip's does
+	refuse error                     // the write waits for its deadline, then fails with this (a refusal at fence.Check as the lease ends)
 }
 
 func (c *ctxChannel) Read(ctx context.Context, variable string, shape ir.Value, elem string) (ir.Value, error) {
@@ -50,6 +54,17 @@ func (c *ctxChannel) Write(ctx context.Context, variable string, data ir.Value, 
 	c.mu.Unlock()
 	if during != nil {
 		during(ctx)
+	}
+	if c.refuse != nil {
+		<-ctx.Done()
+		return c.refuse
+	}
+	if c.hang {
+		<-ctx.Done()
+		if c.onWire {
+			fence.CutSend(ctx, false)
+		}
+		return ctx.Err()
 	}
 	return nil
 }
@@ -142,5 +157,121 @@ func TestPairChannelWriteJudgedOnOneRead(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if n := len(ch.got()); n != 0 {
 		t.Fatalf("%d write(s) went out under a gate read in another term; want none", n)
+	}
+}
+
+// #710: a channel write still unanswered at its send deadline is one write
+// cut, counted under the channel's name, which reaches the transport on
+// its context; a write the closed gate refused is not, nor one that
+// failed at the deadline before anything was on the wire (a dial, a
+// preliminary read: #1333 review).
+func TestPairChannelWriteCutAtItsDeadlineIsCounted(t *testing.T) {
+	fence.ResetCutsForTest()
+	coord := &pairCoord{}
+	coord.open.Store(true)
+	coord.term.Store(7)
+	ch := &ctxChannel{hang: true, onWire: true}
+	rt, err := runtime.New(runtime.Options{
+		Program:     oneWrite,
+		Scan:        time.Hour,
+		Seed:        map[string]any{"P1": false, "V": int64(7)},
+		Coordinator: coord,
+		Channels:    []runtime.Channel{{Name: "peer", Channel: ch, Timeout: 10 * time.Second}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	if err := rt.Tags().WriteGlobal("P1", ir.BoolVal(true)); err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	deadline := time.Now().Add(3 * time.Second)
+	for fence.CutCounts()["peer"] == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := fence.CutCounts(); got["peer"] != 1 || len(got) != 1 {
+		t.Fatalf("writes cut = %v, want peer 1", got)
+	}
+
+	// Failed at the deadline with nothing on the wire (its dial timed
+	// out): no cut.
+	fence.ResetCutsForTest()
+	dial := &ctxChannel{hang: true}
+	rt2, err := runtime.New(runtime.Options{
+		Program:     oneWrite,
+		Scan:        time.Hour,
+		Seed:        map[string]any{"P1": false, "V": int64(7)},
+		Coordinator: coord,
+		Channels:    []runtime.Channel{{Name: "peer", Channel: dial, Timeout: 10 * time.Second}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt2.Scan()
+	if err := rt2.Tags().WriteGlobal("P1", ir.BoolVal(true)); err != nil {
+		t.Fatal(err)
+	}
+	rt2.Scan()
+	for until := time.Now().Add(3 * time.Second); len(dial.got()) == 0 && time.Now().Before(until); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(600 * time.Millisecond) // past the 300 ms send deadline
+	if got := fence.CutCounts(); len(got) != 0 {
+		t.Fatalf("a write that failed before it was on the wire was counted as cut: %v", got)
+	}
+
+	// The gate closed before the send: refused, not a cut.
+	fence.ResetCutsForTest()
+	coord2 := &pairCoord{}
+	coord2.term.Store(7)
+	ch2 := pairWrite(t, coord2, nil)
+	time.Sleep(100 * time.Millisecond)
+	if n := len(ch2.got()); n != 0 {
+		t.Fatalf("%d writes reached the peer through a closed gate", n)
+	}
+	if got := fence.CutCounts(); len(got) != 0 {
+		t.Fatalf("a write the closed gate refused was counted: %v", got)
+	}
+}
+
+// #710: a write refused at fence.Check (the gate closed, or its request
+// not started) is not a cut, even where the lease's end makes the
+// deadline pass at the same moment.
+func TestPairChannelWriteRefusedBeforeItBeganIsNotACut(t *testing.T) {
+	for name, refusal := range map[string]error{
+		"gate closed": fmt.Errorf("fragment 2: %w", fence.ErrGateClosed),
+		"not started": fmt.Errorf("%w: %w", fence.ErrNotStarted, context.DeadlineExceeded),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fence.ResetCutsForTest()
+			coord := &pairCoord{}
+			coord.open.Store(true)
+			coord.term.Store(7)
+			ch := &ctxChannel{refuse: refusal}
+			rt, err := runtime.New(runtime.Options{
+				Program:     oneWrite,
+				Scan:        time.Hour,
+				Seed:        map[string]any{"P1": false, "V": int64(7)},
+				Coordinator: coord,
+				Channels:    []runtime.Channel{{Name: "peer", Channel: ch, Timeout: 10 * time.Second}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt.Scan()
+			if err := rt.Tags().WriteGlobal("P1", ir.BoolVal(true)); err != nil {
+				t.Fatal(err)
+			}
+			rt.Scan()
+			deadline := time.Now().Add(3 * time.Second)
+			for len(ch.got()) == 0 && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			time.Sleep(600 * time.Millisecond) // past the 300 ms send deadline and the refusal
+			if got := fence.CutCounts(); len(got) != 0 {
+				t.Fatalf("a refused write was counted as cut: %v", got)
+			}
+		})
 	}
 }

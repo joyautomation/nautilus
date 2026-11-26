@@ -1,0 +1,23 @@
+FUNCTION_BLOCK "naut_Slow"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      i : INT;
+   END_VAR
+
+BEGIN
+	"naut_Scan_slow".tags.Status.%X3 := "naut_Scan_slow".tags.Level > 10.0;
+	"naut_Scan_slow".assigned.Status.%X3 := TRUE;
+	IF "naut_Scan_slow".tags.Stop THEN
+		"naut_Scan_slow".tags.Status.%X0 := TRUE;
+		"naut_Scan_slow".assigned.Status.%X0 := TRUE;
+	END_IF;
+	IF "naut_Scan_slow".tags.Start THEN
+		"naut_Scan_slow".tags.Status := 16#0;
+		"naut_Scan_slow".assigned.Status := WORD#16#FFFF;
+	END_IF;
+	FOR #i := 1 TO 3 DO
+		"naut_Scan_slow".tags.Status.%X7 := NOT "naut_Scan_slow".tags.Status.%X7;
+		"naut_Scan_slow".assigned.Status.%X7 := TRUE;
+	END_FOR;
+END_FUNCTION_BLOCK

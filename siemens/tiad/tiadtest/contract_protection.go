@@ -131,7 +131,7 @@ func contractPasswords(t *testing.T, start Starter) {
 		t.Fatal(err)
 	}
 	status, b := rawJSON(t, c, "POST", "/v1/sessions/"+s.ID+"/download", map[string]any{"address": benchCPU,
-		"software": true, "announced": true, "decisions": map[string]any{"startAfter": false},
+		"software": true, "announced": true, "decisions": map[string]any{"resetData": true, "startAfter": false},
 		"secrets": map[string]string{"configurationPassword": old, "fullAccessPassword": BenchFullAccessPassword}})
 	if status != http.StatusOK {
 		t.Errorf("a download carrying an old-rules password: HTTP %d %s", status, b)
@@ -181,7 +181,7 @@ func contractProtected(t *testing.T, start Starter) {
 	path := "/v1/sessions/" + s.ID + "/download"
 	body := func(secrets map[string]string) map[string]any {
 		return map[string]any{"address": benchCPU, "hardware": true, "software": true, "announced": true,
-			"decisions": map[string]any{"startAfter": true, "acceptUnverifiedHardware": true}, "secrets": secrets,
+			"decisions": map[string]any{"resetData": true, "startAfter": true, "acceptUnverifiedHardware": true}, "secrets": secrets,
 			"attestation": map[string]string{"by": BenchAttestation.By, "text": BenchAttestation.Text}}
 	}
 	for _, sec := range []map[string]string{benchLoginJSON, {"protection": BenchConfigurationPassword, "fullAccessPassword": BenchFullAccessPassword}} {

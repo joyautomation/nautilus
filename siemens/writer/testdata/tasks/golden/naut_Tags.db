@@ -1,0 +1,21 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      Alarm : BOOL;
+      Big : REAL := 1.0e+20;
+      Done : BOOL;
+      Hold : TIME := T#5s;
+      Level : REAL := 50.0;
+      Local1 : DINT;
+      Offset : DINT := -5;
+      Pump : "naut_Motor";
+      Run : BOOL;
+      Start : BOOL;
+      Status : WORD;
+      Stop : BOOL;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

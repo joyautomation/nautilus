@@ -161,6 +161,9 @@ of the previous scan, and a rung below reads this scan's, as on any PLC. To capt
 variable** at the call site, use the standard's output binding:
 `t2:TON(PT := T#5S, ET => Elapsed)` — the one way ladder stores a
 non-BOOL (coils only assign BOOL). `=>` works in ST and FBD calls too.
+`ET => Elapsed` stores exactly as `Elapsed := t2.ET` would, so it follows the
+assignment's type rules and is refused where the assignment is: a REAL output
+bound to an INT names the same error as `MyInt := pid1.CV`.
 
 An instance is a local of its program, so **another task's program cannot
 name it**: tasks share only tags. `t2.Q` there — or `Owner.t2.Q` through
@@ -246,7 +249,10 @@ Logix controller scope is.
 - **Its type** is the tag's `type:` (any elementary type, a project `TYPE`,
   or an `ARRAY` of either), else the type its `init:` implies (`TRUE` BOOL,
   a number REAL, `T#5s` TIME, other text STRING). A tag with neither cannot
-  be typed; naming it is an error that says to give it a `type:`.
+  be typed; naming it is an error that says to give it a `type:`. A tag
+  typed only by a number `init:` is a REAL, so passing it to an INT input of
+  a block is refused, and the error says so: `tag In has no type:, so it
+  is REAL; give it type: INT`.
 - **`VAR_EXTERNAL` stays legal**, as IEC's explicit form, and must agree with
   a stated `type:` (an error at the declaration otherwise). Two programs
   binding one untyped tag with different types is an error naming both.
@@ -565,12 +571,40 @@ clamp to the string instead of faulting.
 
 | Name | Signature | Result | Behavior |
 | --- | --- | --- | --- |
-| `FIRST_SCAN` | `FIRST_SCAN()` | BOOL | TRUE for the whole of the program's first scan after it starts or is downloaded, or after a redundant pair's takeover (which resets the program's state), FALSE from the second scan on. An online edit keeps the program's state, so it is not a start, and neither is a rollback or a leadership resumed in the same term |
+| `FIRST_SCAN` | `FIRST_SCAN()` | BOOL | TRUE for the whole of the program's first scan after it starts or is downloaded, or after a redundant pair's cold takeover (which resets the program's state), FALSE from the second scan on. A hot takeover keeps the state going, so it is not a start; nor is an online edit, a rollback or a leadership resumed in the same term |
 
 `FIRST_SCAN()` is how a program seeds state from the world once: a ladder
 function contact `FIRST_SCAN() { next := Clock.SECOND }`, or
 `IF FIRST_SCAN() THEN … END_IF;` in ST. Each task's program has its own
 first scan. On a Logix controller it is the status flag `S:FS`.
+
+### Redundancy
+
+These are nautilus system functions: they read the state of a [redundant
+pair](/guides/redundancy/). Each answer is latched at the start of the scan
+and holds for the whole of it, separately for each task's program. Outside a
+pair, every flag is FALSE and the count 0. A program, function, function
+block or tag may not be named as one of them; `naut check` says which name
+to change. `FIRST_SCAN` is not reserved: a project that declares its own
+keeps it.
+
+| Name | Signature | Result | Behavior |
+| --- | --- | --- | --- |
+| `TAKEOVER_SCAN` | `TAKEOVER_SCAN()` | BOOL | TRUE for the whole of the first scan after this controller took the lead over from its peer, hot or cold. FALSE on a start, a whole pair's power-up included (its first leadership, before it saw its peer lead) |
+| `HOT_TAKEOVER` | `HOT_TAKEOVER()` | BOOL | TRUE for the whole of the first scan after a hot takeover, one that went on from the peer's state image. `FIRST_SCAN()` is FALSE there: the state goes on |
+| `PEER_READY` | `PEER_READY()` | BOOL | On the leader: TRUE while a takeover by its standby would go hot. The standby is current, on this build and these programs, and no force is held (a takeover drops forces). FALSE on a standby. It is advisory: the pair refreshes it every 50 ms, and the voters learn it from the leader's next renewals, up to a quarter lease later, so a takeover just after it turns TRUE may still be cold |
+| `TAKEOVERS` | `TAKEOVERS()` | DINT | How many takeovers this controller made since it started |
+| `TAKEOVER_HOLD` | `TAKEOVER_HOLD()` | BOOL | TRUE while the [takeover hold](/guides/redundancy/#the-takeover-hold) holds this leader's outputs: nothing goes to the field until the program sets its release tag. FALSE without `redundancy.takeover-hold`. Gate integrators and one-shots on it: they run while the field does not follow |
+
+A takeover's first scan is the place for logic that must notice the change
+of controller, for example resetting a sequence's watchdog or logging the
+event. `IF TAKEOVER_SCAN() AND NOT HOT_TAKEOVER() THEN … END_IF;` runs only
+after a cold takeover, where state restarted. On Logix and Siemens targets
+these functions are constants (FALSE, and 0 for `TAKEOVERS()`): a
+controller there runs no nautilus pair, and its own redundancy status is in
+the vendor's diagnostics, which nautilus does not map. Logic gated on them
+is dead code there, so `naut logix write`, `naut logix deploy` and the
+Siemens writer warn once per project when a program uses one.
 
 ## Type conversions
 

@@ -3,6 +3,7 @@ package ir
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // writeMotorType is a two-level UDT: enough to exercise a leaf, a nested leaf,
@@ -300,4 +301,42 @@ func TestPathSegments(t *testing.T) {
 	if got := JoinPath("Recipes", segs); got != "Recipes[2].Mode" {
 		t.Errorf("JoinPath = %q", got)
 	}
+}
+
+// Restoring a list onto an array is linear in its length (#710 S1b): a
+// pair's takeover restores every retained array within its first scan,
+// and a copy of the whole array per element made a 2000-element one take
+// 80 ms on a fast desktop (a lease's quarter is the bound). 32 times the
+// elements take about 32 times as long when linear and about 1000 times
+// when quadratic: the bound, 200x, leaves room for a loaded CI runner.
+func TestArrayRestoreIsLinear(t *testing.T) {
+	restore := func(n int) time.Duration {
+		ty := &Type{Kind: TypeArray, Elem: &Type{Kind: TypeReal}, ArrLen: n, ArrLoBound: 1}
+		cur := Value{Kind: TypeArray, Arr: make([]Value, n)}
+		for i := range cur.Arr {
+			cur.Arr[i] = Value{Kind: TypeReal}
+		}
+		list := make([]any, n)
+		for i := range list {
+			list[i] = float64(i)
+		}
+		start := time.Now()
+		out, err := SetFieldTyped(cur, ty, nil, list, "Table")
+		d := time.Since(start)
+		if err != nil || out.Arr[n-1].F != float64(n-1) {
+			t.Fatalf("restore of %d: %v, last %v", n, err, out.Arr[n-1])
+		}
+		return d
+	}
+	small := time.Duration(1<<63 - 1)
+	for range 7 {
+		small = min(small, restore(500))
+	}
+	var big time.Duration
+	for range 3 { // best of three, stopping at the first within the bound
+		if big = restore(16000); big <= 200*small {
+			return
+		}
+	}
+	t.Fatalf("500 elements in %s, 16000 in %s (%.0fx, linear is about 32x): the restore is not linear", small, big, float64(big)/float64(small))
 }

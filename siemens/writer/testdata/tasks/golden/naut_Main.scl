@@ -1,0 +1,37 @@
+FUNCTION_BLOCK "naut_Main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      dwell : TON_TIME;
+      naut_dwell_last : Struct
+         Q : Bool;
+         ET : Time;
+      END_STRUCT;
+      latch : Struct
+         S1 : Bool;
+         R : Bool;
+         Q1 : Bool;
+      END_STRUCT;
+      "Name" : INT;
+   END_VAR
+
+BEGIN
+	"naut_Tags".Run := ("naut_Scan_main".tags.Start OR "naut_Tags".Run) AND NOT "naut_Scan_main".tags.Stop;
+	"naut_Scan_main".tags.Pump.Run := "naut_Tags".Run AND "naut_Scan_main".tags.Level < 90.0;
+	"naut_Scan_main".assigned.Pump.Run := TRUE;
+	#dwell(IN := "naut_Tags".Run, PT := T#5s, Q => #naut_dwell_last.Q, ET => #naut_dwell_last.ET);
+	"naut_Scan_main".tags.Done := #naut_dwell_last.Q;
+	"naut_Scan_main".assigned.Done := TRUE;
+	#latch.S1 := "naut_Scan_main".tags.Level > 95.0;
+	#latch.R := "naut_Scan_main".tags.Stop;
+	#latch.Q1 := #latch.S1 OR (#latch.Q1 AND NOT #latch.R);
+	"naut_Scan_main".tags.Alarm := #latch.Q1;
+	"naut_Scan_main".assigned.Alarm := TRUE;
+	"naut_Tags".Local1 := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".Local1) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	#"Name" := LINT_TO_INT((((INT_TO_LINT(#"Name") + 1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	IF NOT "naut_Scan_main".tags.Status.%X3 THEN
+		RETURN;
+	END_IF;
+	"naut_Scan_main".tags.Pump.Speed := 0.0;
+	"naut_Scan_main".assigned.Pump.Speed := TRUE;
+END_FUNCTION_BLOCK

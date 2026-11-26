@@ -1,0 +1,8 @@
+DATA_BLOCK "naut_SfcTimedQualifiers_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+"naut_SfcTimedQualifiers"
+
+BEGIN
+
+END_DATA_BLOCK

@@ -1,0 +1,15 @@
+FUNCTION "naut_MOD_LINT" : LINT
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      A : LINT;
+      B : LINT;
+   END_VAR
+
+BEGIN
+	IF #B = 0 THEN
+		#naut_MOD_LINT := 0;
+	ELSE
+		#naut_MOD_LINT := #A MOD #B;
+	END_IF;
+END_FUNCTION

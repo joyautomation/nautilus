@@ -29,12 +29,13 @@ END_PROGRAM`
 // machine it runs on: the extra a scan pays to copy its frame, against a
 // plain copy of the same leaves (one slice copy of as many ir.Leaf) timed
 // beside it. A walk that copies values only is about 5 times the plain
-// copy (i9-14900K, also pinned to 2 cores: 3.7 ns a leaf); a copy through
-// reflection, JSON or a per-leaf allocation is far over the limit. It is a
-// coarse catch for such regressions, measured relative so a slow CI runner
-// does not fail it; the exact guard is
-// TestImageCopyAddsNoAllocationToTheScan.
-const copyRatioLimit = 12
+// copy (i9-14900K, also pinned to 2 cores: 3.7 ns a leaf), and a shared CI
+// runner has measured it above 12 (#1120), so the bound sits well clear.
+// It catches a copy that does far more work per leaf without allocating
+// (a search per leaf over even 200 neighbours is over 400 times). A copy
+// that allocates per leaf (reflection, JSON, a pointer per leaf: 30 to 35
+// times here) is the exact guard's: TestImageCopyAddsNoAllocationToTheScan.
+const copyRatioLimit = 25
 
 // BenchmarkImageCopyInScan is the extra a scan pays to copy its frame, per
 // leaf, on a large frame; it fails over copyRatioLimit times a plain copy
@@ -69,9 +70,9 @@ func BenchmarkImageCopyInScan(b *testing.B) {
 	}
 	scan := func() { rt.Scan() }
 	copied := func() {
-		rt.prog.requestImage()
+		rt.prog.requestImage(imageStamp(1, 0))
 		rt.Scan()
-		rt.prog.takeImage(MainTaskName, &img.Tasks[0])
+		rt.prog.takeImage(MainTaskName, &img.Tasks[0], imageStamp(1, 0))
 	}
 	src := append([]ir.Leaf(nil), img.Tasks[0].Leaves...)
 	dst := make([]ir.Leaf, len(src))

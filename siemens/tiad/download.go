@@ -58,7 +58,12 @@ const (
 	// TIA instance that trusted a CPU's certificate blindly earlier
 	// (CheckBlindTrust). Only Decisions.AcceptBlindTrust yes answers it.
 	QuestionBlindTrust = "blind-trust"
-	QuestionOther      = "other"
+	// QuestionResetData is the agent's own question too: a download the
+	// data layout gate says may reset data blocks (Layout,
+	// ResetDataNeeded), answered only by Decisions.ResetData yes. Its
+	// Objects are the data blocks the gate names.
+	QuestionResetData = "reset-data"
+	QuestionOther     = "other"
 )
 
 // Question is one pre-download check that needs an answer.
@@ -74,7 +79,14 @@ type Question struct {
 // Decisions are a download's answers. A nil pointer is "not answered",
 // which is different from "no".
 type Decisions struct {
-	StopCPU   *bool `json:"stopCpu,omitempty"`
+	StopCPU *bool `json:"stopCpu,omitempty"`
+	// ResetData is the caller's consent to a load that may return data
+	// blocks to their start values, retained ones included (#1341): what
+	// the data layout gate found needs it (Layout.ResetDataNeeded), as
+	// does StopCPU yes (CheckResetData). With it the agent answers TIA's
+	// reinitialize check yes; without it, TIA asking that check, the stop
+	// or a load of every block is a gate miss that cancels the download.
+	ResetData *bool `json:"resetData,omitempty"`
 	Overwrite *bool `json:"overwrite,omitempty"`
 	// ConsistentDownload answers QuestionConsistentDownload; only yes
 	// lets the download go on.
@@ -101,9 +113,6 @@ type Decisions struct {
 	// load no identification data.
 	IdentificationDataLoadNothing *bool `json:"identificationDataLoadNothing,omitempty"`
 	StartAfter                    *bool `json:"startAfter,omitempty"`
-	// Reinitialize names every DB the caller agrees to reset. It must
-	// cover every DB the question names.
-	Reinitialize []string `json:"reinitialize,omitempty"`
 	// TrustCertificate is the fingerprint of the CPU certificate the
 	// caller trusts; it must equal the question's.
 	TrustCertificate string `json:"trustCertificate,omitempty"`
@@ -130,6 +139,27 @@ func KeptQuestion(kept []KeptDevice) Question {
 	return Question{ID: QuestionKeptDevices,
 		Message: "load the devices the project keeps as found besides the CPU (name each in decisions.keptDevices)",
 		Objects: keptNames(kept)}
+}
+
+// ResetDataSentence says what the consent is to (#1341): the deploy's
+// plan and the agent's refusals carry it.
+const ResetDataSentence = "a load may return data blocks to their start values, retained ones included, and with the CPU in STOP TIA does so without asking"
+
+// CheckResetData is the agent's ResetDataRule.Check, before anything
+// reaches the CPU: "" when req may go on to the data layout gate, else
+// why it is refused. A stop needs the consent; a download without it
+// needs the digest of the layout check the caller showed.
+func CheckResetData(req DownloadRequest) string {
+	d := req.Decisions
+	switch {
+	case d.ResetData != nil && *d.ResetData:
+		return ""
+	case d.StopCPU != nil && *d.StopCPU:
+		return "decisions.stopCpu yes needs decisions.resetData yes: " + ResetDataSentence + " (#1341); nothing was sent to the CPU"
+	case req.LayoutDigest == "":
+		return "a download without decisions.resetData needs layoutDigest, the digest of the data layout check the caller showed (POST /v1/sessions/{id}/layout): only that check says the load keeps the CPU's data, and " + ResetDataSentence + " (#1341); nothing was sent to the CPU"
+	}
+	return ""
 }
 
 // CheckKept is the agent's KeptRule.Check: "" when answer names exactly
@@ -212,6 +242,15 @@ type DownloadRequest struct {
 	// TIA instance then keeps (Decisions.AcceptBlindTrust) until every
 	// session is closed. Close the session after a deploy.
 	Fingerprint *FingerprintRequest `json:"fingerprint,omitempty"`
+	// DeviceAttestation is the operator's reading of the CPU's order
+	// number and firmware off the device, for a pinned CPU the agent
+	// cannot identify online (DeviceAttestation, #1325); unused otherwise.
+	DeviceAttestation *DeviceAttestation `json:"deviceAttestation,omitempty"`
+	// LayoutDigest is Layout.Digest of the data layout check the caller
+	// showed: a download without Decisions.ResetData needs it, and any
+	// download that sends it is refused when the layout is no longer
+	// that one (#1341).
+	LayoutDigest string `json:"layoutDigest,omitempty"`
 }
 
 // Attestation is the operator's statement that the CPU's hardware
@@ -345,6 +384,10 @@ type DownloadResult struct {
 	// attestation that stood in for the check, as tiad journalled it:
 	// keep it in the deploy record.
 	Attestation *AttestationRecord `json:"attestation,omitempty"`
+	// DeviceAttestation is the operator's reading of the CPU's identity
+	// that stood in for the online read of a pinned CPU, as the agent
+	// accepted it: keep it in the deploy record. Nil when none was used.
+	DeviceAttestation *DeviceAttestationRecord `json:"deviceAttestation,omitempty"`
 	// UserManagementReset is set when tiad answered TIA's user-management
 	// check by resetting it to the project's: the route that let it,
 	// ResetRouteUpload, ResetRouteAttestation, ResetRouteLogon or
@@ -501,6 +544,9 @@ func (r DownloadRequest) Validate() error {
 	if r.Fingerprint != nil && r.Fingerprint.Secrets != nil {
 		return fmt.Errorf("download: the Full access password goes in secrets.fullAccessPassword, not in the fingerprint's secrets")
 	}
+	if r.Fingerprint != nil && r.Fingerprint.DeviceAttestation != nil {
+		return fmt.Errorf("download: the device attestation goes in deviceAttestation, not in the fingerprint's")
+	}
 	if !r.Announced {
 		return fmt.Errorf("download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing")
 	}
@@ -513,6 +559,11 @@ func (r DownloadRequest) Validate() error {
 		}
 		if !validCPUAccess(a.CPUAccessControl) {
 			return fmt.Errorf("download: attestation.cpuAccessControl is not one of disabled, enabled")
+		}
+	}
+	if a := r.DeviceAttestation; a != nil {
+		if err := a.Validate(); err != nil {
+			return fmt.Errorf("download: %v", err)
 		}
 	}
 	if isYes(r.Decisions.UserManagementKeepOnline) && isYes(r.Decisions.UserManagementResetToProject) {
@@ -638,6 +689,55 @@ func resetRoutes(uploadRoute bool) string {
 	}
 	return s
 }
+
+// TurnOnDownloadRefusal is the agent's TurnOnRule.DownloadRefusal: why a
+// download on a session whose apply turned a kept CPU's access control on
+// (accessControlTurnOn), before any download on it loaded, is refused
+// before anything reaches the CPU, or "": only a hardware download that
+// resets the CPU's user management to the project's, with
+// attestation.cpuAccessControl "disabled", loads it. A dry run too.
+//
+// tried is whether a gated download on the session reached the deploy
+// record, or the session opened a project marked turn-on pending: TIA may
+// have loaded it, so "enabled" (the logon route) is let too.
+func TurnOnDownloadRefusal(r DownloadRequest, tried bool) string {
+	var why []string
+	if r.DryRun {
+		why = append(why, "it is a dry run, which reaches the CPU")
+	}
+	if !r.Hardware {
+		why = append(why, "it loads no hardware")
+	}
+	if !isYes(r.Decisions.UserManagementResetToProject) {
+		why = append(why, "it does not answer decisions.userManagementResetToProject yes")
+	}
+	attested := r.Attestation.given() && (r.Attestation.CPUAccessControl == AttestCPUAccessDisabled || tried && r.Attestation.CPUAccessControl == AttestCPUAccessEnabled)
+	switch {
+	case attested:
+	case tried:
+		why = append(why, `it does not attest attestation.cpuAccessControl "disabled" or "enabled" (with attestation.by and attestation.text)`)
+	default:
+		why = append(why, `it does not attest attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text)`)
+	}
+	if len(why) == 0 {
+		return ""
+	}
+	if tried {
+		return TurnOnDownloadRefusedTried + strings.Join(why, "; ")
+	}
+	return TurnOnDownloadRefused + strings.Join(why, "; ")
+}
+
+// TurnOnDownloadRefusedTried starts the refusal once a download may have
+// loaded it.
+const TurnOnDownloadRefusedTried = `the project's CPU access control was turned on (accessControlTurnOn) and a download that may have loaded it was not verified, so tiad loads it only by a hardware download that resets the CPU's user management to the project's, with attestation.cpuAccessControl "disabled" (the CPU still off), or "enabled" (that download did load: the logon route, tiad logged on as "nautilus"); this download is refused: `
+
+// TurnOnPendingNote is what an open or adopt says of a project marked
+// turn-on pending (the agent's TurnOnRule.PendingNote).
+const TurnOnPendingNote = `this project is marked turn-on pending: an earlier download that turned its CPU's access control on was not verified loaded (the deploy record's archive saved the project before TIA's download), so it loads only by a hardware download that resets the CPU's user management, with attestation.cpuAccessControl "disabled", or "enabled" with tiad logged on as "nautilus" if that download did load`
+
+// TurnOnDownloadRefused starts TurnOnDownloadRefusal's refusal.
+const TurnOnDownloadRefused = `an apply on this session turned the kept CPU's access control on (accessControlTurnOn), and tiad loads that only by a hardware download that resets the CPU's user management to the project's, with attestation.cpuAccessControl "disabled", the operator's own observation of the CPU; this download is refused: `
 
 // UserManagementResetQuestion is the question a refused reset lists.
 func UserManagementResetQuestion(why string) Question {
@@ -827,12 +927,11 @@ func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPasswo
 				unanswered = append(unanswered, q)
 			}
 		case QuestionReinitialize:
-			// A reset nobody named cannot be agreed to: without objects
-			// the question is never answered.
-			if missing := notCovered(q.Objects, d.Reinitialize); len(d.Reinitialize) == 0 || len(q.Objects) == 0 {
-				unanswered = append(unanswered, q)
-			} else if len(missing) > 0 {
-				q.Message = fmt.Sprintf("%s (not agreed: %s)", q.Message, strings.Join(missing, ", "))
+			// TIA names no data block (bench 1510SP, 2026-11-24); the
+			// layout gate named them. Its yes stops the CPU
+			// (StopPlcAndReinitialize): it needs the consent to the reset
+			// and to the stop.
+			if d.ResetData == nil || !*d.ResetData || d.StopCPU == nil || !*d.StopCPU {
 				unanswered = append(unanswered, q)
 			}
 		case QuestionCertificate:
@@ -868,21 +967,6 @@ func sortAnswer(q Question, a *bool, unanswered, declined *[]Question) {
 
 // notCovered returns the names in want that agreed does not contain,
 // case-insensitively (TIA block names are case-insensitive).
-func notCovered(want, agreed []string) []string {
-	ok := map[string]bool{}
-	for _, a := range agreed {
-		ok[strings.ToLower(a)] = true
-	}
-	var out []string
-	for _, w := range want {
-		if !ok[strings.ToLower(w)] {
-			out = append(out, w)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
 // Yes is a convenience for a Decisions answer.
 func Yes() *bool { t := true; return &t }
 

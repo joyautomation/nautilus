@@ -235,6 +235,12 @@ func (e *Elector) serveDup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not running", http.StatusServiceUnavailable)
 		return
 	}
+	// Only the peer asks (its operator's check, clear or fence): bound to
+	// its certificate (#710 per-box keys).
+	if !SenderOK(r, e.o.Cluster, string(e.o.Peer), "sender_unbound_dup") {
+		http.Error(w, "not this pair's peer", http.StatusForbidden)
+		return
+	}
 	q, err := readDupOp(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -263,10 +269,29 @@ func fenceNameRefusal(member string, name string, allowed ...string) string {
 	return fmt.Sprintf("%s fences only %s, not %q", member, strings.Join(allowed, " and "), name)
 }
 
+// dupWriteFloor is the shortest a member waits for a clear's or a fence's
+// records to reach disk before it answers. The wait is an operator
+// command's, not a lease path's, so it need not shrink with the lease: a
+// quarter of a 1 s lease (250 ms) is shorter than an fsync on a slow SD
+// card or a loaded CI runner, and the command then ends incomplete for a
+// write that only took its time (#1329).
+const dupWriteFloor = 2 * time.Second
+
+// dupWriteWait is how long a member waits for that write: its share of the
+// lease, or the floor if longer.
+func dupWriteWait(share time.Duration) time.Duration {
+	if mut("dup_wait_lease_scaled") {
+		return share
+	}
+	return max(share, dupWriteFloor)
+}
+
 // dupDurable waits, after a clear or a fence, until v's duplicate records
 // are on disk, for up to d: the answer says "cleared" or "fenced" only of
 // a record a crash can't lose (#1164 review, S1). It returns why not, ""
-// once durable. mu guards v; failing says the writer's last error.
+// once durable. mu guards v; failing says the writer's last error. It
+// waits the whole of d even while the writer fails, since the writer
+// retries: a member whose disk refuses every write answers after d.
 func dupDurable(mu *sync.Mutex, v *quorum.Voter, d time.Duration, failing func() string) string {
 	if mut("dup_answered_before_write") {
 		return ""
@@ -306,7 +331,7 @@ func (e *Elector) dupLocal(q dupOp) DupAnswer {
 	e.mu.Unlock()
 	e.w.ask(p)
 	if (q.Op == "clear" || q.Op == "fence") && a.Refused == "" {
-		if why := dupDurable(&e.mu, e.v, e.o.Lease/2, func() string { return e.writeErr }); why != "" {
+		if why := dupDurable(&e.mu, e.v, dupWriteWait(e.o.Lease/2), func() string { return e.writeErr }); why != "" {
 			a.Err = string(e.o.Self) + ": " + why
 		}
 	}
@@ -340,6 +365,13 @@ func (w *Witness) serveDup(rw http.ResponseWriter, r *http.Request) {
 		http.Error(rw, "not this cluster's members", http.StatusForbidden)
 		return
 	}
+	// A controller of this cluster, by its certificate (#710 per-box
+	// keys): one witness token serves every cluster, so a member of
+	// another must not reach this one's marks.
+	if !witnessSenderOK(r, name, p.members, "witness_sender_unbound_dup") {
+		http.Error(rw, "not a member of this cluster", http.StatusForbidden)
+		return
+	}
 	if q.Op == "state" {
 		p.mu.Lock()
 		m := voterState(p.v, w.now(), "witness")
@@ -359,7 +391,7 @@ func (w *Witness) serveDup(rw http.ResponseWriter, r *http.Request) {
 	p.mu.Unlock()
 	p.w.ask(mw)
 	if (q.Op == "clear" || q.Op == "fence") && a.Refused == "" {
-		if why := dupDurable(&p.mu, p.v, w.o.Lease/4, func() string { return p.failing }); why != "" {
+		if why := dupDurable(&p.mu, p.v, dupWriteWait(w.o.Lease/4), func() string { return p.failing }); why != "" {
 			a.Err = "the witness: " + why
 		}
 	}
@@ -369,10 +401,19 @@ func (w *Witness) serveDup(rw http.ResponseWriter, r *http.Request) {
 	writeDupAnswer(rw, a)
 }
 
-// dupRemote asks the member at base (the peer or the witness).
+// dupRemote asks the member at base (the peer or the witness). A clear or
+// a fence waits a lease more than this pair's wait for the write
+// (dupWriteWait), which covers the peer's, and a witness's (2 s, or a
+// quarter of its own lease) unless that quarter is longer than the
+// call: its answer then may come too late, and the command ends
+// incomplete, to be run again. Other ops write nothing: a lease.
 func (e *Elector) dupRemote(ctx context.Context, member, base string, q dupOp) DupAnswer {
 	b, _ := json.Marshal(q)
-	body, err := e.call.call(ctx, e.o.Lease, http.MethodPost, base+Prefix+e.o.Cluster+"/dup", b)
+	timeout := e.o.Lease
+	if (q.Op == "clear" || q.Op == "fence") && !mut("dup_wait_lease_scaled") {
+		timeout += dupWriteWait(e.o.Lease / 2)
+	}
+	body, err := e.call.call(ctx, timeout, http.MethodPost, base+Prefix+e.o.Cluster+"/dup", b)
 	if err != nil {
 		var se *statusError
 		msg := member + " is not reachable: " + err.Error()

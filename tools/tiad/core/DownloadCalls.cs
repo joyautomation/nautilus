@@ -32,6 +32,10 @@ namespace Tiad
             r.Add("POST", "/v1/sessions/{id}/save", Save);
         }
 
+        // UiRefusesDownload is a download's refusal on an agent started
+        // with TIAD_UI=1.
+        public const string UiRefusesDownload = "this agent runs TIA Portal with its user interface (TIAD_UI=1), for viewing only, and refuses every download: a click or a dialog in the visible Portal could change or stall it. Restart the agent without TIAD_UI to download; nothing was sent to the CPU";
+
         bool Target(string address)
         {
             return cfg.Targets.Contains(address);
@@ -165,16 +169,44 @@ namespace Tiad
 
         static string AuditDecisions(Decisions d)
         {
-            var reinit = new List<string>();
-            foreach (var n in d.Reinitialize) reinit.Add(Json.Quote(n));
-            return "stopCpu=" + YesNo(d.StopCpu) + " overwrite=" + YesNo(d.Overwrite) + " consistentDownload=" + YesNo(d.ConsistentDownload) +
+            return "stopCpu=" + YesNo(d.StopCpu) + " resetData=" + YesNo(d.ResetData) + " overwrite=" + YesNo(d.Overwrite) + " consistentDownload=" + YesNo(d.ConsistentDownload) +
                 " alarmTexts=" + YesNo(d.AlarmTexts) + " allBlocks=" + YesNo(d.AllBlocks) +
                 " userManagementKeepOnline=" + YesNo(d.UserManagementKeepOnline) + " userManagementResetToProject=" + YesNo(d.UserManagementResetToProject) +
                 " identificationDataLoadNothing=" + YesNo(d.IdentificationDataLoadNothing) +
-                " startAfter=" + YesNo(d.StartAfter) + " reinitialize=[" + string.Join(",", reinit) + "]" +
+                " startAfter=" + YesNo(d.StartAfter) +
                 " keptDevices=[" + string.Join(",", Quoted(d.KeptDevices)) + "]" +
                 " trustCertificate=" + (d.TrustCertificate == "" ? "unset" : Json.Quote(d.TrustCertificate)) +
                 " acceptUnverifiedHardware=" + YesNo(d.AcceptUnverifiedHardware) + " acceptBlindTrust=" + YesNo(d.AcceptBlindTrust);
+        }
+
+        // GateMissed is e, led by the gate miss's words when the download
+        // ended at one (LayoutRule.GateMiss): a cancel after an acting
+        // answer is in doubt, and says why it was cancelled.
+        static TiadException GateMissed(TiadException e, string gateMiss, string baseline)
+        {
+            if (gateMiss == "") return e;
+            return new TiadException(e.Status, e.Kind, LayoutRule.GateMiss(gateMiss, baseline) + "; and " + e.Message, e.Payload, e.Fatal);
+        }
+
+        // LayoutRefusal is null, or the refusal of a download the data
+        // layout gate does not let (LayoutRule): a digest that is not the
+        // layout's, or a layout that needs the consent the request does
+        // not give. Nothing has reached TIA's download.
+        static TiadException LayoutRefusal(LayoutDiff layout, DownloadRequest req)
+        {
+            var d = new Obj();
+            d["layout"] = layout.ToJson();
+            if (req.LayoutDigest != "" && req.LayoutDigest != layout.Digest)
+            {
+                return new TiadException(409, Kinds.DecisionRequired, "the data layout is no longer the one the caller showed (layoutDigest " + Json.Quote(req.LayoutDigest) + ", now " + layout.Digest +
+                    "): the project, the CPU's last deploy or its verify changed since; read POST /v1/sessions/{id}/layout again; nothing was sent to the CPU", d, false);
+            }
+            if (layout.ResetDataNeeded && req.Decisions.ResetData != true)
+            {
+                d["questions"] = Question.ToJson(new List<Question> { new Question { Id = QuestionIds.ResetData, Message = layout.Why, Objects = layout.DataBlocks } });
+                return new TiadException(409, Kinds.DecisionRequired, "the download needs decisions.resetData: " + layout.Why + "; nothing was sent to the CPU", d, false);
+            }
+            return null;
         }
 
         // AuditKept is the devices an apply kept as found, for the audit
@@ -244,12 +276,13 @@ namespace Tiad
                     // was written: a record with no outcome means the agent
                     // died during the download.
                     if (run.IntentWritten) WriteOutcome(run, rode, acting);
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} source={13} outsideChanges={14} deploy={15} kept=[{16}] asked=[{17}] acting=[{18}] outcome={19}",
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} source={13} outsideChanges={14} deploy={15} kept=[{16}] asked=[{17}] acting=[{18}] outcome={19} deviceAttestation={20}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
                         req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), reset, BlindTrust.Audit(rode),
                         DeploySource.Audit(req.Source), OutsideChanges.Audit(req.OutsideChanges), run.IntentWritten ? run.Id + (run.Recorded ? "" : "(outcome-not-recorded)") : "unset",
-                        AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
+                        AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome,
+                        req.DeviceAttested != null ? req.DeviceAttested.Attestation.Audit() : req.DeviceAttestation != null ? "given-not-used" : "unset");
                 }
             });
         }
@@ -258,6 +291,10 @@ namespace Tiad
         {
             string bad = req.Validate();
             if (bad != null) throw TiadException.BadRequest("{0}", bad);
+            // An agent that shows TIA's window is for viewing only: a click
+            // or a modal dialog in the visible Portal could change or stall
+            // a load, dry runs included.
+            if (cfg.Ui) throw TiadException.BadRequest("{0}", UiRefusesDownload);
             if (!Target(req.Address))
             {
                 throw new TiadException(403, Kinds.TargetRefused, req.Address + " is not in TIAD_TARGETS");
@@ -277,6 +314,16 @@ namespace Tiad
             if (!s.Compiled)
             {
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
+            }
+            // A stop without the consent to what it does to the data (#1341).
+            string resetWhy = ResetDataRule.Check(req.Decisions, req.LayoutDigest);
+            if (resetWhy != null) throw TiadException.BadRequest("{0}", resetWhy);
+            // A kept CPU's access control turned on by an apply on this
+            // session loads only by the attestation route (TurnOnRule).
+            if (s.AccessTurnOn && !s.AccessTurnOnLoaded)
+            {
+                string turnWhy = TurnOnRule.DownloadRefusal(req, s.AccessTurnOnTried);
+                if (turnWhy != null) throw TiadException.BadRequest("{0}", turnWhy + "; nothing was sent to the CPU");
             }
             // A station with a Full access user turns the CPU's access
             // control on at its hardware load, and from then on going
@@ -402,7 +449,7 @@ namespace Tiad
             }
             // The CPU must still be the one tiad pinned (section 3.8),
             // before a dry run too: it reaches the CPU.
-            CheckDevicePin(s, req.Address, req.DryRun ? "dry run" : "download");
+            req.DeviceAttested = CheckDevicePin(s, req.Address, req.DryRun ? "dry run" : "download", req.DeviceAttestation);
             // One project per CPU: the first download claims the CPU for
             // this session, dry runs included, until it is closed.
             sessions.ClaimCpu(s, req.Address);
@@ -439,6 +486,14 @@ namespace Tiad
             var askedQs = new List<Question>();
             int calls = 0;
             bool cancelled = false;
+            // The data layout gate's verdict, read on the TIA thread just
+            // before TIA's download (LayoutRule): relaxed is a download
+            // without the consent to a reset, so a stop, a reinitialize or
+            // a load of every block TIA asks is a gate miss; gateMiss is
+            // the check that missed, baseline the deploy compared with.
+            bool relaxed = req.Decisions.ResetData != true;
+            string gateMiss = "", gateBaseline = "";
+            bool layoutRefused = false;
             // answer runs once per check TIA asks, in TIA's order. Each is
             // answered on its own, only from the request; the first one
             // not answered yes cancels the download there, and from then
@@ -451,6 +506,18 @@ namespace Tiad
                 if (cancelled || req.DryRun)
                 {
                     cancelled = true;
+                    return null;
+                }
+                // The RUN backstop (#1341): without the consent, TIA asking
+                // to stop the CPU, reinitialize data blocks or load every
+                // block means the layout gate missed a change. Never
+                // answered: cancelled there, and logged.
+                if (relaxed && LayoutRule.GateMissQuestion(q.Id))
+                {
+                    gateMiss = q.Id;
+                    cancelled = true;
+                    unanswered.Add(q);
+                    Log.Line("audit layout-gate-miss session={0} address={1} question={2} baseline={3} acting=[{4}]", s.Id, Json.Quote(req.Address), Json.Quote(q.Id), gateBaseline == "" ? "none" : gateBaseline, string.Join(",", Quoted(acting).ToArray()));
                     return null;
                 }
                 var one = new List<Question> { q };
@@ -526,7 +593,31 @@ namespace Tiad
                     // (#1180 review), as it must get the hardware opt-in,
                     // and with it any outsideChanges accept the request
                     // carries: an overwrite must be on the record (#789).
-                    if (!req.DryRun) Record(t, s, req, ranWith, run);
+                    // The data layout gate (#1341), on this same work item,
+                    // so the layout checked is the one archived and loaded:
+                    // before the record, so a refusal records nothing.
+                    List<LayoutObject> layoutNow;
+                    LayoutDiff layout = ReadLayout(t, s, req.Address, req.Hardware, out layoutNow);
+                    gateBaseline = layout.Baseline;
+                    string digestSeen = req.LayoutDigest == "" ? "unset" : req.LayoutDigest == layout.Digest ? "match" : "mismatch";
+                    Log.Line("audit layout-gate session={0} address={1} baseline={2} changes={3} dataBlocks={4} resetDataNeeded={5} resetData={6} digest={7}",
+                        s.Id, Json.Quote(req.Address), layout.Baseline == "" ? "none" : layout.Baseline, layout.Changes.Count,
+                        layout.AllDataBlocks ? "all" : string.Join(",", Quoted(layout.DataBlocks).ToArray()), layout.ResetDataNeeded ? "yes" : "no", YesNo(req.Decisions.ResetData), digestSeen);
+                    TiadException layoutWhy = LayoutRefusal(layout, req);
+                    if (layoutWhy != null)
+                    {
+                        layoutRefused = true;
+                        throw layoutWhy;
+                    }
+                    bool everyBlock = req.Hardware || (req.Decisions.ResetData == true && layout.Baseline == "");
+                    bool marked = !req.DryRun && s.AccessTurnOn && !s.AccessTurnOnLoaded;
+                    if (marked) MarkTurnOnPending(s, req);
+                    if (!req.DryRun) Record(t, s, req, ranWith, run, layoutNow, layout.Baseline);
+                    // A download to the CPU runs: the verify that found it
+                    // equal to its last deploy no longer stands.
+                    if (!req.DryRun) ForgetVerified(req.Address);
+                    // Recorded: TIA's download comes next, and may load.
+                    if (marked) s.AccessTurnOnTried = true;
                     try
                     {
                         // A dry run never starts the CPU, whatever the request
@@ -543,7 +634,7 @@ namespace Tiad
                         DownloadOutcome got = null;
                         try
                         {
-                            got = t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer, use);
+                            got = t.Download(s.Handle, req.Address, req.Hardware, req.Software, everyBlock, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer, use);
                             return got;
                         }
                         finally
@@ -556,6 +647,14 @@ namespace Tiad
                             // record it again.
                             bool clean = got != null && !got.Loaded && acting.Count == 0 && !(use.MayHaveAskedCredentials && !use.LoggedOn);
                             if (!clean) instanceLogons.Forget(req.Address, "a download to it ran in TIA and may have changed the CPU's users or access control");
+                            // A dry run TIA did not end cleanly, loading
+                            // nothing (it may have loaded: TIA asked no
+                            // check, or it failed), voids every adopt
+                            // baseline for the CPU. One cancelled at its
+                            // first check loaded nothing and keeps it, so a
+                            // deploy's dry run and its download that follows
+                            // still compare with it (#1347).
+                            if (req.DryRun && !(got != null && !got.Loaded)) BumpLoad(req.Address);
                         }
                     }
                     catch (Exception e)
@@ -573,6 +672,12 @@ namespace Tiad
             catch (TiadException e)
             {
                 rode = ranWith;
+                if (layoutRefused)
+                {
+                    asked = Json.Quote(QuestionIds.ResetData);
+                    outcome = e.Kind + ":[" + asked + "]";
+                    throw;
+                }
                 if (lateRefused)
                 {
                     asked = Json.Quote(QuestionIds.BlindTrust);
@@ -587,7 +692,7 @@ namespace Tiad
                 {
                     outcome = Kinds.OutcomeUnknown;
                     MayHaveStarted(req, acting);
-                    throw WithReason(WithActing(e, acting), atWhy);
+                    throw GateMissed(WithReason(WithActing(e, acting), atWhy), gateMiss, gateBaseline);
                 }
                 // TIA failed once it asked a check: whether it acted on an
                 // answer, or loaded, is unknown, so from there on a failure
@@ -596,7 +701,7 @@ namespace Tiad
                 {
                     outcome = Kinds.OutcomeUnknown;
                     MayHaveStarted(req, acting);
-                    throw WithReason(UnknownAfter(e, acting), atWhy);
+                    throw GateMissed(WithReason(UnknownAfter(e, acting), atWhy), gateMiss, gateBaseline);
                 }
                 throw;
             }
@@ -619,7 +724,7 @@ namespace Tiad
             {
                 outcome = Kinds.OutcomeUnknown;
                 if (calls == 0) throw Unknown("TIA ran the dry run's download without asking a single check, so tiad could not cancel it", acting);
-                throw Unknown("TIA loaded the CPU although tiad cancelled the download", acting);
+                throw GateMissed(Unknown("TIA loaded the CPU although tiad cancelled the download", acting), gateMiss, gateBaseline);
             }
             if (!result.Loaded && calls == 0)
             {
@@ -652,7 +757,8 @@ namespace Tiad
             {
                 outcome = Kinds.OutcomeUnknown;
                 var at = unanswered.Count > 0 ? unanswered[0] : declined[0];
-                throw WithReason(Unknown("tiad cancelled the download at TIA's " + at.Id + " check, which the request does not answer yes", acting), at.Id == QuestionIds.UserManagement ? atWhy : "");
+                string missed = gateMiss != "" ? LayoutRule.GateMiss(gateMiss, gateBaseline) + "; and " : "";
+                throw WithReason(Unknown(missed + "tiad cancelled the download at TIA's " + at.Id + " check, which the request does not answer yes", acting), at.Id == QuestionIds.UserManagement ? atWhy : "");
             }
             if (unanswered.Count > 0)
             {
@@ -660,6 +766,11 @@ namespace Tiad
                 var d = new Obj();
                 d["questions"] = Question.ToJson(unanswered);
                 d["keptDevices"] = KeptDevice.ToJson(s.Kept);
+                if (gateMiss != "")
+                {
+                    d["gateMiss"] = gateMiss;
+                    throw new TiadException(409, Kinds.DecisionRequired, LayoutRule.GateMiss(gateMiss, gateBaseline) + "; nothing was loaded", d, false);
+                }
                 throw new TiadException(409, Kinds.DecisionRequired, "TIA asked a check the request does not answer; nothing was loaded (TIA asks one check at a time: answer it, and it may ask another)", d, false);
             }
             if (declined.Count > 0)
@@ -704,6 +815,21 @@ namespace Tiad
                 throw Unknown("TIA reported the download loaded, but the compare right after it differs (" + (names.Count == 0 ? "no differences named" : string.Join(", ", names.ToArray())) + ")", acting, false, result);
             }
             outcome = "loaded state=" + (result.State == "" ? "unknown" : result.State + " (" + result.StateSource + ")") + " compare=equal blocks=[" + TiaNames.BlockLabels(cmp.Blocks, 20) + "]" + (req.Hardware ? " hardwareVerified=false" : "");
+            if (s.AccessTurnOn && !s.AccessTurnOnLoaded)
+            {
+                s.AccessTurnOnLoaded = true;
+                Log.Line("audit access-turn-on session={0} address={1} loaded (route {2})", s.Id, Json.Quote(req.Address), Json.Quote(run == null ? "" : run.UserManagementReset));
+                string marker = work.Resolve(s.Project) + TurnOnRule.MarkerSuffix;
+                try
+                {
+                    File.Delete(marker);
+                }
+                catch (Exception e)
+                {
+                    // The gate stays on the next open: never looser.
+                    Log.Line("audit access-turn-on session={0} removing the turn-on pending mark failed: {1}", s.Id, Json.Quote(e.GetType().Name + ": " + e.Message));
+                }
+            }
             o["dryRun"] = false;
             o["downloaded"] = true;
             o["compareEqual"] = true;
@@ -718,6 +844,9 @@ namespace Tiad
                 // for the caller's deploy record.
                 o["attestation"] = req.Attestation.ToJson();
             }
+            // The operator's reading of the CPU's identity that stood in for
+            // the online read of a pinned CPU, for the caller's deploy record.
+            if (req.DeviceAttested != null) o["deviceAttestation"] = req.DeviceAttested.ToJson();
             // A user-management reset tiad wrote, and the route that let it
             // (UserManagementRule), for the deploy record.
             if (given != "") o["userManagementReset"] = given;
@@ -765,8 +894,13 @@ namespace Tiad
             NeedTia();
             return WithSession(c, delegate(Session s)
             {
+                HeldOnlineRefuses(s, "compare");
                 var r = c.Json();
                 string password = OnlinePassword(r);
+                DeviceAttestation att = ReadDeviceAttestation(r);
+                // layoutBaseline: an equal compare of the untouched project
+                // also takes the session's adopt baseline (#1347).
+                bool wantBaseline = r.Bool("layoutBaseline");
                 r.Done();
                 // A project opened as found (no spec applied yet: an
                 // adopted one, #1272) compares with its own CPU, at the
@@ -778,7 +912,22 @@ namespace Tiad
                     if (address == "") throw TiadException.BadRequest("the project has no station spec, and its CPU no address to compare with");
                 }
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
-                CheckDevicePin(s, address, "compare");
+                CheckDevicePin(s, address, "compare", att);
+                // The CPU's load count and journal head before the compare
+                // goes online: a download from here on voids what it takes.
+                string baselineWhy = null;
+                long gen = 0;
+                string head = null;
+                AdoptBaseline taken = null;
+                if (wantBaseline)
+                {
+                    // Asking again drops what an earlier compare took.
+                    s.Adopted = null;
+                    s.AdoptRefused = "";
+                    gen = LoadGen(address);
+                    head = JournalHead(address, out baselineWhy);
+                    if (baselineWhy == null) baselineWhy = AdoptBaselineRefusal(s);
+                }
                 var diffs = new List<Difference>();
                 // Read on the TIA thread, where trust is recorded: what the
                 // compare rode on, also once a later close retired it.
@@ -786,7 +935,10 @@ namespace Tiad
                 bool equal = false;
                 // Journalled before it goes online, so a compare that fails
                 // is journalled as riding on the trust too.
-                OnlineCompare cmp = OnSession(s, delegate(ITia t)
+                OnlineCompare cmp;
+                try
+                {
+                cmp = OnSession(s, delegate(ITia t)
                 {
                     BlindTrust bt = blindTrust;
                     rode = bt;
@@ -794,8 +946,22 @@ namespace Tiad
                     {
                         Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
                     }
-                    return CompareOnline(t, s, address, password, bt, "compare", diffs, out equal);
+                    OnlineCompare oc = CompareOnline(t, s, address, password, bt, "compare", diffs, out equal);
+                    if (wantBaseline && baselineWhy == null)
+                    {
+                        if (!equal) baselineWhy = "the compare found the project not equal to the CPU";
+                        else taken = TakeAdoptBaseline(t, s, address, gen, head, out baselineWhy);
+                    }
+                    return oc;
                 });
+                }
+                catch
+                {
+                    if (wantBaseline) s.AdoptRefused = "the compare failed";
+                    throw;
+                }
+                if (taken != null) s.Adopted = taken;
+                else if (wantBaseline) s.AdoptRefused = baselineWhy;
                 var list = new List<object>();
                 foreach (var d in diffs)
                 {
@@ -814,6 +980,24 @@ namespace Tiad
                 // A compare asks no TLS question of its own; it may ride on
                 // the instance's blind trust.
                 o["blindTrust"] = rode == null ? null : rode.ToJson();
+                if (wantBaseline)
+                {
+                    var b = new Obj();
+                    b["taken"] = taken != null;
+                    if (taken != null)
+                    {
+                        b["id"] = taken.Id;
+                        b["objects"] = taken.Objects.Count;
+                        b["unreadable"] = taken.Unreadable;
+                    }
+                    else
+                    {
+                        b["why"] = baselineWhy;
+                    }
+                    o["layoutBaseline"] = b;
+                    Log.Line("audit adopt-baseline session={0} project={1} address={2} taken={3} {4}", s.Id, Json.Quote(s.Project), Json.Quote(address),
+                        taken != null ? "yes" : "no", taken != null ? "id=" + taken.Id + " objects=" + taken.Objects.Count + " unreadable=" + taken.Unreadable + " journalHead=" + Json.Quote(taken.JournalHead) : "why=" + Json.Quote(baselineWhy));
+                }
                 return o;
             });
         }
@@ -859,6 +1043,7 @@ namespace Tiad
             NeedTia();
             return WithSession(c, delegate(Session s)
             {
+                HeldOnlineRefuses(s, "upload");
                 var r = c.Json();
                 // An explicit, per-call opt-in, only here: trust the CPU's
                 // TLS certificate blindly for this read-only upload.
@@ -962,6 +1147,23 @@ namespace Tiad
             });
         }
 
+        // MarkTurnOnPending marks the session's project turn-on pending
+        // before a gated download's deploy record saves it (TurnOnRule
+        // .MarkerSuffix); failing refuses the download, with nothing sent.
+        void MarkTurnOnPending(Session s, DownloadRequest req)
+        {
+            string marker = work.Resolve(s.Project) + TurnOnRule.MarkerSuffix;
+            try
+            {
+                File.WriteAllText(marker, "{\"session\":" + Json.Quote(s.Id) + ",\"address\":" + Json.Quote(req.Address) + "}\n");
+            }
+            catch (Exception e)
+            {
+                throw new TiadException(500, Kinds.OperationFailed, "marking the project turn-on pending failed (" + e.GetType().Name + ": " + e.Message + "); nothing was sent to the CPU");
+            }
+            Log.Line("audit access-turn-on session={0} project={1} marked turn-on pending before the deploy record", s.Id, Json.Quote(s.Project));
+        }
+
         object Save(Call c)
         {
             NeedTia();
@@ -977,6 +1179,7 @@ namespace Tiad
                 {
                     if (s.Unclean) throw CpuReuse.Unclean("saving it");
                     if (s.ForeignChanged) throw Ownership.Unusable("saving it");
+                    if (s.AccessTurnOn && !s.AccessTurnOnLoaded) throw TiadException.BadRequest("{0}", TurnOnRule.SaveRefused);
                     return t.Save(s.Handle, archive);
                 });
                 var o = new Obj();

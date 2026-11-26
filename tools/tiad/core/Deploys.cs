@@ -642,7 +642,7 @@ namespace Tiad
         // line, on the TIA thread, in the download's own work item, just
         // before TIA's download. Either failing refuses the download, with
         // nothing sent to the CPU.
-        void Record(ITia t, Session s, DownloadRequest req, BlindTrust rode, DeployRun run)
+        void Record(ITia t, Session s, DownloadRequest req, BlindTrust rode, DeployRun run, List<LayoutObject> layout, string baseline)
         {
             // A project left part-way is never archived as a deploy.
             if (s.Unclean) throw CpuReuse.Unclean("archiving it for the deploy record");
@@ -679,8 +679,21 @@ namespace Tiad
             line["tia"] = tia;
             line["archive"] = a.ToJson();
             line["attestation"] = req.Hardware ? req.Attestation.ToJson() : null;
+            line["deviceAttestation"] = req.DeviceAttested == null ? null : req.DeviceAttested.ToJson();
             line["keptDevices"] = KeptDevice.ToJson(s.Kept);
+            // The import group: a verify of this deploy requires the data
+            // types in it by name, as the download's own compare did.
+            if (s.ImportGroup != "") line["group"] = s.ImportGroup;
+            // A turn-on download: an adopt of this archive stays gated
+            // unless the record says loaded (TurnOnRule.MarkerSuffix).
+            if (s.AccessTurnOn && !s.AccessTurnOnLoaded) line["accessTurnOn"] = true;
             line["blindTrust"] = rode == null ? null : rode.ToJson();
+            // The data layout loaded (#1341): the baseline of the next
+            // download, once a verify finds the CPU equal to this deploy.
+            line["layout"] = LayoutRule.ToRecord(layout, host.TiaVersion);
+            // What the gate compared it with: a deploy, the adopted project
+            // (its adopt baseline, #1347), or nothing.
+            line["layoutBaseline"] = baseline == "" ? null : baseline;
             try
             {
                 deploys.Append(line);

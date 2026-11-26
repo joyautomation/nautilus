@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/auth"
@@ -71,7 +72,16 @@ type Manifest struct {
 	// sign-off rule. checkoutSheet is the sheet, read by ReadManifest.
 	Checkout      *CheckoutConfig `yaml:"checkout"`
 	checkoutSheet any             // the sheet (*checkout.Sheet), read by checkout.go: not in the browser build
-	Tasks         []TaskConfig    `yaml:"tasks"`
+	// Cameras are the plant's cameras (#724): each bound to an asset the
+	// plant.yaml names; the controller relays them. Checked as rows by
+	// ReadManifest, against the plant by CheckCameras.
+	Cameras CameraRows `yaml:"cameras"`
+	// CameraSnapshots is how long and how much of the pictures kept when an
+	// alarm activates (#724): keep-days, max-count, max-mb.
+	CameraSnapshots CameraSnapshotsCfg `yaml:"camera-snapshots"`
+	// CameraStreams bounds the memory of all live video streams together (#724).
+	CameraStreams CameraStreamsCfg `yaml:"camera-streams"`
+	Tasks         []TaskConfig     `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
 	// tag set stays a separate reviewable artifact instead of a 500-line
@@ -460,7 +470,9 @@ func (p *Project) AuditJournal() (dir string, keep time.Duration) {
 type RedundancyConfig struct {
 	// Lease is the coordination.k8s.io Lease's name without peers:
 	// (default: the project name). With peers: it is the lease time
-	// (default 2s), a duration: a name there is refused.
+	// (default 1s), a duration: a name there is
+	// refused. A pair with a lease of its own gives its witness the same
+	// --lease: the witness refuses a lease longer than its own.
 	Lease string `yaml:"lease"`
 	// Peers names the pair's two controllers, a and b, by their peer
 	// listeners (host:port). Both controllers run the same file.
@@ -478,14 +490,12 @@ type RedundancyConfig struct {
 	// gate check and its send (design §3.4): the write gate closes their
 	// sum, the fence margin, before the lease ends, and every field write
 	// gets the lease left minus NetDelay as its deadline. Unset, both
-	// scale with the lease (50 ms and 20 ms at the default 2 s lease). Set,
+	// scale with the lease (50 ms and 20 ms at the default 1 s lease). Set,
 	// their sum must stay under a quarter of the lease. Pair only.
 	NetDelay   Duration `yaml:"net-delay"`
 	SendMargin Duration `yaml:"send-margin"`
-	// Experimental opts in to a pair before state streaming (#710 step
-	// 4): until then a takeover starts from the new leader's own retained
-	// values, so a setpoint the old leader took is lost. A pair without it
-	// is refused. It goes away when step 4 lands.
+	// Experimental was the pair's opt-in while #710 was open. A pair no
+	// longer needs it; it is still read, so a manifest that has it loads.
 	Experimental bool `yaml:"experimental"`
 	// PublicURLs are the pair's controllers as a browser reaches them, by
 	// node name ({a: https://plc-a.plant.lan, b: …}): where a standby
@@ -504,6 +514,54 @@ type RedundancyConfig struct {
 	// says so at every start and on /api/cluster. The witness takes the
 	// same setting as `naut witness --peer-tls`.
 	PeerTLS string `yaml:"peer-tls"`
+	// StreamBudget is the state stream's bytes a second (#710 S1b, design
+	// §4.1): the leader sends a full image at most every 100 ms, and an
+	// image too big for that at this budget stretches the interval, never
+	// drops images. A number of bytes a second, or with kB/s, MB/s, KiB/s
+	// or MiB/s (default 1MB/s). Pair only.
+	StreamBudget string `yaml:"stream-budget"`
+	// HotMaxAge is the oldest state image a takeover goes on from (#710
+	// S2, design §4.2): an image older at the election makes the takeover
+	// cold. Default 3 × lease + 2 × the stream's interval, which covers a
+	// crash, a kill and an isolation of the leader; 0 makes every takeover
+	// cold. Pair only.
+	HotMaxAge *Duration `yaml:"hot-max-age"`
+	// TakeoverHold holds the new leader's outputs after a takeover until
+	// the program sets its release tag (#710 (b2), design §4.6). Pair only.
+	TakeoverHold *TakeoverHoldConfig `yaml:"takeover-hold"`
+	// Failback fails back to the preferred controller once it has been
+	// ready for a while (#710 d2, design §4.8). Pair only; off when absent.
+	Failback *FailbackConfig `yaml:"failback"`
+}
+
+// TakeoverHoldConfig is redundancy.takeover-hold.
+type TakeoverHoldConfig struct {
+	// Release is the BOOL state tag the program sets TRUE to release the
+	// hold. Required. The hold sets it FALSE when it starts; only the
+	// program may write it.
+	Release string `yaml:"release"`
+	// Max is how long the hold holds before it raises its alarm (default
+	// 5s, at most 1m).
+	Max *Duration `yaml:"max"`
+	// On is when the hold holds: cold (the default) on a cold takeover, and
+	// on a hot one from a leader that was holding; always on every
+	// takeover.
+	On string `yaml:"on"`
+	// OnMax is what happens at max: hold (the default) keeps holding with
+	// the alarm raised until the program or an operator releases; release
+	// releases with the alarm raised.
+	OnMax string `yaml:"on-max"`
+	// Safe are values written to output tags when the hold starts, by tag.
+	Safe map[string]any `yaml:"safe"`
+}
+
+// HotMaxAgeOr is redundancy.hot-max-age, or def when the manifest sets
+// none.
+func (r *RedundancyConfig) HotMaxAgeOr(def time.Duration) time.Duration {
+	if r == nil || r.HotMaxAge == nil {
+		return def
+	}
+	return time.Duration(*r.HotMaxAge)
 }
 
 // FloatingIPConfig is redundancy.floating-ip. The process needs
@@ -543,18 +601,57 @@ func checkPublicURLs(urls map[string]string) error {
 	return nil
 }
 
-// PairRetainNotReplicated is what a pair says about its retained values
-// until state streaming (#710 step 4): at start, in /api/cluster and on
-// the dashboard.
-const PairRetainNotReplicated = "retained state not replicated: retained values (setpoints) are not replicated until state streaming (#710 step 4), so a takeover starts from the new leader's own retain and a setpoint the old leader took is lost"
+// DefaultStreamBudget is the state stream's bytes a second when the
+// manifest names none (1 MB/s).
+const DefaultStreamBudget = 1_000_000
+
+// StreamBudgetBytes is the state stream's budget in bytes a second
+// (DefaultStreamBudget when unset). Load has checked it.
+func (r *RedundancyConfig) StreamBudgetBytes() int64 {
+	if r == nil || r.StreamBudget == "" {
+		return DefaultStreamBudget
+	}
+	n, err := parseByteRate(r.StreamBudget)
+	if err != nil {
+		return DefaultStreamBudget
+	}
+	return n
+}
+
+// parseByteRate reads a bytes-a-second figure: a number, or one with
+// B/s, kB/s, MB/s, KiB/s or MiB/s (the /s optional).
+func parseByteRate(s string) (int64, error) {
+	t := strings.TrimSuffix(strings.TrimSpace(s), "/s")
+	units := []struct {
+		suffix string
+		mul    float64
+	}{{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"kB", 1e3}, {"KB", 1e3}, {"MB", 1e6}, {"B", 1}}
+	mul := 1.0
+	for _, u := range units {
+		if strings.HasSuffix(t, u.suffix) {
+			t, mul = strings.TrimSpace(strings.TrimSuffix(t, u.suffix)), u.mul
+			break
+		}
+	}
+	f, err := strconv.ParseFloat(t, 64)
+	if err != nil || f <= 0 || f*mul > 1e12 {
+		return 0, fmt.Errorf("want a positive rate such as 1MB/s, 500kB/s or 2000000")
+	}
+	return int64(f * mul), nil
+}
+
+// minStreamBudget is the lowest budget a pair takes: below it, even a
+// small image goes out seconds apart.
+const minStreamBudget = 10_000
 
 // Pair reports whether the section names a redundant pair (peers:)
 // rather than the Kubernetes Lease.
 func (r *RedundancyConfig) Pair() bool { return r != nil && len(r.Peers) > 0 }
 
 // DefaultPairLease is a pair's lease time when the manifest names none
-// (design §2).
-const DefaultPairLease = 2 * time.Second
+// (design §2): 1 s (#710; it was 2 s). It equals quorum/node's
+// DefaultLease, the witness's default --lease (cmd/naut tests it).
+const DefaultPairLease = time.Second
 
 // Bounds on a pair's lease: shorter, and a vote round with its fsync
 // (deadline lease/8) does not fit; longer, and a takeover waits minutes.
@@ -590,7 +687,7 @@ func checkRedundancy(r *RedundancyConfig) error {
 		case r.StateDir != "":
 			return errors.New("redundancy.state-dir needs peers:; the Kubernetes Lease mode keeps no voter state")
 		case r.Experimental:
-			return errors.New("redundancy.experimental applies to a redundant pair (peers:); the Kubernetes Lease mode is not experimental")
+			return errors.New("redundancy.experimental applies to a redundant pair (peers:), which no longer needs it either: remove the key")
 		case r.NetDelay != 0 || r.SendMargin != 0:
 			return errors.New("redundancy.net-delay and send-margin apply to a redundant pair (peers:): they set its write gate's fence margin")
 		case r.PublicURLs != nil:
@@ -599,11 +696,16 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.floating-ip applies to a redundant pair (peers:): the address the leader holds")
 		case r.PeerTLS != "":
 			return errors.New("redundancy.peer-tls applies to a redundant pair (peers:): the TLS of its controllers' and witness's peer ports")
+		case r.StreamBudget != "":
+			return errors.New("redundancy.stream-budget applies to a redundant pair (peers:): the bytes a second its leader streams its state to the standby at")
+		case r.HotMaxAge != nil:
+			return errors.New("redundancy.hot-max-age applies to a redundant pair (peers:): the oldest state image its takeover goes on from")
+		case r.TakeoverHold != nil:
+			return errors.New("redundancy.takeover-hold applies to a redundant pair (peers:): it holds the outputs after a takeover from the peer")
+		case r.Failback != nil:
+			return errors.New("redundancy.failback is for a redundant pair (peers:): there is no other controller to fail back to")
 		}
 		return nil
-	}
-	if !r.Experimental {
-		return errors.New("redundancy.peers: a redundant pair is experimental for now: retained values (setpoints) are not replicated until state streaming: a takeover starts from the new leader's own retain. Set redundancy.experimental: true to run it knowing that")
 	}
 	for name := range r.Peers {
 		if name != "a" && name != "b" {
@@ -657,7 +759,25 @@ func checkRedundancy(r *RedundancyConfig) error {
 	if err := checkFence(r); err != nil {
 		return err
 	}
+	if r.StreamBudget != "" {
+		n, err := parseByteRate(r.StreamBudget)
+		switch {
+		case err != nil:
+			return fmt.Errorf("redundancy.stream-budget %q: %v", r.StreamBudget, err)
+		case n < minStreamBudget:
+			return fmt.Errorf("redundancy.stream-budget %s: want at least 10kB/s", r.StreamBudget)
+		}
+	}
+	if r.HotMaxAge != nil && *r.HotMaxAge < 0 {
+		return fmt.Errorf("redundancy.hot-max-age %s: want 0 (every takeover cold) or more", time.Duration(*r.HotMaxAge))
+	}
 	if err := checkPublicURLs(r.PublicURLs); err != nil {
+		return err
+	}
+	if err := checkTakeoverHoldConfig(r.TakeoverHold); err != nil {
+		return err
+	}
+	if err := checkFailbackConfig(r); err != nil {
 		return err
 	}
 	// A controller's path, judged the same wherever Load runs (naut check
@@ -1220,7 +1340,17 @@ type Project struct {
 	// Checkout is the manifest's checkout: section (#719), nil without one;
 	// CheckoutSheet is the sheet it names.
 	Checkout *CheckoutConfig
-	checkout any // the sheet, see CheckoutSheet
+	// Cameras are the manifest's cameras: section (#724).
+	Cameras CameraRows
+	// CameraSnapshots is the manifest's camera-snapshots: policy (#724).
+	CameraSnapshots CameraSnapshotsCfg
+	// CameraStreams is the manifest's camera-streams: policy (#724).
+	CameraStreams CameraStreamsCfg
+	// AlarmNotifiers are heard by the alarm engine besides the manifest's
+	// alarms.notify: ones: what a controller composes in (the cameras'
+	// snapshot on alarm, #724).
+	AlarmNotifiers []alarm.Notifier
+	checkout       any // the sheet, see CheckoutSheet
 
 	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
@@ -1434,6 +1564,9 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 	if err := m.readCheckout(fsys, !noSheet); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
+	if err := validateCameras(m.Cameras, m.CameraSnapshots, m.CameraStreams); err != nil {
+		return nil, fmt.Errorf("%s: cameras: %w", name, err)
+	}
 	if m.Parameters != nil {
 		switch m.Parameters.WriteBack {
 		case "", WriteBackOff, WriteBackPatch, WriteBackCommit:
@@ -1456,8 +1589,8 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 	if m.authPolicy, err = compileAuth(m.Auth); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	if m.Auth != nil && m.Auth.OIDC != nil && m.Redundancy != nil {
-		return nil, fmt.Errorf("%s: %w", name, errOIDCPair)
+	if m.Auth != nil && m.Auth.OIDC != nil && m.Redundancy != nil && !m.Redundancy.Pair() {
+		return nil, fmt.Errorf("%s: %w", name, errOIDCLease)
 	}
 	if m.Server.TLS != nil && m.Server.TLS.SelfSigned && m.Redundancy != nil {
 		return nil, fmt.Errorf("%s: %w", name, errSelfSignedPair)
@@ -1647,6 +1780,9 @@ func composeTags(fsys fs.FS, m *Manifest, manifestName string) error {
 			if t.Name == "" {
 				continue
 			}
+			if ir.IsSystemFunction(t.Name) {
+				return fmt.Errorf("tag %q (%s) has the name of a nautilus system function (%s()): rename the tag", t.Name, src, ir.NameKey(t.Name))
+			}
 			if prev, dup := from[ir.NameKey(t.Name)]; dup {
 				if prev.name != t.Name {
 					return fmt.Errorf("tag %q (%s) and tag %q (%s) are one tag — "+
@@ -1817,9 +1953,15 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if err := checkRedundancy(m.Redundancy); err != nil {
 		return nil, err
 	}
-	if m.Redundancy.Pair() && m.Sparkplug != nil {
-		// #798: both controllers would publish as the same edge node.
-		return nil, errors.New("sparkplug: a redundant pair can't run a Sparkplug edge node yet: both controllers would publish as the same edge node, fighting over its session (#798). Remove sparkplug: from this project, or run the edge on one controller outside the pair")
+	if m.Redundancy != nil {
+		if err := checkTakeoverHold(m.Redundancy.TakeoverHold, m.Tags, drivers); err != nil {
+			return nil, err
+		}
+		if m.Redundancy.Failback != nil && m.Retain == nil {
+			// Its state (suspended, and by whom) lives in the retain store:
+			// without one, a takeover could not know an operator's suspend.
+			return nil, errors.New("redundancy.failback needs a retain: section: whether failback is suspended (and by whom) is kept in the retain store, so a takeover keeps an operator's suspend")
+		}
 	}
 	if opts.Channels, err = buildChannels(m); err != nil {
 		return nil, err
@@ -1941,27 +2083,30 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 
 			TrustedProxies: proxies,
 		},
-		sparkplug:   m.Sparkplug,
-		substitutes: substitutes,
-		drivers:     drivers,
-		devices:     m.devices,
-		Plant:       m.plant,
-		OPCUA:       m.OPCUA,
-		Retain:      m.Retain,
-		WriteBack:   m.WriteBackMode(),
-		Audit:       m.Audit,
-		Auth:        m.authPolicy,
-		Redundancy:  m.Redundancy,
-		Alarms:      m.Alarms,
-		HMIDir:      hmiDir,
-		HMIMissing:  hmiMissing,
-		HMIApp:      hmiApp,
-		HMIScreens:  screens,
-		HMIPlant:    plantPages,
-		PWA:         m.PWA,
-		PWAIcon:     m.pwaIcon,
-		Checkout:    m.Checkout,
-		checkout:    m.checkoutSheet,
+		sparkplug:       m.Sparkplug,
+		substitutes:     substitutes,
+		drivers:         drivers,
+		devices:         m.devices,
+		Plant:           m.plant,
+		OPCUA:           m.OPCUA,
+		Retain:          m.Retain,
+		WriteBack:       m.WriteBackMode(),
+		Audit:           m.Audit,
+		Auth:            m.authPolicy,
+		Redundancy:      m.Redundancy,
+		Alarms:          m.Alarms,
+		HMIDir:          hmiDir,
+		HMIMissing:      hmiMissing,
+		HMIApp:          hmiApp,
+		HMIScreens:      screens,
+		HMIPlant:        plantPages,
+		PWA:             m.PWA,
+		PWAIcon:         m.pwaIcon,
+		Checkout:        m.Checkout,
+		Cameras:         m.Cameras,
+		CameraSnapshots: m.CameraSnapshots,
+		CameraStreams:   m.CameraStreams,
+		checkout:        m.checkoutSheet,
 
 		AuthStateDir: m.authStateDir(),
 		AuthOIDC:     m.authOIDC(),
@@ -2452,6 +2597,7 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		if err != nil {
 			return nil, nil, err
 		}
+		labelCuts(d, c.Name, false)
 		return d, []nio.NamedDriver{{Name: c.Name, Driver: d}}, nil
 	}
 	named := make([]nio.NamedDriver, 0, len(configs))
@@ -2462,6 +2608,7 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		if err != nil {
 			return nil, nil, fmt.Errorf("drivers[%d] (%s): %w", i, name, err)
 		}
+		labelCuts(d, name, true)
 		named = append(named, nio.NamedDriver{Name: name, Driver: d})
 	}
 	multi, err := nio.NewMulti(named...)
@@ -2469,6 +2616,14 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		return nil, nil, fmt.Errorf("drivers: %w", err)
 	}
 	return multi, named, nil
+}
+
+// labelCuts tells a driver its name for the writes-cut counter (#710,
+// fence.CutLabel): among several drivers a source is "driver/id".
+func labelCuts(d nio.Driver, name string, multi bool) {
+	if l, ok := d.(interface{ SetCutLabel(string, bool) }); ok {
+		l.SetCutLabel(name, multi)
+	}
 }
 
 // withDeviceTypes makes the composed device types this manifest's:

@@ -1,0 +1,8 @@
+FUNCTION_BLOCK "naut_Main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	"naut_Tags".Hours := "naut_Tags".Hours + "naut_Tags".MainDtS / 3600.0;
+	"naut_Tags".Seen := "naut_Scan_main".tags.FastDt;
+END_FUNCTION_BLOCK

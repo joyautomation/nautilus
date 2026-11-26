@@ -358,11 +358,14 @@ type Options struct {
 	// Auth with auth.oidc and Users (the pins and sign-outs live beside the
 	// users file); without them it is ignored. OIDCRedirectURL is
 	// auth.oidc.redirect-url: "" derives the redirect URI from a trusted
-	// Host.
+	// Host. OIDCIssuer is auth.oidc.issuer: on a redundant pair a name is
+	// pinned from the other controller's sign-in only when that sign-in's
+	// issuer is this one (#710); "" pins none that way.
 	// The seam's type is internal (internal/oidcseam): not stable Go API
 	// while #708 is open.
 	OIDC            oidcseam.Provider
 	OIDCRedirectURL string
+	OIDCIssuer      string
 
 	// Users is the controller's users file (#708): a personal access token
 	// it holds is a credential acting as "user:<name>", with the grants
@@ -687,6 +690,8 @@ type Server struct {
 	oidcFlows    *oidcFlows
 	oidcTickets  *oidcTickets
 	oidcRedirect string
+	oidcIssuer   string
+	oidcPair     bool // a redundant pair's: names are pinned from the log too (#710)
 
 	// unforceAllChecked, when set (tests only), runs between clear-all's
 	// check of the forced tags and its clearing of them.
@@ -863,12 +868,24 @@ func newServer(rt *runtime.Runtime, opts ...Options) *Server {
 				s.signin = newSignInGate()
 				if opts[0].OIDC != nil && s.policy.OIDC() {
 					s.oidc, s.oidcFlows, s.oidcTickets, s.oidcRedirect = opts[0].OIDC, newOIDCFlows(), newOIDCTickets(), opts[0].OIDCRedirectURL
+					s.oidcIssuer, s.oidcPair = opts[0].OIDCIssuer, opts[0].SessionLog != nil
 				}
 			}
 			u.OnChange(s.journalUsersChange)
 			u.OnHealth(s.journalUsersHealth)
-			// What changed while the controller was stopped.
+			// What changed while the controller was stopped: first, so an
+			// unpin made then ends the replayed sessions before any pins.
 			u.CatchUp()
+			if s.oidcPair {
+				// a pair: pin names from the other controller's sign-ins,
+				// those the log replayed at start first
+				// The log's apply path tells adopted: pinning asks the log
+				// whether it is synced, so it runs apart from that path.
+				adopted := func(se session) { go s.pinFromLog(se) }
+				for _, se := range s.sessions.OnAdopted(adopted) {
+					s.pinFromLog(se)
+				}
+			}
 		}
 	}
 	if unavailable != nil {
@@ -2323,6 +2340,9 @@ func (s *Server) frontDoor(w http.ResponseWriter, req writeTagRequest, whole boo
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, runtime.ErrForced):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, runtime.ErrSwitching):
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	case whole && errors.Is(err, ir.ErrTypeMismatch):
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 	default:

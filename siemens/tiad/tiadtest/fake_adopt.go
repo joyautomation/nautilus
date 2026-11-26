@@ -88,7 +88,7 @@ func (s *session) snapshot() savedProject {
 	}
 	sp := savedProject{cpu: cpu, others: append([]tiad.KeptDevice(nil), s.others...), protection: s.protection, protectedWith: s.protectedWith,
 		accessControl: s.accessControl, access: s.access.clone(), webServer: s.webServer, webHTTPS: s.webHTTPS,
-		blocks: slices.Clone(s.blocks), groups: maps.Clone(s.groups), obInfo: maps.Clone(s.obInfo), node: s.node}
+		blocks: slices.Clone(s.blocks), groups: maps.Clone(s.groups), obInfo: maps.Clone(s.obInfo), decls: maps.Clone(s.decls), node: s.node}
 	if !s.changed {
 		sp.restored = s.restored
 	}
@@ -120,6 +120,7 @@ func (f *Fake) adoptProject(r *http.Request) (any, *failure) {
 	source := map[string]any{}
 	var sp savedProject
 	var b []byte
+	pendingTurnOn := false
 	if req.Deploy != "" {
 		var d *tiad.Deploy
 		for _, x := range f.deployRecs {
@@ -144,6 +145,7 @@ func (f *Fake) adoptProject(r *http.Request) (any, *failure) {
 		held := f.archived[sha]
 		sp = held.project
 		sp.restored = sha
+		pendingTurnOn = d.AccessTurnOn && d.Status != tiad.DeployLoaded
 		source["deploy"] = req.Deploy
 		out["address"] = d.Address
 		if held.address != d.Address {
@@ -222,6 +224,14 @@ func (f *Fake) adoptProject(r *http.Request) (any, *failure) {
 		f.saved = map[string]savedProject{}
 	}
 	f.saved[project] = sp
+	delete(f.turnOnPending, project)
+	if pendingTurnOn {
+		if f.turnOnPending == nil {
+			f.turnOnPending = map[string]bool{}
+		}
+		f.turnOnPending[project] = true
+		out["notes"] = []string{tiad.TurnOnPendingNote}
+	}
 	if sp.cpu != nil {
 		out["cpu"] = *sp.cpu
 	} else {

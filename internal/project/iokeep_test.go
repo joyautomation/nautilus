@@ -740,16 +740,18 @@ func TestIOWatchClearsSilentWhenTheResampleAnswers(t *testing.T) {
 	files := staticFiles(slavePort(s1), slavePort(s2))
 	r := startKeepRig(t, files, keepOpts{})
 	r.leading(t)
-	port := deadPort(t)
-	r.applyMove(t, files, port, slavePort(s2), ApplyOptions{RevertIfSilent: 300 * time.Millisecond})
-	r.io.applying.Lock() // the revert waits here
-	eventually(t, "the deadline to find DEV_A silent", func() bool { w := r.io.Watch(); return len(w.Silent) == 1 })
-	late := slave.NewServer(fmt.Sprintf("127.0.0.1:%d", port), nil)
+	// The device's own server holds its port from the start (a port picked,
+	// closed and bound again later was taken by another test's connection in
+	// CI); with no unit 1 it answers every read with exception 0x0B, which
+	// reads as silence. Coming up is creating the unit.
+	late := slave.NewServer("", nil)
 	if err := late.Start(); err != nil {
-		r.io.applying.Unlock()
 		t.Fatal(err)
 	}
 	t.Cleanup(late.Stop)
+	r.applyMove(t, files, slavePort(late), slavePort(s2), ApplyOptions{RevertIfSilent: 300 * time.Millisecond})
+	r.io.applying.Lock() // the revert waits here
+	eventually(t, "the deadline to find DEV_A silent", func() bool { w := r.io.Watch(); return len(w.Silent) == 1 })
 	late.Unit(1).SetHolding(0, 8)
 	eventually(t, "DEV_A to answer late", func() bool { return r.value("A_In") == "8" })
 	r.io.applying.Unlock()

@@ -45,8 +45,8 @@ func TestPairShortTokenRefusedWithPeerTLS(t *testing.T) {
 	r.PeerTLS = ""
 	env["NAUTILUS_PEER_TOKEN"] = testPeerToken
 	o, _, srv, err := pairOptions(r, "127.0.0.1:8080", "", pairEnv(env))
-	if err != nil || srv == nil || o.TLS == nil {
-		t.Fatalf("the default: %v, server TLS %v, client TLS %v: want peer TLS on", err, srv != nil, o.TLS != nil)
+	if err != nil || srv == nil || o.TLS != nil {
+		t.Fatalf("the default: %v, peer TLS options %v, client TLS %v: want peer TLS on, its client side set by newPairMember with the box", err, srv != nil, o.TLS != nil)
 	}
 }
 

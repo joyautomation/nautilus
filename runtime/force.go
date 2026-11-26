@@ -280,6 +280,9 @@ func (t *Tags) UnforceIf(addr string, gen uint64) bool {
 func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if err := t.switchingLocked(); err != nil {
+		return 0, "", fmt.Errorf("force %s: %w", addr, err)
+	}
 	root, path, tv, err := t.resolveForceAddr(addr)
 	if err != nil {
 		return 0, "", err
@@ -297,6 +300,9 @@ func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, string
 		// The runtime stores a companion past the force layer: a force on
 		// one would show in the table and hold nothing.
 		return 0, "", fmt.Errorf("tag %s is set by the runtime from the substitute table and cannot be forced: %w", root, ErrReadOnly)
+	}
+	if tv.releases {
+		return 0, "", fmt.Errorf("tag %s releases the takeover hold: only the program sets it: %w", root, ErrReadOnly)
 	}
 	fs := t.forces[root]
 	base := tv.v

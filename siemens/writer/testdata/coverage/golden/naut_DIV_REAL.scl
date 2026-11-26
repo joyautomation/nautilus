@@ -1,0 +1,15 @@
+FUNCTION "naut_DIV_REAL" : REAL
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      A : REAL;
+      B : REAL;
+   END_VAR
+
+BEGIN
+	IF #B = 0.0 THEN
+		#naut_DIV_REAL := 0.0;
+	ELSE
+		#naut_DIV_REAL := #A / #B;
+	END_IF;
+END_FUNCTION

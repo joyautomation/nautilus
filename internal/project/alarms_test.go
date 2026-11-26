@@ -9,6 +9,7 @@ package project
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -513,6 +514,70 @@ alarms:
 		t.Fatal(err)
 	}
 	if len(errs) != 2 || !strings.Contains(errs[0], "alarms.chatter.count") || !strings.Contains(errs[1], "alarms.flood.threshold") {
+		t.Fatalf("errs = %v", errs)
+	}
+}
+
+// Paging under chattering and floods is on by default (#1249 slice 3);
+// alarms.flood.individual adds to critical and safety and can never take
+// them away; naut check refuses a priority it does not know and a class
+// no alarm has.
+func TestAlarmPagingConfig(t *testing.T) {
+	proj, rt := loadAlarms(t, alarmFS(alarmTags+`
+alarms:
+  defs:
+    - { id: a, tag: RTU7_PMP01_FAULT, class: level }
+`, nil))
+	chatter, flood := proj.Alarms.paging()
+	if !chatter || !flood.Group || !slices.Equal(flood.Priorities, []alarm.Priority{alarm.Critical}) || !slices.Equal(flood.Classes, []string{"safety"}) {
+		t.Fatalf("defaults: chatter %v flood %+v", chatter, flood)
+	}
+	if _, errs, _, err := proj.CheckAlarms(rt); err != nil || len(errs) != 0 {
+		t.Fatalf("CheckAlarms: %v %v", errs, err)
+	}
+
+	proj, rt = loadAlarms(t, alarmFS(alarmTags+`
+alarms:
+  chatter: { page: false }
+  flood: { group-pages: false, individual: { priorities: [high], classes: [level] } }
+  defs:
+    - { id: a, tag: RTU7_PMP01_FAULT, class: level }
+`, nil))
+	chatter, flood = proj.Alarms.paging()
+	if chatter || flood.Group || !slices.Equal(flood.Priorities, []alarm.Priority{alarm.Critical, alarm.High}) ||
+		!slices.Equal(flood.Classes, []string{"safety", "level"}) {
+		t.Fatalf("set: chatter %v flood %+v", chatter, flood)
+	}
+	if _, errs, _, err := proj.CheckAlarms(rt); err != nil || len(errs) != 0 {
+		t.Fatalf("CheckAlarms: %v %v", errs, err)
+	}
+
+	// A class compares ignoring case: LEVEL names the level alarms, and
+	// Safety is the safety class already there.
+	proj, rt = loadAlarms(t, alarmFS(alarmTags+`
+alarms:
+  flood: { individual: { classes: [LEVEL, Safety] } }
+  defs:
+    - { id: a, tag: RTU7_PMP01_FAULT, class: level }
+`, nil))
+	if _, flood = proj.Alarms.paging(); !slices.Equal(flood.Classes, []string{"safety", "LEVEL"}) {
+		t.Fatalf("mixed case: %+v", flood)
+	}
+	if _, errs, _, err := proj.CheckAlarms(rt); err != nil || len(errs) != 0 {
+		t.Fatalf("CheckAlarms mixed case: %v %v", errs, err)
+	}
+
+	bad, rt2 := loadAlarms(t, alarmFS(alarmTags+`
+alarms:
+  flood: { individual: { priorities: [urgent], classes: [levle] } }
+  defs:
+    - { id: a, tag: RTU7_PMP01_FAULT, class: level }
+`, nil))
+	_, errs, _, err := bad.CheckAlarms(rt2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 2 || !strings.Contains(errs[0], "alarms.flood.individual.priorities[0]") || !strings.Contains(errs[1], `no alarm has class "levle"`) {
 		t.Fatalf("errs = %v", errs)
 	}
 }

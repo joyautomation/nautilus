@@ -284,6 +284,23 @@ func auditRows() []auditRow {
 		ckHdr["Cookie"], ckHdr["Origin"] = c.Name+"="+c.Value, "http://localhost"
 		return srv
 	}
+	// the camera snapshot purge rows: akhan (an engineer: config) signs in
+	camHdr := map[string]string{}
+	camSrv := func(t *testing.T) *Server {
+		srv, toks, _ := snapServer(t, "http://127.0.0.1:1/x", snapDir(t, nil), nil)
+		_ = toks
+		c := signIn(t, srv, "akhan")
+		camHdr["Cookie"], camHdr["Origin"] = c.Name+"="+c.Value, "http://localhost"
+		return srv
+	}
+	// the camera pan and tilt rows (#724): akhan, an engineer, holds ptz
+	ptzHdr := map[string]string{}
+	ptzSrv := func(t *testing.T) *Server {
+		srv, _, _ := ptzServer(t)
+		c := signIn(t, srv, "akhan")
+		ptzHdr["Cookie"], ptzHdr["Origin"] = c.Name+"="+c.Value, "http://localhost"
+		return srv
+	}
 	ckRun := func(t *testing.T, s *Server) {
 		if _, err := ckOf(s).Store.Begin(false, ckOf(s).Sheet.Hash(), "T", "akhan", "user:akhan"); err != nil {
 			t.Fatal(err)
@@ -334,6 +351,24 @@ func auditRows() []auditRow {
 	none := plain(Options{})
 	tok := plain(Options{AuthToken: "s3cret"})
 	return []auditRow{
+		{name: "camera ptz move", pattern: "POST /api/cameras/{id}/ptz", server: ptzSrv, person: true, header: ptzHdr,
+			method: "POST", path: "/api/cameras/dome/ptz", body: `{"action":"move","x":0.5,"ms":200}`,
+			action: "camera.ptz", target: "dome", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "camera ptz with no credential", pattern: "POST /api/cameras/{id}/ptz", server: ptzSrv, person: true,
+			method: "POST", path: "/api/cameras/dome/ptz", body: `{"action":"move","x":0.5,"ms":200}`,
+			action: "camera.ptz", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "camera ptz stop", pattern: "POST /api/cameras/{id}/ptz/stop", server: ptzSrv, person: true, header: ptzHdr,
+			method: "POST", path: "/api/cameras/dome/ptz/stop",
+			action: "camera.ptz-stop", target: "dome", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "camera ptz stop with no credential", pattern: "POST /api/cameras/{id}/ptz/stop", server: ptzSrv, person: true,
+			method: "POST", path: "/api/cameras/dome/ptz/stop",
+			action: "camera.ptz-stop", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "camera snapshot purge", pattern: "POST /api/camera-snapshots/purge", server: camSrv, person: true, header: camHdr,
+			method: "POST", path: "/api/camera-snapshots/purge", body: `{"all":true}`,
+			action: "camera.snapshot-purge", target: "camera-snapshots", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "camera snapshot purge with no credential", pattern: "POST /api/camera-snapshots/purge", server: camSrv, person: true,
+			method: "POST", path: "/api/camera-snapshots/purge", body: `{"all":true}`,
+			action: "camera.snapshot-purge", target: "", user: "anonymous", source: "api", result: "refused"},
 		{name: "checkout begin", pattern: "POST /api/checkout/runs", server: ckSrv, person: true, header: ckHdr,
 			method: "POST", path: "/api/checkout/runs", body: `{"rehearsal":true}`,
 			action: "checkout.begin", target: "*", user: "user:akhan", source: "hmi", result: "ok"},
@@ -506,6 +541,74 @@ func auditRows() []auditRow {
 			header: map[string]string{"Authorization": "Bearer s3cret"},
 			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "ok",
 			check: wantDetail("acceptLoss", "0123456789")},
+		{name: "release the takeover hold", pattern: "POST /api/cluster/release-hold", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/release-hold", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.release-hold", target: "takeover hold on b", user: "token", source: "api", result: "ok"},
+		{name: "release the takeover hold, none holds", pattern: "POST /api/cluster/release-hold", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/release-hold", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.release-hold", target: "takeover hold on b", user: "token", source: "api", result: "refused",
+			check: wantReason("no takeover hold")},
+		{name: "release the takeover hold, no credential configured", pattern: "POST /api/cluster/release-hold", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/release-hold", body: `{}`,
+			action: "redundancy.release-hold", target: "takeover hold on b", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
+		{name: "switch over", pattern: "POST /api/cluster/switchover", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/switchover", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.switchover", target: "the lead of b", user: "token", source: "api", result: "ok"},
+		{name: "switch over, refused", pattern: "POST /api/cluster/switchover", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/switchover", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.switchover", target: "the lead of b", user: "token", source: "api", result: "refused",
+			check: wantReason("fake refused")},
+		{name: "switch over, fell back to a failover", pattern: "POST /api/cluster/switchover", server: pairServer("failover"),
+			method: "POST", path: "/api/cluster/switchover", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.switchover", target: "the lead of b", user: "token", source: "api", result: "error",
+			check: wantReason("fake failover")},
+		{name: "switch over, no credential configured", pattern: "POST /api/cluster/switchover", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/switchover", body: `{}`,
+			action: "redundancy.switchover", target: "the lead of b", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
+		{name: "suspend failback", pattern: "POST /api/cluster/failback", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/failback", body: `{"suspend":true,"why":"servicing a"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.failback", target: "failback of b", user: "token", source: "api", result: "ok",
+			check: wantDetail("why", "servicing a")},
+		{name: "resume failback, refused", pattern: "POST /api/cluster/failback", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/failback", body: `{"suspend":false}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.failback", target: "failback of b", user: "token", source: "api", result: "refused",
+			check: wantReason("fake refused")},
+		{name: "failback without suspend", pattern: "POST /api/cluster/failback", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/failback", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.failback", target: "failback of b", user: "token", source: "api", result: "refused",
+			check: wantReason("want a body")},
+		{name: "failback, no credential configured", pattern: "POST /api/cluster/failback", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/failback", body: `{"suspend":true}`,
+			action: "redundancy.failback", target: "failback of b", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
+		{name: "unpin the other controller", pattern: "POST /api/cluster/unpin", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/unpin", body: `{"name":"a"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.unpin", target: "a", user: "token", source: "api", result: "ok"},
+		{name: "unpin, refused", pattern: "POST /api/cluster/unpin", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/unpin", body: `{"name":"b"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.unpin", target: "b", user: "token", source: "api", result: "refused",
+			check: wantReason("fake refused")},
+		{name: "unpin without a name", pattern: "POST /api/cluster/unpin", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/unpin", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.unpin", target: "", user: "token", source: "api", result: "refused",
+			check: wantReason("want")},
+		{name: "unpin, no credential configured", pattern: "POST /api/cluster/unpin", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/unpin", body: `{"name":"a"}`,
+			action: "redundancy.unpin", target: "a", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
 		{name: "vouch, the picture printed", pattern: "POST /api/cluster/vouch", server: pairServer("refused"),
 			method: "POST", path: "/api/cluster/vouch", body: `{}`,
 			header: map[string]string{"Authorization": "Bearer s3cret"},
@@ -962,9 +1065,38 @@ func (f *fakePair) Status() leader.Status {
 	return leader.Status{Mode: "quorum", Pod: "b", Leader: "b", IsLeader: true, Marked: []string{"a"}}
 }
 
+// ReleaseHold is the takeover hold's release (HoldReleaser): "refused"
+// answers that none holds.
+func (f *fakePair) ReleaseHold(by string) error {
+	f.by = append(f.by, by)
+	if f.outcome == "refused" {
+		return runtime.ErrNotHolding
+	}
+	return nil
+}
+
+// Failback is the pair's failback suspend and resume (FailbackSetter):
+// "refused" answers as a standby that lost the lead.
+func (f *fakePair) Failback(suspend bool, by, why string) error {
+	f.by = append(f.by, by)
+	if f.outcome == "refused" {
+		return errors.New("fake refused")
+	}
+	return nil
+}
+
+func (f *fakePair) Switchover(_ context.Context, by string) (any, string, string) {
+	f.by = append(f.by, by)
+	return map[string]any{"from": "b", "to": "a"}, f.outcome, "fake " + f.outcome
+}
+
 func (f *fakePair) ClearDuplicate(_ context.Context, name, by string) (any, string, string) {
 	f.by = append(f.by, by)
 	return map[string]any{"name": name}, f.outcome, "fake " + f.outcome
+}
+
+func (f *fakePair) Unpin(_ context.Context, name, by string) (any, string, string) {
+	return map[string]string{"name": name}, f.outcome, "fake " + f.outcome
 }
 
 func (f *fakePair) Commission(_ context.Context, by, acceptLoss, acceptLostLog string) (any, string, string) {

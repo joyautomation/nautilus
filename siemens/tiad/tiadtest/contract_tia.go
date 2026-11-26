@@ -199,6 +199,12 @@ func contractTIA(t *testing.T, start Starter) {
 	t.Run("Software", func(t *testing.T) { contractSoftware(t, start) })
 	t.Run("SoftwareOwnership", func(t *testing.T) { contractSoftwareOwnership(t, start) })
 	t.Run("SoftwareReplacedForeign", func(t *testing.T) { contractSoftwareReplacedForeign(t, start) })
+	t.Run("SoftwareDataTypes", func(t *testing.T) { contractSoftwareDataTypes(t, start) })
+	t.Run("SoftwareDataTypeClash", func(t *testing.T) { contractSoftwareDataTypeClash(t, start) })
+	t.Run("SoftwareDataTypeOutsideGroup", func(t *testing.T) { contractSoftwareDataTypeOutsideGroup(t, start) })
+	t.Run("CompileTouchesForeign", func(t *testing.T) { contractCompileTouchesForeign(t, start) })
+	t.Run("ImportTouchesForeignType", func(t *testing.T) { contractImportTouchesForeignType(t, start) })
+	t.Run("SoftwarePrunePrefix", func(t *testing.T) { contractSoftwarePrunePrefix(t, start) })
 	t.Run("SoftwareCyclicOBs", func(t *testing.T) { contractSoftwareCyclicOBs(t, start) })
 	t.Run("SoftwareCyclicOBNotAsAsked", func(t *testing.T) { contractSoftwareCyclicOBNotAsAsked(t, start) })
 	t.Run("Compile", func(t *testing.T) { contractCompile(t, start) })
@@ -679,14 +685,15 @@ func contractSoftwareOwnership(t *testing.T, start Starter) {
 		// With an owned source beside it: nothing of the call is imported.
 		_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{src, "src/Main.scl"}, Prune: true})
 		if tiad.Kind(err) != tiad.KindForeignBlock || !strings.Contains(err.Error(), src+` declares "Main" [OB1] in the program blocks' root`) ||
-			!strings.Contains(err.Error(), "Nothing was imported") || !strings.Contains(err.Error(), "Rename the block") {
+			!strings.Contains(err.Error(), "Nothing was imported") || !strings.Contains(err.Error(), "Rename it in the source") {
 			t.Fatalf("%s: %v, want foreign_block naming Main [OB1]", src, err)
 		}
 	}
-	// A data type: TIA puts it beside the project's own, so it is refused.
-	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl", "src/Recipe.udt"}}); tiad.Kind(err) != tiad.KindBadRequest ||
-		!strings.Contains(err.Error(), `src/Recipe.udt declares data type "naut_Recipe"`) || !strings.Contains(err.Error(), "Nothing was imported") {
-		t.Fatalf("a data type: %v", err)
+	// A source with a data type and a block: each goes to its own group.
+	put("src/Mixed.scl", "TYPE \"naut_R2\"\nVERSION : 0.1\n   STRUCT\n      x : Int;\n   END_STRUCT;\nEND_TYPE\n\nFUNCTION \"naut_F\" : Void\nBEGIN\nEND_FUNCTION\n")
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl", "src/Mixed.scl"}}); tiad.Kind(err) != tiad.KindBadRequest ||
+		!strings.Contains(err.Error(), "src/Mixed.scl declares a data type and a block") || !strings.Contains(err.Error(), "Nothing was imported") {
+		t.Fatalf("a data type and a block in one source: %v", err)
 	}
 	// A group is one user group under the root.
 	for _, g := range []string{"nautilus/sub", `a\b`} {
@@ -708,6 +715,251 @@ func contractSoftwareOwnership(t *testing.T, start Starter) {
 	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/OB.scl"}}); tiad.Kind(err) != tiad.KindBadRequest ||
 		!strings.Contains(err.Error(), `src/OB.scl declares OB "OB_main", which obs does not name`) {
 		t.Fatalf("an OB source with no obs entry: %v", err)
+	}
+}
+
+// recipeUDT is a writer-shaped data type; recipeFB uses it as a pin.
+const (
+	recipeUDT = "TYPE \"naut_Recipe\"\nVERSION : 0.1\n   STRUCT\n      speed : Real := 1.5;\n   END_STRUCT;\n\nEND_TYPE\n"
+	recipeFB  = "FUNCTION_BLOCK \"naut_Mix\"\nVERSION : 0.1\n   VAR_INPUT\n      r : \"naut_Recipe\";\n   END_VAR\nBEGIN\nEND_FUNCTION_BLOCK\n"
+)
+
+func foreignNames(l []tiad.ForeignBlock) string {
+	var n []string
+	for _, b := range l {
+		k := "block"
+		if b.DataType {
+			k = "type"
+		}
+		n = append(n, k+":"+b.Group+"/"+b.Label())
+	}
+	return strings.Join(n, ",")
+}
+
+// contractSoftwareDataTypes (D1b, #1301): a source of data types imports
+// into the data types' group named like the block group, beside the
+// blocks that use them; the result lists them (UDT), the customer's data
+// types are on the foreign list after the blocks, a regenerated type of
+// nautilus's (and the blocks the compile then touches) is no change, and
+// a prune removes a type no source declares any more.
+func contractSoftwareDataTypes(t *testing.T, start Starter) {
+	a := start(t, Config{})
+	c := a.Client()
+	a.SetTypes(t, TypesScript{Foreign: []ForeignType{{Name: "Cust", Group: ""}, {Name: "Deep", Group: "custg/sub"}}})
+	installGSD(t, c)
+	s, err := c.CreateProject(ctx, "types", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, body := range map[string]string{"src/naut_Recipe.udt": recipeUDT, "src/naut_Mix.scl": recipeFB, "src/Main.scl": programSCL,
+		"src/naut_Old.udt": "TYPE \"naut_Old\"\nVERSION : 0.1\n   STRUCT\n      x : Int;\n   END_STRUCT;\n\nEND_TYPE\n"} {
+		if _, err := c.PutFile(ctx, p, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/naut_Recipe.udt", "src/naut_Old.udt", "src/naut_Mix.scl", "src/Main.scl"}, Prune: true, PrunePrefix: "naut_"})
+	if err != nil || blockNames(r.Blocks) != "FB:naut_Main,DB:naut_Main_DB,FB:naut_Mix,UDT:naut_Old,UDT:naut_Recipe" {
+		t.Fatalf("import with data types: %s %v", blockNames(r.Blocks), err)
+	}
+	if got := foreignNames(r.Foreign); got != "block:/Main [OB1],type:/Cust,type:custg/sub/Deep" {
+		t.Fatalf("foreign list: %s, want the blocks, then the customer's data types", got)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	// Again, naut_Old gone from the sources: the type is regenerated in
+	// place, the prune removes naut_Old, and nothing outside changed.
+	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/naut_Recipe.udt", "src/naut_Mix.scl", "src/Main.scl"}, Prune: true, PrunePrefix: "naut_"})
+	if err != nil || blockNames(r.Blocks) != "FB:naut_Main,DB:naut_Main_DB,FB:naut_Mix,UDT:naut_Recipe" {
+		t.Fatalf("re-import: %s %v", blockNames(r.Blocks), err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatalf("compile after a regenerated type: %v", err)
+	}
+	if _, err := s.Save(ctx, false); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+}
+
+// contractSoftwareDataTypeClash (D1b): TIA regenerates a same-named data
+// type where it sits, and keeps one name for blocks and data types. So a
+// declared data type or block that names a customer's data type (the
+// root or a nested user group, any case), or a declared data type that
+// names a customer's block, refuses the whole call before anything is
+// imported, and the session stays usable.
+func contractSoftwareDataTypeClash(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	a.SetTypes(t, TypesScript{Foreign: []ForeignType{{Name: "Cust", Group: ""}, {Name: "Deep", Group: "custg/sub/subsub"}}})
+	for _, tc := range []struct{ file, body, named string }{
+		{"src/Cust.udt", "TYPE \"CUST\"\nVERSION : 0.1\n   STRUCT\n      x : Int;\n   END_STRUCT;\n\nEND_TYPE\n", `src/Cust.udt declares data type "Cust" in the PLC data types' root`},
+		{"src/Deep.udt", "TYPE \"deep\"\nVERSION : 0.1\n   STRUCT\n      x : Int;\n   END_STRUCT;\n\nEND_TYPE\n", `src/Deep.udt declares data type "Deep" in data types group "custg/sub/subsub"`},
+		{"src/CustFB.scl", "FUNCTION_BLOCK \"Cust\"\nVERSION : 0.1\nBEGIN\nEND_FUNCTION_BLOCK\n", `src/CustFB.scl declares data type "Cust" in the PLC data types' root`},
+		{"src/MainT.udt", "TYPE \"Main\"\nVERSION : 0.1\n   STRUCT\n      x : Int;\n   END_STRUCT;\n\nEND_TYPE\n", `src/MainT.udt declares "Main" [OB1] in the program blocks' root`},
+	} {
+		if _, err := c.PutFile(ctx, tc.file, []byte(tc.body)); err != nil {
+			t.Fatal(err)
+		}
+		_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{tc.file, "src/Main.scl"}, Prune: true, PrunePrefix: "naut_"})
+		if tiad.Kind(err) != tiad.KindForeignBlock || !strings.Contains(err.Error(), tc.named) || !strings.Contains(err.Error(), "Nothing was imported") {
+			t.Fatalf("%s: %v, want foreign_block naming %s", tc.file, err, tc.named)
+		}
+	}
+	// Nothing was imported and the session stays usable: it downloads.
+	a.SetQuestions(t, nil)
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true, PrunePrefix: "naut_"}); err != nil {
+		t.Fatalf("an import after the refusals: %v", err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Save(ctx, false); err != nil {
+		t.Fatalf("a save after the refusals: %v", err)
+	}
+}
+
+// contractSoftwareDataTypeOutsideGroup (D1b): TIA hands back a data type
+// outside the group (it regenerated a customer's type the agent's
+// reading never listed, where it sits): the import fails naming it and
+// the recovery, and the session is never saved, archived for a deploy,
+// downloaded or imported into again, though no reading shows a change.
+func contractSoftwareDataTypeOutsideGroup(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	a.SetTypes(t, TypesScript{Foreign: []ForeignType{{Name: "Cust", Group: "custg"}}, Hidden: true})
+	if _, err := c.PutFile(ctx, "src/Cust.udt", []byte("TYPE \"Cust\"\nVERSION : 0.1\n   STRUCT\n      y : Real;\n   END_STRUCT;\n\nEND_TYPE\n")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Cust.udt", "src/Main.scl"}, Prune: true, PrunePrefix: "naut_"})
+	if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), `src/Cust.udt: TIA generated data type "Cust" outside`) ||
+		!strings.Contains(err.Error(), "Close it without saving, then open or adopt the project again") {
+		t.Fatalf("an import TIA answered outside the group: %v", err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindUncleanSession || tiad.DeployIDOf(err) != "" {
+		t.Fatalf("a download after it: %v, want unclean_session", err)
+	}
+	if l := a.Loaded(t); len(l) != 0 {
+		t.Fatalf("a download after it loaded %+v", l)
+	}
+	if l := deploys(t, c, ""); len(l.Deploys) != 0 {
+		t.Fatalf("a download after it left a record: %+v", l)
+	}
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after it: %v, want unclean_session", err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}}); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("another import after it: %v, want unclean_session", err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+// contractCompileTouchesForeign (D1b): after an import, a compile that
+// moves a customer object's date (a customer type that uses one of
+// nautilus's) makes the session unusable, naming it; a compile with no
+// import before it checks nothing.
+func contractCompileTouchesForeign(t *testing.T, start Starter) {
+	a := start(t, Config{Targets: []string{benchCPU}})
+	c := a.Client()
+	installGSD(t, c)
+	a.SetTypes(t, TypesScript{Foreign: []ForeignType{{Name: "Cust", Group: "custg"}}, CompileTouchesForeign: true})
+	fresh, err := c.CreateProject(ctx, "noimport", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.Compile(ctx, true, true); err != nil {
+		t.Fatalf("a compile with no import: %v", err)
+	}
+	if err := fresh.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.CreateProject(ctx, "touch", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PutFile(ctx, "src/Main.scl", []byte(programSCL)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true, PrunePrefix: "naut_"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Compile(ctx, true, true)
+	if tiad.Kind(err) != tiad.KindUncleanSession || !strings.Contains(err.Error(), `the compile changed program blocks or data types outside group "nautilus" (data type "Cust" in data types group "custg" was modified)`) ||
+		!strings.Contains(err.Error(), "close it without saving") || !strings.Contains(err.Error(), "needs the project changed outside nautilus") {
+		t.Fatalf("a compile that moved a customer type: %v", err)
+	}
+	// A clean compile after it does not make it usable again.
+	a.SetTypes(t, TypesScript{Foreign: []ForeignType{{Name: "Cust", Group: "custg"}}})
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatalf("a compile that moves nothing: %v", err)
+	}
+	if _, err := s.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a download after it: %v, want unclean_session", err)
+	}
+	if l := a.Loaded(t); len(l) != 0 {
+		t.Fatalf("a download after it loaded %+v", l)
+	}
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after it: %v, want unclean_session", err)
+	}
+}
+
+// contractImportTouchesForeignType (D1b): an import that moves a
+// customer data type's date, though TIA hands nothing back outside the
+// group, fails naming it, and the session is never saved or downloaded.
+func contractImportTouchesForeignType(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	a.SetTypes(t, TypesScript{Foreign: []ForeignType{{Name: "Cust", Group: "custg"}}, ImportTouchesForeign: true})
+	_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true, PrunePrefix: "naut_"})
+	if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), `outside group "nautilus" (data type "Cust" in data types group "custg" was modified)`) {
+		t.Fatalf("an import that moved a customer type: %v", err)
+	}
+	a.SetTypes(t, TypesScript{Foreign: []ForeignType{{Name: "Cust", Group: "custg"}}})
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a download after it: %v, want unclean_session", err)
+	}
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after it: %v, want unclean_session", err)
+	}
+}
+
+// contractSoftwarePrunePrefix (D1b): with prunePrefix, a prune refuses
+// when the group holds a block or data type that no source declares and
+// that lacks the prefix (a customer's object there would be deleted),
+// naming it, before anything is imported; with none, it prunes as before.
+func contractSoftwarePrunePrefix(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	if _, err := c.PutFile(ctx, "src/Theirs.scl", []byte("FUNCTION \"Theirs\" : Void\nVERSION : 0.1\nBEGIN\nEND_FUNCTION\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PutFile(ctx, "src/Shared.udt", []byte("TYPE \"Shared\"\nVERSION : 0.1\n   STRUCT\n      x : Int;\n   END_STRUCT;\n\nEND_TYPE\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Shared.udt", "src/Theirs.scl", "src/Main.scl"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true, PrunePrefix: "naut_"})
+	if tiad.Kind(err) != tiad.KindForeignBlock || !strings.Contains(err.Error(), `: "Theirs" [FC1] in group "nautilus"; data type "Shared" in data types group "nautilus": not named with the prefix "naut_"`) ||
+		!strings.Contains(err.Error(), "Nothing was imported") {
+		t.Fatalf("a prune over objects without the prefix: %v", err)
+	}
+	r, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Shared.udt", "src/Theirs.scl", "src/Main.scl"}, Prune: true, PrunePrefix: "naut_"})
+	if err != nil || blockNames(r.Blocks) != "UDT:Shared,FC:Theirs,FB:naut_Main,DB:naut_Main_DB" {
+		t.Fatalf("declared ones are kept: %s %v", blockNames(r.Blocks), err)
+	}
+	// No prefix (an older caller): the blocks are pruned as before, the
+	// data types never.
+	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true})
+	if err != nil || blockNames(r.Blocks) != "UDT:Shared,FB:naut_Main,DB:naut_Main_DB" {
+		t.Fatalf("no prefix: blocks pruned as before, data types kept: %s %v", blockNames(r.Blocks), err)
 	}
 }
 
@@ -801,6 +1053,11 @@ func contractSoftwareCyclicOBs(t *testing.T, start Starter) {
 	}
 	if got := blockNames(r.Blocks); got != "FB:naut_Main,DB:naut_Main_DB,OB:naut_OB_main" {
 		t.Fatalf("blocks = %s", got)
+	}
+	// Every program block outside the group, which a download loads too
+	// (#1326): here the project's own Main at the root, never the group's.
+	if want := []tiad.ForeignBlock{{Name: "Main", Kind: "OB", Number: 1, Group: ""}}; !reflect.DeepEqual(r.Foreign, want) {
+		t.Fatalf("foreign = %+v, want %+v", r.Foreign, want)
 	}
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)

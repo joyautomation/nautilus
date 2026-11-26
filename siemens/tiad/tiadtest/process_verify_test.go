@@ -425,3 +425,121 @@ func TestAgentVerifyFailsAndCannotClose(t *testing.T) {
 		t.Fatalf("the mismatch data is lost: %v", err)
 	}
 }
+
+// typesReady is downloadReady with a data type of nautilus's imported
+// and compiled beside a block that uses it (D1b).
+func typesReady(t *testing.T) (*tiadtest.Process, *tiad.Session) {
+	t.Helper()
+	p, s := downloadReady(t)
+	c := p.Client()
+	for path, body := range map[string]string{
+		"src/naut_Recipe.udt": "TYPE \"naut_Recipe\"\r\nVERSION : 0.1\r\n   STRUCT\r\n      speed : Real := 1.5;\r\n   END_STRUCT;\r\n\r\nEND_TYPE\r\n",
+		"src/naut_Mix.scl":    "FUNCTION_BLOCK \"naut_Mix\"\r\nVERSION : 0.1\r\n   VAR_INPUT\r\n      r : \"naut_Recipe\";\r\n   END_VAR\r\nBEGIN\r\nEND_FUNCTION_BLOCK\r\n",
+	} {
+		if _, err := c.PutFile(ctx, path, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/naut_Recipe.udt", "src/naut_Mix.scl"}, Prune: true, PrunePrefix: "naut_"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	return p, s
+}
+
+func diffNames(ds []tiad.Difference) string {
+	var n []string
+	for _, d := range ds {
+		n = append(n, strings.TrimSpace(d.Object+" "+d.State))
+	}
+	return strings.Join(n, ", ")
+}
+
+// TestAgentRequiresTheGroupsDataTypes (D1b): a compare on a session that
+// imported requires the data types of its group by name, as an identical
+// element; the deploy record keeps the group, so a verify of the deploy
+// requires them too. A tree that leaves them out is not equal, naming
+// the type. (The bare-name label is the agent's guess, TiaNames.TypeLabel,
+// until a bench compare shows a loaded type's.)
+func TestAgentRequiresTheGroupsDataTypes(t *testing.T) {
+	p, s := typesReady(t)
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
+	r, err := s.Download(ctx, deployLoad)
+	if err != nil || !r.Downloaded || !r.CompareEqual || r.Deploy == nil {
+		t.Fatalf("download with a data type: %+v %v", r, err)
+	}
+	var intent map[string]any
+	for _, l := range journalLines(t, p.DeploysDir) {
+		if l["kind"] == "intent" && l["deploy"] == r.Deploy.ID {
+			intent = l
+		}
+	}
+	if intent == nil || intent["group"] != "nautilus" {
+		t.Fatalf("the intent line keeps no group: %v", intent)
+	}
+	if cr, err := s.CompareWith(ctx, tiadtest.BenchCompare); err != nil || !cr.Equal {
+		t.Fatalf("compare: %+v %v", cr, err)
+	}
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), Types: &tiadtest.TypesScript{CompareDropsTypes: true}})
+	if cr, err := s.CompareWith(ctx, tiadtest.BenchCompare); err != nil || cr.Equal || diffNames(cr.Differences) != "naut_Recipe (data type) not compared" {
+		t.Fatalf("compare leaving the data type out: %+v %v", cr, err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	v, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: r.Deploy.ID})
+	if err != nil || v.Verdict != tiad.VerifyDifferent || diffNames(v.Differences) != "naut_Recipe (data type) not compared" {
+		t.Fatalf("verify leaving the data type out: %+v %v", v, err)
+	}
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
+	if v, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: r.Deploy.ID}); err != nil || v.Verdict != tiad.VerifyEqual {
+		t.Fatalf("verify: %+v %v", v, err)
+	}
+}
+
+// TestAgentDownloadSeesTheDataTypeItSent (D1b): a download whose compare
+// right after leaves out a data type of the group did not land as
+// written: outcome_unknown naming it, start-after named.
+func TestAgentDownloadSeesTheDataTypeItSent(t *testing.T) {
+	p, s := typesReady(t)
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), Types: &tiadtest.TypesScript{CompareDropsTypes: true}})
+	start := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ResetData: tiad.Yes(), StartAfter: tiad.Yes()}}
+	_, err := s.Download(ctx, start)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "the compare right after it differs (naut_Recipe (data type) not compared)") ||
+		strings.Join(tiad.ActingAnswers(err), ",") != "start-after" {
+		t.Fatalf("download whose compare leaves the data type out: %v (acting %v)", err, tiad.ActingAnswers(err))
+	}
+}
+
+// TestAgentKeepsAFailedTypeImportUnusable (D1b): an import of data types
+// that fails inside TIA's side leaves the session unusable even when no
+// reading shows a change (TIA may have regenerated a customer's type with
+// its content and date); a failed import of blocks only is cleared as
+// before. A compile after an import that fails, with nothing outside
+// changed, leaves the session usable.
+func TestAgentKeepsAFailedTypeImportUnusable(t *testing.T) {
+	p, s := typesReady(t)
+	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "ImportSoftware", Message: "TIA fell over"}}})
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/naut_Mix.scl"}, Prune: true, PrunePrefix: "naut_"}); err == nil {
+		t.Fatal("a failing import of blocks succeeded")
+	}
+	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "Compile", Message: "TIA fell over"}}})
+	if _, err := s.Compile(ctx, true, true); err == nil {
+		t.Fatal("a failing compile succeeded")
+	}
+	p.SetScript(t, tiadtest.Script{})
+	if _, err := s.Save(ctx, false); err != nil {
+		t.Fatalf("a save after a failed import of blocks and a failed compile: %v", err)
+	}
+	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "ImportSoftware", Message: "TIA fell over"}}})
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/naut_Recipe.udt", "src/naut_Mix.scl"}, Prune: true, PrunePrefix: "naut_"}); err == nil {
+		t.Fatal("a failing import of data types succeeded")
+	}
+	p.SetScript(t, tiadtest.Script{})
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after a failed import of data types: %v, want unclean_session", err)
+	}
+}

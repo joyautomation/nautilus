@@ -52,6 +52,9 @@ type Record struct {
 	// Writes are what the simulated device received (I2): a controller
 	// writes it on each scan while its gate is open.
 	Writes []DeviceWrite
+	// LeadStarts and Takeovers feed the hot oracle (checkHot).
+	LeadStarts []LeadStart
+	Takeovers  []HotTakeover
 	// Requests are every request a candidate sent: who, when, which term,
 	// and whether it was a renewal.
 	Requests []SentRequest
@@ -93,6 +96,45 @@ type Record struct {
 
 	ends     []time.Duration // promise end of each Grant, global; built once by Check
 	released []release
+
+	// Resigns are the planned switchovers that resigned a leadership;
+	// ResignsTaken the RESIGNs a voter took, dropping its running
+	// promise (a duplicate's answer is not one) (#710 d1).
+	Resigns      []ResignRec
+	ResignsTaken []ResignTaken
+	// HoldEnds are the resign holds ended early (EndHold).
+	HoldEnds []HoldEnd
+}
+
+// ResignRec is a controller resigning its leadership of Epoch at At.
+type ResignRec struct {
+	At    time.Duration
+	Node  Addr
+	Epoch uint64
+	// Boot is the resigner's process (node.boot); Local its own clock at
+	// the resign: its hold runs on that clock, in that process.
+	Boot  int
+	Local quorum.Instant
+}
+
+// HoldEnd is a resign hold ended early (an EndHold fault: the controller
+// said yes to its peer's hand-back, #710 d1d).
+type HoldEnd struct {
+	At   time.Duration
+	Node Addr
+	Boot int
+}
+
+// ResignTaken is Voter dropping its promise to the boot (Name, Nonce) on
+// that boot's RESIGN of Epoch, at At.
+type ResignTaken struct {
+	At           time.Duration
+	Voter        Addr
+	Name         quorum.NodeID
+	Nonce, Epoch uint64
+	// HeardLater: the voter had received a campaign or renewal of that
+	// boot sent after the RESIGN (a higher Seq) before it took it.
+	HeardLater bool
 }
 
 // AdoptRec is one adoption (durable) or proposal (made) by a controller.
@@ -176,6 +218,28 @@ type Grant struct {
 }
 
 // DeviceWrite is one write the simulated device received.
+// LeadStart is a controller's gate opening on a new lease, in its epoch.
+type LeadStart struct {
+	At    time.Duration
+	Node  Addr
+	Epoch uint64
+	// Boot and Local: the leader's process and its own clock at the start
+	// (the rejoin oracle judges a resign hold on them).
+	Boot  int
+	Local quorum.Instant
+}
+
+// HotTakeover is a lease start by a controller that held an image of its
+// peer's state (#710 S2c-1): the image's epoch, the new epoch, and the
+// hot check's verdict.
+type HotTakeover struct {
+	At           time.Duration
+	Node         Addr
+	Image, Epoch uint64
+	Hot          bool
+	Why          string
+}
+
 type DeviceWrite struct {
 	At   time.Duration
 	From Addr
@@ -454,6 +518,11 @@ func (r *Record) promiseEnd(i int) time.Duration {
 					r.ends[j] = min(r.ends[j], rl.at)
 				}
 			}
+			for _, rt := range r.ResignsTaken { // a taken RESIGN ends that boot's promise (#710 d1)
+				if rt.Voter == g.Voter && rt.Name == g.ToID && rt.Nonce == g.Nonce && g.Start <= rt.At {
+					r.ends[j] = min(r.ends[j], rt.At)
+				}
+			}
 		}
 	}
 	return r.ends[i]
@@ -582,6 +651,18 @@ func Check(r *Record, c Checks) []Violation {
 		add(v)
 	}
 	for _, v := range r.checkI4(gates) {
+		add(v)
+	}
+	for _, v := range r.checkHot() {
+		add(v)
+	}
+	for _, v := range r.checkI3() {
+		add(v)
+	}
+	for _, v := range r.checkResign() {
+		add(v)
+	}
+	for _, v := range r.checkRejoin() {
 		add(v)
 	}
 	if c.HealAt > 0 {
@@ -948,6 +1029,92 @@ func checkI7(gates []Interval, maxChanges int, settle time.Duration) []Violation
 	}
 	if n > maxChanges {
 		vs = append(vs, Violation{"I7", 0, fmt.Sprintf("%d takeovers, at most %d expected", n, maxChanges)})
+	}
+	return vs
+}
+
+// checkHot is the hot oracle (#710 S2c-1, naut-lead's ruling B): a
+// takeover the voters let go on hot from an image of epoch e into epoch n
+// never skips a leadership: no controller led in an epoch between them.
+func (r *Record) checkHot() []Violation {
+	var vs []Violation
+	for _, h := range r.Takeovers {
+		if !h.Hot {
+			continue
+		}
+		for _, l := range r.LeadStarts {
+			if l.Epoch > h.Image && l.Epoch < h.Epoch {
+				vs = append(vs, Violation{"hot", h.At, fmt.Sprintf("%v went on hot from an image of epoch %d into %d, over %v's lead in epoch %d at %v", h.Node, h.Image, h.Epoch, l.Node, l.Epoch, l.At)})
+			}
+		}
+	}
+	return vs
+}
+
+// I3 (test plan: no write leaves through a closed gate), its resign case
+// (#710 d1): a controller that resigned writes nothing under the resigned
+// epoch from its resign on. (The sim's writes are its scans', instant and
+// judged on the candidate alone; the rest of I3, a send's deadline and
+// its drain, is the drivers' and package fence's, tested there.)
+func (r *Record) checkI3() []Violation {
+	var vs []Violation
+	for _, rs := range r.Resigns {
+		for _, w := range r.Writes {
+			if w.From == rs.Node && w.Term == rs.Epoch && w.At >= rs.At {
+				vs = append(vs, Violation{"I3", w.At, fmt.Sprintf("%v wrote epoch %d after resigning it at %v", w.From, w.Term, rs.At)})
+				break
+			}
+		}
+	}
+	return vs
+}
+
+// Resign: a voter drops a promise on a RESIGN only when it had received
+// nothing later from that boot: no campaign or renewal sent after the
+// RESIGN (a higher Seq). Such a frame may start or renew a later
+// leadership the promise now backs; a RESIGN of an earlier one must not
+// end it. (A voter that heard nothing of a later leadership may take it:
+// no promise of its rests on that leadership.) (#710 d1, Fable on #1355)
+func (r *Record) checkResign() []Violation {
+	var vs []Violation
+	for _, rt := range r.ResignsTaken {
+		if rt.HeardLater {
+			vs = append(vs, Violation{"resign", rt.At, fmt.Sprintf("%v took %s's RESIGN of epoch %d after a later campaign or renewal of that boot", rt.Voter, rt.Name, rt.Epoch)})
+		}
+	}
+	return vs
+}
+
+// Rejoin: a controller that resigned leads again only after its peer led,
+// or its hold ran out (two leases), or its own voter took a fresh RESIGN
+// from the peer (a switchover back), or the hold was ended early (it said
+// yes to its peer's hand-back, an EndHold). An old copy of a RESIGN must
+// not make it campaign at once (#710 d1, Fable on #1355). The hold runs on
+// the resigner's own clock, which a Skew may run fast, and in its own
+// process: a restarted controller holds none (#710 d1d).
+func (r *Record) checkRejoin() []Violation {
+	var vs []Violation
+	for _, rs := range r.Resigns {
+		for _, ls := range r.LeadStarts {
+			if ls.At <= rs.At {
+				continue
+			}
+			if ls.Node != rs.Node {
+				break // the peer led first
+			}
+			held := ls.Local.Sub(rs.Local) >= quorum.ResignHold(r.lease)
+			restarted := ls.Boot != rs.Boot
+			ended := slices.ContainsFunc(r.HoldEnds, func(h HoldEnd) bool {
+				return h.Node == rs.Node && h.Boot == rs.Boot && h.At >= rs.At && h.At <= ls.At
+			})
+			ok := held || restarted || ended || slices.ContainsFunc(r.ResignsTaken, func(rt ResignTaken) bool {
+				return rt.Voter == rs.Node && rt.Name != nodeIDs[rs.Node] && rt.At > rs.At && rt.At <= ls.At
+			})
+			if !ok {
+				vs = append(vs, Violation{"rejoin", ls.At, fmt.Sprintf("%v led again %v after resigning, with no peer leadership, hold over or fresh RESIGN between", rs.Node, ls.At-rs.At)})
+			}
+			break
+		}
 	}
 	return vs
 }

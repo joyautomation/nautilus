@@ -3,6 +3,7 @@ package tiadtest
 import (
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -125,6 +126,11 @@ func contractVerifyEqual(t *testing.T, start Starter) {
 	if r.Verdict != tiad.VerifyEqual || r.Deploy != d.ID || r.Address != benchCPU || r.Status != tiad.DeployLoaded || r.Latest != d.ID ||
 		!isFalse(r.ChangedOutside) || len(r.Differences) != 0 || r.Broken != "" || r.Session == "" || r.Fingerprint != nil || r.CloseError != "" {
 		t.Fatalf("verify right after the deploy: %+v", r)
+	}
+	// The blocks the compare saw, as the agent labels them (what naut
+	// siemens verify prints).
+	if !slices.Contains(r.Blocks, "naut_Main [FB1]") || !slices.Contains(r.Blocks, "Main [OB1]") {
+		t.Fatalf("verify's blocks: %q, want naut_Main [FB1] and Main [OB1]", r.Blocks)
 	}
 	noSession(t, c)
 	r = verify(t, c, tiad.VerifyRequest{Secrets: BenchLogin, Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})

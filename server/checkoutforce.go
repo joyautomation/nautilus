@@ -205,6 +205,9 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		gen, name, err := a.s.rt.Tags().ForceIfFree(pt.Tag, req.Value)
 		if err != nil {
 			_ = a.co.Store.EndForceOf(run.ID, rec.Seq, checkout.ForceRefused, by)
+			if errors.Is(err, runtime.ErrSwitching) {
+				return nil, http.StatusServiceUnavailable, err // a planned switchover: force on the new leader
+			}
 			if errors.Is(err, runtime.ErrAlreadyForced) {
 				return nil, http.StatusConflict, fmt.Errorf("%s is already forced (by a force that is not this checkout's): clear that force first", pt.Tag)
 			}

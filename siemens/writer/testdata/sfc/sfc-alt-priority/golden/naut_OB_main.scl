@@ -1,0 +1,8 @@
+ORGANIZATION_BLOCK "naut_OB_main"
+TITLE = "Cyclic interrupt, 50ms"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	"naut_SfcAltPriority_DB"();
+END_ORGANIZATION_BLOCK

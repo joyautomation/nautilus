@@ -246,7 +246,9 @@
                     "override",
                     "redundancy",
                     "checkout",
-                    "signoff"
+                    "signoff",
+                    "camera",
+                    "ptz"
                   ]
                 }
               },
@@ -273,7 +275,9 @@
                     "override",
                     "redundancy",
                     "checkout",
-                    "signoff"
+                    "signoff",
+                    "camera",
+                    "ptz"
                   ]
                 }
               }
@@ -630,6 +634,103 @@
           "enum": ["two-person", "single"],
           "description": "Who may seal a run: two-person (the default) needs a signer who recorded none of its results; single lets the person who recorded them sign, naut check warns and the sealed record says single-person."
         }
+      }
+    },
+    "cameras": {
+      "type": "array",
+      "description": "The plant's cameras (#724): each bound to an asset the plant.yaml names. The controller relays them; a browser never talks to a camera. Credentials are never here: set credentials: true and put user:password in the secrets file (naut alarms secrets set camera.<id>).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "asset",
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Letters, digits, - and _ (it is in a URL)."
+          },
+          "label": {
+            "type": "string"
+          },
+          "asset": {
+            "type": "string",
+            "description": "A plant.yaml equipment id: the asset page shows the camera."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "snapshot",
+              "mjpeg",
+              "hls",
+              "rtsp",
+              "onvif"
+            ],
+            "description": "virtual (drawn by the controller), snapshot (a JPEG URL), mjpeg (a motion-JPEG URL); hls, rtsp and onvif are later steps."
+          },
+          "url": {
+            "type": "string",
+            "description": "The stream or device URL, with no user name or password in it."
+          },
+          "credentials": {
+            "type": "boolean",
+            "description": "The camera needs a user name and password, kept as the secret camera.<id>."
+          },
+          "snapshot-url": {
+            "type": "string",
+            "description": "A JPEG URL the controller fetches for the asset page's picture. An onvif camera finds its own."
+          },
+          "ptz": {
+            "type": "boolean",
+            "description": "An onvif camera that pans, tilts and zooms: people who hold the ptz permission get a pad under its live video."
+          },
+          "profile": {
+            "type": "string",
+            "description": "An onvif camera's media profile to stream (its token or name); empty is the smallest H.264 picture."
+          },
+          "interval": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3600,
+            "description": "Seconds between snapshot refreshes on the asset page (default 5)."
+          },
+          "max-viewers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16,
+            "description": "How many people may watch this camera live at once (default 2)."
+          },
+          "snapshot-on-alarm": {
+            "type": "boolean",
+            "description": "Keep a still when an alarm of this asset's equipment activates (needs a snapshot source; kept under the state directory for the camera-snapshots policy)."
+          },
+          "snapshot-alarms": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Alarm ids (of any equipment) that also keep a still."
+          }
+        }
+      }
+    },
+    "camera-snapshots": {
+      "type": "object",
+      "description": "How long and how much of the pictures kept when an alarm activates (#724). They are pictures of people: nothing is kept past keep-days, and never more than max-count pictures, max-mb megabytes or 5% of the state filesystem's free space.",
+      "additionalProperties": false,
+      "properties": {
+        "keep-days": { "type": "integer", "minimum": 1, "maximum": 3650, "description": "Days a picture is kept (default 30)." },
+        "max-count": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "Most pictures kept (default 500)." },
+        "max-mb": { "type": "integer", "minimum": 1, "maximum": 100000, "description": "Most megabytes kept (default 200)." }
+      }
+    },
+    "camera-streams": {
+      "type": "object",
+      "description": "The memory all live video streams of the controller may hold together (#724). A stream that would pass it ends with 'camera stream too large for this controller'.",
+      "additionalProperties": false,
+      "properties": {
+        "memory-mb": { "type": "integer", "minimum": 16, "maximum": 4096, "description": "Megabytes (default 64). A stream reserves 5 MB before it has a picture and a 2 Mbit/s one holds about 5 MB more." }
       }
     },
     "pwa": {
@@ -1896,6 +1997,10 @@
           "minimum": 2,
           "maximum": 100,
           "description": "Activations within the window that make an alarm chatter. Default 3."
+        },
+        "page": {
+          "type": "boolean",
+          "description": "Page a chattering alarm once per escalation level per episode, instead of once per bounce, in the modes that page per bounce (stop: ack-or-rtn, ack-required: false, an acknowledgement between bounces). Default true."
         }
       }
     },
@@ -1913,6 +2018,27 @@
           "minimum": 1,
           "maximum": 1023,
           "description": "A flood is more than this many activations within the window. Default 10."
+        },
+        "group-pages": {
+          "type": "boolean",
+          "description": "During a flood, send one grouped page per escalation step per person per channel (then at most every 5 minutes for alarms newly due) instead of one per alarm. Critical alarms and class safety always page on their own. Default true."
+        },
+        "individual": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "More alarms that page on their own during a flood. Critical priority and class safety always do: this adds to them, never replaces them.",
+          "properties": {
+            "priorities": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["diagnostic", "low", "medium", "high", "critical"] },
+              "description": "Priorities that page on their own (critical always does)."
+            },
+            "classes": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Alarm classes that page on their own (safety always does). Each must be the class of some alarm."
+            }
+          }
         }
       }
     },

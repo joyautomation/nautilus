@@ -110,8 +110,14 @@ func newPairRigPlain(t *testing.T, pmod func(n string, p *project.Project), dmod
 	wit := r.wit
 	r.peer["a"], r.peer["b"] = lnA.Addr().String(), lnB.Addr().String()
 	r.files = pairProject(r.peer["a"], r.peer["b"], wit)
+	if testPairFiles != nil {
+		r.files = testPairFiles(r.peer["a"], r.peer["b"], wit)
+	}
 	for _, n := range []string{"a", "b"} {
 		r.env[n] = map[string]string{"NAUTILUS_NODE": n, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
+		if testPairAPIToken != "" {
+			r.env[n]["NAUTILUS_TOKEN"] = testPairAPIToken
+		}
 	}
 	r.nodes["a"] = r.start("a", lnA, apiA)
 	r.nodes["b"] = r.start("b", lnB, apiB)
@@ -445,7 +451,7 @@ func TestPairLogRoutesAreNotOnTheTagAPI(t *testing.T) {
 		if code, body, _ := r.call("a", "GET", p, ""); code != http.StatusNotFound {
 			t.Errorf("tag API GET %s: %d %s, want 404", p, code, body)
 		}
-		resp, err := peerClient(t, testPeerToken).Get("https://" + r.peer["a"] + p)
+		resp, err := r.peerHTTPAs("b", "a").Get("https://" + r.peer["a"] + p)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -455,7 +461,7 @@ func TestPairLogRoutesAreNotOnTheTagAPI(t *testing.T) {
 		}
 		req, _ := http.NewRequest("GET", "https://"+r.peer["a"]+p, nil)
 		req.Header.Set(node.TokenHeader, testPeerToken)
-		resp, err = peerClient(t, testPeerToken).Do(req)
+		resp, err = r.peerHTTPAs("b", "a").Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}

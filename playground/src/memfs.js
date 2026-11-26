@@ -277,6 +277,14 @@
 				for (const [k, n] of nodes) if (!n.dir && k.startsWith(root + '/')) out[k.slice(root.length + 1)] = dec.decode(n.data);
 				return out;
 			},
+			/** Every file under root, as {relativePath: Uint8Array}: the bytes, for
+			 * what must not be decoded as text (images and fonts of a screen). */
+			snapshotBytes(root) {
+				root = abs(root);
+				const out = {};
+				for (const [k, n] of nodes) if (!n.dir && k.startsWith(root + '/')) out[k.slice(root.length + 1)] = n.data.slice();
+				return out;
+			},
 			mkdirp,
 			onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); },
 		};

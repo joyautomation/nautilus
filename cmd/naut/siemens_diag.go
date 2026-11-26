@@ -23,7 +23,8 @@ Usage:
 Reads the CPU's diagnostic buffer over the PLC Web API (DiagnosticBuffer.Browse:
 firmware 3.1 or later, not on R/H CPUs). It reads and changes nothing. The web
 user needs the diagnostics right (web-server.users[].rights: [diagnostics] in
-the station spec). The password is never a flag: set NAUTILUS_SIEMENS_PASSWORD.
+the station spec). The password is never a flag: set NAUTILUS_SIEMENS_PASSWORD, or
+NAUTILUS_SIEMENS_PASSWORD_FILE to a file holding it.
 
 Entries print in the order the CPU sends them, one per line: the time (UTC),
 incoming or outgoing, the event ID (text list/text) and the short text.
@@ -90,7 +91,12 @@ func runSiemensDiag(args []string) int {
 // resolveSiemensDiag merges flags over the project's target.siemens and
 // the environment.
 func resolveSiemensDiag(c siemensDiagConfig, host, user, pin, projectDir string, getenv func(string) string) (siemensDiagConfig, error) {
-	c.host, c.user, c.pin, c.password = host, user, pin, getenv("NAUTILUS_SIEMENS_PASSWORD")
+	c.host, c.user, c.pin = host, user, pin
+	pass, err := siemensSecret(getenv, "NAUTILUS_SIEMENS_PASSWORD")
+	if err != nil {
+		return c, err
+	}
+	c.password = pass
 	if projectDir != "" {
 		m, err := project.ReadManifest(os.DirFS(projectDir), "")
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no nautilus.yaml") {
