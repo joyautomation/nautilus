@@ -260,3 +260,71 @@ func TestOutOfServiceDeviceSuppressesItsOfflineAlarmToo(t *testing.T) {
 		t.Error("the comms alarm stayed up for a device taken out of service")
 	}
 }
+
+// A device that has not answered once since boot has no <Dev>__Online value
+// at all (a typed input is unseeded until its driver delivers). It is not
+// known to be answering, its own alarms are suppressed (enable: reads that
+// tag, and an unreadable enable suppresses), so the comms alarm must raise
+// after its on-delay: never a quiet screen.
+func TestDeviceThatNeverAnswersRaisesItsOfflineAlarm(t *testing.T) {
+	proj, err := Load(deviceAlarmFS(t, "  defs: []\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk := &testClock{t: time.Unix(1_800_000_000, 0)}
+	proj.Runtime.Clock = clk
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := proj.AlarmEngine(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	// The companion exists as a BOOL from load, false until the driver says
+	// otherwise: that is what this test rides on.
+	if v, ok := rt.Tags().ReadPath("CONV__Online"); !ok || v != false {
+		t.Fatalf("CONV__Online at boot = %v, %v; want a seeded false", v, ok)
+	}
+	raised := func() bool {
+		for _, r := range eng.Active() {
+			if r.ID == "CONV__Offline" && r.Cond {
+				return true
+			}
+		}
+		return false
+	}
+	rt.Scan()
+	if raised() {
+		t.Fatal("raised before the on-delay")
+	}
+	for range 12 {
+		clk.t = clk.t.Add(time.Second)
+		rt.Scan()
+	}
+	if !raised() {
+		t.Fatal("a device that never answered since boot raised no comms alarm")
+	}
+	rt.Tags().Set("CONV__Online", true)
+	clk.t = clk.t.Add(time.Second)
+	rt.Scan()
+	if raised() {
+		t.Error("still raised once the device answers")
+	}
+}
+
+// And if the companion is ever missing or not a BOOL (a rename, a driver that
+// never created it), the alarm fails active: it reads as not answering.
+func TestOfflineAlarmFailsActiveWhenTheCompanionIsMissing(t *testing.T) {
+	withDevices, err := Load(deviceAlarmFS(t, "  defs: []\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, rt := loadAlarms(t, alarmFS(alarmTags+"alarms:\n  defs: []\n", nil)) // no CONV__Online here
+	_ = without
+	c := withDevices.deviceCommsAlarms(rt)
+	if len(c) != 1 || !c[0].Active() {
+		t.Fatalf("with no CONV__Online tag the comms alarm is quiet: %+v", c)
+	}
+}

@@ -406,9 +406,14 @@ func (p *Project) deviceCommsAlarms(rt *runtime.Runtime) []SystemAlarm {
 		out = append(out, SystemAlarm{
 			Def: def,
 			Active: func() bool {
+				// Fails active: a companion that is missing or not a BOOL
+				// (a device that never answered since boot, whose typed
+				// input has not been delivered) is a device not known to be
+				// answering, and its own alarms are suppressed meanwhile
+				// (enable: reads the same tag), so this one must raise.
 				v, ok := rt.Tags().ReadPath(online)
 				b, isBool := v.(bool)
-				return ok && isBool && !b
+				return !(ok && isBool && b)
 			},
 		})
 	}
