@@ -317,7 +317,7 @@ type spObserver struct {
 
 func (o *spObserver) ID() string { return "sp-observer" }
 func (o *spObserver) Provides(b byte) bool {
-	return b == mqttsrv.OnPublished || b == mqttsrv.OnWillSent || b == mqttsrv.OnSubscribed ||
+	return b == mqttsrv.OnPublish || b == mqttsrv.OnWillSent || b == mqttsrv.OnSubscribed ||
 		b == mqttsrv.OnConnectAuthenticate || b == mqttsrv.OnACLCheck
 }
 
@@ -337,8 +337,16 @@ func (o *spObserver) OnSubscribed(cl *mqttsrv.Client, pk packets.Packet, _ []byt
 	}
 }
 
-func (o *spObserver) OnPublished(cl *mqttsrv.Client, pk packets.Packet) { o.record(cl.ID, pk, false) }
-func (o *spObserver) OnWillSent(cl *mqttsrv.Client, pk packets.Packet)  { o.record(cl.ID, pk, true) }
+// OnPublish records a publish as the broker takes it, before it goes to
+// any subscriber: OnPublished runs after the fan-out, so a node's answer to
+// a message (a rebirth for an NDEATH) could be recorded ahead of the
+// message itself (#1405).
+func (o *spObserver) OnPublish(cl *mqttsrv.Client, pk packets.Packet) (packets.Packet, error) {
+	o.record(cl.ID, pk, false)
+	return pk, nil
+}
+
+func (o *spObserver) OnWillSent(cl *mqttsrv.Client, pk packets.Packet) { o.record(cl.ID, pk, true) }
 
 func (o *spObserver) record(client string, pk packets.Packet, will bool) {
 	parts := strings.Split(pk.TopicName, "/")
@@ -391,25 +399,72 @@ func (o *spObserver) births(client string) []spEvent {
 	return out
 }
 
-// onePublisher fails when a client published a birth or data while
-// another client's session was born (its last NBIRTH not yet followed by
-// its NDEATH or will): two publishers for one edge node.
+// onePublisher fails when two sessions of the edge node publish at once:
+// a session publishes data after another client's later NBIRTH while that
+// newer session is still born. An older session that ends late is not
+// that: past its step-down budget a switchover resigns anyway, and the
+// old session, fenced, stays connected and silent until its NDEATH (#1405
+// triage, #616). A host then sees the new NBIRTH before the old NDEATH,
+// never data from both. Step 1 checks the NDEATH-before-NBIRTH order on
+// its own.
 func (o *spObserver) onePublisher(t *testing.T) {
 	t.Helper()
-	born := map[string]bool{}
-	for i, e := range o.all() {
+	evs := o.all()
+	if i, c, at := spInterleaved(evs); i >= 0 {
+		t.Fatalf("event %d: %s %s after %s's later NBIRTH (event %d): two publishers for one edge node\n%s", i, evs[i].client, evs[i].kind, c, at, o.dump())
+	}
+}
+
+// spInterleaved is onePublisher's check: the first event (index i) that a
+// session published after client c's later NBIRTH (index at) while c was
+// still born, or i = -1 when there is none.
+func spInterleaved(evs []spEvent) (i int, c string, at int) {
+	born := map[string]int{} // a client's last NBIRTH's index while born
+	for i, e := range evs {
 		switch e.kind {
 		case "NDEATH":
-			born[e.client] = false
+			delete(born, e.client)
+			continue
+		case "NBIRTH":
+			born[e.client] = i
 			continue
 		}
-		for c, b := range born {
-			if b && c != e.client {
-				t.Fatalf("event %d: %s %s while %s's session was born: two publishers for one edge node\n%s", i, e.client, e.kind, c, o.dump())
+		mine, ok := born[e.client]
+		for c, at := range born {
+			if c != e.client && (!ok || at > mine) {
+				return i, c, at
 			}
 		}
-		if e.kind == "NBIRTH" {
-			born[e.client] = true
+	}
+	return -1, "", -1
+}
+
+// The two-publisher check fails on data from two sessions at once and
+// passes the fallback of a step-down past its budget: the old session
+// fenced and silent, its NDEATH after the new NBIRTH (#1405, #616).
+func TestOnePublisherFailsOnlyOnInterleaving(t *testing.T) {
+	ev := func(spec string) []spEvent {
+		var out []spEvent
+		for _, f := range strings.Fields(spec) {
+			client, kind, _ := strings.Cut(f, ":")
+			out = append(out, spEvent{client: client, kind: kind})
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name, evs string
+		want      int // the event onePublisher fails on, -1 for none
+	}{
+		{"a switchover in order", "a:NBIRTH a:NDATA a:NDEATH b:NBIRTH b:NDATA", -1},
+		{"the old session ends late, silent", "a:NBIRTH a:NDATA b:NBIRTH b:NDATA a:NDEATH b:NDATA", -1},
+		{"a late will, then a rebirth", "a:NBIRTH b:NBIRTH b:NDATA a:NDEATH b:NBIRTH b:NDATA", -1},
+		{"the old session publishes after the new birth", "a:NBIRTH a:NDATA b:NBIRTH b:NDATA a:NDATA", 4},
+		{"device data from the old session", "a:NBIRTH b:NBIRTH a:DDATA", 2},
+		{"data from a session never born, beside a born one", "a:NBIRTH b:NDATA", 1},
+		{"the old session births again and both publish", "a:NBIRTH b:NBIRTH a:NBIRTH b:NDATA", 3},
+	} {
+		if got, _, _ := spInterleaved(ev(c.evs)); got != c.want {
+			t.Errorf("%s (%s): fails on event %d, want %d", c.name, c.evs, got, c.want)
 		}
 	}
 }
@@ -487,31 +542,42 @@ func TestPairSparkplugOneSessionThroughSwitchoverFailoverAndBack(t *testing.T) {
 			t.Errorf("the leader's NBIRTH %s = %+v (%v), want %v", name, m.Value, ok, want)
 		}
 	}
+	// Counted from here: before the pair settled, the standby may have led
+	// (and subscribed) first and yielded (an unsynced log at start, #1405).
+	subs0 := len(obs.subscribed(spClient(stby)))
 	time.Sleep(300 * time.Millisecond)
-	if subs := obs.subscribed(spClient(stby)); len(subs) != 0 {
-		t.Fatalf("the standby subscribed to %v, want no session at all", subs)
+	if subs := obs.subscribed(spClient(stby)); len(subs) != subs0 {
+		t.Fatalf("the standby subscribed to %v, want no session at all", subs[subs0:])
 	}
-	if st := r.nodes[stby].sp.Status(); !st.Standby || st.Connected {
-		t.Fatalf("the standby's node status %+v, want standby, not connected", st)
+	// A session it ran before yielding is fenced and silent at once, but
+	// ends only after the stop this test delays (testSPStopDelay).
+	if !spWaitFor(testSPStopDelay+5*time.Second, func() bool {
+		st := r.nodes[stby].sp.Status()
+		return st.Standby && !st.Connected
+	}) {
+		t.Fatalf("the standby's node status %+v, want standby, not connected\n%s", r.nodes[stby].sp.Status(), obs.dump())
 	}
 
-	// 1. Switchover.
+	// 1. Switchover. Its events only: the standby may have been born once
+	// before the pair settled (it led first and yielded, #1405).
 	r.set(t, lead, "Mode", 5)
+	mark := len(obs.all())
 	if code, ans := r.readySwitchover(t, lead); code != http.StatusOK || ans.Outcome != "done" {
 		t.Fatalf("switchover: %d %+v", code, ans)
 	}
 	r.waitNewLeader(t, stby, 5*time.Second)
-	pairWait(t, "the new leader's NBIRTH", 10*time.Second, func() bool { return len(obs.births(spClient(stby))) > 0 })
-	nb := obs.births(spClient(stby))[0]
+	pairWait(t, "the new leader's NBIRTH", 10*time.Second, func() bool {
+		return spFirst(obs.all()[mark:], spClient(stby), "NBIRTH") >= 0
+	})
+	evs := obs.all()[mark:]
+	nbi := spFirst(evs, spClient(stby), "NBIRTH")
+	nb := evs[nbi]
 	oldBd := obs.births(spClient(lead))[len(obs.births(spClient(lead)))-1].bdSeq
 	var death *spEvent
-	for _, e := range obs.all() {
-		if e.client == spClient(lead) && e.kind == "NDEATH" {
-			death = &e
-			break
-		}
+	if di := spFirst(evs, spClient(lead), "NDEATH"); di >= 0 && di < nbi {
+		death = &evs[di]
 	}
-	if death == nil || death.will || !death.at.Before(nb.at) {
+	if death == nil || death.will {
 		t.Fatalf("the old leader's NDEATH %+v, want its own (not a will) before the new leader's NBIRTH at %s\n%s", death, nb.at.Format("15:04:05.000"), obs.dump())
 	}
 	if nb.bdSeq == oldBd {
@@ -703,6 +769,16 @@ func spMetric(p sparkplug.Payload, name string) (sparkplug.Metric, bool) {
 
 // spOnlineIgnoringBdSeq is a host that takes the last NBIRTH or NDEATH as
 // the node's state, whatever its bdSeq.
+// spFirst is the index in evs of client's first event of kind, -1 for none.
+func spFirst(evs []spEvent, client, kind string) int {
+	for i, e := range evs {
+		if e.client == client && e.kind == kind {
+			return i
+		}
+	}
+	return -1
+}
+
 // spBornAfterDeath reports whether client born published an NBIRTH after
 // the last NDEATH that client dead published.
 func spBornAfterDeath(evs []spEvent, dead, born string) bool {

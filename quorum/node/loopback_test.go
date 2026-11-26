@@ -619,12 +619,16 @@ func (c *cluster) settledLeader(d time.Duration) quorum.NodeID {
 	for {
 		ps := c.wit.w.Pairs()
 		lead := c.leader()
-		if len(ps) == 1 && ps[0].GrantedTo == string(who) && lead == who {
+		// The witness's grant must also count at the leader: for a lease
+		// after an adoption it does not (the quiet period, quorum.Adoption),
+		// and a test that cuts a link then leaves a leader that rests on
+		// its own vote alone (#1407: TestLoopbackPeerLinkCut).
+		if len(ps) == 1 && ps[0].GrantedTo == string(who) && lead == who && c.elector(who).CountedIncarnation() != 0 {
 			return who
 		}
 		if time.Now().After(end) {
 			// Which of the three it was (CI run 45406566988, #710 d1d).
-			c.t.Fatalf("timed out after %v waiting for the witness to back the leader %s: the witness's pairs %+v, the gate's leader %q; a=%+v b=%+v", d, who, ps, lead, c.status("a"), c.status("b"))
+			c.t.Fatalf("timed out after %v waiting for the witness to back the leader %s: the witness's pairs %+v, the gate's leader %q, the witness incarnation it counts %d; a=%+v b=%+v", d, who, ps, lead, c.elector(who).CountedIncarnation(), c.status("a"), c.status("b"))
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
