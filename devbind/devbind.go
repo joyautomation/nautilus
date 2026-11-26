@@ -595,6 +595,12 @@ type DevicePoints struct {
 	// Desc is the row's own line, "" when it gave none.
 	Desc   string
 	Points []devprofile.Point
+	// Derived are the struct's computed BOOL members, after the points.
+	Derived []devprofile.Derived
+	// Alarms are the members (points or derived), lower-cased, that the
+	// profile raises an alarm on: a screen shows them as abnormal, not as a
+	// state.
+	Alarms map[string]bool
 }
 
 // DevicePoints is each device with the points it exposes, in declaration
@@ -614,7 +620,13 @@ func (s *Set) DevicePoints() []DevicePoints {
 				pts[i].Writable = false
 			}
 		}
-		out = append(out, DevicePoints{Device: d.Name, Title: d.prof.Title, Desc: d.Desc, Points: pts})
+		alarms := map[string]bool{}
+		for _, a := range d.prof.Alarms {
+			if _, ok := d.member(a.Point); ok {
+				alarms[strings.ToLower(a.Point)] = true
+			}
+		}
+		out = append(out, DevicePoints{Device: d.Name, Title: d.prof.Title, Desc: d.Desc, Points: pts, Derived: d.derived, Alarms: alarms})
 	}
 	return out
 }

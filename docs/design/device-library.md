@@ -326,19 +326,28 @@ Natural alarms for the first devices:
 
 ### 3.5 Faceplate
 
-A device's faceplate is a generated `MimicPanel` (the data-driven panel
-`hmi/src/lib/mimic.ts` already renders):
+A device's faceplate is the asset page (#714) its row already makes: a
+`MimicPanel` (the data-driven panel `hmi/src/lib/mimic.ts` renders), built
+in `cmd/naut/assets.go` from the row's points:
 
-- **readings** are read-only numeric members, with unit and range;
-- **setpoints** are numeric command tags;
-- **commands** and **toggles** are BOOL command tags.
+- **readings** are read-only members by path (`CONV.StatusWord`), with unit
+  and decimals, led by `<Device>__Online` ("Answering"/"Not answering");
+- **derived points** (§3.3) follow the points as BOOL readings in words that
+  answer the question ("Yes"/"No"); a member the profile raises an alarm on
+  (§3.4), derived or polled, is flagged `alarm`, so the screen shows it
+  abnormal when true instead of as a state;
+- **setpoints** are numeric command tags and **commands** BOOL command tags:
+  writes go through the row's command tags and the existing write path and
+  its permissions, nothing else.
 
-A profile's optional `faceplate:` key orders and groups points; without
-it, the points' roles decide. `naut hmi build` adds a page with every
-device's faceplate. A mimic's equipment can say `device: CONV` to take
-that panel instead of writing one. The mimic's `bind` does not resolve
-struct members yet (`docs/design/examples-dogfood.md`); this work closes
-that gap. #714's asset pages can take the same data.
+A struct member binds through its dotted path: `<Mimic>`'s `bind`
+resolves `CONV.Run` through the frame's nested struct (#1397) and shows a
+banner for a bind that matches no tag. A plant equipment's `device: CONV`
+takes this page instead of one written by hand (#714).
+
+Not adopted: a profile `faceplate:` key to order or group points. The
+roles decide the order today, and a profile that needs more (a device with
+forty points) adds the key then.
 
 ### 3.6 Virtual devices
 
