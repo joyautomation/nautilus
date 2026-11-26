@@ -277,3 +277,71 @@ func TestPlantAreasListTheEquipmentThatHasAPage(t *testing.T) {
 		t.Error("no plant, no areas")
 	}
 }
+
+// A profile's derived members are readings (words, not numbers), and a
+// member the profile raises an alarm on is flagged so the screen shows it
+// as abnormal; the command path is the row's command tags and nothing else.
+func TestDeviceAssetShowsDerivedMembersAndFlagsAlarmed(t *testing.T) {
+	bit := 3
+	d := devbind.DevicePoints{
+		Device: "CONV", Title: "Drive", Desc: "Conveyor drive",
+		Points: []devprofile.Point{
+			{Name: "StatusWord", Type: "WORD"},
+			{Name: "Fault", Type: "BOOL"},
+			{Name: "ControlWord", Type: "WORD", Writable: true},
+		},
+		Derived: []devprofile.Derived{{Name: "Tripped", Desc: "The drive has tripped", From: "StatusWord", Bit: &bit}},
+		Alarms:  map[string]bool{"tripped": true, "fault": true},
+	}
+	b, _ := json.Marshal(deviceAsset(d))
+	var a struct {
+		Panel struct {
+			Readings []struct {
+				Tag, Label, On, Off string
+				Alarm               bool
+			}
+			Commands  []struct{ Tag string }
+			Setpoints []struct{ Tag string }
+		}
+	}
+	if err := json.Unmarshal(b, &a); err != nil {
+		t.Fatal(err)
+	}
+	var reads []string
+	alarmed := map[string]bool{}
+	for _, r := range a.Panel.Readings {
+		reads = append(reads, r.Tag)
+		alarmed[r.Tag] = r.Alarm
+	}
+	if strings.Join(reads, ",") != "CONV__Online,CONV.StatusWord,CONV.Fault,CONV.Tripped" {
+		t.Errorf("readings %v, want the derived member after the points", reads)
+	}
+	last := a.Panel.Readings[len(a.Panel.Readings)-1]
+	if last.Label != "The drive has tripped" || last.On != "Yes" || last.Off != "No" {
+		t.Errorf("derived reading %+v", last)
+	}
+	if !alarmed["CONV.Tripped"] || !alarmed["CONV.Fault"] || alarmed["CONV.StatusWord"] || alarmed["CONV__Online"] {
+		t.Errorf("alarm flags %v: only the members the profile alarms on", alarmed)
+	}
+	if len(a.Panel.Commands) != 0 || len(a.Panel.Setpoints) != 1 || a.Panel.Setpoints[0].Tag != "CONV_ControlWord" {
+		t.Errorf("writes %+v %+v: only the row's command tags", a.Panel.Commands, a.Panel.Setpoints)
+	}
+}
+
+// End to end from a project: the built-in ABB profile's Tripped shows on the
+// device's page and is flagged as alarmed.
+func TestDeviceAssetFromAProfileCarriesItsTrippedAlarm(t *testing.T) {
+	prof, err := os.ReadFile("../../devprofile/profiles/abb-acs355-fmbt21.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := devbind.Resolve(fstest.MapFS{"profiles/abb-acs355-fmbt21.yaml": {Data: prof}},
+		[]devbind.Device{{Name: "CONV", Profile: "abb-acs355-fmbt21", Endpoint: "h", Points: []string{"Tripped", "Current"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(deviceAsset(set.DevicePoints()[0]))
+	if !strings.Contains(string(b), `"tag":"CONV.Tripped"`) || !strings.Contains(string(b), `"alarm":true`) {
+		t.Errorf("asset %s", b)
+	}
+}

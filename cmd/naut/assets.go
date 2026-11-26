@@ -81,13 +81,25 @@ func deviceAsset(d devbind.DevicePoints) map[string]any {
 			}
 			continue
 		}
-		r := assetReading{Tag: member, Label: label, Unit: pt.Unit}
+		r := assetReading{Tag: member, Label: label, Unit: pt.Unit, Alarm: d.Alarms[strings.ToLower(pt.Name)]}
 		if strings.EqualFold(pt.Type, "BOOL") {
 			r.On, r.Off = "On", "Off"
 		} else {
 			r.Decimals = decimalsOf(pt)
 		}
 		readings = append(readings, r)
+	}
+	// What the profile computes from a point (a bit of a status word, a
+	// code): readings too, in words that answer the question they ask. One
+	// the profile raises an alarm on is shown as abnormal when true.
+	for _, dp := range d.Derived {
+		label := dp.Desc
+		if label == "" {
+			label = dp.Name
+		}
+		readings = append(readings, assetReading{
+			Tag: d.Device + "." + dp.Name, Label: label, On: "Yes", Off: "No", Alarm: d.Alarms[strings.ToLower(dp.Name)],
+		})
 	}
 	title := d.Desc
 	if title == "" {
