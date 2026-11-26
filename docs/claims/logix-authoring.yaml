@@ -897,7 +897,9 @@ claims:
       is answered OUTCOME UNKNOWN (the stream's error carries "outcome":
       "unknown", the entry is journalled unknown, and PUT /api/program the
       same), and the next online edit reads the controller before it
-      replaces anything.
+      replaces anything. A verified deploy whose mode cannot be read after
+      the write is ok with a mode warning, louder after a Program-mode
+      download, on the done line, the journal entry and the CLI.
     source: "#from-the-editor"
     tests:
       - go ./logix/deploy TestDownloadFinishesWhenTheCallerGoesAway
@@ -918,6 +920,8 @@ claims:
       - go ./cmd/naut TestLogixDeployVerifyMismatchIsOutcomeUnknown
       - go ./cmd/naut TestLogixServeStopWaitsForADeployUnderWay
       - go ./logix/facade TestDeployInDoubtIsJournalledUnknown
+      - go ./logix/deploy TestModeUnreadAfterTheWriteWarns
+      - go ./logix/facade TestDeployModeWarningIsJournalled
       - go ./cmd/naut TestLogixServeDownloadOutlivesAHangUp
     partial: true
     note: >-

@@ -403,3 +403,38 @@ func TestSessionImportRefusedReadsTheRoutineBack(t *testing.T) {
 			uploads, called(f, "/upload-to-new"), f.imports)
 	}
 }
+
+// A mode read that fails after the write does not fail a verified deploy,
+// but the report says the mode is unknown: the verify proves the program,
+// not the mode. After a download that switched to Program mode it says the
+// controller is probably stopped.
+func TestModeUnreadAfterTheWriteWarns(t *testing.T) {
+	for _, programMode := range []bool{true, false} {
+		f, c := newFakeAgent(t, []byte(emptyController))
+		f.modeFails = true
+		rep, err := Run(context.Background(), demoSource(t), Options{Client: c, Target: target(), Mode: Download, ProgramMode: programMode})
+		if err != nil || !rep.Verified {
+			t.Fatalf("program mode %v: err=%v report=%+v; a verified download stays ok", programMode, err, rep)
+		}
+		want := "mode unknown: check whether the controller is in Run"
+		if programMode {
+			want = "probably STOPPED"
+		}
+		if !strings.Contains(rep.ModeWarning, want) {
+			t.Errorf("program mode %v: ModeWarning = %q, want %q", programMode, rep.ModeWarning, want)
+		}
+	}
+	src := demoSource(t)
+	same, _, _ := writer.Write(src, writer.Options{Controller: "DemoLine"})
+	f, c := newFakeAgent(t, same)
+	s, err := Connect(context.Background(), Options{Client: c, Target: target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+	f.modeFails = true
+	rep, err := s.Edit(context.Background(), strings.Replace(src, "/StopPB ( RunCmd )", "/StopPB /HiLevelAlm ( RunCmd )", 1))
+	if err != nil || !rep.Verified || rep.ModeWarning == "" {
+		t.Errorf("online edit: err=%v report=%+v; want ok with a mode warning", err, rep)
+	}
+}

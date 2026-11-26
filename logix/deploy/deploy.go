@@ -127,7 +127,11 @@ type Report struct {
 	// Warnings are the writer's (writer.Options.Warn): written on purpose,
 	// differently from nautilus.
 	Warnings []string
-	Rungs    int
+	// ModeWarning is set when the controller's mode could not be read
+	// after the write (#1404): the verify proves the program, not the
+	// mode, and a controller left in Program mode has stopped the plant.
+	ModeWarning string
+	Rungs       int
 	// Build is the SDK's own build time; ImportBuild the whole import +
 	// build leg as seen from here.
 	Build, ImportBuild time.Duration
@@ -552,7 +556,8 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 			// does not verify, say): nothing changed.
 			return done(err)
 		}
-		after, _ := s.Mode(wctx)
+		after, merr := s.Mode(wctx)
+		modeUnread(rep, merr, false, logf)
 		_, _ = s.GoOffline(context.Background())
 		rep.Applied, rep.Replaced, rep.ModeAfter = Online, replaced, string(after)
 		logf("online edit live: %s/%s replaced online (FinalizeEdits), controller %s → %s", rep.Program, rep.Routine, mode, after)
@@ -587,7 +592,8 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 		// Program mode and still refused: a keyswitch in RUN, a fault).
 		return done(&OutcomeUnknownError{Step: "download", Err: err})
 	}
-	mode, _ := s.Mode(wctx)
+	mode, merr := s.Mode(wctx)
+	modeUnread(rep, merr, o.ProgramMode, logf)
 	_, _ = s.GoOffline(context.Background())
 	rep.Applied, rep.ModeAfter = Download, string(mode)
 	logf("downloaded %s to %s — controller is %s (the SDK does not put it back in Run)", rep.Controller, t.CommPath, mode)

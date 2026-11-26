@@ -45,6 +45,18 @@ func MarkOutcomeUnknown(w http.ResponseWriter) {
 	w.Header().Set(outcomeHeader, "unknown")
 }
 
+// JournalWarning puts a warning on the entry of an Audited or
+// AuditedStream route's answer (its detail "warning"), whatever its
+// result: a deploy that succeeded but could not read the controller's mode
+// after it. Call it before the handler returns; it never reaches the
+// client.
+func JournalWarning(w http.ResponseWriter, text string) {
+	w.Header().Set(journalWarningHeader, text)
+}
+
+// journalWarningHeader carries JournalWarning's text to the seam.
+const journalWarningHeader = "X-Nautilus-Journal-Warning"
+
 // AuditedStream is Audited for a route that streams its answer as NDJSON
 // (a deploy's progress): bytes reach the client as written, the entry is
 // recorded when h returns, and a last line {"event":"error"} records a

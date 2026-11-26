@@ -472,7 +472,11 @@ it different) is answered **OUTCOME UNKNOWN**: the controller may hold
 the new program. Check what it runs before anything else: `naut logix
 deploy` without `--online` or `--download` compares it with the project
 and changes nothing. The next online edit opens its session again and
-reads the controller first.
+reads the controller first. A deploy that verified but could not read the
+controller's mode after the write is still a success, with a warning
+(`modeWarning` on the `done` line, `warning` on the journal entry):
+check whether the controller is in Run, above all after **Switch to
+Program Mode and Download**.
 
 Live values keep streaming through both: they are polled over
 EtherNet/IP, separately from the deploy. If nothing answers at

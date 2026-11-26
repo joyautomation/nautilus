@@ -205,6 +205,9 @@ func (p *programPlane) put(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, msg)
 		return
 	}
+	if rep.ModeWarning != "" {
+		server.JournalWarning(w, rep.ModeWarning)
+	}
 	writeAny(w, http.StatusOK, p.applied(req.Source, rep, started))
 }
 
@@ -257,6 +260,9 @@ func (p *programPlane) applied(src string, rep *deploy.Report, started time.Time
 	}
 	// valuesKept and resets are a download's: an online edit carries every
 	// value, so it has nothing to say about them (#391).
+	if rep.ModeWarning != "" {
+		body["modeWarning"] = rep.ModeWarning
+	}
 	if rep.Applied == deploy.Download {
 		body["resets"] = resets(rep)
 		body["valuesKept"] = valuesKept(rep)
@@ -431,6 +437,9 @@ func (p *programPlane) deployStream(w http.ResponseWriter, r *http.Request) {
 	}
 	body := p.applied(req.Source, rep, started)
 	body["event"] = "done"
+	if rep.ModeWarning != "" {
+		server.JournalWarning(w, rep.ModeWarning)
+	}
 	emit(body)
 	if req.Mode != "download" || p.cfg.Warm == nil {
 		return

@@ -76,3 +76,19 @@ func unsettled(err error) bool {
 	}
 	return e.Fatal && e.Kind != "unauthorized"
 }
+
+// modeUnread sets the report's ModeWarning when the mode read after the
+// write failed: the deploy still succeeds on its verify, which proves the
+// program but not the mode. Louder after a download that switched the
+// controller to Program mode, which leaves it stopped.
+func modeUnread(rep *Report, err error, programMode bool, logf func(string, ...any)) {
+	if err == nil {
+		return
+	}
+	rep.ModeWarning = "mode unknown: check whether the controller is in Run"
+	if programMode {
+		rep.ModeWarning = "MODE UNKNOWN after a download that switched the controller to Program mode: " +
+			"it is probably STOPPED; check it and put it back in Run"
+	}
+	logf("warning: %s", rep.ModeWarning)
+}

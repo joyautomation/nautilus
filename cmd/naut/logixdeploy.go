@@ -303,6 +303,9 @@ func runLogixDeploy(args []string) int {
 		}
 		return reportErr("deploy", err)
 	}
+	if rep.ModeWarning != "" {
+		fmt.Fprintln(os.Stderr, "naut logix deploy: WARNING: "+rep.ModeWarning)
+	}
 	if rep.Applied != deploy.BuildOnly {
 		fmt.Printf("%s done and verified in %s since the command started\n", rep.Applied, rep.Elapsed.Round(time.Millisecond))
 	} else if p.target.CommPath == "" {

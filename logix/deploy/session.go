@@ -340,7 +340,8 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 		}
 		return done(ierr)
 	}
-	after, _ := s.s.Mode(wctx)
+	after, merr := s.s.Mode(wctx)
+	modeUnread(rep, merr, false, s.log)
 	rep.Applied, rep.Replaced, rep.ModeAfter = Online, replaced, string(after)
 
 	// Verify from the controller: export the routine and compare rungs.
