@@ -129,6 +129,9 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 			{"the journal needs audit (viewer)", "GET", "/api/audit", "", "h-secret", http.StatusForbidden},
 			{"the journal needs audit (anonymous)", "GET", "/api/audit", "", "", http.StatusUnauthorized},
 			{"the journal (supervisor)", "GET", "/api/audit", "", "admin-secret", http.StatusOK},
+			{"the CSV export needs audit (viewer)", "GET", "/api/audit.csv", "", "h-secret", http.StatusForbidden},
+			{"the CSV export needs audit (anonymous)", "GET", "/api/audit.csv", "", "", http.StatusUnauthorized},
+			{"the CSV export (supervisor)", "GET", "/api/audit.csv", "", "admin-secret", http.StatusOK},
 		} {
 			if code, body := do(c.method, c.path, c.body, c.token); code != c.want {
 				t.Errorf("%s: %d %s, want %d", c.what, code, body, c.want)

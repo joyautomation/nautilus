@@ -13,9 +13,11 @@ import (
 
 // Scan reads the journal's files in dir oldest first, one line at a time
 // (the whole journal is never held), and calls fn with each entry whose
-// time is not before from (zero: all). fn returns false to stop. A file
-// older than from's day is not opened: a file's day is never earlier than
-// the entries in it. A line that does not parse (the half-written last
+// time is not before from (zero: all). fn returns false to stop. Entries
+// come in file order, which is time order unless the clock stepped back (an
+// entry earlier than the current file's day is written to it). A file older
+// than from's day is not opened: a file's day is never earlier than the
+// entries in it. A line that does not parse (the half-written last
 // line of a file being appended to) is skipped.
 func Scan(dir string, from time.Time, fn func(Entry) bool) error {
 	files, err := listFiles(dir)

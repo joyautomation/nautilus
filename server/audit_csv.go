@@ -61,20 +61,51 @@ func (s *Server) handleAuditCSV(w http.ResponseWriter, r *http.Request) {
 		}
 		return limit == 0 || n < limit
 	}
-	if d, ok := s.audit.rec.(interface{ Dir() string }); ok && d.Dir() != "" {
+	// The ring holds the newest entries, among them any the journal has
+	// not taken yet (a full disk): they are in the export too, after the
+	// files', so the CSV and /api/audit never disagree about them.
+	ring := s.audit.ring.Recent() // newest first
+	if d, ok := s.audit.rec.(journalDir); ok && d.Dir() != "" {
+		w.Header().Set("X-Audit-Source", "files")
+		onDisk := make(map[string]bool, len(ring))
+		for _, e := range ring {
+			onDisk[e.ID] = false
+		}
 		// The files are the record. A read error mid-stream cannot change
-		// the status; the file ends where it did.
-		_ = audit.Scan(d.Dir(), from, emit)
+		// the status: the connection is aborted, so the download fails
+		// rather than looking complete.
+		err := audit.Scan(d.Dir(), from, func(e audit.Entry) bool {
+			if _, inRing := onDisk[e.ID]; inRing {
+				onDisk[e.ID] = true
+			}
+			return emit(e)
+		})
+		if err != nil {
+			cw.Flush()
+			panic(http.ErrAbortHandler)
+		}
+		if limit == 0 || n < limit {
+			for i := len(ring) - 1; i >= 0; i-- {
+				if !onDisk[ring[i].ID] && !emit(ring[i]) {
+					break
+				}
+			}
+		}
 	} else {
-		es := s.audit.ring.Recent() // newest first
-		for i := len(es) - 1; i >= 0; i-- {
-			if !emit(es[i]) {
+		w.Header().Set("X-Audit-Source", "ring")
+		for i := len(ring) - 1; i >= 0; i-- {
+			if !emit(ring[i]) {
 				break
 			}
 		}
 	}
 	cw.Flush()
 }
+
+// journalDir is what a journal on disk offers (audit.FileJournal): where
+// its files are. A recorder that wraps one must pass it on, or the export
+// falls back to the ring (and says so in X-Audit-Source).
+type journalDir interface{ Dir() string }
 
 func auditCSVRow(e audit.Entry) []string {
 	return []string{
@@ -94,11 +125,13 @@ func csvJSON(v any) string {
 	if s, ok := v.(string); ok {
 		return csvText(s)
 	}
+	// A number, bool, object or array: JSON never starts with = + or @,
+	// and a leading - is a negative number, not a formula.
 	b, err := json.Marshal(v)
 	if err != nil {
 		return ""
 	}
-	return csvText(string(b))
+	return string(b)
 }
 
 // csvText stops a spreadsheet taking a cell for a formula: a person or a

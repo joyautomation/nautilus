@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,6 +65,9 @@ func TestAuditCSVReachesPastTheRing(t *testing.T) {
 	if len(rows)-1 != n || rows[1][6] != "T0" || rows[n][6] != fmt.Sprintf("T%d", n-1) {
 		t.Fatalf("%d rows, first %q, last %q; want %d oldest first", len(rows)-1, rows[1][6], rows[len(rows)-1][6], n)
 	}
+	if rec.Header().Get("X-Audit-Source") != "files" {
+		t.Fatalf("X-Audit-Source = %q; want files", rec.Header().Get("X-Audit-Source"))
+	}
 	if rows[8][6] != "'=HYPERLINK(\"http://x\")" {
 		t.Fatalf("a formula cell = %q; want it made text", rows[8][6])
 	}
@@ -95,3 +99,52 @@ func TestAuditCSVFromTheRing(t *testing.T) {
 		t.Fatalf("rows = %v", rows)
 	}
 }
+
+// Entries the journal has not taken (a full disk) are in the ring only:
+// the export still ends with them, once, after the files' entries.
+func TestAuditCSVIncludesWhatTheJournalHasNotTaken(t *testing.T) {
+	dir := t.TempDir()
+	j, err := audit.OpenFile(dir, audit.FileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	f := &flakyRec{Recorder: j}
+	srv := New(newTestRuntime(t), Options{Audit: f})
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":1}`) // written to the file
+	f.down.Store(true)
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":2}`) // kept in memory only
+	rows := csvRows(t, call(t, srv, "GET", "/api/audit.csv", "").Body.String())
+	if len(rows)-1 != 2 {
+		t.Fatalf("%d rows; want both writes, each once: %v", len(rows)-1, rows)
+	}
+}
+
+// A recorder that wraps the journal without passing Dir on falls back to
+// the ring, and says so.
+func TestAuditCSVSaysWhenItReadTheRing(t *testing.T) {
+	j, err := audit.OpenFile(t.TempDir(), audit.FileOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	srv := New(newTestRuntime(t), Options{Audit: struct{ audit.Recorder }{j}})
+	if rec := call(t, srv, "GET", "/api/audit.csv", ""); rec.Header().Get("X-Audit-Source") != "ring" {
+		t.Fatalf("X-Audit-Source = %q; want ring", rec.Header().Get("X-Audit-Source"))
+	}
+}
+
+type flakyRec struct {
+	audit.Recorder
+	down atomic.Bool
+}
+
+func (f *flakyRec) Record(e audit.Entry) (audit.Entry, error) {
+	if f.down.Load() {
+		return audit.Entry{}, fmt.Errorf("disk full")
+	}
+	return f.Recorder.Record(e)
+}
+
+// Dir passes the journal's directory on.
+func (f *flakyRec) Dir() string { return f.Recorder.(interface{ Dir() string }).Dir() }

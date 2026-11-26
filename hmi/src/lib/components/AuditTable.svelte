@@ -57,7 +57,7 @@
 		a.href = url;
 		a.download = r.filename;
 		a.click();
-		URL.revokeObjectURL(url);
+		setTimeout(() => URL.revokeObjectURL(url), 10_000);
 	}
 
 	// Ahead of time, so a role without audit is told before it asks.
