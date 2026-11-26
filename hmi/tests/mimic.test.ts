@@ -16,6 +16,9 @@ import {
 	resolveRuntimePorts,
 	PORT_STUB,
 	labelState,
+	resolveBindings,
+	unresolvedBindings,
+	unresolvedMessage,
 	type MimicDoc,
 	type MimicEquipment
 } from '../src/lib/mimic.js';
@@ -412,5 +415,44 @@ describe('labelState', () => {
 	});
 	it('is null with no states', () => {
 		expect(labelState({ text: 'x', x: 0, y: 0 }, {})).toBe(null);
+	});
+});
+
+describe('resolveBindings on a struct member', () => {
+	const tags = { CONV: { Run: true, Speed: 42, Inner: { Deep: 7 } }, 'Flat.Name': 3, Plain: 1 };
+	it('walks a dotted path through the frame\'s nested struct', () => {
+		expect(resolveBindings({ on: 'CONV.Run', hz: 'CONV.Speed', d: 'CONV.Inner.Deep' }, tags)).toEqual({ on: true, hz: 42, d: 7 });
+	});
+	it('still takes a flat key, even one with a dot, and negates with !', () => {
+		expect(resolveBindings({ a: 'Plain', b: 'Flat.Name', c: '!CONV.Run' }, tags)).toEqual({ a: 1, b: 3, c: false });
+	});
+	it('leaves a missing member out rather than inventing one', () => {
+		expect(resolveBindings({ x: 'CONV.Nope', y: 'NOPE.Run' }, tags)).toEqual({});
+	});
+});
+
+describe('unresolvedBindings', () => {
+	const tags = { CONV: { Run: true } };
+	const doc = {
+		canvas: { width: 10, height: 10 },
+		equipment: [{ id: 'a', component: 'Pump', x: 0, y: 0, bind: { running: 'CONV.Run', speed: 'CONV.Speed' } }],
+		pipes: [{ id: 'p', points: [], bind: { flowing: '!GONE' } }],
+		labels: [{ text: 't', x: 0, y: 0, bind: 'CONV.Speed' }]
+	} as unknown as MimicDoc;
+	it('lists each reference that matches no tag, once, without the ! ', () => {
+		expect(unresolvedBindings(doc, tags)).toEqual(['CONV.Speed', 'GONE']);
+	});
+	it('is empty before any frame has arrived', () => {
+		expect(unresolvedBindings(doc, {})).toEqual([]);
+	});
+});
+
+describe('unresolvedMessage', () => {
+	it('does not call an absent tag a wrong name: a subscription or a read scope can leave it out', () => {
+		const m = unresolvedMessage(['A.B']);
+		expect(m.includes('not in the live frame')).toBe(true);
+		expect(m.includes('not subscribed or readable')).toBe(true);
+		expect(m.startsWith('1 binding ')).toBe(true);
+		expect(unresolvedMessage(['A', 'B']).startsWith('2 bindings')).toBe(true);
 	});
 });

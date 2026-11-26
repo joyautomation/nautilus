@@ -8,6 +8,7 @@
 
 import { builtinParts } from './drawings.js';
 import type { StatusKind } from './types.js';
+import { tagAt } from './tags.js';
 import { routePipes, type Rect, type RouteEnd, type RouteJob } from './route.js';
 
 /** One mimic document (typically a *.mimic.json file imported by a page). */
@@ -928,11 +929,47 @@ export function resolveBindings(
 	for (const [prop, ref] of Object.entries(bind)) {
 		const negate = ref.startsWith('!');
 		const tag = negate ? ref.slice(1) : ref;
-		if (!(tag in tags)) continue;
-		const v = tags[tag];
+		const v = bindValue(tag, tags);
+		if (v === undefined) continue;
 		out[prop] = negate ? v !== true : v;
 	}
 	return out;
+}
+
+/** One bound tag's value: a flat tag name first (a tag whose name has no
+ * dot, or a flat key that does), else a dotted struct path walked through
+ * the frame's nested objects (`CONV.Run`, a device's member). `undefined`
+ * when any hop is missing. */
+function bindValue(tag: string, tags: Record<string, unknown>): unknown {
+	if (tag in tags) return tags[tag];
+	return tag.includes('.') ? tagAt(tags, tag) : undefined;
+}
+
+/** The banner's words for `unresolvedBindings`. A frame can leave a tag out
+ * on purpose (a `?tags=` subscription narrows it, server/stream.go
+ * filterTags), so the message does not call the name wrong: it says the tag
+ * is absent from the frame. */
+export function unresolvedMessage(refs: string[]): string {
+	return `${refs.length} binding${refs.length === 1 ? '' : 's'} not in the live frame (no such tag, or not subscribed or readable): ${refs.join(', ')}`;
+}
+
+/** The tag references of a drawing's live bindings that resolve to nothing
+ * in `tags`, in document order, each once. A bind that never resolves is
+ * silent in resolveBindings (the component keeps its default), so the
+ * drawing shows this list instead of looking healthy. Empty while `tags` is
+ * empty: nothing has arrived yet, which is not a wrong name. */
+export function unresolvedBindings(doc: MimicDoc, tags: Record<string, unknown>): string[] {
+	if (Object.keys(tags).length === 0) return [];
+	const refs: string[] = [];
+	for (const eq of doc.equipment ?? []) refs.push(...Object.values(eq.bind ?? {}));
+	for (const p of doc.pipes ?? []) refs.push(...Object.values(p.bind ?? {}));
+	for (const l of doc.labels ?? []) if (l.bind) refs.push(l.bind);
+	const seen = new Set<string>();
+	for (const ref of refs) {
+		const tag = ref.startsWith('!') ? ref.slice(1) : ref;
+		if (bindValue(tag, tags) === undefined) seen.add(tag);
+	}
+	return [...seen];
 }
 
 // ── attaching free pipe ends to ports ───────────────────────────────────────
