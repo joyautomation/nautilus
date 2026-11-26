@@ -15,7 +15,17 @@ func pairFS(red string) fstest.MapFS {
 	}
 }
 
-const pairOK = "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n"
+const pairOK = "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n"
+
+// A pair needs no opt-in since #710 closed; a manifest that still has
+// experimental: true loads as before.
+func TestPairNeedsNoOptIn(t *testing.T) {
+	for _, m := range []string{pairOK, strings.Replace(pairOK, "redundancy:\n", "redundancy:\n  experimental: true\n", 1)} {
+		if p, err := Load(pairFS(m), ""); err != nil || !p.Redundancy.Pair() {
+			t.Errorf("%q: %v", m, err)
+		}
+	}
+}
 
 // A pair's section (design §2) loads with its defaults, and the Kubernetes
 // forms keep their meaning: lease: is a name there, a time with peers:.
@@ -77,17 +87,16 @@ func TestPairSectionRefusals(t *testing.T) {
 		{"a lease name with peers", pairOK + "  lease: plant-a\n", "not a name"},
 		{"a lease too short", pairOK + "  lease: 10ms\n", "want between"},
 		{"a lease too long", pairOK + "  lease: 1h\n", "want between"},
-		{"no witness", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n", "witness is required"},
-		{"one peer", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n  witness: wit:9460\n", "peers.b"},
-		{"a third name", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n    c: ctl-c:9450\n  witness: wit:9460\n", `"c" is not a controller`},
-		{"one address twice", "redundancy:\n  experimental: true\n  peers:\n    a: ctl:9450\n    b: ctl:9450\n  witness: wit:9460\n", "both ctl:9450"},
-		{"no port", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a\n    b: ctl-b:9450\n  witness: wit:9460\n", "want host:port"},
-		{"port out of range", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:70000\n    b: ctl-b:9450\n  witness: wit:9460\n", "1 to 65535"},
-		{"bad witness", "redundancy:\n  experimental: true\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit\n", "redundancy.witness"},
+		{"no witness", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n", "witness is required"},
+		{"one peer", "redundancy:\n  peers:\n    a: ctl-a:9450\n  witness: wit:9460\n", "peers.b"},
+		{"a third name", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n    c: ctl-c:9450\n  witness: wit:9460\n", `"c" is not a controller`},
+		{"one address twice", "redundancy:\n  peers:\n    a: ctl:9450\n    b: ctl:9450\n  witness: wit:9460\n", "both ctl:9450"},
+		{"no port", "redundancy:\n  peers:\n    a: ctl-a\n    b: ctl-b:9450\n  witness: wit:9460\n", "want host:port"},
+		{"port out of range", "redundancy:\n  peers:\n    a: ctl-a:70000\n    b: ctl-b:9450\n  witness: wit:9460\n", "1 to 65535"},
+		{"bad witness", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit\n", "redundancy.witness"},
 		{"relative state dir", pairOK + "  state-dir: state\n", "absolute path"},
 		{"witness without peers", "redundancy:\n  witness: wit:9460\n", "needs peers"},
 		{"state dir without peers", "redundancy:\n  state-dir: /srv/naut\n", "needs peers"},
-		{"a pair without the opt-in", "redundancy:\n  peers:\n    a: ctl-a:9450\n    b: ctl-b:9450\n  witness: wit:9460\n", "a takeover goes on hot"},
 		{"a negative hot-max-age", pairOK + "  hot-max-age: -1s\n", "want 0"},
 		{"a hot-max-age that is not a time", pairOK + "  hot-max-age: soon\n", "bad duration"},
 		{"a hot-max-age without peers", "redundancy:\n  hot-max-age: 2s\n", "hot-max-age applies to a redundant pair"},

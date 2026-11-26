@@ -350,16 +350,15 @@ env:
     value: "water-scada,water-scada.$(POD_NAMESPACE),water-scada.$(POD_NAMESPACE).svc,water-scada.$(POD_NAMESPACE).svc.cluster.local"
 ```
 
-### A redundant pair without Kubernetes (experimental)
+### A redundant pair without Kubernetes
 
 Two controllers and a small third voter, `naut witness`, can elect a
 leader without a cluster. The leader streams its retained state to the
 standby, so a takeover keeps it (below). Commissioning and
-re-commissioning are below too. For now the pair is an explicit opt-in:
+re-commissioning are below too.
 
 ```yaml
 redundancy:
-  experimental: true      # required for now: see below
   peers:
     a: ctl-a:9450         # each controller's peer port
     b: ctl-b:9450
@@ -389,7 +388,7 @@ with mapped ports, whose `peers:` entry is where the others reach it
 rather than an address it has, sets `NAUTILUS_PEER_LISTEN` (for example
 `:9450`) in its own environment to bind that instead.
 
-:::caution[Redundancy is experimental]
+:::caution[Hot and cold takeovers]
 A takeover goes on **hot** from the old leader's state when the standby
 was in sync with it, and is **cold** otherwise (below). A cold takeover
 is a start: `FIRST_SCAN()` is TRUE on the new leader's first scan, so `IF
@@ -398,9 +397,9 @@ on, and `FIRST_SCAN()` stays FALSE. The program can tell what happened
 from [`TAKEOVER_SCAN()`, `HOT_TAKEOVER()`, `PEER_READY()` and
 `TAKEOVERS()`](/reference/functions/#redundancy), and can hold its
 outputs after a takeover until it is ready ([the takeover
-hold](#the-takeover-hold), below). A pair without
-`experimental: true` is refused, and `naut run` says so at every start.
-Live I/O applies are refused on a pair.
+hold](#the-takeover-hold), below). Live I/O applies are refused on a
+pair. (`experimental: true`, the opt-in of earlier releases, is no longer
+needed; a manifest that has it still loads.)
 :::
 
 **What a takeover keeps.** The leader streams its state to the standby

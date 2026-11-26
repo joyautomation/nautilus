@@ -250,7 +250,6 @@ bumpless, and the measured takeover time is published instead.
 
 ```yaml
 redundancy:
-  experimental: true     # required until hot takeover (§4.2) lands
   peers:                 # the same file on both controllers
     a: ctl-a:9450
     b: ctl-b:9450
@@ -261,7 +260,8 @@ redundancy:
   stream-link: ctl-a-link:9451   # optional dedicated A–B cable (§6)
 ```
 
-- **An explicit opt-in until §4.2.** A pair needs `experimental: true`, and Load refuses one
+- **The opt-in, lifted with #710 (2026-11).** A pair no longer needs `experimental: true`
+  (still read, so older manifests load). History: a pair needed it, and Load refused one
   without it (#1028, naut-lead's call). Since S1b the state stream keeps the leader's retained
   values across a takeover, but the takeover is cold (program state restarts), and `naut run`
   says so at every start. The standing `/api/cluster` warning of the interim is gone: the

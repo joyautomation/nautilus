@@ -494,10 +494,8 @@ type RedundancyConfig struct {
 	// their sum must stay under a quarter of the lease. Pair only.
 	NetDelay   Duration `yaml:"net-delay"`
 	SendMargin Duration `yaml:"send-margin"`
-	// Experimental opts in to a pair before state streaming (#710 step
-	// 4): until then a takeover starts from the new leader's own retained
-	// values, so a setpoint the old leader took is lost. A pair without it
-	// is refused. It goes away when step 4 lands.
+	// Experimental was the pair's opt-in while #710 was open. A pair no
+	// longer needs it; it is still read, so a manifest that has it loads.
 	Experimental bool `yaml:"experimental"`
 	// PublicURLs are the pair's controllers as a browser reaches them, by
 	// node name ({a: https://plc-a.plant.lan, b: …}): where a standby
@@ -603,10 +601,6 @@ func checkPublicURLs(urls map[string]string) error {
 	return nil
 }
 
-// PairColdTakeover is what an experimental pair says at every start: what
-// a takeover keeps, hot (#710 S2) or cold.
-const PairColdTakeover = "a takeover goes on hot from the leader's newest state image when the standby is in sync with it (timers, counters, SFC steps and state tags continue; FIRST_SCAN() is still TRUE on its first scan), and is cold otherwise (program state restarts from the field, the retained values kept); either way a setpoint written in the last stream interval before a crash (up to a lease before an isolation) is lost"
-
 // DefaultStreamBudget is the state stream's bytes a second when the
 // manifest names none (1 MB/s).
 const DefaultStreamBudget = 1_000_000
@@ -693,7 +687,7 @@ func checkRedundancy(r *RedundancyConfig) error {
 		case r.StateDir != "":
 			return errors.New("redundancy.state-dir needs peers:; the Kubernetes Lease mode keeps no voter state")
 		case r.Experimental:
-			return errors.New("redundancy.experimental applies to a redundant pair (peers:); the Kubernetes Lease mode is not experimental")
+			return errors.New("redundancy.experimental applies to a redundant pair (peers:), which no longer needs it either: remove the key")
 		case r.NetDelay != 0 || r.SendMargin != 0:
 			return errors.New("redundancy.net-delay and send-margin apply to a redundant pair (peers:): they set its write gate's fence margin")
 		case r.PublicURLs != nil:
@@ -712,9 +706,6 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.failback is for a redundant pair (peers:): there is no other controller to fail back to")
 		}
 		return nil
-	}
-	if !r.Experimental {
-		return errors.New("redundancy.peers: a redundant pair is experimental for now: " + PairColdTakeover + ". Set redundancy.experimental: true to run it knowing that")
 	}
 	for name := range r.Peers {
 		if name != "a" && name != "b" {

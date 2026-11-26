@@ -315,9 +315,6 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// Registered first, so it runs last: the peer listener answers
 		// votes until the election below has stopped and released.
 		defer pair.Close()
-		// Until hot takeover (#710 S2) the opt-in is required (Load
-		// refuses a pair without it), and said out loud.
-		fmt.Fprintln(os.Stderr, "naut run: redundancy: WARNING: experimental pair: "+project.PairColdTakeover)
 		for _, h := range pair.untrustedAPIs(append(server.EnvAllowedHosts(), proj.Server.AllowedHosts...)) {
 			fmt.Fprintf(os.Stderr, "naut run: redundancy: the pair advertises a tag API at %s, which NAUTILUS_ALLOWED_HOSTS does not list: a browser HMI that follows the leader there is refused (403). Add it to NAUTILUS_ALLOWED_HOSTS on both controllers, or name the controllers by IP in redundancy.peers\n", h)
 		}
@@ -2145,7 +2142,7 @@ func pairServiceLevel(st leader.Status) byte {
 
 // opcuaRedundancy is a pair member's OPC UA redundancy (nil outside a pair):
 // RedundancySupport Cold (a takeover keeps the retained values the state
-// stream brought, not a running image: project.PairColdTakeover), both
+// stream brought, not a running image), both
 // members' ApplicationUris, and the ServiceLevel from the elector. A client
 // may sample the level every 100 ms; the elector's status copies several
 // slices under its tick lock, so the level is held for 250 ms.
