@@ -36,6 +36,9 @@ points:
 derived:
   - { name: SensorBreak, from: Loop1Error, eq: 39, desc: "Loop 1 reports a sensor break (error code 39)", doc: "mct4 p. 172 register 39, *B11 p. 176" }
 
+alarms:
+  - { point: SensorBreak, name: "{desc} sensor break", priority: high, class: controller }
+
 simulator: { block: MCT4_SIM, source: fdc-mct4.st }
 notes: |
   Loop 1 only: a PI loop over a first-order thermal model. Heat goes in only

@@ -68,6 +68,9 @@ type Profile struct {
 	// of a status word, a code equal to a value), so an alarm can name a
 	// fault. They are never polled or written; see Derived.
 	Derived []Derived `yaml:"derived"`
+	// Alarms are the alarms a device of this profile raises by default, over
+	// BOOL points (polled or derived); see AlarmSpec.
+	Alarms []AlarmSpec `yaml:"alarms"`
 	// Simulator gives the device behaviour; nil means its points hold what
 	// was last written (by the controller, or by the process model).
 	Simulator *Simulator `yaml:"simulator"`
@@ -421,6 +424,9 @@ func (p *Profile) validate() error {
 		}
 	}
 	if err := p.validateDerived(seen); err != nil {
+		return err
+	}
+	if err := p.validateAlarms(); err != nil {
 		return err
 	}
 	if err := p.validateIOLink(); err != nil {

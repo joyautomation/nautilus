@@ -301,7 +301,7 @@ func (p *Project) alarmDefsTuned(rt *runtime.Runtime) (defs []alarm.Def, applied
 	if p.Alarms == nil {
 		return nil, nil, nil, nil
 	}
-	defs, err = p.Alarms.alarmConfig().Compose(p.deviceAlarmFiles(), p.alarmTagInfo(rt))
+	defs, err = p.Alarms.alarmConfig().ComposeAfter(p.deviceAlarmFiles(), p.deviceAlarmRules(), p.alarmTagInfo(rt))
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -331,6 +331,88 @@ func (p *Project) deviceAlarmFiles() []alarm.File {
 		return nil
 	}
 	return []alarm.File{{Path: "devices:", Defs: defs}}
+}
+
+// deviceAlarmRules are the alarms the devices' profiles declare, as rules
+// over each device type, after the manifest's own so that a project rule on
+// the same member wins. Each is enabled while its device answers: a device
+// that went quiet suppresses its alarms (designed suppression), and the
+// device's comms-loss alarm (deviceCommsAlarms) is what says so.
+func (p *Project) deviceAlarmRules() []alarm.File {
+	var rules []alarm.Rule
+	for _, r := range p.devices.AlarmRows() {
+		rule := alarm.Rule{
+			Match:  alarm.Match{Type: r.Type, Member: r.Member},
+			Name:   r.Name,
+			Class:  r.Class,
+			Notes:  r.Notes,
+			Enable: "{tag}__Online",
+		}
+		if r.Priority != "" {
+			if pr, err := alarm.ParsePriority(r.Priority); err == nil { // the profile was validated
+				rule.Priority = &pr
+			}
+		}
+		if r.OnDelay != "" {
+			if d, err := time.ParseDuration(r.OnDelay); err == nil {
+				ad := alarm.Duration(d)
+				rule.OnDelay = &ad
+			}
+		}
+		rules = append(rules, rule)
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	return []alarm.File{{Path: "devices:", Rules: rules}}
+}
+
+// DeviceOfflineAlarmID is the id of a device's comms-loss alarm.
+func DeviceOfflineAlarmID(device string) string { return device + "__Offline" }
+
+// deviceCommsAlarms raise one alarm per devices: row while the device does
+// not answer (its <Device>__Online is false): the other half of the
+// suppression in deviceAlarmRules, so a device that drops off the network
+// is never a quiet screen. It is never enabled-off by the device, and a
+// system alarm because an alarm's condition is true-is-alarm and the
+// driver's companion is true-is-healthy.
+func (p *Project) deviceCommsAlarms(rt *runtime.Runtime) []SystemAlarm {
+	var out []SystemAlarm
+	for _, row := range p.devices.Rows() {
+		online := row.Name + "__Online"
+		def := alarm.Def{
+			ID: DeviceOfflineAlarmID(row.Name), Tag: "__device-offline." + row.Name,
+			Name:     row.Name + ": not answering (its alarms are suppressed until it answers)",
+			Priority: alarm.High, Class: "comms", Equipment: row.Name,
+			OnDelay:     5 * time.Second,
+			AckRequired: true, AutoClear: true, Shelvable: true,
+			Notes: "The device's driver reports it unreachable (" + online + " is false). Its own alarms are held off meanwhile, so what they would say is unknown until it answers again.",
+		}
+		if o := row.OfflineAlarm; o != nil {
+			if o.Off {
+				continue // the row's choice; CheckAlarms warns about it
+			}
+			if o.Priority != "" {
+				if pr, err := alarm.ParsePriority(o.Priority); err == nil { // checked when the row resolved
+					def.Priority = pr
+				}
+			}
+			if o.OnDelay != "" {
+				if dur, err := time.ParseDuration(o.OnDelay); err == nil {
+					def.OnDelay = dur
+				}
+			}
+		}
+		out = append(out, SystemAlarm{
+			Def: def,
+			Active: func() bool {
+				v, ok := rt.Tags().ReadPath(online)
+				b, isBool := v.(bool)
+				return ok && isBool && !b
+			},
+		})
+	}
+	return out
 }
 
 // alarmTagInfo describes every declared tag to the rule expander: its
@@ -412,8 +494,16 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 		return nil, nil, nil, nil
 	}
 	tags := p.alarmTagInfo(rt)
-	if defs, err = p.Alarms.alarmConfig().Compose(p.deviceAlarmFiles(), tags); err != nil {
+	if defs, err = p.Alarms.alarmConfig().ComposeAfter(p.deviceAlarmFiles(), p.deviceAlarmRules(), tags); err != nil {
 		return nil, nil, nil, err
+	}
+	// A device that raises no comms-loss alarm and suppresses its other
+	// alarms when it drops is a quiet failure: the row asked for it, and
+	// check says so every time.
+	for _, row := range p.devices.Rows() {
+		if row.OfflineAlarm != nil && row.OfflineAlarm.Off {
+			warns = append(warns, fmt.Sprintf("device %s: offline-alarm is off: when it stops answering nothing is raised, and the device's own alarms are suppressed meanwhile", row.Name))
+		}
 	}
 	// The overlay: every row's id must be an alarm of the project (a renamed
 	// alarm leaves a dead row that tunes nothing), and a delay shorter than
@@ -679,6 +769,7 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 	}
 	tags := rt.Tags()
 	read := tags.ReadPath
+	sys = append(p.deviceCommsAlarms(rt), sys...)
 	if len(sys) > 0 {
 		conds := make(map[string]func() bool, len(sys))
 		for _, a := range sys {

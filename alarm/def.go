@@ -830,6 +830,15 @@ func (c *Config) ShelveDurations() []time.Duration {
 // expanded against the tags, ids checked. This is the one call the manifest
 // tier needs.
 func (c *Config) Compose(files []File, tags []TagInfo) ([]Def, error) {
+	return c.ComposeAfter(files, nil, tags)
+}
+
+// ComposeAfter is Compose with files that come after the manifest's own:
+// first match wins and a rule is tried in order, so what the manifest
+// declares claims a condition before an after-file's rule can. Defaults the
+// project's tooling generates (a device profile's alarms) go there, so a
+// project's rule on the same member always wins.
+func (c *Config) ComposeAfter(files, after []File, tags []TagInfo) ([]Def, error) {
 	rules := make([]Rule, 0, len(c.Rules))
 	defs := make([]Def, 0, len(c.Defs))
 	// Stamp where each item came from, so a duplicate-id error can name
@@ -857,6 +866,13 @@ func (c *Config) Compose(files []File, tags []TagInfo) ([]Def, error) {
 		stamp(src, f.Rules, f.Defs)
 	}
 	stamp("manifest", c.Rules, c.Defs)
+	for _, f := range after {
+		src := f.Path
+		if src == "" {
+			src = "alarm file"
+		}
+		stamp(src, f.Rules, f.Defs)
+	}
 
 	out, err := Expand(rules, defs, tags)
 	if err != nil {
