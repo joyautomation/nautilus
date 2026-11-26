@@ -467,8 +467,8 @@ its LWT across every site in the fleet on every failover.
   after that birth anyway, the new leader publishes its birth again, so an
   edge node that connects later still reads STATE online.
 
-Both replicas share the `host-id` (the STATE topic) but not an MQTT
-client ID. Under `redundancy:` each replica appends its identity
+Both controllers share the `host-id` (the STATE topic) but not an MQTT
+client ID. Under `redundancy:` each controller appends its identity
 (`POD_NAME`, or the hostname off-cluster) to `client-id`, so a pair never
 takes over each other's broker session. A broker ACL keyed on the client
 ID has to allow both.

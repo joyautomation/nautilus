@@ -42,7 +42,7 @@ substitutes:
 | `max` | the longest grant, one minute to seven days (default 8 h) |
 | `operator-value` | `true` lets the operator pick another value at the start; without it any other value is refused (`403`) |
 | `ack-on-start` | the substitute must be acknowledged before the program's start interlock releases (below) |
-| `role` | who may start one. Parsed and shown now; it is **not enforced** until roles land (#708), so every writer may start one today |
+| `role` | parsed and shown with the rule, but it does **not** decide who may start one. That is the `substitute` grant in [`auth:`](/guides/auth/): without an `auth:` block any writer may start one, with it only a role holding `substitute` (and, when the grant names `areas:`, only for tags in them) |
 
 `naut check` holds each value to its tag's type, and reports how many
 inputs are substitutable.
@@ -156,15 +156,11 @@ A substitute survives a restart; the plant should not lose it in a deploy.
 
 ## A redundant pair
 
-**Status: built and tested in process, not yet running in `naut run`.** The
-server and runtime code below is exercised by tests that run three in-process
-oplog nodes. `naut run` does not yet mount the oplog or the substitute log
-(that is #710 PR 3), and it has not been run in the simulator or on hardware.
-Until then a pair does not replicate substitutes; the single-controller
-rules above are what runs.
-
-The design: a start, stop or acknowledgement is **proposed to the
-operator-intent log**, and every instance applies the committed entry, so
+On a pair (`redundancy:` with `peers:`, see
+[Redundancy](/guides/redundancy/#a-redundant-pair-without-kubernetes)),
+`naut run` mounts the operator-intent log and the substitute log, so the
+pair replicates substitutes. A start, stop or acknowledgement is **proposed
+to the operator-intent log**, and every instance applies the committed entry, so
 the standby holds exactly what the leader does. At a takeover the new
 leader first **catches up the log, and applies every substitute, before its
 first scan**: the logic never runs one scan on the bad reading. If the
@@ -179,7 +175,7 @@ leader's clock was stepped, the entry is capped and `clock-capped` is
 raised. Expiry is **leader-only** and is itself an entry in the log
 (`unsubstitute`, reason `expired`), independent of quorum.
 
-The `untilMs` of a start is the **wall clock of the replica that took the
+The `untilMs` of a start is the **wall clock of the controller that took the
 request** plus the granted time, which may be the standby's; the leader
 judges expiry on its own clock, so skew between the two controllers shifts
 the end by that much.
@@ -202,12 +198,12 @@ the substitute is there after the restart. That is an unknown outcome too.
 |---|---|
 | `200`, `kept: true` | applied and saved |
 | `200`, `kept: false`, `warning` | **took effect, not saved** (a stop or an acknowledgement; a start that cannot be saved is refused): it may not survive a restart, or on a lost lease it may still be active on the next leader |
-| `202`, `committed: true` | a start **committed** in the pair's log but this replica has not yet seen it (it is behind the leader, and its catch-up failed): it did start, unless it was committed too late and lapsed (that is a `409`, see below). The body carries `committed: true` and no `started`. Re-read `GET /api/substitutes`; do not start again |
+| `202`, `committed: true` | a start **committed** in the pair's log but this controller has not yet seen it (it is behind the leader, and its catch-up failed): it did start, unless it was committed too late and lapsed (that is a `409`, see below). The body carries `committed: true` and no `started`. Re-read `GET /api/substitutes`; do not start again |
 | `400`, `403`, `404` with `refused` | the request is invalid or no rule names the tag (400); a value the rule does not allow, or the permission (403); no such entry is active (404) |
 | `401` | not authenticated. The substitute handlers send it with `refused`; a 401 from a proxy in front does not, and reads as unknown: sign in, then re-read |
 | `409` with `refused` | the `requestId` was used for a different request, or a newer change won, or nothing was waiting for an acknowledgement |
 | `501` with `refused` | this server mirrors a controller it does not run: substitute on that controller |
-| `503` `no leader`, `refused` | this replica is standing by and no leader is known: nothing happened |
+| `503` `no leader`, `refused` | this controller is standing by and no leader is known: nothing happened |
 | `503` `no leader, retry`, `refused` | the log knew no leader at the moment of the proposal, so nothing was sent: a definite no, journalled as refused. Retry shortly. (A proposal forwarded to a leader that then fails to answer is **unknown**, not this: it may have arrived) |
 | `503` `operator-intent log has no majority`, `refused` | a redundant pair whose replicated log can't reach a majority (the other controller is down): nothing was proposed, nothing changed. Starts, stops and acknowledgements are refused until it returns. A write sent before the leader noticed the loss is answered **unknown** instead |
 | `503` not saved, `refused` | the retain store refused a start: nothing was started |

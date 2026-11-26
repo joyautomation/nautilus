@@ -6,10 +6,12 @@ description: Expose a controller's tags to any OPC UA client — browse, read an
 :::caution[Preview]
 Still moving. The `opcua:` section, its `endpoint` and `writable` are
 meant to stay as they are. What is missing today may change between
-releases: sessions are anonymous (no user names), whole-array and
-IndexRange writes are refused, and a monitored item queues one value and
-does not act on its filter. Try it against your client before you depend
-on it.
+releases: sessions are anonymous unless the project has an `auth:` block
+(then a secure endpoint also takes a user name and a trusted certificate,
+see [Sessions](#sessions)), reads, browsing and subscriptions are not
+gated by `auth:` yet, whole-array and IndexRange writes are refused, and a
+monitored item queues one value and does not act on its filter. Try it
+against your client before you depend on it.
 :::
 
 An `opcua:` section in `nautilus.yaml` serves the controller's tag store as
@@ -625,7 +627,7 @@ Each item of a Write gets its own status:
 | a conversion the table above refuses | `Bad_TypeMismatch` or `Bad_OutOfRange` |
 | an array or an `IndexRange`; an Uncertain or Bad status code | `Bad_WriteNotSupported` |
 | the address is [forced](/guides/forcing/) | `Bad_Locked` |
-| this replica is a standby | `Bad_InvalidState` |
+| this controller is a standby | `Bad_InvalidState` |
 | written | `Good` |
 
 A Write may name up to 10 000 nodes: the `MaxNodesPerWrite` the `Server`
@@ -655,12 +657,12 @@ is refused with `Bad_Locked`. Change or remove the force first.
 
 With [redundancy](/guides/redundancy/#redundancy), only the leader takes
 writes. A standby's store is stale and does not scan, so it answers every
-write `Bad_InvalidState`. The replica is asked once per request, so a
+write `Bad_InvalidState`. The controller is asked once per request, so a
 request lands whole or not at all if leadership moves while it is
 answered, and its `opcua-server` row says it is a standby.
 Unlike the HTTP API, a standby cannot pass an OPC UA write on to the
 leader. A client that is answered `Bad_InvalidState` should reconnect, and
-a Service that spreads connections over the replicas can land it on a
+a Service that spreads connections over the controllers can land it on a
 standby again.
 
 ### Audit
@@ -860,7 +862,7 @@ row. The dashboard's OPC UA card shows:
 `access` (`read-only`, `writable by trusted clients` or `writable by
 anonymous clients`), `writes`, `writesRefused`, `writable` (the patterns,
 when there are any), `anonymousWrites: true` when the switch is on (even
-with nothing writable), `standby: true` on a standby replica, and
+with nothing writable), `standby: true` on a standby, and
 `certThumbprint`, `certExpiresMs` and `certWarning` for the server
 certificate. A port already in use is reported there and on stderr at start
 (`continuing without it`); the controller runs regardless.

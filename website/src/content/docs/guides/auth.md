@@ -105,7 +105,7 @@ With an `auth:` block, reading needs the `read` permission (every built-in role 
 
 | | `200 ok` | `503 not ready` |
 |---|---|---|
-| `GET /healthz` | the controller serves HTTP (every replica) | never |
+| `GET /healthz` | the controller serves HTTP (a standby too) | never |
 | `GET /readyz` | a controller without redundancy, or the leader | a standby, no leader known, or a leader whose scans have stopped |
 
 Point a liveness probe at `/healthz` (a standby answers it, so it is never restarted for standing by) and a load balancer or floating address that should reach only the leader at `/readyz`. The deployment `naut new --deploy` generates probes `/healthz`.
@@ -339,7 +339,7 @@ Every command write is journalled, written or refused: action `tag.write`, sourc
 - **Sign-out needs the leader.** If no leader is reachable, signing out can't revoke the session. It ends at the next failover or when it expires.
 - **A standby never reads for a browser.** A browser's read reaching a standby gets the same `503` with the leader's address, even for `/api/cluster` and `/api/history`, which the standby otherwise answers itself.
 - **A view of both controllers** (each one's `/api/cluster`, read from one page) needs a token or `anonymous: viewer`: a browser's session cookie belongs to one controller and is never sent to the other.
-- **One address for the pair** (a floating address, so a browser never has to be sent anywhere) is #716. `/readyz` tells it which controller leads.
+- **One address for the pair** is the optional [floating address](/guides/redundancy/#redundancy) (`redundancy.floating-ip`), so a browser never has to be sent anywhere. `/readyz` tells which controller leads.
 
 ## Limits
 
@@ -349,4 +349,4 @@ Every command write is journalled, written or refused: action `tag.write`, sourc
 - **`naut historian`'s own port is not covered.** It answers its archive by `localhost`, an IP address or an allowed name, or with `NAUTILUS_TOKEN`, as before, with no roles. Reads through the controller's `/api/history` need `read`; keep the historian's port off networks that shouldn't read the archive.
 - **A standby answers some reads from its own users file.** `/api/cluster` and `/api/history` are answered by the standby itself, so a token revoked or a user disabled only on the leader can still read them there until the users file is copied to the standby.
 - **Sessions live on the leader.** On a redundant pair a failover signs browser users out (see [A redundant pair](#a-redundant-pair)).
-- **Not behind a load balancer that spreads requests over replicas.** A replica that isn't leading refers a signed-in browser to the leader. Point browsers at the leader (`/readyz`), or wait for the pair's floating address (#716).
+- **Not behind a load balancer that spreads requests over controllers.** A controller that isn't leading refers a signed-in browser to the leader. Point browsers at the leader (`/readyz`), or give the pair a [floating address](/guides/redundancy/#redundancy).

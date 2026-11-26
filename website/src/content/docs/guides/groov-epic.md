@@ -389,7 +389,7 @@ latch reads set on the standby until the leader, which must see the
 event, delivers and clears it. At the takeover edge a latch event can
 still be lost, when the old leader clears it in its last scan before it
 sees the gate close and its program never runs on it, or delivered twice,
-when both replicas lead for a moment while the lease changes hands. A
+when both controllers lead for a moment while the lease changes hands. A
 standby's clean stop puts nothing back.
 
 **With `watchdog:` set, a standby does not talk to the unit.** Any
@@ -430,7 +430,7 @@ leads as below: power-up clear if owed, watchdog, custom data area and
 stream. Until its first scan of the unit has been delivered, it tells the
 runtime its inputs are not live, and the runtime holds the takeover: no
 frame reset, no logic, and no outputs from any driver, not just this one.
-Its scan loop keeps ticking meanwhile, so the replica stays live for the
+Its scan loop keeps ticking meanwhile, so the controller stays live for the
 lease. The first scan that runs is a warm start on the unit's values, not
 on what the standby last saw. The wait is bounded (2 s by default), and
 one hiccup in the dial can use it up: a failed first connect retries
@@ -457,44 +457,44 @@ stream as the manifest asks, pointing the stream at itself. A leader whose
 gate closes stops using the stream and polls as a standby (with
 `watchdog:` set, it closes its connection instead); it leaves the
 configuration where it is, since the new leader now owns it. Only a
-replica that still leads when it stops puts the stream and the pointers
+controller that still leads when it stops puts the stream and the pointers
 back: one that lost the lease and is stopped before it looks again
 leaves them to the new leader.
 
 **After a takeover, a stop cannot put back the original configuration.**
-Each replica records the stream and the custom data area's pointers as it
-first found them, in memory. Only the replica that led first found the
+Each controller records the stream and the custom data area's pointers as it
+first found them, in memory. Only the controller that led first found the
 unit as it was before nautilus; one that takes over finds the previous
 leader's settings. So what the last leader's stop puts back depends on
-which replica that is, and a stream the unit had before nautilus (to a
-historian, say) is put back only if the replica that first led is the
+which controller that is, and a stream the unit had before nautilus (to a
+historian, say) is put back only if the controller that first led is the
 one that stops last. Under redundancy a stream of the custom data area
 found at a takeover (the previous leader's) is recorded as off, so a stop
-never re-points the stream at the other replica. Note the unit's stream
+never re-points the stream at the other controller. Note the unit's stream
 settings before you deploy a redundant pair, and put them back by hand in
 groov Manage if you retire it.
 
 **A command held while the processor was away goes out only on the
 leader.** Leadership is checked again when held commands go out, before
-every write. A replica that lost leadership during the outage drops what
+every write. A controller that lost leadership during the outage drops what
 it held instead of writing it once the processor is back. A flush the gate
 closes partway through stops there: the write in hand and every one after
 it are dropped. The dropped commands are asked for again, so the push that
 follows the reopen sends them.
 
 **When the gate reopens, every output goes out again.** While it was
-closed another replica may have led and written the same outputs, so
-nothing this replica commanded before is trusted to still be there. The
+closed another controller may have led and written the same outputs, so
+nothing this controller commanded before is trusted to still be there. The
 first time the driver sees the gate open again it forgets every command,
 and what is still held from before, and asks the runtime for the outputs.
 The next push writes every output with the program's current value,
-including one that has not changed since this replica last led. A replica
+including one that has not changed since this controller last led. A controller
 that regains leadership pushes because it took over. A gate that reopens
 without a takeover (logic healthy again) pushes because the driver asked.
 Until that push the reconnect and watchdog rewrites have nothing to write,
 so a command from the previous term is never sent.
 
-**A replica that started as a standby commands every output on its first
+**A controller that started as a standby commands every output on its first
 takeover.** A standby has no start-up baseline, so the first value handed over
 for each output is written, equal to the unit's or not (see
 [What a scan does](#what-a-scan-does)).

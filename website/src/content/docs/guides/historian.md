@@ -20,7 +20,7 @@ naut historian \
   and not matching `-exclude` (booleans as 0/1), once per `-interval`,
   from `GET /api/state`. Strings are skipped at any depth.
 - **Redundancy-aware for free:** point `-source` at the Service in front
-  of the replicas — a standby proxies the poll to the leader, so samples
+  of the controllers — a standby proxies the poll to the leader, so samples
   keep flowing across a failover with no historian configuration at all.
 - **The controller must answer the name in `-source`.** A controller
   answers only `localhost`, an IP address, or a name in its
@@ -124,7 +124,7 @@ server:
   historian: http://historian:9100   # or NAUTILUS_HISTORIAN_URL
 ```
 
-History answers on **any** replica, leader or standby: the archive lives
+History answers on **any** controller, leader or standby: the archive lives
 in Postgres, not the tag store.
 
 The historian's own API follows the controller's Host rule: it answers a
