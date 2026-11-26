@@ -334,7 +334,7 @@ func TestAgentsTextFollowsTheProject(t *testing.T) {
 			t.Errorf("an ST-only project carries %q", gone)
 		}
 	}
-	for _, stub := range []string{"## Ladder (`.ld`) (not used in this project yet)", "## Operator screens (not used in this project yet)"} {
+	for _, stub := range []string{"## Ladder (`.ld`) (not used in this project yet)", "## Operator screens (not used in this project yet)", "## Field devices (`devices:` and `profiles/`) (not used in this project yet)"} {
 		if !strings.Contains(text, stub) {
 			t.Errorf("no stub %q for a section left out", stub)
 		}
@@ -378,8 +378,13 @@ func TestAgentsFeaturesFollowTheFiles(t *testing.T) {
 	}
 	write("c.fbd")
 	write("d.sfc")
+	write("other.yaml") // only a file in profiles/ is a device profile
+	if got := agentsFeaturesFor(dir); got != (agentsFeatures{ST: true, LD: true, FBD: true, SFC: true, Screens: true}) {
+		t.Errorf("every kind of program file: %+v", got)
+	}
+	write("profiles/x.yaml")
 	if got := agentsFeaturesFor(dir); got != agentsAll {
-		t.Errorf("every kind of file: %+v", got)
+		t.Errorf("every kind of file, with a device profile: %+v", got)
 	}
 
 	// The loader lower-cases extensions, so Main.ST and Loop.FBD count.
@@ -444,5 +449,20 @@ func TestAgentsStaleWhenTheProjectGrowsASection(t *testing.T) {
 	raw, _ := os.ReadFile(filepath.Join(dir, agentsFileName))
 	if !strings.Contains(string(raw), "RUNG fillcmd") || !strings.Contains(string(raw), "CommandButton") {
 		t.Error("the refreshed guidance does not carry the ladder and screens sections")
+	}
+}
+
+// A project with device profiles is told to write them from the manual and
+// to run lint; every other project gets a stub (#717 PR 6).
+func TestAgentsDevicesSectionTeachesLint(t *testing.T) {
+	with := agentsText(agentsFeatures{ST: true, Devices: true})
+	for _, want := range []string{"naut devices lint profiles/", "unverified: true", "from the manual's state machine"} {
+		if !strings.Contains(with, want) {
+			t.Errorf("a project with profiles/ is not told %q", want)
+		}
+	}
+	without := agentsText(agentsFeatures{ST: true})
+	if strings.Contains(without, "naut devices lint") {
+		t.Error("a project with no profiles carries the device section")
 	}
 }

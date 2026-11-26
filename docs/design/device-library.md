@@ -386,16 +386,26 @@ start-up sequence against a device that behaves.
 
 naut does not call a model. Instead:
 
-- `naut devices lint <profile>` checks:
-  - every row cites a `docs:` entry or says `unverified`;
-  - no two points overlap an address;
-  - `type` and `format` agree;
-  - derived points name a point that exists;
-  - the simulator compiles;
-  - the alarms name BOOL points.
+- `naut devices lint <profile>` (a built-in id, or a path to a project's
+  own `.yaml`) runs after the profile parses; loading already refuses a
+  point with no citation, a citation of no `docs:` entry, a derived point
+  or alarm of nothing, and an alarm that is not BOOL. Lint adds:
+  - **errors** (exit 1): two points on one address in a table (a BOOL
+    `bit:N` point shares its register with the register's own point, but
+    not with another point of the same bit), an OPC UA node used twice,
+    a simulator that does not compile (the plant `naut devices check`
+    builds, with the profile as one device);
+  - **warnings**: a citation that names the document but no page or
+    section, a document under `docs:` nothing cites, a document with
+    neither a `url:` nor a publisher's number, and the count of
+    `unverified` rows.
+  The pure checks are `devprofile.Lint`; the simulator compile is in
+  `cmd/naut`, so the playground build does not carry it.
 - The built-in AGENTS.md gets a section on writing a profile from a
-  manual: cite every row, mark guesses `unverified`, write the simulator
-  from the manual's state machine, run lint.
+  manual (a section of its own, so only a project with `profiles/*.yaml`
+  carries the full text and the others a stub): cite every row, mark
+  guesses `unverified`, write the simulator from the manual's state
+  machine, run lint, have someone else check the rows.
 - The independent check (§4.2) is a documented step.
 
 ## 6. Commands
@@ -417,6 +427,13 @@ or the process model.
 - The asset page: #714 (it consumes §3.5's data).
 - GSDML: #723. CIP assemblies: later.
 - A package registry: declined on #193.
+- Not adopted: a profile format version (`format:`) with a migration on
+  `update`. A profile's `version:` is its own revision and `update` reports
+  it; the format has had no breaking change since the library began, so a
+  `format:` key would have nothing to read and a migration nothing to do.
+  When the first breaking change comes, add `format: 1` as a required key
+  in that PR, and have `update` migrate the vendored copies it finds then.
+  Decided by naut-lead, 2026-11-26.
 
 ## 8. Plan
 

@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
 )
@@ -124,11 +125,11 @@ func embeddedText(name string) string {
 // carries: the AI reads AGENTS.md on every turn, so a project with no
 // screens does not pay for 180 lines about them. A kind the project does
 // not use gets a short stub that says how to get the full text.
-type agentsFeatures struct{ ST, LD, FBD, SFC, Screens bool }
+type agentsFeatures struct{ ST, LD, FBD, SFC, Screens, Devices bool }
 
 // agentsAll is every section: the text of a project with none of the
 // signs below (no program yet, so no way to know what it will use).
-var agentsAll = agentsFeatures{true, true, true, true, true}
+var agentsAll = agentsFeatures{true, true, true, true, true, true}
 
 // agentsFeaturesFor reads a project directory for the files each section is
 // about. A project with no program file at all gets every section.
@@ -166,6 +167,8 @@ func agentsFeaturesFor(dir string) agentsFeatures {
 			f.SFC = true
 		case strings.HasSuffix(n, ".mimic.json"):
 			f.Screens = true
+		case strings.HasSuffix(n, ".yaml") && strings.HasPrefix(p, devprofile.ProjectDir+"/"):
+			f.Devices = true
 		}
 		return nil
 	})
@@ -198,6 +201,7 @@ func agentsText(f agentsFeatures) string {
 		{f.FBD, "fbd.md", "Function Block Diagram (`.fbd`)", "function block diagram", docs + "/languages/function-block/"},
 		{f.SFC, "sfc.md", "Sequential Function Chart (`.sfc`)", "sequential function chart", docs + "/languages/sfc/"},
 		{f.Screens, "screens.md", "Operator screens", "operator screen (`*.mimic.json`; this section does not cover 3D scenes or a hand-built `hmi/` app)", docs + "/guides/operator-screens/"},
+		{f.Devices, "devices.md", "Field devices (`devices:` and `profiles/`)", "device profile in `profiles/`", "`naut devices help`"},
 	} {
 		b.WriteString("\n\n")
 		if sec.on {

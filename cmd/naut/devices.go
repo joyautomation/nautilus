@@ -37,6 +37,10 @@ Usage:
   naut devices profiles          list the built-in device profiles
   naut devices show <profile>    print a profile's points (a built-in id, or a
                                  path to a project's own .yaml)
+  naut devices lint <profile>    check a profile you wrote: addresses that overlap,
+                                 citations that name no page, documents nothing
+                                 cites, unverified rows, a simulator that does not
+                                 compile. Exits 1 on an error; warnings do not fail
 
 A project declares its devices in nautilus.yaml:
 
@@ -86,6 +90,8 @@ func runDevices(args []string) int {
 		return runDevicesProfiles(args[1:], os.Stdout)
 	case "show":
 		return runDevicesShow(args[1:], os.Stdout)
+	case "lint":
+		return runDevicesLint(args[1:], os.Stdout)
 	case "help", "-h", "--help":
 		fmt.Print(devicesUsage)
 		return 0
