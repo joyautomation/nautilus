@@ -243,6 +243,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/config/schema`](#configuration-screens) | The manifest's JSON Schema, one section at a time (`?section=drivers`), or the list of sections |
 | `GET` | [`/api/config/files`](#configuration-screens) | The manifest and the files its drivers name, as what runs (needs the edit permission) |
 | `POST` | [`/api/config/commit`](#saving-a-change) | Save an applied candidate as a git commit (only where the controller runs from a git checkout) |
+| `POST` | [`/api/config/save`](#a-change-that-needs-a-restart) | Save a candidate that needs a restart (a device added or removed) as a git commit, to apply at the next restart |
 | `GET` | [`/api/config/patch`](#saving-a-change) | The applied change as a patch for `git apply` (needs the edit permission) |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 | `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
@@ -1421,6 +1422,40 @@ needs the config permission and, for a browser sign-in, a fresh password
 (it is elevated, like an apply); the journal records `config.commit` under
 the principal, with the commit, branch and files. The journal being down
 refuses it, like an apply.
+
+### A change that needs a restart
+
+A device or driver added or removed, the tag set and a device's struct are
+fixed while the runtime runs, so a candidate that changes them fails
+validation (`topology`, `tags`, `device-type` or `fields`, with *restart to
+apply this*) and cannot be applied. If that is the **only** thing wrong with it,
+the validation says `"needsRestart": true` and the change can still be saved.
+"Only" is checked: the output-conflict check still runs (two tags commanding
+one point), the candidate is loaded as a whole project (programs, tags, every
+section: a `load` check), and nothing may change outside `driver:`, `drivers:`
+and `devices:` in the manifest, so a candidate that also edits anything else is
+made in the repository instead:
+
+- **`POST /api/config/save`** with `{"id": "<validated candidate>", "message": "<subject, optional>"}`
+  writes the candidate's files into the checkout and commits exactly those
+  files, as the principal, with the same refusals as a commit (only files the
+  manifest names, never over a file edited since the controller booted).
+  The answer is `{"commit", "branch", "files", "by", "at", "pending": true}`
+  and the candidate then carries who saved it (`saved`). **Nothing running
+  changes**: it applies when the controller next restarts, which stops the scan
+  while it starts again from the committed files. On a redundant pair, restart
+  the standby first, then switch over, then restart the former leader. The
+  controller never restarts itself for this. A save writes only files the
+  manifest already names, so vendor a new profile or driver manifest in the
+  repository first (`naut devices add <profile>`), commit it, then save the
+  change; while a saved change waits for a restart, another save or commit to
+  the same file is refused, so it cannot be undone by accident. A candidate invalid for any other
+  reason is refused (`409`); the journal records `config.save`. A valid
+  candidate is applied and then committed, not saved this way.
+
+The configuration screen shows this as *Save for restart* beside the failed
+check. A device added or removed live, without the restart, is tracked in
+[#1290](https://github.com/joyautomation/nautilus/issues/1290).
 
 A commit saves what runs, so only the candidate whose apply is in force can
 be committed: after a later apply, or an automatic revert, the earlier id is

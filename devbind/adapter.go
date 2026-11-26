@@ -43,7 +43,7 @@ func newStructs(devs []*device, names []string) structs {
 func (x *structs) newAssembly() func(nio.Values) {
 	asm := make([]*assembler, len(x.asm))
 	for i, a := range x.asm {
-		asm[i] = &assembler{dev: a.dev, def: a.def, members: a.members}
+		asm[i] = &assembler{dev: a.dev, def: a.def, members: a.members, derived: a.derived, got: make([]bool, len(a.members))}
 	}
 	return func(vals nio.Values) {
 		for _, a := range asm {

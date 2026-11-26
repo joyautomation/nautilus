@@ -89,6 +89,8 @@ type device struct {
 	// points are the selected points, in profile order: the struct's
 	// members.
 	points []devprofile.Point
+	// derived are the BOOL members computed from points (PR 5a), after them.
+	derived []devprofile.Derived
 	// ports are an IO-Link master's port devices (loadPorts).
 	ports []*portDev
 }
@@ -150,7 +152,7 @@ func Resolve(fsys fs.FS, rows []Device) (*Set, error) {
 			st  devprofile.Struct
 			dev string
 			why string
-		}{{devprofile.Struct{Name: p.TypeName(), Points: d.points}, r.Name, "select the same points, or give one profile a udt of its own"}}
+		}{{devprofile.Struct{Name: p.TypeName(), Points: d.points, Derived: d.derived}, r.Name, "select the same points, or give one profile a udt of its own"}}
 		for _, pd := range d.ports {
 			structs = append(structs, struct {
 				st  devprofile.Struct
@@ -227,11 +229,11 @@ func (d *device) check(where string) error {
 			return fmt.Errorf("%s: profile %s has no param %q", where, p.ID, k)
 		}
 	}
-	pts, err := p.Select(d.Points)
+	sel, err := p.SelectAll(d.Points)
 	if err != nil {
 		return fmt.Errorf("%s: %w", where, err)
 	}
-	d.points = pts
+	d.points, d.derived = sel.Points, sel.Derived
 	return nil
 }
 
@@ -348,8 +350,16 @@ func (s *Set) Validate(name string) (row, def, why string, ok bool) {
 // sameMembers reports how two structs sharing a type name differ, nil
 // when their members are the same names and types in the same order.
 func sameMembers(a, b devprofile.Struct) error {
-	if len(a.Points) != len(b.Points) {
-		return fmt.Errorf("with %d and %d members", len(a.Points), len(b.Points))
+	if len(a.Points)+len(a.Derived) != len(b.Points)+len(b.Derived) {
+		return fmt.Errorf("with %d and %d members", len(a.Points)+len(a.Derived), len(b.Points)+len(b.Derived))
+	}
+	if len(a.Derived) != len(b.Derived) {
+		return fmt.Errorf("with %d and %d derived members", len(a.Derived), len(b.Derived))
+	}
+	for i := range a.Derived {
+		if !a.Derived[i].Same(b.Derived[i]) {
+			return fmt.Errorf("derived member %d differs (%s, %s: another source or test)", i+1, a.Derived[i].Name, b.Derived[i].Name)
+		}
 	}
 	for i := range a.Points {
 		pa, pb := a.Points[i], b.Points[i]
@@ -528,6 +538,33 @@ func (s *Set) DevicePoints() []DevicePoints {
 			}
 		}
 		out = append(out, DevicePoints{Device: d.Name, Title: d.prof.Title, Desc: d.Desc, Points: pts})
+	}
+	return out
+}
+
+// DerivedRow is one derived member of a device: what it reads and how.
+type DerivedRow struct {
+	Device, Name, From string
+	// Test is "bit 3" or "== 39".
+	Test string
+}
+
+// Derived lists each device's derived members, in declaration order.
+func (s *Set) Derived() []DerivedRow {
+	if s == nil {
+		return nil
+	}
+	var out []DerivedRow
+	for _, d := range s.devices {
+		for _, dp := range d.derived {
+			var test string
+			if dp.Bit != nil {
+				test = fmt.Sprintf("bit %d", *dp.Bit)
+			} else if dp.Eq != nil {
+				test = fmt.Sprintf("== %d", *dp.Eq)
+			}
+			out = append(out, DerivedRow{Device: d.Name, Name: dp.Name, From: dp.From, Test: test})
+		}
 	}
 	return out
 }

@@ -409,6 +409,105 @@ type IOCommand struct {
 	Value any    `json:"value"`
 }
 
+// restartChecks are the checks whose failure only means a restart would be
+// needed: what is fixed while the runtime runs.
+var restartChecks = map[string]bool{"topology": true, "tags": true, "device-type": true, "fields": true}
+
+// needsRestart reports whether every check that failed is a restart one, and
+// the candidate loaded (schema passed): a configuration a restart would apply.
+func needsRestart(checks []IOCheck) bool {
+	failed := false
+	for _, ck := range checks {
+		if ck.OK {
+			continue
+		}
+		if !restartChecks[ck.Name] {
+			return false
+		}
+		failed = true
+	}
+	return failed
+}
+
+// restartLoads is what makes a candidate fit to be saved for a restart: it
+// loads as a whole project (programs, tags, every section, not only the I/O
+// ones this validation looked at), and it changes nothing outside the I/O
+// sections (a save writes the whole manifest, which a live apply never does).
+// Either failing takes NeedsRestart back and says why.
+func (io *IOConfig) restartLoads(c *IOCandidate, v *IOValidation) {
+	var problems []string
+	if p, err := Load(c.fsys, io.manifest); err != nil {
+		problems = append(problems, err.Error())
+	} else if _, err := runtime.New(p.Runtime); err != nil {
+		problems = append(problems, err.Error())
+	}
+	v.Checks = append(v.Checks, IOCheck{Name: "load", OK: len(problems) == 0, Detail: strings.Join(problems, "; ")})
+	if len(problems) > 0 {
+		v.NeedsRestart = false
+		return
+	}
+	// Loading read files the candidate's staging did not (alarm files, tag
+	// files, programs): if any differs from boot, a save would commit a
+	// project other than the one just loaded.
+	if rec, ok := c.fsys.(*recordFS); ok {
+		var extra []string
+		for n := range io.differingFiles(rec) {
+			if _, staged := c.files[n]; !staged {
+				extra = append(extra, n)
+			}
+		}
+		if len(extra) > 0 {
+			slices.Sort(extra)
+			v.NeedsRestart = false
+			v.Notes = append(v.Notes, "the candidate also changes files outside the I/O configuration ("+strings.Join(extra, ", ")+"): make that change in the repository and restart; it is not saved from this screen")
+			return
+		}
+	}
+	if io.changesBeyondIO(c) {
+		v.NeedsRestart = false
+		v.Notes = append(v.Notes, "the candidate also changes sections outside the I/O configuration (drivers: and devices:): make that change in the repository, so it is reviewed there, and restart; it is not saved from this screen")
+	}
+}
+
+// changesBeyondIO says whether the candidate's manifest text differs from the
+// booted one anywhere but the I/O sections (driver:, drivers:, devices:). It
+// compares the documents themselves, not the parsed manifests: a parsed
+// manifest carries what its devices derive (tags, types), which differs
+// whenever a device does. Unreadable text counts as different.
+func (io *IOConfig) changesBeyondIO(c *IOCandidate) bool {
+	name := io.manifest
+	if name == "" {
+		name = ManifestName
+	}
+	rest := func(fsys fs.FS) (map[string]any, bool) {
+		b, err := fs.ReadFile(fsys, name)
+		if err != nil {
+			return nil, false
+		}
+		var doc map[string]any
+		if err := yaml.Unmarshal(b, &doc); err != nil {
+			return nil, false
+		}
+		delete(doc, "driver")
+		delete(doc, "drivers")
+		delete(doc, "devices")
+		return doc, true
+	}
+	was, ok1 := rest(io.bootFS)
+	now, ok2 := rest(c.fsys)
+	return !ok1 || !ok2 || !reflect.DeepEqual(was, now)
+}
+
+// ChangedFiles is what the candidate reads that differs from the files the
+// controller booted from: path to content.
+func (c *IOCandidate) ChangedFiles() map[string]string {
+	out := make(map[string]string, len(c.files))
+	for k, v := range c.files {
+		out[k] = v
+	}
+	return out
+}
+
 // IOValidation is a candidate's checks, what it changes and what the apply
 // will command.
 type IOValidation struct {
@@ -421,7 +520,12 @@ type IOValidation struct {
 	// holds back; the rest are sent once they change.
 	WillCommand []IOCommand `json:"willCommand"`
 	Held        bool        `json:"held,omitempty"`
-	Notes       []string    `json:"notes,omitempty"`
+	// NeedsRestart says the candidate is not applicable live only because it
+	// changes what is fixed while the runtime runs (a device or driver added
+	// or removed, the tag set, a device's struct): it loads, and a restart
+	// would apply it. It can be saved (committed) for that restart (#711).
+	NeedsRestart bool     `json:"needsRestart,omitempty"`
+	Notes        []string `json:"notes,omitempty"`
 	// Probes are the live checks of each changed device (live or static,
 	// and why), run once every static check has passed.
 	Probes []IOProbe `json:"probes,omitempty"`
@@ -548,6 +652,10 @@ func (io *IOConfig) validate(c *IOCandidate, probes bool) *IOValidation {
 		for _, ck := range v.Checks {
 			v.Valid = v.Valid && ck.OK
 		}
+		v.NeedsRestart = needsRestart(v.Checks)
+		if v.NeedsRestart {
+			io.restartLoads(c, v)
+		}
 		base := map[string]string{}
 		for k, u := range running {
 			base[k] = u.hash
@@ -583,6 +691,9 @@ func (io *IOConfig) validate(c *IOCandidate, probes bool) *IOValidation {
 	}
 	if len(topo) > 0 {
 		check("topology", append(topo, "the drivers and devices are fixed while the runtime runs: restart to apply this"))
+		// What needs no running baseline still runs: two tags commanding one
+		// point is as wrong at the next restart as now.
+		check("outputs", newOutputConflicts(running, c.units))
 		return finish()
 	}
 	check("topology", nil)

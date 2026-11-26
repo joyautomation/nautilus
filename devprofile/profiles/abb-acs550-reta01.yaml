@@ -23,6 +23,10 @@ points:
   - { name: Actual2,     type: INT,  table: holding, address: 5, desc: "Actual 2 (drive-parameter dependent; 0 here)", doc: "fena register (4)00006 p. 103" }
   - { name: Current,     type: REAL, table: holding, address: 103, format: uint16, scale: 0.1, unit: A,
       desc: "Parameter 01.04, motor current", doc: "measured 40104; parameter address (4)00000 + 100 x group + index, fena p. 103" }
+# Computed from a polled point, never polled themselves (an alarm names one).
+derived:
+  - { name: Tripped, from: StatusWord, bit: 3, desc: "The drive has tripped (ABB Drives profile status word bit 3)", doc: "fena pp. 93-94" }
+
 simulator: { block: ABB_DRIVES_SIM, source: abb-drives.st }
 notes: |
   Parameters other than the motor current are not mapped; reading one answers

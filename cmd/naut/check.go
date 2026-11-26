@@ -611,6 +611,16 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		}
 	}
 
+	// A device row is realised by the nautilus runtime's drivers and its
+	// adapter, which computes the struct and its derived members. Neither
+	// writer carries them: the type would be written and nothing on the
+	// controller would fill it, so no member (a derived one included) could
+	// be trusted. A gap, named, rather than a device that never updates.
+	if (target == "logix" || target == "siemens") && proj.Devices().Len() > 0 {
+		errs++
+		fmt.Printf("%s: error: %s\n", loc.file, devicesOnTargetMessage(target))
+	}
+
 	// The Siemens writer's rules, on the project it would write.
 	if target == "siemens" {
 		errs += checkSiemensTarget(dir, manifestName, loc.file)
@@ -1474,3 +1484,11 @@ type sizingStore struct{}
 func (sizingStore) Load() (retain.State, error) { return retain.State{}, nil }
 func (sizingStore) Save(retain.State) error     { return nil }
 func (sizingStore) Kind() string                { return "none" }
+
+// devicesOnTargetMessage is the refusal for devices: rows on a target whose
+// writer does not realise them.
+func devicesOnTargetMessage(target string) string {
+	return "devices: rows run on the nautilus runtime (its drivers poll the device and its adapter computes the struct, derived members included); the " +
+		target + " writer does not carry them, so the device's tag would never be filled on the controller. " +
+		"Not supported on this target yet: remove the devices: rows, or run the project on nautilus"
+}
