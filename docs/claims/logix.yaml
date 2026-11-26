@@ -400,3 +400,22 @@ claims:
       - go ./logix/writer TestMnemonicsAreCorpusVocabulary
     partial: true
     note: Checked against a vocabulary of surveyed exports, not against the SDK importer (SDK acceptance is verified on hardware only).
+
+  - id: LGX-034
+    claim: >-
+      A write the agent has started (a mode change, a download, an online
+      import) runs to its end even when the caller goes away, and closing
+      its session waits for it.
+    source: "#security"
+    tests:
+      - go ./logix/logixd TestControllerWritesIgnoreTheCallerHangingUp
+      - go ./logix/logixd TestSessionCloseWaitsForTheWriteInFlight
+    partial: true
+    note: >-
+      The test pins the token each controller write in tools/logixd/Program.cs
+      gets (CancellationToken.None through ControllerWrite) and the session
+      close's wait (Sessions.cs); the C# agent has no test project of its own. The behaviour was checked once on an
+      emulated controller: naut killed 0.1 s into a download with
+      --program-mode, the old agent left the controller in Program with the
+      old program, the new one finished the download (see the PR that closed
+      #1409).

@@ -466,6 +466,9 @@ has begun to write to the controller: the download or the online import,
 and the verify after it, run to their end (only the server's 15-minute
 limit stops them), and the journal records how it really ended. Before
 that first write, closing the tab stops the deploy and nothing changes.
+When nautilus itself stops (Ctrl-C on `naut logix deploy`, a killed
+`naut logix serve`), `logixd` still runs a write it has started to its
+end, but nothing verifies or journals it: check the controller as above.
 A deploy that fails after the write began (that limit, an agent that
 stopped answering, a verify that could not read the controller or found
 it different) is answered **OUTCOME UNKNOWN**: the controller may hold

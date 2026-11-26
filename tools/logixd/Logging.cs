@@ -28,6 +28,9 @@ public sealed class CollectingLogger : OperationEvent
         _events.Enqueue(e);
     }
 
+    /// <summary>The events recorded since the last drain, left in place.</summary>
+    public List<LogEvent> Peek() => _events.ToList();
+
     /// <summary>Drains the events recorded since the last call.</summary>
     public List<LogEvent> Drain()
     {

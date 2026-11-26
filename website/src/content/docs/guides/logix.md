@@ -424,6 +424,14 @@ To check the controller still matches your repo, use `naut logix drift`
 - Every path the agent touches is confined to `LOGIXD_WORKDIR`, compared
   after full resolution so traversal is rejected rather than string-matched.
 - `download` never changes the controller mode unless explicitly asked.
+- A write the agent has started (a mode change, a download, an online
+  import) runs to its end even when the caller goes away: Ctrl-C on
+  `naut logix deploy`, a `naut logix serve` that is killed. A cancel
+  half-way would leave the controller in a state nobody chose, such as
+  stopped in Program mode with the old program. Closing the session waits
+  for the write too. The agent logs how the
+  write ended; `naut logix drift` shows what the controller runs. An agent
+  installed before this change cancels instead: reinstall it to get this.
 
 None of that makes it safe to expose to a plant network. It is an agent for
 a trusted host on a trusted link.

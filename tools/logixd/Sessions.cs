@@ -18,6 +18,12 @@
 //     another session already holds.
 //   - A session left open holds a server-side project forever. Sessions
 //     expire on an idle timer.
+//
+// And one we learned on an emulated controller (#1409): disposing a
+// project while an operation runs on it breaks that operation half-way. A
+// close during a download with ensureProgramMode left the controller
+// stopped in Program mode with the old program. So a close waits for the
+// operation in flight, and the reaper never takes a busy session.
 
 namespace Logixd;
 
@@ -37,6 +43,10 @@ public sealed class Session : IAsyncDisposable
     // One operation at a time per project: the SDK permits concurrency
     // ACROSS projects, never within one.
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool _closed; // under _gate
+
+    /// <summary>An operation is running on this project right now.</summary>
+    public bool Busy => _gate.CurrentCount == 0;
 
     public Session(string id, string projectPath, LogixProject project, CollectingLogger log)
         => (Id, ProjectPath, Project, Log) = (id, projectPath, project, log);
@@ -47,6 +57,7 @@ public sealed class Session : IAsyncDisposable
         await _gate.WaitAsync(ct);
         try
         {
+            if (_closed) throw new InvalidOperationException($"session {Id} is closed");
             LastUsed = DateTimeOffset.UtcNow;
             return await op(Project);
         }
@@ -57,11 +68,24 @@ public sealed class Session : IAsyncDisposable
         }
     }
 
-    public ValueTask DisposeAsync()
+    /// <summary>
+    /// Closes the project once the operation in flight, if any, has ended:
+    /// never under it. The gate is left undisposed, so an operation queued
+    /// behind the close gets "closed", not a disposed semaphore.
+    /// </summary>
+    public async ValueTask DisposeAsync()
     {
-        Project.Dispose();
-        _gate.Dispose();
-        return ValueTask.CompletedTask;
+        await _gate.WaitAsync();
+        try
+        {
+            if (_closed) return;
+            _closed = true;
+            Project.Dispose();
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 }
 
@@ -78,7 +102,9 @@ public sealed class SessionStore : IAsyncDisposable
     public SessionStore(TimeSpan idleTimeout)
     {
         _idleTimeout = idleTimeout;
-        _reaper = new Timer(_ => ReapAsync().GetAwaiter().GetResult(), null,
+        // An exception escaping a Timer callback ends the process, and every
+        // write running on other sessions with it.
+        _reaper = new Timer(_ => { try { ReapAsync().GetAwaiter().GetResult(); } catch { } }, null,
             TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
     }
 
@@ -116,17 +142,23 @@ public sealed class SessionStore : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Closes a session, waiting for the operation in flight on it. The
+    /// session stays in the table until its project is closed, so its path
+    /// cannot be opened again while a write on it still runs.
+    /// </summary>
     public async Task<bool> CloseAsync(string id)
     {
-        if (!_sessions.TryRemove(id, out var s)) return false;
-        await s.DisposeAsync();
+        if (!_sessions.TryGetValue(id, out var s)) return false;
+        try { await s.DisposeAsync(); }
+        finally { _sessions.TryRemove(id, out _); } // a failed dispose must not hold the path
         return true;
     }
 
     private async Task ReapAsync()
     {
         var cutoff = DateTimeOffset.UtcNow - _idleTimeout;
-        foreach (var s in _sessions.Values.Where(s => s.LastUsed < cutoff).ToList())
+        foreach (var s in _sessions.Values.Where(s => !s.Busy && s.LastUsed < cutoff).ToList())
             await CloseAsync(s.Id);
     }
 
