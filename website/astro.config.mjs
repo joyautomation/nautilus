@@ -83,6 +83,10 @@ export default defineConfig({
           ],
         },
         {
+          label: 'The whole stack',
+          items: [{ slug: 'guides/whole-stack' }],
+        },
+        {
           label: 'Programming',
           items: [
             { slug: 'guides/first-program' },
@@ -97,6 +101,7 @@ export default defineConfig({
             { slug: 'guides/forcing' },
             { slug: 'guides/online-edits' },
             { slug: 'guides/program-history' },
+            { slug: 'guides/parameters' },
           ],
         },
         {
@@ -112,6 +117,8 @@ export default defineConfig({
             { slug: 'guides/io-link' },
             { slug: 'guides/it-hardware' },
             { slug: 'guides/substitutes' },
+            { slug: 'guides/virtual-devices' },
+            { slug: 'guides/live-io-configuration' },
           ],
         },
         {

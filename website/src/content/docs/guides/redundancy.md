@@ -198,25 +198,25 @@ never computes.
   when it was posted:
   - if its turn comes while the gate is closed, it is dropped;
   - if it was posted in an earlier term, it is dropped, even with the
-    gate open again: another replica may have led in between;
+    gate open again: another controller may have led in between;
   - if the gate closed and reopened in the same term (a stalled scan that
     resumed, with nobody else leading), a write still waiting is sent.
 
   A dropped write ends with `ERROR` and `STATUS` -6 (lost), as on a
   restart. Reads are not gated.
-- **A replica that takes over from standby sends every output once**
+- **A controller that takes over from standby sends every output once**
   through the Modbus, OPC UA client, EtherNet/IP and OptoMMP drivers,
   with the program's value, changed or not: the runtime hands the
   drivers the whole output set on the first scan as leader, and those
-  drivers send each one even if it equals what this replica sent the
+  drivers send each one even if it equals what this controller sent the
   last time it led, since the leader in between may have written
-  something else. A replica that started as a
+  something else. A controller that started as a
   standby has no start-up baseline, so its first takeover commands every
-  output, as the new active controller of a hot-standby PLC pair does; a replica that
+  output, as the new active controller of a hot-standby PLC pair does; a controller that
   leads from its first scan keeps the baseline. `naut run` starts the
   drivers only after the elector's first decision (at most 5 s; a Lease
   read that fails at start is retried, not taken as standby), so a
-  replica that acquires the lease at once is a plain start. One whose
+  controller that acquires the lease at once is a plain start. One whose
   lease is still held by a predecessor that has not yet expired (a pod
   replaced under a new name) is a standby until it takes over, and so
   commands every output when it does. A Modbus `rewrite:`
