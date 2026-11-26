@@ -167,3 +167,33 @@ func TestLongErrorLineIsStillAFailure(t *testing.T) {
 		t.Fatalf("the journal holds the client's mode text or the source: %s", raw)
 	}
 }
+
+// A deploy cancelled with its request (the client hung up and the deploy
+// honours the context) ends in an error event, and is journalled as a
+// failure, once: the entry matches what the controller was told.
+func TestDeployCancelledWithTheRequestIsJournalledAsFailed(t *testing.T) {
+	started := make(chan struct{})
+	url := startPlaneWith(t, &ProgramPlane{
+		Source: ladderA, Controller: "DemoLine",
+		Deploy: func(ctx context.Context, _ string, progress func(string)) (*deploy.Report, error) {
+			progress("working")
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	raw, _ := json.Marshal(map[string]any{"mode": "online", "source": ladderB})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url+"/api/logix/deploy", bytes.NewReader(raw))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	cancel()
+	res.Body.Close()
+	es := waitEntries(t, url, "logix.deploy", 1)
+	if len(es) != 1 || es[0]["result"] != "error" {
+		t.Fatalf("after a cancelled deploy: %v; want one failed entry", es)
+	}
+}

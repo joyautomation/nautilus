@@ -798,8 +798,19 @@ func (a *auditedRoute) answerAs(w http.ResponseWriter, r *http.Request, t auditT
 	r = withSeamRef(r, ref)
 	if sw != nil {
 		h(sw, r)
-		if ev := sw.lastEvent(); ev == "error" {
-			buf.status = http.StatusInternalServerError
+		if buf.status == 0 || buf.status < http.StatusBadRequest {
+			// A streamed answer is accepted only when it says so: ending
+			// without a terminal event (the request was cancelled, the
+			// handler returned early) is a failure.
+			switch sw.ended() {
+			case "done":
+			case "error":
+				buf.status = http.StatusInternalServerError
+			default:
+				buf.status = http.StatusInternalServerError
+				buf.body.Reset()
+				buf.body.WriteString(`{"error":"ended without a result"}`)
+			}
 		}
 	} else {
 		h(buf, r)

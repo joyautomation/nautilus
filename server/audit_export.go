@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 )
 
@@ -52,21 +51,23 @@ func (s *Server) AuditedStream(action string, tf func(*http.Request, []byte) Aud
 type auditStreamWriter struct {
 	http.ResponseWriter
 	buf *bufferedResponse
-	// line is the line being written; last the latest complete one (each
-	// capped), so how a stream ended is known however long its lines are.
-	line, last []byte
-	// isErr, lastErr: the line (or the last complete one) held the event
-	// marker, wherever in a long line it sat (JSON keys come sorted, so
-	// "event" can follow a very long "error"); carry holds the bytes that
-	// may start a marker split across writes.
-	isErr, lastErr bool
+	// The stream's end is its last terminal event: {"event":"done"…} is
+	// success, {"event":"error"…} a failure, and a stream with neither
+	// ended without a result. A terminal line is found by its marker
+	// wherever it sits in the line (JSON keys come sorted, so "event" can
+	// follow a very long "error"); lineTerm is the current line's, term the
+	// last seen, termLine that line's start (capped), for the reason.
+	line, termLine []byte
+	lineTerm, term string
 	carry          []byte
 }
 
-var errorMarker = []byte(`"event":"error"`)
+var terminalMarkers = []struct{ marker, event string }{
+	{`"event":"done"`, "done"},
+	{`"event":"error"`, "error"},
+}
 
-// auditLineMax caps what is kept of one line: an error event's "event"
-// comes first, so a cut line still says what it was.
+// auditLineMax caps what is kept of one line.
 const auditLineMax = 16 << 10
 
 func (w *auditStreamWriter) WriteHeader(code int) {
@@ -80,47 +81,51 @@ func (w *auditStreamWriter) Write(p []byte) (int, error) {
 	if w.buf.status == 0 {
 		w.buf.status = http.StatusOK
 	}
-	// The marker may sit anywhere in a line, however long.
-	scan := append(w.carry, p...)
-	if bytes.Contains(scan, errorMarker) {
-		w.isErr = true
-	}
-	w.carry = append(w.carry[:0], scan[max(0, len(scan)-len(errorMarker)+1):]...)
 	for _, c := range p {
-		if c == '\n' {
-			if len(bytes.TrimSpace(w.line)) > 0 {
-				w.last = append(w.last[:0], w.line...)
-				w.lastErr = w.isErr
-			}
-			w.line, w.isErr, w.carry = w.line[:0], false, w.carry[:0]
-		} else if len(w.line) < auditLineMax {
-			w.line = append(w.line, c)
-		}
+		w.see(c)
 	}
 	return w.ResponseWriter.Write(p)
+}
+
+// see takes one byte of the stream: it keeps the line (capped), looks for
+// a terminal marker at the line's tail as it grows, and closes the line.
+func (w *auditStreamWriter) see(c byte) {
+	if c == '\n' {
+		w.endLine()
+		return
+	}
+	w.carry = append(w.carry, c)
+	for _, m := range terminalMarkers {
+		if bytes.HasSuffix(w.carry, []byte(m.marker)) {
+			w.lineTerm = m.event
+		}
+	}
+	if len(w.carry) > 32 {
+		w.carry = w.carry[len(w.carry)-32:]
+	}
+	if len(w.line) < auditLineMax {
+		w.line = append(w.line, c)
+	}
+}
+
+func (w *auditStreamWriter) endLine() {
+	if w.lineTerm != "" {
+		w.term = w.lineTerm
+		w.termLine = append(w.termLine[:0], w.line...)
+	}
+	w.line, w.lineTerm, w.carry = w.line[:0], "", w.carry[:0]
 }
 
 // Unwrap lets http.NewResponseController reach the real writer's Flush.
 func (w *auditStreamWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// lastEvent is the "event" of the last line written (complete or not),
-// and leaves that line as the body the entry's reason is read from. A cut
-// line is not valid JSON, so its event is read from its start.
-func (w *auditStreamWriter) lastEvent() string {
-	b, isErr := bytes.TrimSpace(w.line), w.isErr
-	if len(b) == 0 {
-		b, isErr = bytes.TrimSpace(w.last), w.lastErr
-	}
+// ended is how the stream ended: "done", "error", or "" when it ended
+// without a terminal event. A last line written without its newline
+// counts. It leaves the terminal line as the body the entry's reason is
+// read from.
+func (w *auditStreamWriter) ended() string {
+	w.endLine()
 	w.buf.body.Reset()
-	w.buf.body.Write(b)
-	var j struct {
-		Event string `json:"event"`
-	}
-	if isErr {
-		return "error"
-	}
-	if json.Unmarshal(b, &j) == nil {
-		return j.Event
-	}
-	return ""
+	w.buf.body.Write(bytes.TrimSpace(w.termLine))
+	return w.term
 }
