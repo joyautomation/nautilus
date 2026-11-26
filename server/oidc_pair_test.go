@@ -91,7 +91,9 @@ func TestOIDCSignInCarriesAcrossAPair(t *testing.T) {
 	if p, ok := b.pin(t, "jsmith@corp.example"); !ok || !p.Same(pairIssuer, "sub-1") {
 		t.Errorf("b's pin = %+v %v, want sub-1", p, ok)
 	}
-	if d := b.pinEntry("ok"); d == nil || d["from"] != "the other controller" || d["subject"] != "sub-1" {
+	// the pin is journalled just after it is written: wait for the entry
+	waitFor(t, "b to journal the pin", func() bool { return b.pinEntry("ok") != nil })
+	if d := b.pinEntry("ok"); d["from"] != "the other controller" || d["subject"] != "sub-1" {
 		t.Errorf("b journalled %+v", d)
 	}
 	// Another account under the same name is refused on b, as on a.
