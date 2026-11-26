@@ -202,7 +202,7 @@ the substitute is there after the restart. That is an unknown outcome too.
 |---|---|
 | `200`, `kept: true` | applied and saved |
 | `200`, `kept: false`, `warning` | **took effect, not saved** (a stop or an acknowledgement; a start that cannot be saved is refused): it may not survive a restart, or on a lost lease it may still be active on the next leader |
-| `202`, `committed: true` | a start **committed** in the pair's log but this replica has not yet seen it (it is behind the leader, and its catch-up failed): it did start. Re-read `GET /api/substitutes`; do not start again |
+| `202`, `committed: true` | a start **committed** in the pair's log but this replica has not yet seen it (it is behind the leader, and its catch-up failed): it did start, unless it was committed too late and lapsed (that is a `409`, see below). The body carries `committed: true` and no `started`. Re-read `GET /api/substitutes`; do not start again |
 | `400`, `403`, `404` with `refused` | the request is invalid or no rule names the tag (400); a value the rule does not allow, or the permission (403); no such entry is active (404) |
 | `401` | not authenticated. The substitute handlers send it with `refused`; a 401 from a proxy in front does not, and reads as unknown: sign in, then re-read |
 | `409` with `refused` | the `requestId` was used for a different request, or a newer change won, or nothing was waiting for an acknowledgement |

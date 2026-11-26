@@ -256,14 +256,19 @@ func (s *Server) startThroughLog(w http.ResponseWriter, r *http.Request, tag str
 		refuse(w, fmt.Sprintf("%v: entry %d was started with it for something else", runtime.ErrRequestReused, started.ID), http.StatusConflict)
 		return
 	}
+	if !ok && e.Lapsed {
+		// Committed too late to be carried out: it never started.
+		refuse(w, fmt.Sprintf("entry %d committed but lapsed (it was proposed too long before it committed) and did not start: re-read GET /api/substitutes", e.Seq), http.StatusConflict)
+		return
+	}
 	if !ok {
 		// The start committed; this replica is only behind. Not a
 		// refusal and not a 409: a client must not retry or give up.
 		logAction(r, "substitute: committed, not yet visible here", "tag", tag, "id", e.Seq)
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"committed": true, "id": e.Seq,
-			"message": fmt.Sprintf("entry %d committed, not yet visible here; re-read GET /api/substitutes", e.Seq),
-		})
+		resp := s.substitutesResponse()
+		resp.Committed = true
+		resp.Message = fmt.Sprintf("entry %d committed, not yet visible here; re-read GET /api/substitutes", e.Seq)
+		writeJSON(w, http.StatusAccepted, resp)
 		return
 	}
 	logAction(r, "substitute: started (replicated)", "tag", started.Name, "id", started.ID, "for", d)

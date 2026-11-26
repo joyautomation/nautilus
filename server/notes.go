@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/notes"
 	"github.com/joyautomation/nautilus/oplog"
@@ -545,6 +546,14 @@ func (s *Server) refuseNoteWithoutMajority(w http.ResponseWriter) bool {
 func noteUnknown(w http.ResponseWriter, err error, id string) {
 	if errors.Is(err, oplog.ErrTooLarge) {
 		refuse(w, "too large for the operator-intent log: "+err.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
+	if errors.Is(err, oplog.ErrNoLeader) {
+		w.Header().Set(outcomeHeader, "refused")
+		w.Header().Set(journalAsHeader, audit.ResultRefused)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "no leader, retry: nothing was proposed (" + err.Error() + ")", "note": id,
+		})
 		return
 	}
 	w.Header().Set(outcomeHeader, "unknown")

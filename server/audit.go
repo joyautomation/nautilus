@@ -815,6 +815,7 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		// A definite no answered 5xx (no leader known: nothing was sent).
 		e.Result = audit.ResultRefused
 	}
+	buf.header.Del(journalAsHeader) // the seam's, never the client's
 	valueCap := valueMax
 	if e.Result == audit.ResultOK {
 		if t.done != nil {

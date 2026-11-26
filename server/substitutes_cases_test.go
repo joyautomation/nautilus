@@ -521,3 +521,28 @@ func TestACommittedStartThisReplicaHasNotSeenIs202(t *testing.T) {
 	p.gates[0].failReads.Store(false)
 	eventually(t, "the start is on the leader", func() bool { return len(p.rts[0].Substitutes()) == 1 })
 }
+
+// A proposal refused for want of a leader leaves nothing tracked as
+// "unknown" (nothing was sent, so there is nothing to resolve later), on
+// the substitute route and on a note's.
+func TestNoLeaderIsNotTrackedAsUnknown(t *testing.T) {
+	p := newPair(t)
+	s := p.srvs[0]
+	req := httptest.NewRequest("POST", "/x", nil)
+	_, err := s.proposeFor(context.Background(), req, oplog.Entry{Kind: oplog.KindSubstitute, Tag: "Level"}, true,
+		func(context.Context, oplog.Entry) (oplog.Entry, error) { return oplog.Entry{}, oplog.ErrNoLeader })
+	if !errors.Is(err, oplog.ErrNoLeader) {
+		t.Fatalf("err = %v", err)
+	}
+	s.unknowns.mu.Lock()
+	n := len(s.unknowns.order)
+	s.unknowns.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d proposals tracked after a no-leader refusal; want none", n)
+	}
+	w := httptest.NewRecorder()
+	noteUnknown(w, oplog.ErrNoLeader, "n1")
+	if w.Code != 503 || w.Header().Get(outcomeHeader) != "refused" || strings.Contains(w.Body.String(), "outcome unknown") {
+		t.Fatalf("note with no leader = %d %q %s; want 503 refused", w.Code, w.Header().Get(outcomeHeader), w.Body)
+	}
+}
