@@ -33,8 +33,8 @@ Usage:
         not on a redundant pair, behind a TLS proxy, or with a server.tls.
         --oidc adds sign-in at an OpenID Connect provider (auth.oidc: Entra
         ID, Google, Keycloak, Okta) with the client id it registered; its
-        secret goes in NAUTILUS_OIDC_SECRET on the controller. Not on a
-        redundant pair yet.
+        secret goes in NAUTILUS_OIDC_SECRET on the controller (on a
+        redundant pair, on both controllers).
 
 Roles: viewer, operator, supervisor, engineer, administrator (each adds to
 the one before), or a custom one of the block's roles:.
@@ -116,9 +116,6 @@ func authMain(args []string, stdout, stderr io.Writer, getenv func(string) strin
 	}
 	if k, _ := child(e.root, "auth"); k != nil {
 		return fail(fmt.Errorf("%s has an auth: block already (line %d): edit it there", e.path, k.Line))
-	}
-	if oidc != nil && e.m.Redundancy != nil {
-		return fail(errors.New("--oidc: OIDC sign-in is not available on a redundant pair yet (each box would pin names on its own); use local users there (--user)"))
 	}
 	tlsDone, tlsWhy := addSelfSignedTLS(e, *noTLS)
 	e.appendBlock(starterAuth(grants, oidc))

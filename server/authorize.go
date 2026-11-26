@@ -260,6 +260,11 @@ func (s *Server) sessionStands(se session) bool {
 		if s.oidc == nil || !s.policy.OIDC() {
 			return false
 		}
+		// a sign-in at another issuer (the other controller of a pair on
+		// another auth.oidc.issuer) acts not here, whatever the pins say
+		if s.oidcIssuer != "" && se.issuer != s.oidcIssuer {
+			return false
+		}
 		pin, ok, err := s.users.Pin(se.user)
 		if err != nil || !ok || !pin.Same(se.issuer, se.sub) {
 			return false

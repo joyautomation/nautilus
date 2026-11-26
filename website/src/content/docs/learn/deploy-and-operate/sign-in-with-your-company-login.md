@@ -315,8 +315,10 @@ what is checked.
 - **Signing out is not signing out of the company login.** On a shared screen the
   next person who presses *Sign in* may come straight back in as the last one while
   the company session lasts. Sign out at the provider too, or keep its sessions short.
-- **A redundant pair** cannot use this yet: the controller refuses `auth.oidc`
-  together with `redundancy:`, and says so.
+- **On a redundant pair** set `NAUTILUS_OIDC_SECRET` on both controllers and
+  register both controllers' callback addresses at the provider. A person stays
+  signed in when the other controller takes over if they use one address for the
+  pair; see [the auth guide](/guides/auth/#a-redundant-pair).
 
 ## Next
 

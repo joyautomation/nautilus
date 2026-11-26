@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -435,7 +436,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !pin.Same(id.Issuer, id.Subject) {
-		refuse(http.StatusForbidden, "oidc:"+name+" is pinned to another account at this provider; if this is a re-created account, run naut users unpin "+name+" on the controller", "pinned to another account")
+		refuse(http.StatusForbidden, "oidc:"+name+" is pinned to another account at this provider; if this is a re-created account, run naut users unpin "+name+" on the controller (on a redundant pair, on both controllers)", "pinned to another account")
 		return
 	}
 	// A fresh id at every sign-in. The session cookie is SameSite=Strict,
@@ -546,3 +547,44 @@ const oidcHopPageHTML = `<!doctype html>
 <style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;background:Canvas;color:CanvasText}</style>
 </head><body><main><p>{{.Msg}} <a href="{{.Next}}">Continue</a></p></main></body></html>
 `
+
+// pinFromLog pins the name of an OIDC session the operator log brought
+// from the other controller of a pair (#710): its sign-in there pinned the
+// name to that account, and this controller holds the same pin, so the
+// session acts here after a takeover and no other account can take the
+// name here first. Only a session that would stand here is used: this
+// controller's issuer, not signed out here. A name pinned here to
+// another account keeps its pin: the session does not act here, and the
+// journal names the fix. Nothing is pinned that the session's own
+// sign-in did not (a sign-out or an unpin ended it before it was adopted).
+func (s *Server) pinFromLog(se session) {
+	if !se.oidc || s.oidc == nil || s.users == nil || !s.policy.OIDC() {
+		return
+	}
+	target := se.key()
+	refused := func(reason, fix string) {
+		slog.Warn("auth: a sign-in from the other controller does not act here", "user", target, "reason", reason, "fix", fix)
+		s.audit.record(audit.Entry{User: "system", Source: audit.SourceSystem, Action: "auth.pin", Target: target, Session: se.hash,
+			Result: audit.ResultRefused, Detail: map[string]any{"from": "the other controller", "reason": reason, "fix": fix}})
+	}
+	if s.oidcIssuer == "" || se.issuer != s.oidcIssuer {
+		refused("signed in at issuer "+se.issuer+", not this controller's auth.oidc.issuer "+s.oidcIssuer,
+			"give both controllers the same auth.oidc.issuer (deploy the same project to both), then sign in again")
+		return
+	}
+	if at, out, err := s.users.SignedOut(target); err != nil || out && !se.created.After(at) {
+		return // it acts nowhere: nothing to pin
+	}
+	pin, fresh, err := s.users.PinFirst(se.user, se.issuer, se.sub, s.sessions.clock())
+	switch {
+	case err != nil:
+		refused("this controller cannot record which account "+se.user+" is: "+err.Error(),
+			"see the journal's users.unavailable entry for which file in this controller's state directory to fix, then sign in again")
+	case !pin.Same(se.issuer, se.sub):
+		refused("the name is pinned to another account at the provider on this controller",
+			"if the account was re-created at the provider, run naut users unpin "+se.user+" on both controllers, then sign in again")
+	case fresh:
+		s.audit.record(audit.Entry{User: "system", Source: audit.SourceSystem, Action: "auth.pin", Target: target, Session: se.hash,
+			Result: audit.ResultOK, Detail: map[string]any{"from": "the other controller", "issuer": se.issuer, "subject": se.sub}})
+	}
+}

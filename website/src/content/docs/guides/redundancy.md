@@ -281,6 +281,10 @@ never computes.
   (the account chip says "local session", and the journal records it), and is
   replicated once the log returns. A copy of the log that is not known complete
   honours only local sessions.
+  An operator signed in through an OIDC provider stays signed in across a
+  takeover in the same way; each controller signs in at the provider with its
+  own copy of `auth.oidc`, and the other controller pins the name to the same
+  account ([OIDC on a pair](/guides/auth/#a-redundant-pair)).
   When a controller briefly refuses a request for that reason (the browser sees
   a transient refusal), the operator is asked to sign in again and gets a local
   session, so nobody is locked out.
