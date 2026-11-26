@@ -586,8 +586,8 @@ func dialectLibraries(fsys fs.FS) ([]dialect.Library, error) {
 		if err != nil {
 			continue
 		}
-		if pts, err := p.Select(d.Points); err == nil {
-			structs = append(structs, devprofile.Struct{Name: p.TypeName(), Points: pts})
+		if sel, err := p.SelectAll(d.Points); err == nil {
+			structs = append(structs, devprofile.Struct{Name: p.TypeName(), Points: sel.Points, Derived: sel.Derived})
 		}
 	}
 	if src := devprofile.TypesST(structs); src != "" {

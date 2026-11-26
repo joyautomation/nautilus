@@ -123,6 +123,11 @@ notes: what is simplified and what is not modelled
   `REAL` → `float32`); a scaled point is `REAL` or `LREAL`.
 - `repeat: N` expands a row N times, `{n}` substituted and the address
   advanced by `stride` (default: one value's width).
+- `derived:` rows (`{ name, from, bit | eq, doc }`) are BOOL members of a
+  device's struct computed from a polled integer point (a bit of a status word,
+  a code equal to a value) so an alarm can name them; they cite like points,
+  are never polled or simulated, and a row's `points:` selecting one selects
+  its source (device-library.md §3.3).
 - **Provenance is mandatory**: every row cites a `docs:` entry with a
   section or page, or says `unverified: true`. Unverified rows keep a device
   working where the public documents are silent, and `naut devices show`

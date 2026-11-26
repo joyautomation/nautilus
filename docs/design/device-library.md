@@ -235,16 +235,41 @@ standby's takeover.
 ### 3.3 Derived points
 
 Alarms are BOOL-only, and many faults are bits of a word or a code. A
-profile may declare **derived points**:
+profile may declare **derived points**, a `derived:` list beside `points:`:
 
 ```yaml
-- { name: Tripped, type: BOOL, from: StatusWord, bit: 3, doc: "fena p. 95" }
-- { name: SensorBreak, type: BOOL, from: Loop1Error, eq: 39, doc: "mct4 p. 176 *B11" }
+derived:
+  - { name: Tripped, from: StatusWord, bit: 3, doc: "fena pp. 93-94" }
+  - { name: SensorBreak, from: Loop1Error, eq: 39, doc: "mct4 p. 172 register 39, *B11 p. 176" }
 ```
 
-They are members of the struct, computed by the adapter from the point
-they name; they are never polled, and a virtual device computes them
-the same way.
+`from` names a polled integer point (INT UINT WORD DINT UDINT DWORD, not
+another derived point); exactly one of `bit` (inside the source's width) and
+`eq` is given; each cites a document or says `unverified`, as a point does.
+(It is `derived:` and not a `from:` on a point because a point's `from` is
+the repeat start.)
+
+- They are BOOL members of the struct, after the polled ones, computed by
+  the adapter when the source arrives; they are never polled, written or in a
+  manifest. A virtual device's simulator keeps only the source point, so the
+  controller computes them from the register the way it does from a real
+  device. A derived point is false until its source has been delivered, so
+  `eq: 0` is not true for a register the device never answered.
+- **On comms loss** a derived point holds its last value, exactly as its
+  source member does (a delivery without the source recomputes from the held
+  value); the device's quality and `<Device>__Online` say the data is old.
+  `eq` must be a value the source's type can hold, or the profile is refused
+  (it could never be true).
+- A row's `points:` globs match derived names too. **Selecting a derived
+  point selects its source** (the struct has no member the adapter could not
+  compute), so `points: [Tripped]` gives `StatusWord` and `Tripped`.
+- Devices of one type must have the same members, derived included.
+- **Deploy targets.** The adapter is the nautilus runtime's. Neither the
+  Logix nor the Siemens writer carries `devices:` rows: the device type would
+  be written and nothing on the controller would fill it, so no member (a
+  derived one included) could be trusted. `naut check` against either target
+  therefore refuses a project with `devices:` rows, naming the gap.
+- `naut devices render` lists them under `# derived`.
 
 ### 3.4 Alarms
 
