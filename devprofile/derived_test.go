@@ -34,7 +34,7 @@ func TestDerivedValidation(t *testing.T) {
 		{`  - { name: Tripped, from: Word, bit: 3, doc: "zz p. 2" }`, "not the id of a document"},
 		{`  - { name: "2bad", from: Word, bit: 3, doc: "m p. 2" }`, "IEC identifier"},
 	} {
-		_, err := ParseProfile([]byte(derivedBase + tc.row + "\n"), "x.yaml")
+		_, err := ParseProfile([]byte(derivedBase+tc.row+"\n"), "x.yaml")
 		switch {
 		case tc.want == "" && err != nil:
 			t.Errorf("%s: %v", tc.row, err)
@@ -69,7 +69,7 @@ func TestDerivedEval(t *testing.T) {
 // source alone does not select the derived point; a glob that matches
 // neither is still an error.
 func TestSelectAllPullsTheSource(t *testing.T) {
-	p, err := ParseProfile([]byte(derivedBase + `  - { name: Tripped, from: Word, bit: 3, doc: "m p. 2" }` + "\n"), "x.yaml")
+	p, err := ParseProfile([]byte(derivedBase+`  - { name: Tripped, from: Word, bit: 3, doc: "m p. 2" }`+"\n"), "x.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +106,7 @@ func TestSelectAllPullsTheSource(t *testing.T) {
 }
 
 func TestTypesSTCarriesDerived(t *testing.T) {
-	p, err := ParseProfile([]byte(derivedBase + `  - { name: Tripped, from: Word, bit: 3, desc: "tripped", doc: "m p. 2" }` + "\n"), "x.yaml")
+	p, err := ParseProfile([]byte(derivedBase+`  - { name: Tripped, from: Word, bit: 3, desc: "tripped", doc: "m p. 2" }`+"\n"), "x.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
