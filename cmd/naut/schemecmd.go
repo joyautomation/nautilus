@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/joyautomation/nautilus/internal/assetpages"
 	"github.com/joyautomation/nautilus/internal/plant"
 	"github.com/joyautomation/nautilus/internal/project"
 )
@@ -358,7 +359,7 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 					e.Bind[k] = plant.Expand(v, s.eq.Tag)
 				}
 			}
-			panel := typePanel(s.typ, s.eq.Tag)
+			panel := assetpages.TypePanel(s.typ, s.eq.Tag)
 			panel["title"] = label
 			e.Panel = panel
 		}

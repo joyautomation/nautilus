@@ -1,4 +1,8 @@
-package main
+// Package assetpages makes the HMI's asset and area descriptors (#714) from
+// the plant model and the device rows. It takes both as arguments and
+// imports no manifest, so the CLI and the playground's wasm build the same
+// pages from the same code.
+package assetpages
 
 import (
 	"encoding/json"
@@ -7,30 +11,29 @@ import (
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/plant"
-	"github.com/joyautomation/nautilus/internal/project"
 )
 
-// deviceAssets are the asset pages (#714) a project's devices: rows make:
+// DeviceAssets are the asset pages (#714) a project's devices: rows make:
 // one descriptor per device, for the HMI kit's <AssetPage/>. What the
 // device answers is a reading (a true/false as words, a number with its
 // unit), what the controller may write is a command (a BOOL) or a setpoint
 // (a number), through the command tag the row declares. A device with no
 // rows makes none.
-func deviceAssets(proj *project.Project) []json.RawMessage {
+func DeviceAssets(pl *plant.Plant, devs []devbind.DevicePoints) []json.RawMessage {
 	var out []json.RawMessage
 	inPlant := map[string]bool{}
-	if proj.Plant != nil {
-		for _, e := range proj.Plant.Equipment {
+	if pl != nil {
+		for _, e := range pl.Equipment {
 			if e.Device != "" {
 				inPlant[strings.ToLower(e.Device)] = true
 			}
 		}
 	}
-	for _, d := range proj.Devices().DevicePoints() {
+	for _, d := range devs {
 		if inPlant[strings.ToLower(d.Device)] {
 			continue // the plant's equipment for it makes the page
 		}
-		if b, err := json.Marshal(deviceAsset(d)); err == nil {
+		if b, err := json.Marshal(DeviceAsset(d)); err == nil {
 			out = append(out, b)
 		}
 	}
@@ -64,7 +67,7 @@ type assetSetpoint struct {
 	Max      *float64 `json:"max,omitempty"`
 }
 
-func deviceAsset(d devbind.DevicePoints) map[string]any {
+func DeviceAsset(d devbind.DevicePoints) map[string]any {
 	var readings []assetReading
 	var commands []assetCommand
 	var setpoints []assetSetpoint
@@ -138,12 +141,11 @@ func decimalsOf(pt devprofile.Point) *int {
 	return &n
 }
 
-// plantAssets are the asset pages the plant model makes (#714): one per
+// PlantAssets are the asset pages the plant model makes (#714): one per
 // equipment, titled and placed by the plant. A device's page is made from
 // its profile's points; a tag's from its asset type, each entry's {tag}
 // filled with the equipment's tag.
-func plantAssets(proj *project.Project) []json.RawMessage {
-	pl := proj.Plant
+func PlantAssets(pl *plant.Plant, devs []devbind.DevicePoints) []json.RawMessage {
 	if pl == nil {
 		return nil
 	}
@@ -156,22 +158,22 @@ func plantAssets(proj *project.Project) []json.RawMessage {
 		areas[strings.ToLower(a.ID)] = label
 	}
 	devices := map[string]devbind.DevicePoints{}
-	for _, d := range proj.Devices().DevicePoints() {
+	for _, d := range devs {
 		devices[strings.ToLower(d.Device)] = d
 	}
 	var out []json.RawMessage
 	for _, e := range pl.Equipment {
 		var a map[string]any
-		key := tagRoot(e.Tag)
+		key := TagRoot(e.Tag)
 		if e.Device != "" {
 			d, ok := devices[strings.ToLower(e.Device)]
 			if !ok {
 				continue // naut check says so
 			}
-			a = deviceAsset(d)
+			a = DeviceAsset(d)
 			key = e.Device
 		} else if t := pl.Type(e.Type); t != nil {
-			a = map[string]any{"panel": typePanel(t, e.Tag)}
+			a = map[string]any{"panel": TypePanel(t, e.Tag)}
 		} else {
 			continue
 		}
@@ -210,8 +212,8 @@ func plantAssets(proj *project.Project) []json.RawMessage {
 	return out
 }
 
-// typePanel is an asset type's panel for the equipment whose tag is tag.
-func typePanel(t *plant.AssetType, tag string) map[string]any {
+// TypePanel is an asset type's panel for the equipment whose tag is tag.
+func TypePanel(t *plant.AssetType, tag string) map[string]any {
 	x := func(s string) string { return plant.Expand(s, tag) }
 	var readings []assetReading
 	for _, r := range t.Readings {
@@ -253,19 +255,18 @@ func typePanel(t *plant.AssetType, tag string) map[string]any {
 	return panel
 }
 
-// tagRoot is a tag path's first element: the alarm engine's default
+// TagRoot is a tag path's first element: the alarm engine's default
 // equipment for an alarm on Plant.Pump1.Fault is "Plant".
-func tagRoot(tag string) string {
+func TagRoot(tag string) string {
 	if i := strings.IndexAny(tag, ".["); i > 0 {
 		return tag[:i]
 	}
 	return tag
 }
 
-// plantAreas are the plant model's areas for the HMI's area pages: each
+// PlantAreas are the plant model's areas for the HMI's area pages: each
 // with the ids of its equipment that have a page, in the plant's order.
-func plantAreas(proj *project.Project, assets []json.RawMessage) []json.RawMessage {
-	pl := proj.Plant
+func PlantAreas(pl *plant.Plant, assets []json.RawMessage) []json.RawMessage {
 	if pl == nil {
 		return nil
 	}
@@ -294,4 +295,11 @@ func plantAreas(proj *project.Project, assets []json.RawMessage) []json.RawMessa
 		}
 	}
 	return out
+}
+
+// For is every asset descriptor a project's plant and devices make (the
+// plant's pages first), and the plant's areas listing them.
+func For(pl *plant.Plant, devs []devbind.DevicePoints) (assets, areas []json.RawMessage) {
+	assets = append(PlantAssets(pl, devs), DeviceAssets(pl, devs)...)
+	return assets, PlantAreas(pl, assets)
 }

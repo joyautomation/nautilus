@@ -18,6 +18,7 @@ import (
 	"syscall/js"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/assetpages"
 	"github.com/joyautomation/nautilus/internal/project"
 )
 
@@ -54,6 +55,8 @@ func startHMI(proj *project.Project, root string) *hmiBuild {
 		src = proj.HMIApp + "/"
 	case proj.HMIScreens:
 		src = "the project's mimics"
+	case proj.HMIPlant:
+		src = "the plant model's pages"
 	default:
 		return nil
 	}
@@ -62,14 +65,19 @@ func startHMI(proj *project.Project, root string) *hmiBuild {
 	if proj.HMIApp != "" {
 		b.req.App = path.Join(root, proj.HMIApp)
 	}
+	// The plant model's and the devices' asset pages (#714): the same
+	// descriptors naut run builds, handed to the screen builder as data.
+	b.req.Assets, b.req.Areas = assetpages.For(proj.Plant, proj.Devices().DevicePoints())
 	b.root = root
 	return b
 }
 
 // hmiRequest is what the builder module is asked (cmd/naut-wasm-hmi).
 type hmiRequest struct {
-	App   string `json:"app"`
-	Title string `json:"title"`
+	App    string            `json:"app"`
+	Title  string            `json:"title"`
+	Assets []json.RawMessage `json:"assets,omitempty"`
+	Areas  []json.RawMessage `json:"areas,omitempty"`
 }
 
 // start begins the build, once, in the background.
