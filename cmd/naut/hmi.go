@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/assetpages"
 	"github.com/joyautomation/nautilus/internal/hmibuild"
 	"github.com/joyautomation/nautilus/internal/hmicheck"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -47,8 +48,8 @@ func buildHMI(proj *project.Project, dir string) (*hmibuild.Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := hmibuild.Options{Project: abs, Title: proj.Name, Minify: true, Checkout: proj.Checkout != nil, Assets: append(plantAssets(proj), deviceAssets(proj)...)}
-	opts.Areas = plantAreas(proj, opts.Assets)
+	opts := hmibuild.Options{Project: abs, Title: proj.Name, Minify: true, Checkout: proj.Checkout != nil}
+	opts.Assets, opts.Areas = assetpages.For(proj.Plant, proj.Devices().DevicePoints())
 	if proj.PWA != nil || proj.PWAIcon != nil {
 		opts.PWA = &hmibuild.PWA{Icon: proj.PWAIcon}
 		if c := proj.PWA; c != nil {

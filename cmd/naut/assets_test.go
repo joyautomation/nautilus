@@ -9,6 +9,7 @@ import (
 
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
+	"github.com/joyautomation/nautilus/internal/assetpages"
 	"github.com/joyautomation/nautilus/internal/project"
 )
 
@@ -22,7 +23,7 @@ func TestDeviceAssetSplitsReadingsFromWrites(t *testing.T) {
 		{Name: "SpeedRef", Type: "REAL", Unit: "rpm", Writable: true, Desc: "Speed reference"},
 		{Name: "Start", Type: "BOOL", Writable: true},
 	}}
-	b, err := json.Marshal(deviceAsset(d))
+	b, err := json.Marshal(assetpages.DeviceAsset(d))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,8 +86,8 @@ func TestDeviceAssetsFromARow(t *testing.T) {
 	if len(pts) != 1 || pts[0].Device != "CONV" || len(pts[0].Points) == 0 {
 		t.Fatalf("device points %+v", pts)
 	}
-	if deviceAsset(pts[0])["id"] != "CONV" {
-		t.Errorf("asset %v", deviceAsset(pts[0]))
+	if assetpages.DeviceAsset(pts[0])["id"] != "CONV" {
+		t.Errorf("asset %v", assetpages.DeviceAsset(pts[0]))
 	}
 }
 
@@ -144,7 +145,7 @@ trend: ["{tag}_Flow"]
 // page of its own.
 func TestPlantAssets(t *testing.T) {
 	p := plantTestProject(t)
-	list := plantAssets(p)
+	list := assetpages.PlantAssets(p.Plant, p.Devices().DevicePoints())
 	if len(list) != 2 {
 		t.Fatalf("%d assets, want the pump and the belt", len(list))
 	}
@@ -194,7 +195,7 @@ func TestPlantAssets(t *testing.T) {
 	}
 	// CONV is the plant's Belt1; CONV2 is in no plant equipment and keeps its own page
 	var ids []string
-	for _, d := range deviceAssets(p) {
+	for _, d := range assetpages.DeviceAssets(p.Plant, p.Devices().DevicePoints()) {
 		var a struct{ ID string }
 		_ = json.Unmarshal(d, &a)
 		ids = append(ids, a.ID)
@@ -206,15 +207,15 @@ func TestPlantAssets(t *testing.T) {
 
 func TestNoPlantNoPlantAssets(t *testing.T) {
 	p := &project.Project{}
-	if got := plantAssets(p); got != nil {
+	if got := assetpages.PlantAssets(p.Plant, p.Devices().DevicePoints()); got != nil {
 		t.Errorf("a project with no plant makes %d", len(got))
 	}
 }
 
 func TestTagRootIsTheAlarmEnginesDefaultEquipment(t *testing.T) {
 	for in, want := range map[string]string{"P101": "P101", "Plant.Pump1": "Plant", "Tags[3].Run": "Tags"} {
-		if got := tagRoot(in); got != want {
-			t.Errorf("tagRoot(%q) = %q, want %q", in, got, want)
+		if got := assetpages.TagRoot(in); got != want {
+			t.Errorf("TagRoot(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -238,7 +239,7 @@ func TestPlantIDAgainstAnUnnamedDevicesPage(t *testing.T) {
 func TestPlantAssetKeysAlarmsOnTheTagRoot(t *testing.T) {
 	p := plantTestProjectWith(t, "  - { id: Dot1, type: Pump, tag: P101.Inner }\n")
 	var found bool
-	for _, raw := range plantAssets(p) {
+	for _, raw := range assetpages.PlantAssets(p.Plant, p.Devices().DevicePoints()) {
 		var a struct{ ID, Equipment string }
 		_ = json.Unmarshal(raw, &a)
 		if a.ID == "Dot1" {
@@ -255,8 +256,8 @@ func TestPlantAssetKeysAlarmsOnTheTagRoot(t *testing.T) {
 
 func TestPlantAreasListTheEquipmentThatHasAPage(t *testing.T) {
 	p := plantTestProject(t)
-	assets := plantAssets(p)
-	areas := plantAreas(p, assets)
+	assets := assetpages.PlantAssets(p.Plant, p.Devices().DevicePoints())
+	areas := assetpages.PlantAreas(p.Plant, assets)
 	if len(areas) != 1 {
 		t.Fatalf("%d areas", len(areas))
 	}
@@ -270,10 +271,10 @@ func TestPlantAreasListTheEquipmentThatHasAPage(t *testing.T) {
 	if a.ID != "Receiving" || a.Label != "Receiving dock" || strings.Join(a.Assets, ",") != "P101,Belt1" {
 		t.Errorf("area %+v: the equipment with a page, in the plant's order", a)
 	}
-	if got := plantAreas(p, nil); len(got) != 1 || strings.Contains(string(got[0]), "P101") {
+	if got := assetpages.PlantAreas(p.Plant, nil); len(got) != 1 || strings.Contains(string(got[0]), "P101") {
 		t.Errorf("with no pages the area lists none: %s", got)
 	}
-	if plantAreas(&project.Project{}, nil) != nil {
+	if assetpages.PlantAreas(nil, nil) != nil {
 		t.Error("no plant, no areas")
 	}
 }
@@ -293,7 +294,7 @@ func TestDeviceAssetShowsDerivedMembersAndFlagsAlarmed(t *testing.T) {
 		Derived: []devprofile.Derived{{Name: "Tripped", Desc: "The drive has tripped", From: "StatusWord", Bit: &bit}},
 		Alarms:  map[string]bool{"tripped": true, "fault": true},
 	}
-	b, _ := json.Marshal(deviceAsset(d))
+	b, _ := json.Marshal(assetpages.DeviceAsset(d))
 	var a struct {
 		Panel struct {
 			Readings []struct {
@@ -327,7 +328,7 @@ func TestDeviceAssetShowsDerivedMembersAndFlagsAlarmed(t *testing.T) {
 	}
 	// one the profile does not alarm on keeps its Yes/No
 	d.Alarms = map[string]bool{}
-	b, _ = json.Marshal(deviceAsset(d))
+	b, _ = json.Marshal(assetpages.DeviceAsset(d))
 	var plain struct {
 		Panel struct {
 			Readings []struct {
@@ -362,8 +363,30 @@ func TestDeviceAssetFromAProfileCarriesItsTrippedAlarm(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal(deviceAsset(set.DevicePoints()[0]))
+	b, _ := json.Marshal(assetpages.DeviceAsset(set.DevicePoints()[0]))
 	if !strings.Contains(string(b), `"tag":"CONV.Tripped"`) || !strings.Contains(string(b), `"alarm":true`) {
 		t.Errorf("asset %s", b)
+	}
+}
+
+// assetpages.For is what naut hmi build and the playground both hand the
+// screen builder: the plant's pages, then the pages of devices the plant
+// does not name, and the areas listing the plant's.
+func TestForMakesTheAssetsAndAreasTheBuilderIsGiven(t *testing.T) {
+	p := plantTestProject(t)
+	assets, areas := assetpages.For(p.Plant, p.Devices().DevicePoints())
+	var ids []string
+	for _, raw := range assets {
+		var a struct{ ID string }
+		if err := json.Unmarshal(raw, &a); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, a.ID)
+	}
+	if got := strings.Join(ids, ","); got != "P101,Belt1,CONV2" {
+		t.Errorf("assets %s, want the plant's P101,Belt1 then the unnamed device CONV2", got)
+	}
+	if len(areas) != 1 || !strings.Contains(string(areas[0]), "Belt1") || strings.Contains(string(areas[0]), "CONV2") {
+		t.Errorf("areas %s", areas)
 	}
 }

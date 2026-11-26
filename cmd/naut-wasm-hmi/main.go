@@ -30,8 +30,10 @@ import (
 )
 
 type request struct {
-	App   string `json:"app"`
-	Title string `json:"title"`
+	App    string            `json:"app"`
+	Title  string            `json:"title"`
+	Assets []json.RawMessage `json:"assets"`
+	Areas  []json.RawMessage `json:"areas"`
 }
 
 func main() {
@@ -57,7 +59,7 @@ func build(root, optsJSON string) js.Value {
 	if err := json.Unmarshal([]byte(optsJSON), &rq); err != nil {
 		return failed([]string{"the screen builder was sent bad options: " + err.Error()})
 	}
-	res, err := hmibuild.Build(hmibuild.Options{Project: root, Title: rq.Title, App: rq.App, Minify: true, NoPWA: true})
+	res, err := hmibuild.Build(hmibuild.Options{Project: root, Title: rq.Title, App: rq.App, Assets: rq.Assets, Areas: rq.Areas, Minify: true, NoPWA: true})
 	if err != nil {
 		var be *hmibuild.Error
 		if errors.As(err, &be) {

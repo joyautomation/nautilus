@@ -112,3 +112,20 @@ test("a screen's image and font are built into the screen byte for byte", () => 
 	assert.deepEqual(built('.png').map(([, h]) => h), [sha(png)], 'the PNG was changed on the way: ' + Object.keys(r.sha).join(', '));
 	assert.deepEqual(built('.woff').map(([, h]) => h), [sha(font)], 'the font was changed on the way');
 });
+
+test("asset pages from the plant model build into the playground's screens (#714)", () => {
+	// What startHMI hands the builder for a project with a plant: the descriptors and areas
+	// naut run builds (cmd/naut-wasm/hmi_test.go checks they are made). The module
+	// has to pass them on to the build.
+	const asset = { id: 'P101', title: 'Transfer pump', area: 'Receiving dock', panel: { title: 'Transfer pump', readings: [{ tag: 'P101', label: 'State' }] } };
+	const base = { root: '/project', files: { 'nautilus.yaml': 'name: t\n' } };
+	const without = run('assets-none', { ...base, opts: { app: '', title: 't' } });
+	const withAssets = run('assets-some', {
+		...base,
+		opts: { app: '', title: 't', assets: [asset], areas: [{ id: 'Receiving', label: 'Receiving dock', assets: ['P101'] }] }
+	});
+	assert.equal(withAssets.ok, true, JSON.stringify(withAssets));
+	assert.ok(withAssets.pages.some((p) => p.includes('assets')), 'no asset page: ' + withAssets.pages.join(', '));
+	assert.ok(withAssets.pages.some((p) => p.includes('areas')), 'no area page: ' + withAssets.pages.join(', '));
+	assert.ok(!(without.pages || []).some((p) => p.includes('assets')), 'asset pages with no assets given');
+});
