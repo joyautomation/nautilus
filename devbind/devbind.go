@@ -357,8 +357,8 @@ func sameMembers(a, b devprofile.Struct) error {
 		return fmt.Errorf("with %d and %d derived members", len(a.Derived), len(b.Derived))
 	}
 	for i := range a.Derived {
-		if !strings.EqualFold(a.Derived[i].Name, b.Derived[i].Name) {
-			return fmt.Errorf("derived member %d differs (%s, %s)", i+1, a.Derived[i].Name, b.Derived[i].Name)
+		if !a.Derived[i].Same(b.Derived[i]) {
+			return fmt.Errorf("derived member %d differs (%s, %s: another source or test)", i+1, a.Derived[i].Name, b.Derived[i].Name)
 		}
 	}
 	for i := range a.Points {

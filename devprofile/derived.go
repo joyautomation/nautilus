@@ -34,6 +34,24 @@ func (d Derived) Eval(v int64) bool {
 	return d.Eq != nil && v == *d.Eq
 }
 
+// intRange is the values an integer IEC type holds.
+var intRange = map[string][2]int64{
+	"INT": {-32768, 32767}, "UINT": {0, 65535}, "WORD": {0, 65535},
+	"DINT": {-1 << 31, 1<<31 - 1}, "UDINT": {0, 1<<32 - 1}, "DWORD": {0, 1<<32 - 1},
+}
+
+// Same reports whether two derived points compute the same thing from the
+// same point, so a device type's two rows agree on what a member means.
+func (d Derived) Same(o Derived) bool {
+	if !strings.EqualFold(d.Name, o.Name) || !strings.EqualFold(d.From, o.From) {
+		return false
+	}
+	if (d.Bit == nil) != (o.Bit == nil) || (d.Eq == nil) != (o.Eq == nil) {
+		return false
+	}
+	return (d.Bit == nil || *d.Bit == *o.Bit) && (d.Eq == nil || *d.Eq == *o.Eq)
+}
+
 // intBits is the width of the integer IEC types a derived point may read.
 var intBits = map[string]int{"INT": 16, "UINT": 16, "WORD": 16, "DINT": 32, "UDINT": 32, "DWORD": 32}
 
@@ -78,6 +96,11 @@ func (p *Profile) validateDerived(seen map[string]bool) error {
 		}
 		if d.Bit != nil && (*d.Bit < 0 || *d.Bit >= bits) {
 			return fmt.Errorf("derived %s: bit %d is outside the %d bits of %s (%s)", d.Name, *d.Bit, bits, src.Name, src.Type)
+		}
+		if d.Eq != nil {
+			if r := intRange[strings.ToUpper(src.Type)]; *d.Eq < r[0] || *d.Eq > r[1] {
+				return fmt.Errorf("derived %s: eq %d is outside %s's range %d..%d, so it could never be true", d.Name, *d.Eq, src.Type, r[0], r[1])
+			}
 		}
 	}
 	return nil

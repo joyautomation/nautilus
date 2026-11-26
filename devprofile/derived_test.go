@@ -32,6 +32,9 @@ func TestDerivedValidation(t *testing.T) {
 		{`  - { name: Word, from: Code, eq: 1, doc: "m p. 2" }`, "already a point"},
 		{`  - { name: Tripped, from: Word, bit: 3 }`, "cite a document"},
 		{`  - { name: Tripped, from: Word, bit: 3, doc: "zz p. 2" }`, "not the id of a document"},
+		{`  - { name: Broken, from: Code, eq: 70000, doc: "m p. 2" }`, "outside UINT's range"},
+		{`  - { name: Broken, from: Code, eq: -1, doc: "m p. 2" }`, "outside UINT's range"},
+		{`  - { name: Broken, from: Other, eq: -1, doc: "m p. 2" }`, ""},
 		{`  - { name: "2bad", from: Word, bit: 3, doc: "m p. 2" }`, "IEC identifier"},
 	} {
 		_, err := ParseProfile([]byte(derivedBase+tc.row+"\n"), "x.yaml")
@@ -114,5 +117,23 @@ func TestTypesSTCarriesDerived(t *testing.T) {
 	src := TypesST([]Struct{{Name: "X", Points: sel.Points, Derived: sel.Derived}})
 	if !strings.Contains(src, "    Tripped : BOOL; (* tripped *)\n") || strings.Index(src, "Tripped") < strings.Index(src, "Other") {
 		t.Errorf("types:\n%s", src)
+	}
+}
+
+func TestDerivedSame(t *testing.T) {
+	b3, b4, e := 3, 4, int64(3)
+	d := Derived{Name: "T", From: "W", Bit: &b3}
+	for _, tc := range []struct {
+		o    Derived
+		want bool
+	}{
+		{Derived{Name: "t", From: "w", Bit: &b3}, true},
+		{Derived{Name: "T", From: "W", Bit: &b4}, false},
+		{Derived{Name: "T", From: "X", Bit: &b3}, false},
+		{Derived{Name: "T", From: "W", Eq: &e}, false},
+	} {
+		if got := d.Same(tc.o); got != tc.want {
+			t.Errorf("Same(%+v) = %v", tc.o, got)
+		}
 	}
 }

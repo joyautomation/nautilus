@@ -255,6 +255,11 @@ the repeat start.)
   controller computes them from the register the way it does from a real
   device. A derived point is false until its source has been delivered, so
   `eq: 0` is not true for a register the device never answered.
+- **On comms loss** a derived point holds its last value, exactly as its
+  source member does (a delivery without the source recomputes from the held
+  value); the device's quality and `<Device>__Online` say the data is old.
+  `eq` must be a value the source's type can hold, or the profile is refused
+  (it could never be true).
 - A row's `points:` globs match derived names too. **Selecting a derived
   point selects its source** (the struct has no member the adapter could not
   compute), so `points: [Tripped]` gives `StatusWord` and `Tripped`.

@@ -154,3 +154,41 @@ func TestDerivedMembersMustAgreeAcrossRowsOfAType(t *testing.T) {
 		t.Error("rows with a derived member in one and a polled one in the other share a type")
 	}
 }
+
+// One member held while another moves: a derived point follows its source's
+// held value, so a comms loss (which leaves every member at its last value)
+// leaves it at what the last delivered source said; it is never reset.
+func TestDerivedHoldsWithItsSource(t *testing.T) {
+	s := derivedSet(t, "Tripped", "Current")
+	a := newAssembler(s.devices[0])
+	vals := map[string]any{"CONV.StatusWord": int64(0x08), "CONV.Current": 1.0}
+	a.take(vals)
+	vals = map[string]any{"CONV.Current": 2.0} // the source is not in this delivery
+	a.take(vals)
+	v := vals["CONV"].(ir.Value)
+	if !field(v, "Tripped").B || field(v, "Current").F != 2 {
+		t.Errorf("Tripped %v after a delivery without its source, want it held true", field(v, "Tripped").B)
+	}
+}
+
+// Two rows of one type whose profiles' derived points differ in what they
+// test are not one type.
+func TestDerivedSameNameDifferentTestIsNotOneType(t *testing.T) {
+	other := strings.Replace(string(builtin(t, "abb-acs355-fmbt21")), "profile: abb-acs355-fmbt21", "profile: p4", 1)
+	other = strings.Replace(other, "from: StatusWord, bit: 3,", "from: StatusWord, bit: 4,", 1)
+	// both profiles name one type (a profile's udt: key), as two layouts of one device do
+	shared := func(raw, id string) []byte {
+		return []byte(strings.Replace(raw, "profile: "+id, "profile: "+id+"\nudt: SHARED", 1))
+	}
+	fsys := fstest.MapFS{
+		"profiles/abb-acs355-fmbt21.yaml": &fstest.MapFile{Data: shared(string(builtin(t, "abb-acs355-fmbt21")), "abb-acs355-fmbt21")},
+		"profiles/p4.yaml":                &fstest.MapFile{Data: shared(other, "p4")},
+	}
+	_, err := Resolve(fsys, []Device{
+		{Name: "A", Profile: "abb-acs355-fmbt21", Endpoint: "h", Points: []string{"Tripped"}},
+		{Name: "B", Profile: "p4", Endpoint: "h", Points: []string{"Tripped"}},
+	})
+	if err == nil {
+		t.Fatal("two profiles sharing a type name with different bits were accepted")
+	}
+}
