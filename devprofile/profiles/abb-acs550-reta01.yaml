@@ -27,6 +27,10 @@ points:
 derived:
   - { name: Tripped, from: StatusWord, bit: 3, desc: "The drive has tripped (ABB Drives profile status word bit 3)", doc: "fena pp. 93-94" }
 
+# Raised by default while the device answers; a project's own alarms: win.
+alarms:
+  - { point: Tripped, name: "{desc} tripped", priority: high, class: drive }
+
 simulator: { block: ABB_DRIVES_SIM, source: abb-drives.st }
 notes: |
   Parameters other than the motor current are not mapped; reading one answers

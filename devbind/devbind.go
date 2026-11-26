@@ -21,10 +21,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
+	"gopkg.in/yaml.v3"
 )
 
 // Device is one row of a project's devices: list.
@@ -62,6 +64,78 @@ type Device struct {
 	// (#705). Nothing consumes them yet, so a row may name only ports its
 	// profile declares (devprofile.Profile.IOLinkPorts).
 	Ports map[int]Port `yaml:"ports"`
+	// OfflineAlarm tunes or turns off the comms-loss alarm the device
+	// raises while it does not answer (<Device>__Offline): nil keeps the
+	// default (high priority, 5 s on-delay); a mapping sets priority and
+	// on-delay; false turns it off, which `naut check` warns about, since the
+	// device's other alarms are suppressed meanwhile.
+	OfflineAlarm *OfflineAlarm `yaml:"offline-alarm"`
+}
+
+// OfflineAlarm is a row's offline-alarm: false, true, or {priority,
+// on-delay}.
+type OfflineAlarm struct {
+	// Off is set by `offline-alarm: false`.
+	Off bool
+	// Priority is one of devprofile.AlarmPriorities; "" keeps the default.
+	Priority string
+	// OnDelay is a duration like "30s"; "" keeps the default.
+	OnDelay string
+}
+
+// UnmarshalYAML reads false, true or a mapping of priority and on-delay; any
+// other key or value is an error, so a typo cannot turn the alarm off.
+func (o *OfflineAlarm) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		var b bool
+		if err := node.Decode(&b); err != nil {
+			return fmt.Errorf("line %d: offline-alarm: want false, true or {priority, on-delay}, not %q", node.Line, node.Value)
+		}
+		*o = OfflineAlarm{Off: !b}
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: offline-alarm: want false, true or {priority, on-delay}", node.Line)
+	}
+	// Keys are checked by hand: yaml.Marshal (what a strict re-decode would
+	// need) pulls the encoder into the playground's wasm.
+	var w struct {
+		Priority string `yaml:"priority"`
+		OnDelay  string `yaml:"on-delay"`
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if k := node.Content[i].Value; k != "priority" && k != "on-delay" {
+			return fmt.Errorf("line %d: offline-alarm: unknown key %q (want priority or on-delay)", node.Content[i].Line, k)
+		}
+	}
+	if err := node.Decode(&w); err != nil {
+		return fmt.Errorf("offline-alarm: %w", err)
+	}
+	*o = OfflineAlarm{Priority: w.Priority, OnDelay: w.OnDelay}
+	return nil
+}
+
+// checkOfflineAlarm validates the row's offline-alarm.
+func (d *device) checkOfflineAlarm(where string) error {
+	o := d.OfflineAlarm
+	if o == nil {
+		return nil
+	}
+	if o.Priority != "" {
+		ok := false
+		for _, n := range devprofile.AlarmPriorities {
+			ok = ok || strings.EqualFold(n, o.Priority)
+		}
+		if !ok {
+			return fmt.Errorf("%s: offline-alarm priority %q (want one of %s)", where, o.Priority, strings.Join(devprofile.AlarmPriorities, ", "))
+		}
+	}
+	if o.OnDelay != "" {
+		if dur, err := time.ParseDuration(o.OnDelay); err != nil || dur < 0 {
+			return fmt.Errorf("%s: offline-alarm on-delay %q is not a duration like 30s", where, o.OnDelay)
+		}
+	}
+	return nil
 }
 
 // Port is one IO-Link port of a master's row.
@@ -146,6 +220,9 @@ func Resolve(fsys fs.FS, rows []Device) (*Set, error) {
 			return nil, err
 		}
 		if err := d.checkValidate(where); err != nil {
+			return nil, err
+		}
+		if err := d.checkOfflineAlarm(where); err != nil {
 			return nil, err
 		}
 		structs := []struct {
@@ -567,4 +644,56 @@ func (s *Set) Derived() []DerivedRow {
 		}
 	}
 	return out
+}
+
+// AlarmRow is a default alarm of a device type (a profile's alarms: entry),
+// once per type that a row selects the point of. Priority and OnDelay are
+// "" when the profile left them out.
+type AlarmRow struct {
+	Type, Member, Name, Priority, OnDelay, Class, Notes string
+}
+
+// AlarmRows are the default alarms the rows' profiles declare: one per
+// (device type, point) for which some row has the point as a struct
+// member, so a row that does not select the point has no alarm on it.
+func (s *Set) AlarmRows() []AlarmRow {
+	if s == nil {
+		return nil
+	}
+	var out []AlarmRow
+	seen := map[string]bool{}
+	for _, d := range s.devices {
+		for _, a := range d.prof.Alarms {
+			member, ok := d.member(a.Point)
+			if !ok {
+				continue
+			}
+			k := strings.ToLower(d.prof.TypeName() + "." + member)
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, AlarmRow{
+				Type: d.prof.TypeName(), Member: member, Name: a.Name, Priority: a.Priority,
+				OnDelay: a.OnDelay, Class: a.Class, Notes: a.Notes,
+			})
+		}
+	}
+	return out
+}
+
+// member is the struct member called name (a selected BOOL point or derived
+// point), as the struct spells it.
+func (d *device) member(name string) (string, bool) {
+	for _, pt := range d.points {
+		if strings.EqualFold(pt.Name, name) {
+			return pt.Name, strings.EqualFold(pt.Type, "BOOL")
+		}
+	}
+	for _, dp := range d.derived {
+		if strings.EqualFold(dp.Name, name) {
+			return dp.Name, true
+		}
+	}
+	return "", false
 }

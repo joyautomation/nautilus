@@ -60,6 +60,7 @@ func TestDerivedPointIsComputedNotPolled(t *testing.T) {
 // read true for a register the device never answered.
 func TestDerivedWaitsForItsSource(t *testing.T) {
 	raw := strings.Replace(string(builtin(t, "abb-acs355-fmbt21")), "{ name: Tripped, from: StatusWord, bit: 3,", "{ name: Idle, from: Actual1, eq: 0,", 1)
+	raw = strings.Replace(raw, "{ point: Tripped,", "{ point: Idle,", 1)
 	fsys := fstest.MapFS{"profiles/p.yaml": &fstest.MapFile{Data: []byte(strings.Replace(raw, "profile: abb-acs355-fmbt21", "profile: p", 1))}}
 	s, err := Resolve(fsys, []Device{{Name: "CONV", Profile: "p", Endpoint: "h", Points: []string{"StatusWord", "Idle"}}})
 	if err != nil {

@@ -1055,6 +1055,20 @@
           "enum": ["live", "static"],
           "description": "How a live I/O configuration change checks this device: live probes it on a connection of its own, static checks the configuration only. Overrides the driver's validate:. Default: static when the profile documents modbus max-connections of 2 or fewer, else live. live on a profile documenting max-connections 1 is an error."
         },
+        "offline-alarm": {
+          "description": "The comms-loss alarm <Device>__Offline every device raises while it does not answer (its own alarms are suppressed meanwhile). Default: high priority, 5 s on-delay. A mapping tunes it; false turns it off on purpose, and naut check warns on every run that the device has none.",
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "priority": { "enum": ["diagnostic", "low", "medium", "high", "critical"], "description": "The alarm's priority." },
+                "on-delay": { "type": "string", "description": "How long the device must stay silent before the alarm raises, a duration like 30s." }
+              }
+            }
+          ]
+        },
         "ports": {
           "type": "object",
           "propertyNames": { "pattern": "^[0-9]+$" },

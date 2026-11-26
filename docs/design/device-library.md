@@ -274,26 +274,55 @@ the repeat start.)
 ### 3.4 Alarms
 
 A profile's `alarms:` names BOOL points (often derived), with the alarm
-fields (`priority`, `name`, `on-delay`, `class`):
+fields (`name`, `priority`, `on-delay`, `class`, `notes`):
 
 ```yaml
 alarms:
-  - { point: Tripped, name: "{desc} tripped", priority: high }
+  - { point: Tripped, name: "{desc} tripped", priority: high, class: drive }
 ```
 
 Each renders as an alarm rule over the profile's type (`match: {type,
-member}`), so one rule covers every device of that type. A project's own
-`alarms:` can override a rule by id or turn it off with `enable`.
-`{tag}__Online` comms-loss alarms come from the existing companions.
+member}`), so one rule covers every device of that type that selects the
+point (a row whose `points:` leaves it out has no such alarm). Alarms still
+have to be on: the project needs an `alarms:` section.
+
+- **A priority left out** is what any alarm with none gets: the project's
+  `alarms.defaults.priority`, else medium.
+- **A project's own `alarms:` win.** The device rules are matched after the
+  manifest's, so a project rule on the same member (first match wins) makes
+  the alarm instead; a hand-written alarm with the id a device rule generates
+  is the ordinary duplicate-id error, naming both sources (`devices:` and
+  the project's alarm).
+- **While the device does not answer**, its alarms are suppressed, not
+  frozen on: each rule carries `enable: "{tag}__Online"`, #715's designed
+  suppression (the same as an IO-Link port's identity fault with its
+  master). An alarm that cannot be evaluated is not an alarm of nothing, so
+  every `devices:` row also raises a **comms-loss alarm**, `<Device>__Offline`:
+  high priority, class `comms`, 5 s on-delay, raised while `<Device>__Online`
+  is false, **missing or not a BOOL** (it fails active: `enable:` reads the
+  same tag, and an alarm whose enable tag is missing or not a BOOL is
+  suppressed as unreadable, so a device not known to answer must raise, not go
+  quiet; the companion is in fact declared and seeded false at load) and never
+  suppressed by the device itself. The alarms: tuning overlay (#1249) reaches
+  it by the id `<Device>__Offline`. (It is a system alarm
+  because an alarm's condition is true-is-alarm and the driver's companion is
+  true-is-healthy.) Equipment out of service (#715) covers it with the
+  device's other alarms; the equipment is the device's name.
+- **No `alarms:` section, no alarms**: the profiles' alarms and the comms-loss
+  alarm are the engine's, so a project with `devices:` and no `alarms:` gets
+  none of them; `naut check` warns (`alarms: {}` turns them on).
+- **Tuning it:** a row's `offline-alarm:` takes `{priority, on-delay}`, or
+  `false` to turn it off on purpose (a typo or a bad value is a load error,
+  and `naut check` warns on every run that a device has none).
 
 Natural alarms for the first devices:
 
 | Device | Alarm | Point |
 |---|---|---|
-| ABB drives | tripped | status word bit 3 |
-| FDC MCT4 | sensor break | loop 1 error code 39 |
+| ABB drives | tripped | status word bit 3 (`Tripped`) |
+| FDC MCT4 | sensor break | loop 1 error code 39 (`SensorBreak`) |
 | IO-Link masters | port fault, where the master exposes one | per-port status |
-| relay boards | none of their own | comms loss through `__Online` |
+| relay boards | none of their own | the comms-loss alarm |
 
 ### 3.5 Faceplate
 

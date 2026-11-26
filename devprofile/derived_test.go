@@ -137,3 +137,32 @@ func TestDerivedSame(t *testing.T) {
 		}
 	}
 }
+
+func TestAlarmValidation(t *testing.T) {
+	for _, tc := range []struct{ alarms, want string }{
+		{`  - { point: Tripped, priority: high, on-delay: 2s }`, ""},
+		{`  - { point: Flag }`, ""},
+		{`  - { point: tripped, name: "{desc} t" }`, ""},
+		{`  - { point: Word }`, "not a BOOL point or derived point"},
+		{`  - { point: Nope }`, "not a BOOL point or derived point"},
+		{`  - { }`, "point: is required"},
+		{`  - { point: Tripped }` + "\n" + `  - { point: Tripped }`, "has an alarm already"},
+		{`  - { point: Tripped, priority: urgent }`, "priority"},
+		{`  - { point: Tripped, on-delay: soon }`, "on-delay"},
+		{`  - { point: Tripped, name: "{descr} tripped" }`, "unknown placeholder {descr}"},
+		{`  - { point: Tripped, name: "{desc tripped" }`, "unclosed"},
+		{`  - { point: Tripped, name: "desc} tripped" }`, "no {"},
+		{`  - { point: Tripped, name: "{tag}.{member} of {desc} ({type}, {path}, {site}, {area})" }`, ""},
+	} {
+		src := derivedBase + `  - { name: Tripped, from: Word, bit: 3, doc: "m p. 2" }` + "\nalarms:\n" + tc.alarms + "\n"
+		src = strings.Replace(src, "docs:\n", "docs:\n", 1)
+		src = strings.Replace(src, "points:\n", "points:\n  - { name: Flag, type: BOOL, table: coil, address: 9, doc: \"m p. 1\" }\n", 1)
+		_, err := ParseProfile([]byte(src), "x.yaml")
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", tc.alarms, err)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: err %v, want %q", tc.alarms, err, tc.want)
+		}
+	}
+}
