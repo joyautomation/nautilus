@@ -877,6 +877,14 @@ func (a *auditedRoute) answerAs(w http.ResponseWriter, r *http.Request, t auditT
 			}
 		}
 	}
+	if m := buf.header.Get(journalWarningHeader); m != "" {
+		d := map[string]any{"warning": capText(m, reasonMax)}
+		for k, v := range e.Detail {
+			d[k] = v
+		}
+		e.Detail = d
+	}
+	buf.header.Del(journalWarningHeader) // the seam's, never the client's
 	e.Before, e.After = audit.Cap(e.Before, valueCap), audit.Cap(e.After, valueCap)
 	a.s.audit.record(e)
 	buf.header.Del(linkReasonHeader) // the seam's, never the client's

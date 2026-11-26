@@ -170,6 +170,26 @@ func (s *Session) Close(ctx context.Context) error {
 	return err
 }
 
+// drop lets go of the held session after a failure that leaves the
+// routine in doubt: the next edit reopens it and reads the controller
+// before it computes what to replace.
+func (s *Session) drop() {
+	if s.s == nil {
+		return
+	}
+	off, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_, _ = s.s.GoOffline(off)
+	cancel()
+	// Its own time: a GoOffline that waited out its own must not leave
+	// the close none (the agent's close does not wait for a call still
+	// running on the session).
+	closing, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_ = s.s.Close(closing)
+	cancel()
+	s.s = nil
+	s.log("the online session is dropped: the next edit reopens it and reads the controller first")
+}
+
 // Edit replaces the routine's rungs with the program's as an online edit
 // and verifies. A session the agent has dropped (idle timeout, a restart)
 // is reopened once.
@@ -256,63 +276,79 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 	run := "edit-" + time.Now().UTC().Format("20060102-150405.000")
 	xpath := logixd.RoutinePath(s.prog, s.rout)
 	s.log("%d difference(s) from the controller; replacing %s/%s online (FinalizeEdits)", len(rep.Diffs), s.prog, s.rout)
+	var rel string
+	if s.t.Language == "st" {
+		rel = path.Join(run, rep.Controller+".routine.L5X")
+	} else {
+		rel = path.Join(run, rep.Controller+".rungs.L5X")
+	}
+	if err := s.c.PutFile(ctx, rel, partial); err != nil {
+		return done(err)
+	}
 	mode, _ := s.s.Mode(ctx)
 	rep.ModeBefore = string(mode)
+	// The point of no return (outcome.go, #1404): a cancel before here
+	// changed nothing; from the import on, only the deadline stops it.
+	if err := ctx.Err(); err != nil {
+		return done(err)
+	}
+	wctx, cancel := committed(ctx)
+	defer cancel()
+	// inDoubt is a failure from the import on that leaves the routine
+	// unknown: the session's rungs may no longer be the controller's, and
+	// an edit against them would replace the wrong count. The session is
+	// dropped, so the next edit reopens it and reads the controller first.
+	inDoubt := func(step string, err error) (*Report, error) {
+		s.drop()
+		return done(&OutcomeUnknownError{Step: step, Err: err})
+	}
 	var replaced uint32
+	step := "online rung import"
+	var evs []logixd.Event
+	var ierr error
 	if s.t.Language == "st" {
-		rel := path.Join(run, rep.Controller+".routine.L5X")
-		if err := s.c.PutFile(ctx, rel, partial); err != nil {
-			return done(err)
-		}
 		// A routine imports INTO its program: the target path is the
 		// container, and the routine's own path would make the SDK
 		// overwrite the routine with itself and fall over.
-		evs, err := s.s.ImportWithTarget(ctx, logixd.ProgramPath(s.prog), s.rout, rel, logixd.FinalizeEdits)
-		if err != nil {
-			if logixd.IsFatal(err) {
-				_ = s.s.Close(context.Background())
-				s.s = nil
-			}
-			return done(withEvents("online routine import", err, evs))
-		}
+		step = "online routine import"
+		evs, ierr = s.s.ImportWithTarget(wctx, logixd.ProgramPath(s.prog), s.rout, rel, logixd.FinalizeEdits)
 		replaced = uint32(len(s.lines))
 	} else {
-		rel := path.Join(run, rep.Controller+".rungs.L5X")
-		if err := s.c.PutFile(ctx, rel, partial); err != nil {
-			return done(err)
-		}
-		ir, evs, err := s.s.ImportRungs(ctx, xpath, 0, uint32(len(s.rungs)), rel, logixd.FinalizeEdits)
-		if err != nil {
-			if logixd.IsFatal(err) {
-				// The session is gone; the next edit reopens it.
-				_ = s.s.Close(context.Background())
-				s.s = nil
-			}
-			return done(withEvents("online rung import", err, evs))
-		}
+		var ir logixd.ImportRungsResult
+		ir, evs, ierr = s.s.ImportRungs(wctx, xpath, 0, uint32(len(s.rungs)), rel, logixd.FinalizeEdits)
 		replaced = ir.ReplaceCount
 	}
-	after, _ := s.s.Mode(ctx)
+	if ierr != nil {
+		ierr = withEvents(step, ierr, evs)
+		if unsettled(ierr) {
+			return inDoubt(step, ierr)
+		}
+		if logixd.IsFatal(ierr) { // a refused token: nothing was done
+			s.drop()
+			return done(ierr)
+		}
+		// The SDK's word that the import did not take (a rung that does
+		// not verify, say): nothing changed. The routine is read back all
+		// the same (an export, about a second), so the next edit replaces
+		// what the controller runs and never a count only that word
+		// vouches for; if it cannot be read, the session is dropped and
+		// the next edit reopens it.
+		if now, err := s.exportRoutine(wctx, xpath, path.Join(run, "routine.L5X")); err != nil {
+			s.drop()
+		} else {
+			s.adopt(now)
+		}
+		return done(ierr)
+	}
+	after, merr := s.s.Mode(wctx)
+	modeUnread(rep, merr, false, s.log)
 	rep.Applied, rep.Replaced, rep.ModeAfter = Online, replaced, string(after)
 
 	// Verify from the controller: export the routine and compare rungs.
 	s.log("edit finalized, controller %s; verifying from the controller", after)
-	out := path.Join(run, "routine.L5X")
-	if _, err := s.s.PartialExport(ctx, xpath, out); err != nil {
-		return done(fmt.Errorf("verify export: %w", err))
-	}
-	raw, err := s.c.GetFile(ctx, out)
+	now, err := s.exportRoutine(wctx, xpath, path.Join(run, "routine.L5X"))
 	if err != nil {
-		return done(fmt.Errorf("verify: %w", err))
-	}
-	exp, err := l5x.Parse(raw)
-	if err != nil {
-		return done(fmt.Errorf("verify: %w", err))
-	}
-	got := l5x.LogicOf(exp)
-	now := got.Routines[s.prog+"/"+s.rout]
-	if now == nil {
-		return done(&VerifyError{Diffs: []string{"routine " + s.prog + "/" + s.rout + ": not in the controller's export"}})
+		return inDoubt("verify", err)
 	}
 	wantR := want.Routines[rep.Program+"/"+rep.Routine]
 	// A partial export carries the routine as context, without its Type;
@@ -325,15 +361,46 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 		&l5x.Logic{Tags: map[string]string{}, Routines: map[string]*l5x.RoutineLogic{"r": wantR}},
 		&l5x.Logic{Tags: map[string]string{}, Routines: map[string]*l5x.RoutineLogic{"r": &nowCmp}},
 	); len(d) > 0 {
-		return done(&VerifyError{Diffs: d})
+		return inDoubt("verify", &VerifyError{Diffs: d})
 	}
-	s.routines[s.prog+"/"+s.rout] = &nowCmp
-	s.rungs = nowCmp.Rungs
-	s.lines = strings.Split(strings.TrimRight(nowCmp.Text, "\n"), "\n")
-	s.routType = nowCmp.Type
+	s.adopt(&nowCmp)
 	rep.Verified = true
 	s.log("online edit live and verified: %s/%s replaced online, controller %s, %s", s.prog, s.rout, after, time.Since(started).Round(time.Millisecond))
 	return done(nil)
+}
+
+// exportRoutine reads the edited routine back from the controller: a
+// partial export, as the verify and a refused import's read-back do.
+func (s *Session) exportRoutine(ctx context.Context, xpath, out string) (*l5x.RoutineLogic, error) {
+	if _, err := s.s.PartialExport(ctx, xpath, out); err != nil {
+		return nil, fmt.Errorf("export: %w", err)
+	}
+	raw, err := s.c.GetFile(ctx, out)
+	if err != nil {
+		return nil, err
+	}
+	exp, err := l5x.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	now := l5x.LogicOf(exp).Routines[s.prog+"/"+s.rout]
+	if now == nil {
+		return nil, &VerifyError{Diffs: []string{"routine " + s.prog + "/" + s.rout + ": not in the controller's export"}}
+	}
+	return now, nil
+}
+
+// adopt makes r what the session's routine runs. A partial export carries
+// the routine without its Type; the type stays what it was.
+func (s *Session) adopt(r *l5x.RoutineLogic) {
+	c := *r
+	if c.Type == "" {
+		c.Type = s.routType
+	}
+	s.routines[s.prog+"/"+s.rout] = &c
+	s.rungs = c.Rungs
+	s.lines = strings.Split(strings.TrimRight(c.Text, "\n"), "\n")
+	s.routType = c.Type
 }
 
 // aoiRoutinesOf keeps only the Add-On Instruction routines of a logic
