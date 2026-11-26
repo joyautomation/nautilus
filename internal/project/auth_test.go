@@ -337,11 +337,18 @@ func TestLoadAuthOIDC(t *testing.T) {
 	}
 }
 
-// On a redundant pair auth.oidc is refused for now: the pins are not
-// shared yet (#710).
-func TestLoadAuthOIDCRefusedOnAPair(t *testing.T) {
+// auth.oidc runs on a redundant pair (#710): each controller loads the
+// block and signs in at the provider itself; a name's pin comes to the
+// other controller with the sign-in, through the operator log.
+func TestLoadAuthOIDCOnAPair(t *testing.T) {
 	fs := authProject("auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\n" + pairOK)
-	if _, err := Load(fs, ""); err == nil || !strings.Contains(err.Error(), "cannot be used on a redundant pair") {
-		t.Errorf("err = %v", err)
+	p, err := Load(fs, "")
+	if err != nil || p.AuthOIDC == nil || p.AuthOIDC.Issuer != "https://login.example" {
+		t.Fatalf("err = %v", err)
+	}
+	// The Kubernetes Lease mode carries no pins: refused, naming the ways out.
+	fs = authProject("auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\nredundancy:\n  lease: naut-leader\n")
+	if _, err := Load(fs, ""); err == nil || !strings.Contains(err.Error(), "Kubernetes Lease mode") || !strings.Contains(err.Error(), "redundancy.peers") {
+		t.Errorf("Lease mode: err = %v", err)
 	}
 }

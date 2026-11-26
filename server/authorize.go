@@ -260,7 +260,18 @@ func (s *Server) sessionStands(se session) bool {
 		if s.oidc == nil || !s.policy.OIDC() {
 			return false
 		}
+		// a sign-in at another issuer (the other controller of a pair on
+		// another auth.oidc.issuer) acts not here, whatever the pins say
+		if (s.oidcIssuer != "" || s.oidcPair) && se.issuer != s.oidcIssuer {
+			return false
+		}
 		pin, ok, err := s.users.Pin(se.user)
+		if err == nil && !ok && s.oidcPair && !se.local {
+			// from the other controller, adopted before this copy of the
+			// log was known complete: pinned at its first use (#710)
+			s.pinFromLog(se)
+			pin, ok, err = s.users.Pin(se.user)
+		}
 		if err != nil || !ok || !pin.Same(se.issuer, se.sub) {
 			return false
 		}

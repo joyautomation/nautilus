@@ -74,6 +74,13 @@ func (f *fakeOIDC) as(name, sub string, groups ...string) {
 // (viewer: the OIDC akhan is not the local one) are granted by name.
 func oidcServer(t *testing.T, o Options) (*Server, *fakeOIDC, string) {
 	t.Helper()
+	return oidcServerAt(t, o, "")
+}
+
+// oidcServerAt is oidcServer on the users file at path, as a restart finds
+// it; "" makes a new one.
+func oidcServerAt(t *testing.T, o Options, path string) (*Server, *fakeOIDC, string) {
+	t.Helper()
 	old := users.Default
 	users.Default = users.Params{Memory: 64, Time: 1, Threads: 1}
 	t.Cleanup(func() { users.Default = old })
@@ -96,17 +103,19 @@ func oidcServer(t *testing.T, o Options) (*Server, *fakeOIDC, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := t.TempDir()
-	os.Chmod(dir, 0o700)
-	path := filepath.Join(dir, users.FileName)
-	f := users.New()
-	for _, n := range []string{"akhan", "jsmith"} {
-		if err := f.Add(n, "password-"+n); err != nil {
+	if path == "" {
+		dir := t.TempDir()
+		os.Chmod(dir, 0o700)
+		path = filepath.Join(dir, users.FileName)
+		f := users.New()
+		for _, n := range []string{"akhan", "jsmith"} {
+			if err := f.Add(n, "password-"+n); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := f.Save(path, "opsadmin"); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := f.Save(path, "opsadmin"); err != nil {
-		t.Fatal(err)
 	}
 	store, err := users.Open(path)
 	if err != nil {
