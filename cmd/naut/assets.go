@@ -100,9 +100,11 @@ func deviceAsset(d devbind.DevicePoints) map[string]any {
 		if label == "" {
 			label = dp.Name
 		}
-		readings = append(readings, assetReading{
-			Tag: d.Device + "." + dp.Name, Label: label, On: "Yes", Off: "No", Alarm: d.Alarms[strings.ToLower(dp.Name)],
-		})
+		r := assetReading{Tag: d.Device + "." + dp.Name, Label: label, Alarm: d.Alarms[strings.ToLower(dp.Name)]}
+		if !r.Alarm { // an alarmed one takes the kit's Alarm / Normal, as a polled BOOL does
+			r.On, r.Off = "Yes", "No"
+		}
+		readings = append(readings, r)
 	}
 	title := d.Desc
 	if title == "" {

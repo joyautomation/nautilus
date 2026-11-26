@@ -322,8 +322,25 @@ func TestDeviceAssetShowsDerivedMembersAndFlagsAlarmed(t *testing.T) {
 		}
 	}
 	last := a.Panel.Readings[len(a.Panel.Readings)-1]
-	if last.Label != "The drive has tripped" || last.On != "Yes" || last.Off != "No" {
-		t.Errorf("derived reading %+v", last)
+	if last.Label != "The drive has tripped" || last.On != "" || last.Off != "" || !last.Alarm {
+		t.Errorf("an alarmed derived reading carries no words (the kit says Alarm/Normal): %+v", last)
+	}
+	// one the profile does not alarm on keeps its Yes/No
+	d.Alarms = map[string]bool{}
+	b, _ = json.Marshal(deviceAsset(d))
+	var plain struct {
+		Panel struct {
+			Readings []struct {
+				Tag, On, Off string
+				Alarm        bool
+			}
+		}
+	}
+	if err := json.Unmarshal(b, &plain); err != nil {
+		t.Fatal(err)
+	}
+	if r := plain.Panel.Readings[len(plain.Panel.Readings)-1]; r.Tag != "CONV.Tripped" || r.On != "Yes" || r.Off != "No" || r.Alarm {
+		t.Errorf("an unalarmed derived reading %+v, want Yes/No", r)
 	}
 	if !alarmed["CONV.Tripped"] || !alarmed["CONV.Fault"] || alarmed["CONV.StatusWord"] || alarmed["CONV__Online"] {
 		t.Errorf("alarm flags %v: only the members the profile alarms on", alarmed)
