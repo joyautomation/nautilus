@@ -235,6 +235,44 @@ async Task<IResult> WithSession(string? id, Func<Session, Task<object?>> op, Can
     catch (Exception ex) { return Fail(ex, s.Log); }
 }
 
+// ControllerWrite runs the SDK calls that change a controller: the mode
+// change, the download and the two online imports (#1409). Once one has
+// started it runs to its end: the calls get CancellationToken.None, never
+// the request's token, so a nautilus that goes away mid-write (Ctrl-C, a
+// killed `naut logix serve`) no longer has the agent cancel it. Cancelling
+// is not a safe stop: with ensureProgramMode the old agent stopped the
+// controller and then never downloaded, and an interrupted write leaves the
+// controller in a state nobody chose. A caller that went away learns the
+// outcome by verifying (upload / partial export), as nautilus's "outcome
+// unknown" answer tells it to. Waiting for the session's gate stays
+// cancellable (WithSession): nothing is written yet. The agent logs the
+// start and the end of each write, so its log says how a write whose
+// caller had gone really ended.
+async Task<object?> ControllerWrite(string what, Session s, CancellationToken caller, Func<CancellationToken, Task<object?>> write)
+{
+    var sw = Stopwatch.StartNew();
+    app.Logger.LogInformation("controller write {What} on session {Session}: started", what, s.Id);
+    try
+    {
+        var result = await write(CancellationToken.None);
+        app.Logger.LogInformation("controller write {What} on session {Session}: finished in {Ms} ms{Gone}",
+            what, s.Id, sw.ElapsedMilliseconds, caller.IsCancellationRequested ? " (the caller had gone)" : "");
+        return result;
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning("controller write {What} on session {Session}: failed after {Ms} ms{Gone}: {Error}",
+            what, s.Id, sw.ElapsedMilliseconds, caller.IsCancellationRequested ? " (the caller had gone)" : "", ex.Message);
+        // The SDK's exception says little and its events say a lot; with the
+        // caller gone nobody reads the response, so the events go to the log.
+        if (caller.IsCancellationRequested)
+            foreach (var e in s.Log.Peek().Where(e => e.Kind != "progress"))
+                app.Logger.LogWarning("controller write {What} on session {Session}: {Kind} [{Source}] {Message}",
+                    what, s.Id, e.Kind, e.Source, e.Message);
+        throw;
+    }
+}
+
 // ------------------------------------------------------------- file access
 //
 // Scoped to workDir, always. Resolve() is the whole security boundary: it
@@ -483,11 +521,15 @@ app.MapPost("/v1/sessions/{id}/partial-import", async (string id, PartialImportR
 // running controller — the finding that corrected logix-sdk-api.md §9.
 // onlineOption is ignored offline.
 app.MapPost("/v1/sessions/{id}/partial-import-with-target", async (string id, PartialImportTargetReq req, CancellationToken ct) =>
-    await WithSession(id, async s =>
+    await WithSession(id, s =>
     {
         var opt = ParseEnum(req.OnlineOption, LogixProject.PartialImportOption.LeaveEdits);
-        await s.Project.PartialImportWithTargetFromXmlFileAsync(req.XPath, req.TargetName, Resolve(req.File), opt, ct);
-        return new { xpath = req.XPath, targetName = req.TargetName, file = req.File, onlineOption = opt.ToString() };
+        var file = Resolve(req.File);
+        return ControllerWrite("partial-import-with-target", s, ct, async w =>
+        {
+            await s.Project.PartialImportWithTargetFromXmlFileAsync(req.XPath, req.TargetName, file, opt, w);
+            return new { xpath = req.XPath, targetName = req.TargetName, file = req.File, onlineOption = opt.ToString() };
+        });
     }, ct));
 
 // ONLINE-CAPABLE, and the interesting one: a rung range, at a position,
@@ -495,20 +537,24 @@ app.MapPost("/v1/sessions/{id}/partial-import-with-target", async (string id, Pa
 // workflow — LeaveEdits leaves pending edits, AcceptEdits sends them down,
 // FinalizeEdits additionally assembles if the controller is in Run.
 app.MapPost("/v1/sessions/{id}/import-rungs", async (string id, ImportRungsReq req, CancellationToken ct) =>
-    await WithSession(id, async s =>
+    await WithSession(id, s =>
     {
         var opt = ParseEnum(req.OnlineOption, LogixProject.PartialImportOption.LeaveEdits);
-        var sw = Stopwatch.StartNew();
-        await s.Project.PartialImportRungsFromXmlFileAsync(
-            req.XPath, req.InsertPosition, req.ReplaceCount, Resolve(req.File), opt, ct);
-        return new
+        var file = Resolve(req.File);
+        return ControllerWrite("import-rungs", s, ct, async w =>
         {
-            xpath = req.XPath,
-            insertPosition = req.InsertPosition,
-            replaceCount = req.ReplaceCount,
-            onlineOption = opt.ToString(),
-            elapsedMs = sw.ElapsedMilliseconds,
-        };
+            var sw = Stopwatch.StartNew();
+            await s.Project.PartialImportRungsFromXmlFileAsync(
+                req.XPath, req.InsertPosition, req.ReplaceCount, file, opt, w);
+            return new
+            {
+                xpath = req.XPath,
+                insertPosition = req.InsertPosition,
+                replaceCount = req.ReplaceCount,
+                onlineOption = opt.ToString(),
+                elapsedMs = sw.ElapsedMilliseconds,
+            };
+        });
     }, ct));
 
 // ------------------------------------------------------ controller control
@@ -564,8 +610,13 @@ app.MapGet("/v1/sessions/{id}/mode", async (string id, CancellationToken ct) =>
 app.MapPost("/v1/sessions/{id}/mode", async (string id, ModeReq req, CancellationToken ct) =>
     await WithSession(id, async s =>
     {
-        await s.Project.ChangeControllerModeAsync(
-            ParseEnum(req.Mode, LogixProject.RequestedControllerMode.Program), ct);
+        var mode = ParseEnum(req.Mode, LogixProject.RequestedControllerMode.Program);
+        await ControllerWrite("mode " + mode, s, ct, async w =>
+        {
+            await s.Project.ChangeControllerModeAsync(mode, w);
+            return null;
+        });
+        // The read-back is a read: a caller that has gone needs no answer.
         return new { mode = (await s.Project.ReadControllerModeAsync(ct)).ToString() };
     }, ct));
 
@@ -574,17 +625,21 @@ app.MapPost("/v1/sessions/{id}/mode", async (string id, ModeReq req, Cancellatio
 // it is right (§3.4). The mode transition is therefore explicit here, and
 // only when the caller asks for it, so nobody stops a line by omission.
 app.MapPost("/v1/sessions/{id}/download", async (string id, DownloadReq? req, CancellationToken ct) =>
-    await WithSession(id, async s =>
-    {
-        var sw = Stopwatch.StartNew();
-        if (req?.EnsureProgramMode == true)
+    await WithSession(id, s =>
+        // The whole sequence is one write: a cancel between the mode change
+        // and the download would leave the controller stopped with the old
+        // program, which is what Echo showed the old agent doing.
+        ControllerWrite("download", s, ct, async w =>
         {
-            await s.Project.ChangeControllerModeAsync(LogixProject.RequestedControllerMode.Program, ct);
-            await s.Project.GoOfflineAsync(ct);
-        }
-        await s.Project.DownloadAsync(ct);
-        return new { downloaded = s.ProjectPath, elapsedMs = sw.ElapsedMilliseconds };
-    }, ct));
+            var sw = Stopwatch.StartNew();
+            if (req?.EnsureProgramMode == true)
+            {
+                await s.Project.ChangeControllerModeAsync(LogixProject.RequestedControllerMode.Program, w);
+                await s.Project.GoOfflineAsync(w);
+            }
+            await s.Project.DownloadAsync(w);
+            return new { downloaded = s.ProjectPath, elapsedMs = sw.ElapsedMilliseconds };
+        }), ct));
 
 app.MapPost("/v1/upload-to-new", async (UploadToNewReq req, CancellationToken ct) =>
 {

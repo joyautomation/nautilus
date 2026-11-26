@@ -263,6 +263,18 @@ that never landed.
 - `download` never changes the controller mode unless explicitly asked
   (`ensureProgramMode`), because the SDK will happily try and fail, and
   because nobody should stop a line by omission.
+- A controller write, once started (`download` with its mode change,
+  `POST /mode`, the two online imports), runs to its end on
+  `CancellationToken.None`, never the request's token: a caller that goes
+  away mid-write does not stop it half-way (#1409). The agent logs
+  `controller write ... started` / `finished` / `failed`; the caller
+  learns the outcome by uploading. Waiting for the session stays
+  cancellable, since nothing is written yet. Closing a session (`DELETE`,
+  the idle reaper) waits for the operation in flight: disposing the
+  project under a download breaks it half-way. A graceful agent stop waits
+  too, within the host's shutdown limit (untested); a killed agent does
+  not. A write the SDK never returns from holds its session until the
+  agent is restarted.
 
 None of that makes this safe to expose to a plant network. It is an agent
 for a trusted host on a trusted link.
