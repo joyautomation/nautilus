@@ -67,7 +67,10 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 			return ""
 		}
 		if !elementary[u] {
-			pw.gap("siemens/enum", e.Pos.Line, gapStructured, "enumerations ("+e.TypeName+"#…)", "")
+			if id, ok := e.Inner.(*st.IdentExpr); ok && pw.w.enumOf(e.TypeName) != nil {
+				return pw.enumMember(e.TypeName, id.Name, e.Pos.Line)
+			}
+			pw.gap("siemens/enum", e.Pos.Line, gapOther, "the typed literal "+e.TypeName+"#…", "")
 			return ""
 		}
 		return pw.widen(u, u+"#"+pw.expr(e.Inner, unaryPrec))
@@ -195,6 +198,9 @@ func (pw *progWriter) binary(e *st.BinaryExpr, parent int) string {
 	if !ok {
 		pw.gap("siemens/operator", e.Pos.Line, gapOther, "the operator "+e.Op, "")
 		return ""
+	}
+	if h := pw.sideHint(e.Left, e.Right); h != "" {
+		defer pw.hint(h)()
 	}
 	lt, rt := pw.typ(e.Left), pw.typ(e.Right)
 	if op == "&" {
@@ -477,6 +483,15 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		// argument's type (lang/ir conversions.go).
 		if len(args) != 1 {
 			pw.diag("siemens/call", line, fmt.Sprintf("%s takes one argument", name))
+			return ""
+		}
+		if en := pw.w.enumOf(to); en != nil {
+			return pw.toEnum(en, argExprs[0], args[0], name, line)
+		}
+		if en := pw.w.enumOf(pw.rawTyp(argExprs[0])); en != nil && !isInt(to) {
+			// nautilus converts an enumeration as its integer; TO_STRING
+			// and the rest are not checked against the runtime yet.
+			pw.gap("siemens/conversion", line, gapOther, name+" of the enumeration "+en.Name, "TO_<integer> is written")
 			return ""
 		}
 		from := pw.typ(argExprs[0])

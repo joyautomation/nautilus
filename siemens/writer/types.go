@@ -102,8 +102,31 @@ var instMembers = map[string]map[string]string{
 }
 
 // typ returns an expression's type class, or "" when the subset cannot
-// tell (the caller refuses where it matters).
+// tell (the caller refuses where it matters). An enumeration is its
+// integer type (enums.go); rawTyp keeps its name.
 func (pw *progWriter) typ(e st.Expression) string {
+	return pw.w.enumType(pw.rawTyp(e))
+}
+
+// rawTyp is typ with an enumeration named as declared (upper-cased),
+// a bare member included.
+func (pw *progWriter) rawTyp(e st.Expression) string {
+	t := pw.typ0(e)
+	if id, ok := e.(*st.IdentExpr); ok && t == "" {
+		names := pw.w.lib.enumMembers[strings.ToLower(id.Name)]
+		if len(names) == 1 {
+			return strings.ToUpper(names[0])
+		}
+		for _, n := range names {
+			if strings.EqualFold(n, pw.enumHint) {
+				return strings.ToUpper(n)
+			}
+		}
+	}
+	return t
+}
+
+func (pw *progWriter) typ0(e st.Expression) string {
 	switch e := e.(type) {
 	case *st.NumberLit:
 		if e.Base == 10 || e.Base == 0 {

@@ -318,8 +318,9 @@ The rules:
   function, a CASE selector, a REAL target), integer arithmetic is refused.
 - **What it does not translate yet is a writer gap,** never a rule for
   the person: the diagnostic reads "the Siemens writer doesn't translate X
-  yet (#N)", N the issue that closes it. B #1299 enums and arrays (structs and
-  their start values are written, the library is in scope); C #1300
+  yet (#N)", N the issue that closes it. B #1299 arrays (structs and
+  their start values are written, the library is in scope; enumerations
+  are written as their integer, below); C #1300
   more than one task (written since C: per-task copies of shared tags);
   D #1301 (closed: the project's FUNCTIONs, FUNCTION_BLOCKs, dialect
   blocks such as TONR and VAR CONSTANT are written since D1, STRUCT pins
@@ -474,6 +475,31 @@ The rules:
     its line) changes the layout, so the check asks for `--reset-data` and
     the chart restarts at its initial step, where nautilus keeps it live
     (documented, not measured; `_en_`/`_f_` could become temps, #616).
+- **Enumerations (B, #1299)** (`siemens/writer/enums.go`). TIA has no
+  enumerated type. An enumeration is the integer nautilus carries for it
+  (`ir.EnumDef`, an int64 value): a DInt, because nautilus's OPC UA server
+  serves every enumeration as an Int32 (`opcua/server/value.go` dataType),
+  so a client reading the tag from nautilus or from the CPU sees one type
+  (Sparkplug sends every integer as Int64, and HTTP shows the member's
+  name). A declared base (`(A, B) INT`) is ignored, since nautilus's
+  lowering does not keep it. A LInt is used only when a member's value
+  needs 64 bits, which nautilus's own Int32 cannot serve either. Each member a block names becomes a VAR
+  CONSTANT of that block, `<Enum>_<Member>`, read as `#Mode_Run`. TIA V21
+  compiles a local constant as a CASE label and as a range bound
+  (`#A..#B`), checked 2026-11-26. A variable named like the constant is
+  refused, never shadowed. Start values are the member's number, since
+  SCL declarations take a literal. A declaration with no initial value
+  starts at the type's initial member, as nautilus's does: tags,
+  statics, UDT members and temps, whose reset at the start of each call
+  uses the same number. An unqualified member that two enumerations
+  declare resolves as nautilus's lowering hints it: from an assignment's
+  target, a CASE selector, or a comparison's other side. Anywhere else
+  it is refused, with the qualified spellings to write instead.
+  `TO_<int>` of an enumeration converts its integer under the usual
+  wrapping rule. `TO_<Enum>(n)` keeps n's value, as nautilus does, so a
+  source the enumeration's integer does not hold is refused. Converting
+  an enumeration to anything other than an integer (`TO_STRING`) is
+  #1305.
 - **Known divergences, documented rather than refused:** where nautilus
   faults the scan the CPU sets ENO FALSE and carries on. Each is a
   `naut check --target siemens` (and deploy) **warning**, never silent

@@ -146,9 +146,9 @@ func TestStructRefusals(t *testing.T) {
 			t.Errorf("start %v: %v, want %q", c.start, diags, c.want)
 		}
 	}
-	// An enumeration is B's second half: still the writer's gap.
+	// An enumeration is written as its integer (enums.go, #1299).
 	_, diags = writeStructs("PROGRAM P\nVAR m : Mode; END_VAR\nEND_PROGRAM\n", nil, "TYPE Mode : (Idle, Run); END_TYPE\n")
-	if len(diags) == 0 || !strings.Contains(diags[0].Message, "the type Mode yet (#1299)") {
+	if len(diags) != 0 {
 		t.Errorf("enum: %v", diags)
 	}
 }
@@ -201,8 +201,8 @@ func TestDeclTypeNeverDropsAStartValue(t *testing.T) {
 }
 
 // TestRefusedOncePerType: many variables of a type the writer cannot
-// write yet say so once per program, and a bare enumeration member names
-// the enum gap rather than an unknown name.
+// write yet say so once per program, and a bare enumeration member is
+// its constant, never an unknown name.
 func TestRefusedOncePerType(t *testing.T) {
 	_, diags := writeStructs("PROGRAM P\nVAR a, b : Motor; c : Motor; m1, m2 : Motor; END_VAR\nEND_PROGRAM\n", nil, motorLib)
 	if len(diags) != 2 || !strings.Contains(diags[0].Message, "member Tag:") {
@@ -213,7 +213,7 @@ func TestRefusedOncePerType(t *testing.T) {
 		t.Fatalf("no enum used: %v", diags)
 	}
 	_, diags = writeStructs("PROGRAM P\nVAR_EXTERNAL k : INT; END_VAR\nVAR m : BOOL; END_VAR\nm := Run = Run;\nEND_PROGRAM\n", []Global{{Name: "k", Type: "INT"}}, "TYPE Mode : (Idle, Run); END_TYPE\n")
-	if len(diags) == 0 || diags[0].Rule != "siemens/enum" || !strings.Contains(diags[0].Message, "enumerations (Mode) yet (#1299)") {
+	if len(diags) != 0 {
 		t.Errorf("bare member: %v", diags)
 	}
 }
@@ -483,14 +483,14 @@ func TestInOutFromOutside(t *testing.T) {
 	}
 }
 
-// TestProgramTypeGapKeepsChecking: an enumeration the program declares is
+// TestProgramTypeGapKeepsChecking: a type alias the program declares is
 // refused, and the rest of the program is still checked in the same run
 // (#1301 D1b fold b).
 func TestProgramTypeGapKeepsChecking(t *testing.T) {
-	src := "PROGRAM P\nTYPE Mode : (Idle, Run); END_TYPE\nVAR s : WSTRING; END_VAR\nEND_PROGRAM\n"
+	src := "PROGRAM P\nTYPE Level : INT; END_TYPE\nVAR s : WSTRING; END_VAR\nEND_PROGRAM\n"
 	_, diags := writeStructs(src, nil)
 	got := fmt.Sprint(diags)
-	if !strings.Contains(got, "the type Mode yet (#1299)") || !strings.Contains(got, "WSTRING yet (#1303)") {
+	if !strings.Contains(got, "the type alias Level yet (#1305)") || !strings.Contains(got, "WSTRING yet (#1303)") {
 		t.Errorf("%v", diags)
 	}
 }

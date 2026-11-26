@@ -54,6 +54,12 @@ type progWriter struct {
 	consts    []string
 	constVals map[string]string
 	gconsts   map[string]int
+	// enums are the enumeration members the block names, each its own
+	// VAR CONSTANT (enums.go); enumHint the enumeration the expression
+	// being written is expected to be, for a member two enumerations
+	// declare.
+	enums    map[string]enumConst
+	enumHint string
 	// structTag is the first STRUCT manifest tag this block writes
 	// (whole or a member of it), "" for none (pous.go, aliasing).
 	structTag string
@@ -129,8 +135,10 @@ func (w *writer) program(path string, libs []string, src string, lines []int, pr
 	// the rest of the program is still checked, so one run lists all.
 	typeGap := false
 	for _, td := range prog.TypeDecls {
-		if _, ok := td.Type.(*st.StructType); !ok {
-			pw.gap("siemens/type", td.Pos.Line, gapStructured, "the type "+td.Name, "enumerations and type aliases")
+		switch td.Type.(type) {
+		case *st.StructType, *st.EnumType:
+		default:
+			pw.gap("siemens/type", td.Pos.Line, gapOther, "the type alias "+td.Name, "")
 			typeGap = true
 		}
 	}
@@ -166,7 +174,7 @@ func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st
 				pw.temps = append([]st.VarDecl{{Name: pw.name, Datatype: pw.pou.ret}}, pw.temps...)
 				sections = append(sections, section{"VAR_TEMP", []string{fmt.Sprintf("      %s : %s;", sclName(pw.name), t)}})
 			}
-		} else if _, ok := zero(u); !ok {
+		} else if _, ok := w.zeroOf(u); !ok {
 			pw.diag("siemens/type", pw.pou.lineOf(), pw.name+": "+gapMessage(gapOther, "a FUNCTION returning a "+u, ""))
 		} else {
 			pw.locals[strings.ToLower(pw.name)] = local{name: pw.name, typ: u}
@@ -187,7 +195,7 @@ func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st
 			}
 			continue
 		}
-		init, _ := zero(strings.ToUpper(strings.TrimSpace(v.Datatype)))
+		init, _ := w.zeroOf(v.Datatype)
 		if v.Initial != nil {
 			init = pw.expr(v.Initial, 0)
 		}
@@ -197,7 +205,7 @@ func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st
 	if pw.kind == kindFC {
 		pw.emit(&body, 0, "\t%s;\n", pw.fcReturn())
 	}
-	consts := append(pw.consts, pw.globalConsts()...)
+	consts := append(append(pw.consts, pw.globalConsts()...), pw.enumConsts()...)
 	if len(w.diags) > before {
 		return false
 	}
@@ -429,7 +437,7 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 				// TIA has no start values for temps, and nautilus resets a
 				// temp to its init on every scan (#203): the body starts
 				// with an assignment for each instead.
-				if _, ok := zero(u); !ok {
+				if _, ok := w.zeroOf(u); !ok {
 					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "a "+u+" temp", ""))
 					continue
 				}
@@ -449,7 +457,13 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "an instance initializer", ""))
 					continue
 				}
-				line += " := " + pw.initValue(v.Initial)
+				if n, ok := w.enumValue(v.Datatype, v.Initial); ok {
+					line += " := " + n
+				} else {
+					line += " := " + pw.initValue(v.Initial)
+				}
+			} else if n, ok := w.enumStart(v.Datatype); ok && !(pw.kind == kindFC && kind == "VAR_INPUT") {
+				line += " := " + n
 			}
 			lines = append(lines, line+";")
 		}
@@ -551,6 +565,8 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		if te == nil {
 			te = &st.IdentExpr{Name: s.Target, Pos: s.Pos}
 		}
+		restore := pw.hint(pw.rawTyp(te))
+		defer restore()
 		if pw.w.structOf(tt) != nil {
 			pw.assignStruct(b, target, s.Value, in, at)
 		} else {
@@ -587,7 +603,9 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		pw.emit(b, at, "%sUNTIL %s\n%sEND_REPEAT;\n", in, pw.expr(s.Condition, 0), in)
 	case *st.CaseStmt:
 		pw.emit(b, at, "%sCASE %s OF\n", in, pw.expr(s.Expression, 0))
+		sel := pw.rawTyp(s.Expression)
 		for _, c := range s.Cases {
+			restore := pw.hint(sel)
 			var labels []string
 			for _, v := range c.Values {
 				labels = append(labels, pw.expr(v, 0))
@@ -595,6 +613,7 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 			for _, r := range c.Ranges {
 				labels = append(labels, pw.expr(r.Lo, 0)+".."+pw.expr(r.Hi, 0))
 			}
+			restore()
 			pw.emit(b, at, "%s\t%s:\n", in, strings.Join(labels, ", "))
 			pw.stmts(b, c.Body, d+2)
 		}
@@ -707,10 +726,6 @@ func (pw *progWriter) ident(name string, line int) string {
 		}
 		return quote(pw.w.tagsDB) + "." + sclName(g.Name)
 	}
-	if e, ok := pw.w.lib.enumMembers[strings.ToLower(name)]; ok {
-		pw.gap("siemens/enum", line, gapStructured, "enumerations ("+e+")", "")
-		return name
-	}
 	if d, ok := pw.w.lib.constDecls[strings.ToLower(name)]; ok {
 		pw.useConst(strings.ToLower(name), line)
 		return "#" + sclName(d.Name)
@@ -718,6 +733,10 @@ func (pw *progWriter) ident(name string, line int) string {
 	if c, ok := pw.w.lib.consts[strings.ToLower(name)]; ok {
 		pw.gap("siemens/library", line, gapOther, "the project's global variable "+c, "a library's VAR_GLOBAL that is not CONSTANT")
 		return name
+	}
+	// After the project's constants, as nautilus resolves a name.
+	if _, ok := pw.w.lib.enumMembers[strings.ToLower(name)]; ok {
+		return pw.enumMember("", name, line)
 	}
 	pw.diag("siemens/name", line, fmt.Sprintf("%s is neither a variable of the program nor a manifest tag", name))
 	return name

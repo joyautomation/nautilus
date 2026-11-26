@@ -375,7 +375,7 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 		"PROGRAM P\nVAR a, b : TIME; r, q : REAL; u : ULINT; END_VAR\na := a + b;\nr := r MOD q;\nu := u + 1;\na := T#1500us;\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a : INT; r : REAL; t : TON; END_VAR\nr := ATAN2(r, r);\nt(IN := TRUE, PT := INT_TO_TIME(a + 1));\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a : LTIME; END_VAR\nEND_PROGRAM\n",
-		"TYPE Mode : (Run, Stop); END_TYPE\nPROGRAM P\nVAR a : INT; END_VAR\nEND_PROGRAM\n",
+		"TYPE Mode : (Run, Stop); END_TYPE\nPROGRAM P\nVAR a : Mode; s : STRING; END_VAR\ns := TO_STRING(a);\nEND_PROGRAM\n",
 		"FUNCTION F : INT\nF := 1;\nEND_FUNCTION\nPROGRAM P\nVAR a : INT; END_VAR\na := F();\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR r : REAL; s : STRING; END_VAR\ns := REAL_TO_STRING(r);\nEND_PROGRAM\n",
 	} {
