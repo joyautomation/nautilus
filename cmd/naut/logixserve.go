@@ -283,7 +283,12 @@ func logixProgramPlane(dir string, p *logixProject, client *logixd.Client) (plan
 		mu.Lock()
 	}
 	release = func() {
-		mu.Lock()
+		if !mu.TryLock() {
+			// A write to the controller, once begun, runs to its end
+			// (#1404): say why the stop waits, and how not to.
+			logf("waiting for the deploy under way to end; Ctrl-C again to leave now (a write to the controller already begun is then in doubt)")
+			mu.Lock()
+		}
 		defer mu.Unlock()
 		if sess != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

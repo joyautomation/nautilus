@@ -461,6 +461,19 @@ waited (an online session opening included). A refusal is shown as the server wo
 A change an online edit cannot carry (new tags, a routine the controller
 does not have) offers **Download Project…**.
 
+Closing the tab, or losing the connection, does not stop a deploy that
+has begun to write to the controller: the download or the online import,
+and the verify after it, run to their end (only the server's 15-minute
+limit stops them), and the journal records how it really ended. Before
+that first write, closing the tab stops the deploy and nothing changes.
+A deploy that fails after the write began (that limit, an agent that
+stopped answering, a verify that could not read the controller or found
+it different) is answered **OUTCOME UNKNOWN**: the controller may hold
+the new program. Check what it runs before anything else: `naut logix
+deploy` without `--online` or `--download` compares it with the project
+and changes nothing. The next online edit opens its session again and
+reads the controller first.
+
 Live values keep streaming through both: they are polled over
 EtherNet/IP, separately from the deploy. If nothing answers at
 `nautilus.runtimeUrl`, the commands offer to start `naut logix serve
@@ -471,7 +484,8 @@ The server answers these commands on `POST /api/logix/deploy`:
 `{"mode": "online" | "download", "source", "baseHash", "programMode",
 "resetValues", "yes"}`; a download's `done` event carries `valuesKept`
 and the `resets`. The answer is a stream of JSON lines (`progress` events, then
-`done` or `error`). A download is refused unless the body says
+`done` or `error`; an `error` with `"outcome": "unknown"` failed after
+the write to the controller began, and is journalled `unknown`). A download is refused unless the body says
 `"yes": true`, and only one deploy runs at a time. The server needs
 `--project`; without it, it serves live values only.
 

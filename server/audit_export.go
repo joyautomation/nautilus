@@ -36,6 +36,15 @@ func (s *Server) Audited(action string, tf func(*http.Request, []byte) AuditTarg
 	return s.audited(action, adaptTarget(tf), h)
 }
 
+// MarkOutcomeUnknown marks a failed answer of an Audited or AuditedStream
+// route whose outcome is not known (a deploy that failed after its write
+// to a controller began): the entry is journalled as "unknown", not
+// "error". Call it before the handler returns; on a stream, the headers
+// on the wire are not changed, only the entry.
+func MarkOutcomeUnknown(w http.ResponseWriter) {
+	w.Header().Set(outcomeHeader, "unknown")
+}
+
 // AuditedStream is Audited for a route that streams its answer as NDJSON
 // (a deploy's progress): bytes reach the client as written, the entry is
 // recorded when h returns, and a last line {"event":"error"} records a

@@ -849,7 +849,8 @@ claims:
       does: the error is a StartStateError naming the mode and the way out,
       without the SDK code, and its Raw keeps the SDK's message and status
       lines; asked for Program mode and refused all the same, the SDK's
-      answer goes as it is. The stream answers 409 with needsProgramMode
+      answer goes as it is, as OUTCOME UNKNOWN (the agent may have switched
+      the mode in the same call, LGA-054). The stream answers 409 with needsProgramMode
       and the raw text as detail. The button is the extension's
       (logixDeployLogic.test.ts). The SDK's wording is from the #375 run on
       an Echo controller; the new message has not been seen on one.
@@ -885,3 +886,50 @@ claims:
     source: "#from-the-editor"
     tests:
       - go ./logix/facade TestDeployStreamUpfrontRefusals
+
+  - id: LGA-054
+    claim: >-
+      A deploy that has begun to write to the controller (the download, or
+      an online edit's import) runs to its end, verify included, when the
+      editor closes its tab or loses its connection; only the deadline stops
+      it, and the journal records how it really ended. Cancelled before the
+      write, it stops and nothing is sent. A failure after the write began
+      is answered OUTCOME UNKNOWN (the stream's error carries "outcome":
+      "unknown", the entry is journalled unknown, and PUT /api/program the
+      same), and the next online edit reads the controller before it
+      replaces anything.
+    source: "#from-the-editor"
+    tests:
+      - go ./logix/deploy TestDownloadFinishesWhenTheCallerGoesAway
+      - go ./logix/deploy TestDownloadStopsWhenCancelledBeforeTheWrite
+      - go ./logix/deploy TestDownloadDeadlineAfterTheWriteIsInDoubt
+      - go ./logix/deploy TestDownloadVerifyMismatchIsInDoubt
+      - go ./logix/deploy TestDownloadStartStateRefusalIsNotInDoubt
+      - go ./logix/deploy TestOnlineEditFinishesWhenTheCallerGoesAway
+      - go ./logix/deploy TestSessionEditFinishesWhenTheCallerGoesAway
+      - go ./logix/deploy TestSessionEditStopsWhenCancelledBeforeTheImport
+      - go ./logix/deploy TestSessionEditInDoubtReadsTheControllerBeforeTheNextEdit
+      - go ./logix/deploy TestOnlineEditImportPastTheDeadlineIsInDoubt
+      - go ./logix/deploy TestSessionImportPastTheDeadlineIsInDoubt
+      - go ./logix/deploy TestSessionImportRefusedIsNotInDoubt
+      - go ./logix/deploy TestSessionImportRefusedReadsTheRoutineBack
+      - go ./logix/deploy TestSessionImportFatalAnswerIsInDoubt
+      - go ./logix/deploy TestOnlineEditFatalImportAnswerIsInDoubt
+      - go ./cmd/naut TestLogixDeployVerifyMismatchIsOutcomeUnknown
+      - go ./cmd/naut TestLogixServeStopWaitsForADeployUnderWay
+      - go ./logix/facade TestDeployInDoubtIsJournalledUnknown
+      - go ./cmd/naut TestLogixServeDownloadOutlivesAHangUp
+    partial: true
+    note: >-
+      Against the fake agent: the caller's context is cancelled while the
+      agent holds the download or import call, and the call is answered
+      only if nautilus did not drop it. End to end through `naut logix
+      serve --project`, a client that hangs up at the download still gets
+      a verified download and an ok entry. An import the SDK refused
+      changed nothing and keeps the session, which reads the routine back
+      before the next edit; one with no answer, or answered fatal (the SDK
+      or its channel broke), is in doubt. `naut logix deploy` prints OUTCOME UNKNOWN, and stopping the
+      serve waits for a deploy under way (a second Ctrl-C leaves). Not
+      covered: nautilus itself
+      dying mid-download (the agent passes the dropped connection to the
+      SDK as a cancel, #1409), and no run on a controller yet.

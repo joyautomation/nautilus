@@ -198,6 +198,9 @@ func (p *programPlane) put(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	rep, err := p.cfg.Deploy(ctx, req.Source, func(string) {})
 	if err != nil {
+		if outcomeUnknown(err) {
+			server.MarkOutcomeUnknown(w)
+		}
 		code, msg := deployError(err)
 		writeJSON(w, code, msg)
 		return
@@ -286,7 +289,16 @@ func deployError(err error) (int, string) {
 	var nd *deploy.NeedsDownloadError
 	var ve *deploy.VerifyError
 	var se *deploy.StartStateError
+	var ou *deploy.OutcomeUnknownError
 	switch {
+	case errors.As(err, &ou):
+		// Before every other case: a verify that found the controller
+		// different is, after a write, in doubt first (#1404).
+		msg := ou.Error()
+		if errors.As(err, &ve) {
+			msg += ". The verify found: " + strings.Join(ve.Diffs, "; ")
+		}
+		return http.StatusBadGateway, msg
 	case errors.As(err, &se):
 		return http.StatusConflict, se.Error()
 	case errors.As(err, &de):
@@ -311,6 +323,9 @@ func deployError(err error) (int, string) {
 func errorEvent(err error) map[string]any {
 	code, msg := deployError(err)
 	ev := map[string]any{"event": "error", "status": code, "error": msg}
+	if outcomeUnknown(err) {
+		ev["outcome"] = "unknown"
+	}
 	var se *deploy.StartStateError
 	if errors.As(err, &se) {
 		ev["needsProgramMode"] = true
@@ -319,6 +334,13 @@ func errorEvent(err error) map[string]any {
 		}
 	}
 	return ev
+}
+
+// outcomeUnknown says a deploy failed after its write to the controller
+// began: the controller may hold the new program (#1404).
+func outcomeUnknown(err error) bool {
+	var ou *deploy.OutcomeUnknownError
+	return errors.As(err, &ou)
 }
 
 // deployStream is POST /api/logix/deploy: an online edit or a download,
@@ -401,6 +423,9 @@ func (p *programPlane) deployStream(w http.ResponseWriter, r *http.Request) {
 		rep, err = p.cfg.Deploy(ctx, req.Source, progress)
 	}
 	if err != nil {
+		if outcomeUnknown(err) {
+			server.MarkOutcomeUnknown(w)
+		}
 		emit(errorEvent(err))
 		return
 	}
@@ -411,8 +436,9 @@ func (p *programPlane) deployStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The report is out and the plane free; the warm-up is the next
-	// edit's. Like the deploy, it stops if the request goes away (a
-	// stopping serve), and the next edit then opens the session itself.
+	// edit's. Unlike a deploy past its write to the controller (#1404),
+	// it stops if the request goes away (a stopping serve), and the next
+	// edit then opens the session itself.
 	end()
 	p.cfg.Warm(ctx, progress)
 }

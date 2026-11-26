@@ -197,3 +197,35 @@ func TestDeployCancelledWithTheRequestIsJournalledAsFailed(t *testing.T) {
 		t.Fatalf("after a cancelled deploy: %v; want one failed entry", es)
 	}
 }
+
+// #1404: a deploy that failed after its write to the controller began is
+// in doubt. The stream's error line says so ("outcome": "unknown"), and
+// the entry is journalled "unknown", not "error": the controller may hold
+// the new program. The same for the program edit route (PUT /api/program).
+func TestDeployInDoubtIsJournalledUnknown(t *testing.T) {
+	inDoubt := &deploy.OutcomeUnknownError{Step: "verify", Err: &deploy.VerifyError{Diffs: []string{"rung 1 differs"}}}
+	url := startPlaneWith(t, &ProgramPlane{
+		Source: ladderA, Controller: "DemoLine",
+		Deploy: func(_ context.Context, _ string, _ func(string)) (*deploy.Report, error) {
+			return &deploy.Report{}, inDoubt
+		},
+	})
+	_, lines := postDeploy(t, url, map[string]any{"mode": "online", "source": ladderB})
+	errs := events(lines, "error")
+	if len(errs) != 1 || errs[0]["outcome"] != "unknown" || errs[0]["status"] != float64(http.StatusBadGateway) {
+		t.Fatalf("error line = %v; want outcome unknown, 502", errs)
+	}
+	if msg, _ := errs[0]["error"].(string); !strings.Contains(msg, "OUTCOME UNKNOWN") || !strings.Contains(msg, "rung 1 differs") {
+		t.Errorf("error = %q; want the doubt and what the verify found", msg)
+	}
+	if es := waitEntries(t, url, "logix.deploy", 1); len(es) != 1 || es[0]["result"] != "unknown" {
+		t.Fatalf("logix.deploy entry: %v; want result unknown", es)
+	}
+	code, _ := putProgram(t, url, ladderB, "")
+	if code != http.StatusBadGateway {
+		t.Errorf("PUT /api/program = %d, want 502", code)
+	}
+	if es := waitEntries(t, url, "program.edit", 1); len(es) != 1 || es[0]["result"] != "unknown" {
+		t.Fatalf("program.edit entry: %v; want result unknown", es)
+	}
+}

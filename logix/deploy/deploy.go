@@ -127,7 +127,7 @@ type Report struct {
 	// Warnings are the writer's (writer.Options.Warn): written on purpose,
 	// differently from nautilus.
 	Warnings []string
-	Rungs                        int
+	Rungs    int
 	// Build is the SDK's own build time; ImportBuild the whole import +
 	// build leg as seen from here.
 	Build, ImportBuild time.Duration
@@ -303,7 +303,7 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	}
 	fullRel, rungsRel, acdRel := rel(rep.Controller+".L5X"), rel(partialName), rel(rep.Controller+".ACD")
 
-	upload := func(name string) (*l5x.File, []byte, error) {
+	upload := func(ctx context.Context, name string) (*l5x.File, []byte, error) {
 		acd, lx := rel(name+".ACD"), rel(name+".L5X")
 		if evs, err := c.UploadToNew(ctx, t.CommPath, acd); err != nil {
 			return nil, nil, withEvents("upload "+name, err, evs)
@@ -323,7 +323,7 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	var beforeRaw []byte
 	uploadBefore := func() error {
 		var err error
-		before, beforeRaw, err = upload("before")
+		before, beforeRaw, err = upload(ctx, "before")
 		if err != nil {
 			if !controllerEmpty(err) {
 				return err
@@ -489,7 +489,25 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 		return done(&NeedsDownloadError{Diffs: rep.Diffs, RoutineMissing: rep.RoutineMissing})
 	}
 
-	// 3. Put it on the controller.
+	// 4. Verify, after the write: on the write's context, and a failure
+	// is in doubt.
+	verify := func(ctx context.Context) (*Report, error) {
+		after, _, err := upload(ctx, "after")
+		if err != nil {
+			return done(&OutcomeUnknownError{Step: "verify", Err: err})
+		}
+		if d := l5x.LogicDiff(want, l5x.LogicOf(after)); len(d) > 0 {
+			return done(&OutcomeUnknownError{Step: "verify", Err: &VerifyError{Diffs: d}})
+		}
+		rep.Verified = true
+		logf("verified: the controller at %s runs what was sent", t.CommPath)
+		return done(nil)
+	}
+
+	// 3. Put it on the controller. A deploy stopped before here changed
+	// nothing; from the write on, it runs to its end on wctx (the
+	// caller's deadline, not its cancel), and a failure is in doubt
+	// (outcome.go, #1404).
 	if o.Mode == Online {
 		s, err := c.Open(ctx, rel("before.ACD"))
 		if err != nil {
@@ -504,68 +522,76 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 		}
 		mode, _ := s.Mode(ctx)
 		rep.ModeBefore = string(mode)
+		if err := ctx.Err(); err != nil {
+			_, _ = s.GoOffline(context.Background())
+			return done(err)
+		}
+		wctx, cancel := committed(ctx)
+		defer cancel()
 		xpath := logixd.RoutinePath(rep.Program, rep.Routine)
 		var replaced uint32
+		step := "online rung import"
+		var evs []logixd.Event
 		if t.Language == "st" {
 			// A routine imports INTO its program (the container), never
 			// onto its own path.
-			evs, err := s.ImportWithTarget(ctx, logixd.ProgramPath(rep.Program), rep.Routine, rungsRel, logixd.FinalizeEdits)
-			if err != nil {
-				_, _ = s.GoOffline(context.Background())
-				return done(withEvents("online routine import", err, evs))
-			}
+			step = "online routine import"
+			evs, err = s.ImportWithTarget(wctx, logixd.ProgramPath(rep.Program), rep.Routine, rungsRel, logixd.FinalizeEdits)
 		} else {
-			ir, evs, err := s.ImportRungs(ctx, xpath, 0, uint32(len(running.Rungs)), rungsRel, logixd.FinalizeEdits)
-			if err != nil {
-				_, _ = s.GoOffline(context.Background())
-				return done(withEvents("online rung import", err, evs))
-			}
+			var ir logixd.ImportRungsResult
+			ir, evs, err = s.ImportRungs(wctx, xpath, 0, uint32(len(running.Rungs)), rungsRel, logixd.FinalizeEdits)
 			replaced = ir.ReplaceCount
 		}
-		after, _ := s.Mode(ctx)
+		if err != nil {
+			_, _ = s.GoOffline(context.Background())
+			err = withEvents(step, err, evs)
+			if unsettled(err) {
+				return done(&OutcomeUnknownError{Step: step, Err: err})
+			}
+			// The SDK's word that the import did not take (a rung that
+			// does not verify, say): nothing changed.
+			return done(err)
+		}
+		after, _ := s.Mode(wctx)
 		_, _ = s.GoOffline(context.Background())
 		rep.Applied, rep.Replaced, rep.ModeAfter = Online, replaced, string(after)
 		logf("online edit live: %s/%s replaced online (FinalizeEdits), controller %s → %s", rep.Program, rep.Routine, mode, after)
-	} else {
-		s, err := c.Open(ctx, acdRel)
-		if err != nil {
-			return done(err)
-		}
-		defer s.Close(context.Background())
-		if _, err := s.SetCommPath(ctx, t.CommPath); err != nil {
-			return done(err)
-		}
-		if mode, err := s.Mode(ctx); err == nil {
-			rep.ModeBefore = string(mode)
-		}
-		evs, err := s.Download(ctx, o.ProgramMode)
-		if err != nil {
-			err = withEvents("download", err, evs)
-			// Asked for Program mode and still refused (a keyswitch in
-			// RUN, a fault): the hint would be wrong, so the SDK's
-			// answer goes as it is.
-			if !o.ProgramMode && invalidStartState(err) {
-				err = &StartStateError{Mode: rep.ModeBefore, Raw: err}
-			}
-			return done(err)
-		}
-		mode, _ := s.Mode(ctx)
-		_, _ = s.GoOffline(context.Background())
-		rep.Applied, rep.ModeAfter = Download, string(mode)
-		logf("downloaded %s to %s — controller is %s (the SDK does not put it back in Run)", rep.Controller, t.CommPath, mode)
+		return verify(wctx)
 	}
-
-	// 4. Verify.
-	after, _, err := upload("after")
+	s, err := c.Open(ctx, acdRel)
 	if err != nil {
-		return done(fmt.Errorf("verify: %w", err))
+		return done(err)
 	}
-	if d := l5x.LogicDiff(want, l5x.LogicOf(after)); len(d) > 0 {
-		return done(&VerifyError{Diffs: d})
+	defer s.Close(context.Background())
+	if _, err := s.SetCommPath(ctx, t.CommPath); err != nil {
+		return done(err)
 	}
-	rep.Verified = true
-	logf("verified: the controller at %s runs what was sent", t.CommPath)
-	return done(nil)
+	if mode, err := s.Mode(ctx); err == nil {
+		rep.ModeBefore = string(mode)
+	}
+	if err := ctx.Err(); err != nil {
+		return done(err)
+	}
+	wctx, cancel := committed(ctx)
+	defer cancel()
+	evs, err = s.Download(wctx, o.ProgramMode)
+	if err != nil {
+		err = withEvents("download", err, evs)
+		// A plain download to a controller in Run: the SDK refused it
+		// before it began, and nothing changed.
+		if !o.ProgramMode && invalidStartState(err) {
+			return done(&StartStateError{Mode: rep.ModeBefore, Raw: err})
+		}
+		// Any other failure may follow a partial download, or the switch
+		// to Program mode the agent makes in the same call (asked for
+		// Program mode and still refused: a keyswitch in RUN, a fault).
+		return done(&OutcomeUnknownError{Step: "download", Err: err})
+	}
+	mode, _ := s.Mode(wctx)
+	_, _ = s.GoOffline(context.Background())
+	rep.Applied, rep.ModeAfter = Download, string(mode)
+	logf("downloaded %s to %s — controller is %s (the SDK does not put it back in Run)", rep.Controller, t.CommPath, mode)
+	return verify(wctx)
 }
 
 // controllerEmpty recognizes the SDK's answer to uploading from a

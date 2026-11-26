@@ -46,6 +46,8 @@ type fakeLogixd struct {
 	// takes as long as a test needs.
 	uploadEntered chan struct{}
 	uploadHold    chan struct{}
+	// hook, when set, sees each request before it is answered.
+	hook func(r *http.Request)
 }
 
 func newFakeLogixd(t *testing.T) (*fakeLogixd, string, func()) {
@@ -53,6 +55,9 @@ func newFakeLogixd(t *testing.T) (*fakeLogixd, string, func()) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.seen = append(f.seen, r.Method+" "+r.URL.Path)
 		f.auth = append(f.auth, r.Header.Get("Authorization"))
+		if f.hook != nil {
+			f.hook(r)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		ok := func(data any) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data, "events": []any{}})

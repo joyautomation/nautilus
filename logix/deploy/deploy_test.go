@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/joyautomation/nautilus/lang/l5x"
@@ -35,6 +36,23 @@ type fakeAgent struct {
 	startState bool
 	// modeFails makes the mode read answer an error.
 	modeFails bool
+	// hook, when set, sees each request before it is answered (#1404:
+	// a caller that goes away mid-call).
+	hook func(r *http.Request)
+	// callsMu guards calls: a call its caller abandoned is still being
+	// answered while the deploy makes the next one.
+	callsMu sync.Mutex
+	// downloadKeeps makes a download leave the controller as it was, so
+	// the verify after it finds it different.
+	downloadKeeps bool
+	// exportFails fails this many partial exports (a verify that cannot
+	// read the controller).
+	exportFails int
+	// importFails makes the SDK answer a rung import with an error:
+	// "refuse" (operation_failed, nothing taken), "refuse-took" (the same
+	// answer, but the controller took the rungs all the same) or "fatal"
+	// (operation_not_performed: the channel broke after the rungs went).
+	importFails string
 }
 
 func newFakeAgent(t *testing.T, running []byte) (*fakeAgent, *logixd.Client) {
@@ -45,7 +63,12 @@ func newFakeAgent(t *testing.T, running []byte) (*fakeAgent, *logixd.Client) {
 }
 
 func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
+	f.callsMu.Lock()
 	f.calls = append(f.calls, r.Method+" "+r.URL.Path)
+	f.callsMu.Unlock()
+	if f.hook != nil {
+		f.hook(r)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	ok := func(data any) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data, "events": []any{}})
@@ -130,9 +153,23 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		ok(map[string]any{})
+	case strings.HasSuffix(r.URL.Path, "/partial-export") && f.exportFails > 0:
+		f.exportFails--
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": map[string]any{"kind": "operation_failed", "message": "export failed", "fatal": false}})
 	case strings.HasSuffix(r.URL.Path, "/partial-export"):
 		f.files[body["output"].(string)] = f.running
 		ok(map[string]any{})
+	case strings.HasSuffix(r.URL.Path, "/import-rungs") && f.importFails != "":
+		kind, fatal := "operation_failed", false
+		if f.importFails == "fatal" {
+			kind, fatal = "operation_not_performed", true
+		}
+		if f.importFails != "refuse" {
+			f.running = f.files[body["file"].(string)]
+		}
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": map[string]any{"kind": kind, "message": "rung 1 does not verify", "fatal": fatal}})
 	case strings.HasSuffix(r.URL.Path, "/import-rungs"):
 		f.imports = append(f.imports, body)
 		// The controller now runs the imported rungs. The cold path staged
@@ -158,7 +195,9 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 				}})
 			return
 		}
-		f.running = f.generated()
+		if !f.downloadKeeps {
+			f.running = f.generated()
+		}
 		f.mode = "Program"
 		ok(map[string]any{})
 	case r.Method == http.MethodDelete:
@@ -342,7 +381,8 @@ func TestEmptyControllerNeedsADownload(t *testing.T) {
 // RxE_INVALID_START_STATE; the error says what to do instead and keeps
 // the SDK's own text underneath (#379). Asked for Program mode and still
 // refused (a keyswitch in RUN), the hint would be wrong: the SDK's answer
-// goes as it is.
+// goes as it is, in doubt, since the agent may have switched the mode in
+// the same call (#1404).
 func TestDownloadInRunSaysToSwitchToProgramMode(t *testing.T) {
 	src := demoSource(t)
 	f, c := newFakeAgent(t, nil)
@@ -368,7 +408,8 @@ func TestDownloadInRunSaysToSwitchToProgramMode(t *testing.T) {
 
 	// Program mode asked for, and refused all the same.
 	_, err = Run(context.Background(), src, Options{Client: c, Target: target(), Mode: Download, ProgramMode: true})
-	if errors.As(err, &se) || err == nil || !strings.Contains(err.Error(), "RxE_INVALID_START_STATE") {
+	var ou *OutcomeUnknownError
+	if errors.As(err, &se) || !errors.As(err, &ou) || !strings.Contains(err.Error(), "RxE_INVALID_START_STATE") {
 		t.Errorf("program mode, refused: %v (%T)", err, err)
 	}
 }

@@ -220,7 +220,10 @@ in the HTTP API guide. The ones that matter most for an audit:
 - **A deploy from a workstation has no journal.** The program routes that
   `naut logix serve` answers (`PUT /api/program`, `POST /api/logix/deploy`)
   are journalled, as `program.edit` and `logix.deploy`, one entry each,
-  with the result the deploy itself reached even if the client hung up.
+  with the result the deploy itself reached even if the client hung up
+  (a write to the controller, once begun, runs to its end). A deploy that
+  failed after that write began is journalled `unknown`: the controller
+  may hold the new program.
   `naut logix deploy` and `naut siemens deploy` run on the workstation and
   write nothing there; the controller's own journal can't see them.
 - **A line is protected once it is in the copy,** normally within a
