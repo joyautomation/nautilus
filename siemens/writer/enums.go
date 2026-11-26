@@ -10,9 +10,11 @@ import (
 )
 
 // Enumerations (#1299). TIA has no enumerated type, so an enumeration is
-// written as the integer nautilus carries for it (on a field bus, and as
-// the Int32 an OPC UA enumeration is): a DInt, or the base type the
-// declaration names (`(A, B) INT`). Each member a block names is one of
+// written as the integer nautilus serves it as: a DInt, the Int32 its OPC
+// UA server encodes every enumeration as (opcua/server/value.go dataType),
+// whatever base type the declaration names (`(A, B) INT`: nautilus's
+// lowering does not keep it), and a LInt only when a member's value needs
+// 64 bits. Each member a block names is one of
 // its VAR CONSTANTs, <Enum>_<Member>, so the SCL still reads by name
 // (TIA V21 takes a local constant as a CASE label, compiled 2026-11-26);
 // a start value is the member's number, since SCL's declarations take a
@@ -43,28 +45,16 @@ func (w *writer) enumOf(typ string) *ir.EnumDef {
 	return t.Enum
 }
 
-// enumBase is the integer type an enumeration is written as, or why it
-// cannot be: the declared base when there is one, else DINT, and every
-// member's value must fit it.
+// enumBase is the integer type an enumeration is written as: DINT, or
+// LINT when a member's value does not fit a DINT. The error result is
+// kept for callers' symmetry; every int64 fits a LINT.
 func (w *writer) enumBase(e *ir.EnumDef) (string, string) {
-	base := "DINT"
-	declared := w.lib.enumBases[strings.ToLower(e.Name)]
-	if declared != "" {
-		base = declared
-		if !isInt(base) || base == "ULINT" {
-			return "", gapMessage(gapOther, "the enumeration "+e.Name+" on the base type "+declared, "")
-		}
-	}
 	for _, m := range e.Members {
-		if !inRange(m.Value, base) {
-			if declared == "" && inRange(m.Value, "LINT") {
-				base = "LINT"
-				continue
-			}
-			return "", gapMessage(gapOther, fmt.Sprintf("the enumeration %s, whose member %s (%d) does not fit its %s", e.Name, m.Name, m.Value, base), "")
+		if !inRange(m.Value, "DINT") {
+			return "LINT", ""
 		}
 	}
-	return base, ""
+	return "DINT", ""
 }
 
 // enumType maps an enumeration-typed declaration to its integer type

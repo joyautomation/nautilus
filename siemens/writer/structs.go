@@ -53,10 +53,8 @@ type library struct {
 	pous       map[string][]*pou
 	// enumMembers are the enumerations' member names, each with the
 	// names of the types that declare it: a bare member (Idle) is an
-	// enumeration value (enums.go). enumBases are the base integer types
-	// enumerations declare (`(A, B) INT`), by lower-cased type name.
+	// enumeration value (enums.go).
 	enumMembers map[string][]string
-	enumBases   map[string]string
 	// types is nautilus's own resolution of every TYPE, for seeding a start
 	// value the way the runtime does (nil when the TYPEs do not resolve:
 	// nautilus's lowering then refuses the program anyway).
@@ -117,7 +115,7 @@ func libraryParts(libs []string) []libSource {
 // blocks.
 func loadLibrary(libs []string, own []*st.Program) *library {
 	lib := &library{structs: map[string]*structDef{}, otherTypes: map[string]string{}, conflicts: map[string]string{},
-		fbs: map[string]string{}, funcs: map[string]string{}, consts: map[string]string{}, enumMembers: map[string][]string{}, enumBases: map[string]string{},
+		fbs: map[string]string{}, funcs: map[string]string{}, consts: map[string]string{}, enumMembers: map[string][]string{},
 		constDecls: map[string]st.VarDecl{}, pous: map[string][]*pou{}}
 	parts := libraryParts(libs)
 	var srcs []string
@@ -196,9 +194,6 @@ func loadLibrary(libs []string, own []*st.Program) *library {
 			for _, m := range e.Members {
 				km := strings.ToLower(m.Name)
 				lib.enumMembers[km] = append(lib.enumMembers[km], td.Name)
-			}
-			if e.Base != "" {
-				lib.enumBases[k] = e.Base
 			}
 		}
 	}

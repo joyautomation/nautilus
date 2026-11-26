@@ -477,10 +477,13 @@ The rules:
     (documented, not measured; `_en_`/`_f_` could become temps, #616).
 - **Enumerations (B, #1299)** (`siemens/writer/enums.go`). TIA has no
   enumerated type. An enumeration is the integer nautilus carries for it
-  (`ir.EnumDef`, an int64 value): a DInt, as an OPC UA enumeration is an
-  Int32; the declared base (`(A, B) INT`) when there is one; a LInt when
-  no base is declared and a value needs 64 bits; refused when a member
-  does not fit a declared base. Each member a block names becomes a VAR
+  (`ir.EnumDef`, an int64 value): a DInt, because nautilus's OPC UA server
+  serves every enumeration as an Int32 (`opcua/server/value.go` dataType),
+  so a client reading the tag from nautilus or from the CPU sees one type
+  (Sparkplug sends every integer as Int64, and HTTP shows the member's
+  name). A declared base (`(A, B) INT`) is ignored, since nautilus's
+  lowering does not keep it. A LInt is used only when a member's value
+  needs 64 bits, which nautilus's own Int32 cannot serve either. Each member a block names becomes a VAR
   CONSTANT of that block, `<Enum>_<Member>`, read as `#Mode_Run`. TIA V21
   compiles a local constant as a CASE label and as a range bound
   (`#A..#B`), checked 2026-11-26. A variable named like the constant is

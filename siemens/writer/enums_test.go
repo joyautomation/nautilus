@@ -7,7 +7,8 @@ import (
 )
 
 // enumLib declares enumerations as a project library does: explicit
-// values, an initial member that is not the first, a declared base type,
+// values, an initial member that is not the first, a declared base type
+// (which nautilus does not keep),
 // two enumerations sharing a member name, and a struct with an enum
 // member.
 const enumLib = `TYPE
@@ -75,8 +76,9 @@ END_PROGRAM
 		// (Fill, 10) or at the member its init names.
 		{"tags DB", db, "      st : DINT := 10;\n"},
 		{"tags DB", db, "      v : DINT := 1;\n"},
-		// A declared base type is kept.
-		{"tags DB", db, "      d : INT := 0;\n"},
+		// A declared base type is not: nautilus serves every enumeration
+		// as an Int32 (OPC UA) whatever its base.
+		{"tags DB", db, "      d : DINT := 0;\n"},
 		// A struct member of enum type starts at its initial member, or
 		// at the one it names.
 		{"Unit", unit, "      State : DINT := 10;\n"},
@@ -88,7 +90,7 @@ END_PROGRAM
 		// The members the block names, as its constants.
 		{"FB", fb, "      WashState_Fill : DINT := 10;\n"},
 		{"FB", fb, "      WashState_Idle : DINT := 0;\n"},
-		{"FB", fb, "      Door_Open : INT := 5;\n"},
+		{"FB", fb, "      Door_Open : DINT := 5;\n"},
 		{"FB", fb, "      Valve_Open : DINT := 1;\n"},
 		// CASE labels name the constants, bare or qualified.
 		{"FB", fb, "\t\t#WashState_Idle:\n"},
@@ -102,7 +104,7 @@ END_PROGRAM
 		{"FB", fb, `IF #Door_Open = "naut_Tags".d THEN`},
 		{"FB", fb, "\t\t#Valve_Open:\n"},
 		// A qualified member is its enumeration's, with no context.
-		{"FB", fb, `"naut_Tags".code := #Door_Open;`},
+		{"FB", fb, `"naut_Tags".code := LINT_TO_INT((((DINT_TO_LINT(#Door_Open))`},
 		// A constant of enum type is the member's number.
 		{"FB", fb, "      K : DINT := 1;\n"},
 		// TO_INT converts the integer; TO_<Enum> keeps an INT's value in
@@ -116,7 +118,7 @@ END_PROGRAM
 		}
 	}
 	// Only the members named are declared.
-	if strings.Contains(fb, "Door_Shut : INT := 0;") == false || strings.Contains(fb, "Valve_Closed") == false || strings.Contains(fb, "WashState_Wash :") == false {
+	if strings.Contains(fb, "Door_Shut : DINT := 0;") == false || strings.Contains(fb, "Valve_Closed") == false || strings.Contains(fb, "WashState_Wash :") == false {
 		t.Errorf("named members missing:\n%s", fb)
 	}
 	for _, unused := range []string{"Door_Closed", "Valve_Shut"} {
@@ -161,9 +163,6 @@ func TestEnumRefusals(t *testing.T) {
 		// CPU's DINT does not hold every one.
 		{"TO_Enum of a LINT", enumLib, "PROGRAM P\nVAR_EXTERNAL st : WashState; big : LINT; END_VAR\nst := TO_WashState(big);\nEND_PROGRAM\n",
 			[]Global{{Name: "st", Type: "WashState"}, {Name: "big", Type: "LINT"}}, "TO_WASHSTATE of a LINT yet (#1305)"},
-		// A member does not fit the declared base type.
-		{"base too small", "TYPE Big : (A, B := 70000) INT; END_TYPE\n", "PROGRAM P\nVAR b : Big; END_VAR\nEND_PROGRAM\n",
-			nil, "the enumeration Big, whose member B (70000) does not fit its INT"},
 		// The writer names a member's constant <Enum>_<Member>; a
 		// variable already so named is refused, not shadowed.
 		{"constant clash", enumLib, "PROGRAM P\nVAR Valve_Open : BOOL; v : Valve; END_VAR\nv := Open;\nEND_PROGRAM\n",
@@ -176,8 +175,8 @@ func TestEnumRefusals(t *testing.T) {
 	}
 }
 
-// TestEnumWiderThanDINT: an enumeration with no declared base whose
-// values need 64 bits is a LINT, not a DINT that would cut them.
+// TestEnumWiderThanDINT: an enumeration whose values need 64 bits is a
+// LINT, not a DINT that would cut them.
 func TestEnumWiderThanDINT(t *testing.T) {
 	out, diags := writeStructs("PROGRAM P\nVAR_EXTERNAL h : Huge; END_VAR\nh := Far;\nEND_PROGRAM\n", []Global{{Name: "h", Type: "Huge"}}, "TYPE Huge : (Near, Far := 5000000000); END_TYPE\n")
 	if len(diags) != 0 {
