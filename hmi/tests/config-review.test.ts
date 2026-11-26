@@ -2,7 +2,7 @@
 // staged-apply client's calls and refusals.
 import { describe, it, expect } from './harness.js';
 import { unifiedDiff, diffFiles } from '../src/lib/config/diff.js';
-import { ReviewClient } from '../src/lib/config/review.js';
+import { ReviewClient, RESTART_NOTE, savedLine } from '../src/lib/config/review.js';
 
 describe('config review: unified diff', () => {
 	it('is empty for equal text', () => expect(unifiedDiff('a', 'b', 'x\n', 'x\n')).toBe(''));
@@ -129,5 +129,39 @@ describe('config review: commit and patch', () => {
 		if (!b.ok) expect(b.kind).toBe('unreachable');
 		const c = await new ReviewClient({ fetch: make(200, 'not json') }).commit('7');
 		expect(c.ok).toBe(false);
+	});
+});
+
+describe('config review: save for the next restart', () => {
+	const make = (status: number, body: string | unknown, calls: { url: string; method?: string; body?: string }[] = []) =>
+		((async (url: string, init?: RequestInit) => {
+			calls.push({ url, method: init?.method, body: init?.body as string });
+			return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+		}) as unknown as typeof fetch);
+	it('posts the candidate to /api/config/save, with the message only when given', async () => {
+		const calls: { url: string; method?: string; body?: string }[] = [];
+		const saved = { commit: 'abcdef0123456789', branch: 'main', files: ['nautilus.yaml'], by: 'user:alice', at: '2026-11-23T00:00:00Z', pending: true };
+		const c = new ReviewClient({ fetch: make(200, saved, calls) });
+		const r = await c.save('3', 'add a device');
+		await c.save('3');
+		expect(calls[0].url).toBe('/api/config/save');
+		expect(calls[0].method).toBe('POST');
+		expect(calls[0].body).toBe('{"id":"3","message":"add a device"}');
+		expect(calls[1].body).toBe('{"id":"3"}');
+		expect(r.ok && r.value.by).toBe('user:alice');
+	});
+	it('passes the controller refusal through whole', async () => {
+		const r = await new ReviewClient({ fetch: make(409, { error: 'candidate 3 is invalid for a reason a restart would not fix: fix what the validation names' }) }).save('3');
+		expect(r.ok).toBe(false);
+		if (!r.ok) { expect(r.status).toBe(409); expect(r.message.includes('a restart would not fix')).toBe(true); }
+	});
+	it('says who saved it, which commit, that nothing running changed, and what a restart costs', () => {
+		const line = savedLine({ commit: 'abcdef0123456789', branch: 'main', files: ['nautilus.yaml', 'profiles/x.yaml'], by: 'user:alice', at: '', pending: true });
+		expect(line.includes('by user:alice')).toBe(true);
+		expect(line.includes('commit abcdef012345 on main')).toBe(true);
+		expect(line.includes('nautilus.yaml, profiles/x.yaml')).toBe(true);
+		expect(line.includes('Nothing running has changed')).toBe(true);
+		expect(RESTART_NOTE.includes('scan stops')).toBe(true);
+		expect(RESTART_NOTE.includes('restart the standby first, then switch over')).toBe(true);
 	});
 });

@@ -44,7 +44,13 @@ type gitCommitter struct {
 	// checkout's boot FS being the live directory).
 	boot  string
 	wrote map[string]string
-	mu    sync.Mutex
+	// pending is a file a save committed for the next restart: the commit and
+	// the content hash it wrote. Another candidate (staged from what runs,
+	// which lacks that change) must not overwrite it while the file still
+	// holds it; a hand edit or revert releases it, and a restart clears it
+	// (a new process).
+	pending map[string]pendingSave
+	mu      sync.Mutex
 }
 
 // inGitWorktree reports whether dir is inside a git worktree.
@@ -68,6 +74,7 @@ func wireConfigCommit(h *server.IOHook, base fs.FS, dir string) {
 	}
 	g := committerFor(dir)
 	h.Commit = func(c server.IOCommit) (server.IOCommitted, error) { return g.commit(h.Files(), c) }
+	h.Save = g.save
 }
 
 var (
@@ -240,12 +247,83 @@ func (g *gitCommitter) commit(st server.IOFiles, c server.IOCommit) (server.IOCo
 	if err != nil {
 		return server.IOCommitted{}, err
 	}
+	if err := g.checkPending(changes); err != nil {
+		return server.IOCommitted{}, err
+	}
 	msg := c.Message
 	if msg == "" {
 		msg = "config: live I/O change (" + driverNames(st) + ")"
 	}
 	body := fmt.Sprintf("%s\n\nSaved by %s from the controller's live I/O configuration.\n\n%s: %s\n", msg, c.By, commitTrailer, c.ID)
 	return g.commitFiles(changes, c.By, body)
+}
+
+// pendingSave is a saved file's commit and the hash of the content it wrote.
+type pendingSave struct{ commit, hash string }
+
+// checkPending refuses a write over a file a save committed for the next
+// restart, while the file still holds what the save wrote: the candidate was
+// made from what runs, which lacks that change, so writing it would silently
+// undo the saved one. The caller holds g.mu.
+func (g *gitCommitter) checkPending(changes []ioChange) error {
+	for _, ch := range changes {
+		if p, waiting := g.pending[ch.path]; waiting && ch.exist && hashHex(string(ch.was)) == p.hash {
+			return refuse("an earlier saved change to %s (commit %s) is waiting for a restart, and this candidate does not include it: restart the controller (the saved change applies then), then make this change", ch.path, p.commit)
+		}
+	}
+	return nil
+}
+
+// save commits a candidate that applies at the next restart: the files it
+// changes, written and committed in the principal's name. Nothing runs
+// differently until the controller restarts. The same refusals as a live
+// commit: only files the manifest names, never over a file edited since the
+// controller booted, never on a detached HEAD.
+func (g *gitCommitter) save(c server.IOSave) (server.IOCommitted, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	// A save commits to this checkout whatever this controller's role: on a
+	// pair, the standby is restarted first, and its checkout is its own.
+	st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "configuration"}}}
+	paths := make([]string, 0, len(c.Files))
+	for p := range c.Files {
+		paths = append(paths, p)
+	}
+	slices.Sort(paths)
+	for _, p := range paths {
+		st.Files = append(st.Files, server.IOFile{Path: p, Running: c.Files[p]})
+	}
+	changes, err := planIOChange(g.dir, st, g.asBooted)
+	if err != nil {
+		// A save writes only files the project's manifest already names: a new
+		// profile or driver manifest is vendored in the repository first.
+		const wayOut = "a save writes only files the project's manifest already names: vendor a new profile in the repository first (naut devices add <profile>), commit it, then save this change"
+		switch {
+		case errors.Is(err, server.ErrIOCommitRefused) && strings.Contains(err.Error(), "bring them in with"):
+			err = refuse("the candidate brings in files this project's manifest does not name; %s", wayOut)
+		case errors.Is(err, server.ErrIOCommitRefused) && strings.Contains(err.Error(), "cannot be committed"):
+			err = fmt.Errorf("%w; %s", err, wayOut)
+		}
+		return server.IOCommitted{}, err
+	}
+	if err := g.checkPending(changes); err != nil {
+		return server.IOCommitted{}, err
+	}
+	msg := c.Message
+	if msg == "" {
+		msg = "config: saved for the next restart (" + strings.Join(paths, ", ") + ")"
+	}
+	body := fmt.Sprintf("%s\n\nSaved by %s from the controller's configuration screen. It applies when the controller next restarts; nothing running changed.\n\n%s: %s\n", msg, c.By, commitTrailer, c.ID)
+	res, err := g.commitFiles(changes, c.By, body)
+	if err == nil {
+		if g.pending == nil {
+			g.pending = map[string]pendingSave{}
+		}
+		for _, ch := range changes {
+			g.pending[ch.path] = pendingSave{commit: res.Commit[:min(12, len(res.Commit))], hash: hashHex(ch.run)}
+		}
+	}
+	return res, err
 }
 
 // commitFiles writes changes into the worktree and commits just those

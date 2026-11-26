@@ -82,6 +82,13 @@ type IOHook struct {
 	// (none asked for, one under way, one done).
 	Watch        func() *IOWatch
 	CancelRevert func(by string) (*IOWatch, error)
+	// Restart says whether a validated candidate is not applicable live only
+	// because it changes what is fixed while the runtime runs (a restart
+	// would apply it), and its changed files (path to content). Save commits
+	// them for that restart (#711); it is nil where the controller cannot
+	// commit.
+	Restart func(cand any) (needs bool, files map[string]string)
+	Save    func(IOSave) (IOCommitted, error)
 	// Files is the project files the running I/O configuration differs in.
 	Files func() IOFiles
 	// Sections are the manifest sections the config screens can render;
@@ -112,6 +119,24 @@ type IOCommit struct {
 	By      string
 	ID      string
 	Message string
+}
+
+// IOSave is a candidate that applies at the next restart, saved as a commit:
+// By is the principal, ID the candidate, Files its changed files.
+type IOSave struct {
+	By      string
+	ID      string
+	Message string
+	Files   map[string]string
+}
+
+// IOSaved is POST /api/config/save's answer: the commit, who saved it and
+// that it takes effect at the next restart.
+type IOSaved struct {
+	IOCommitted
+	By      string    `json:"by"`
+	At      time.Time `json:"at"`
+	Pending bool      `json:"pending"`
 }
 
 // IOCommitted is the commit that was made.
@@ -252,6 +277,9 @@ type stagedIO struct {
 	Error      string    `json:"error,omitempty"`
 	Validation any       `json:"validation,omitempty"`
 	Result     any       `json:"result,omitempty"`
+	// Saved is who saved the candidate for the next restart, when it was
+	// (POST /api/config/save).
+	Saved *IOSaved `json:"saved,omitempty"`
 
 	cand any
 	gen  int // bumped on every state change: a validate that raced one does not overwrite it
@@ -733,6 +761,81 @@ func (s *Server) handleConfigCommit(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusOK, res)
+	}
+}
+
+// handleConfigSave commits a candidate that applies at the next restart: one
+// that loads but changes what is fixed while the runtime runs (a device added
+// or removed). Nothing live changes; the files are committed in the
+// principal's name, and the answer says the change is pending a restart.
+// There is no restart here: the controller stays as it is.
+func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
+	if code, msg := s.authorizeWrite(r); code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+	if s.ioUnavailable(w) {
+		return
+	}
+	var req commitRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil || req.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `body must be {"id": "<staged candidate>", "message": "<subject, optional>"}`})
+		return
+	}
+	req.Message = strings.TrimSpace(req.Message)
+	if len(req.Message) > maxCommitMessage || strings.ContainsAny(req.Message, "\x00\r\n") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("message: one line of at most %d characters", maxCommitMessage)})
+		return
+	}
+	if s.io.Save == nil || s.io.Restart == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "this controller runs from a build, not a git checkout, so it cannot commit: edit the files in your repository and restart"})
+		return
+	}
+	s.staging.mu.Lock()
+	st := s.staging.all[req.ID]
+	var cand any
+	state, gen := "", 0
+	if st != nil {
+		cand, state, gen = st.cand, st.State, st.gen
+	}
+	s.staging.mu.Unlock()
+	switch {
+	case st == nil:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no staged I/O configuration " + req.ID})
+		return
+	case state != "invalid":
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + req.ID + " is " + state + ": only a validated candidate that needs a restart is saved this way (a valid one is applied, then committed)"})
+		return
+	}
+	needs, files := s.io.Restart(cand)
+	if !needs {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + req.ID + " is invalid for a reason a restart would not fix: fix what the validation names and review again"})
+		return
+	}
+	// A validate or stage that moved the candidate while this was checked
+	// means what was checked is not what would be saved.
+	s.staging.mu.Lock()
+	moved := s.staging.all[req.ID] == nil || s.staging.all[req.ID].gen != gen
+	s.staging.mu.Unlock()
+	if moved {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + req.ID + " changed while it was being saved: validate it again, then save"})
+		return
+	}
+	by := s.requester(r)
+	res, err := s.io.Save(IOSave{By: by, ID: req.ID, Message: req.Message, Files: files})
+	switch {
+	case errors.Is(err, ErrIOCommitRefused):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	default:
+		saved := &IOSaved{IOCommitted: res, By: by, At: time.Now(), Pending: true}
+		s.staging.mu.Lock()
+		if st := s.staging.all[req.ID]; st != nil {
+			st.Saved = saved
+		}
+		s.staging.mu.Unlock()
+		writeJSON(w, http.StatusOK, saved)
 	}
 }
 

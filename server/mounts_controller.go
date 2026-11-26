@@ -81,6 +81,7 @@ func mountDisk(s *Server, mux *http.ServeMux) {
 	mux.Handle("POST /api/io/staged/{id}/apply", s.audited("config.apply", ioApplyTarget, s.handleIOApply))
 	mux.HandleFunc("GET /api/config/patch", s.handleConfigPatch)
 	mux.Handle("POST /api/config/commit", s.audited("config.commit", configCommitTarget, s.handleConfigCommit))
+	mux.Handle("POST /api/config/save", s.audited("config.save", configSaveTarget, s.handleConfigSave))
 	mux.Handle("POST /api/io/revert/cancel", s.audited("config.revert.cancel", nil, s.handleIOCancelRevert))
 }
 

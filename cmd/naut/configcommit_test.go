@@ -325,3 +325,114 @@ func TestConfigPatchEndOfFile(t *testing.T) {
 		})
 	}
 }
+
+// A candidate that applies at the next restart is committed in the
+// principal's name with the same refusals as a live commit, and the message
+// says nothing running changed (#711).
+func TestConfigSaveForRestartCommitsAsThePrincipal(t *testing.T) {
+	dir := gitProject(t, "a: 1\nb: 2\n")
+	os.WriteFile(filepath.Join(dir, "other.st"), []byte("changed\n"), 0o644)
+	gitIn(t, dir, "add", "other.st")
+
+	res, err := committer(t, dir).save(server.IOSave{By: "user:akhan", ID: "7", Files: map[string]string{"modbus.yaml": "a: 1\nb: 3\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Branch != "main" || len(res.Files) != 1 || res.Files[0] != "modbus.yaml" || res.Commit != gitIn(t, dir, "rev-parse", "HEAD") {
+		t.Fatalf("result %+v", res)
+	}
+	if files := gitIn(t, dir, "show", "--name-only", "--format=", "HEAD"); files != "modbus.yaml" {
+		t.Fatalf("commit holds %q, want only modbus.yaml", files)
+	}
+	if got := gitIn(t, dir, "show", "-s", "--format=%an <%ae>", "HEAD"); got != "user:akhan <akhan@plant-1>" {
+		t.Fatalf("author = %q", got)
+	}
+	body := gitIn(t, dir, "show", "-s", "--format=%B", "HEAD")
+	if !strings.Contains(body, "saved for the next restart") || !strings.Contains(body, "nothing running changed") || !strings.Contains(body, "\nNautilus-Staged: 7") {
+		t.Fatalf("message %q: want the restart, that nothing running changed, and the trailer", body)
+	}
+	if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\nb: 3\n" {
+		t.Fatalf("modbus.yaml = %q", got)
+	}
+	if st := gitIn(t, dir, "status", "--porcelain"); !strings.Contains(st, "M  other.st") {
+		t.Fatalf("the staged other work was swept in or lost: %q", st)
+	}
+}
+
+func TestConfigSaveForRestartRefusals(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		edit  bool // a file edited in the worktree since boot
+		want  string
+	}{
+		{"a program source", map[string]string{"other.st": "evil\n"}, false, "cannot be committed"},
+		{"a hidden path", map[string]string{".git/config.yaml": "x: 1\n"}, false, "cannot be committed"},
+		{"nothing differs", map[string]string{"modbus.yaml": "a: 1\nb: 2\n"}, false, "nothing to commit"},
+		{"edited since the controller booted", map[string]string{"modbus.yaml": "a: 1\nb: 3\n"}, true, "overwrite your edits"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := gitProject(t, "a: 1\nb: 2\n")
+			g := committer(t, dir)
+			if c.edit {
+				os.WriteFile(filepath.Join(dir, "modbus.yaml"), []byte("a: 9\nb: 2\n"), 0o644)
+			}
+			before := gitIn(t, dir, "rev-parse", "HEAD")
+			_, err := g.save(server.IOSave{By: "user:akhan", ID: "7", Files: c.files})
+			if err == nil || !errors.Is(err, server.ErrIOCommitRefused) || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want a refusal containing %q", err, c.want)
+			}
+			if gitIn(t, dir, "rev-parse", "HEAD") != before {
+				t.Fatal("a refused save made a commit")
+			}
+		})
+	}
+}
+
+// A second candidate, staged from what runs (which lacks the first saved
+// change), must not overwrite the first while it waits for a restart; nor may
+// a live commit. A restart (a new committer) clears the wait (#711).
+func TestConfigSaveWaitsForARestartBeforeAnotherWrite(t *testing.T) {
+	dir := gitProject(t, "a: 1\nb: 2\n")
+	g := committer(t, dir)
+	first, err := g.save(server.IOSave{By: "user:akhan", ID: "1", Files: map[string]string{"modbus.yaml": "a: 1\nb: 3\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := gitIn(t, dir, "rev-parse", "HEAD")
+	_, err = g.save(server.IOSave{By: "user:akhan", ID: "2", Files: map[string]string{"modbus.yaml": "a: 7\nb: 2\n"}})
+	if err == nil || !errors.Is(err, server.ErrIOCommitRefused) || !strings.Contains(err.Error(), "waiting for a restart") || !strings.Contains(err.Error(), first.Commit[:12]) {
+		t.Fatalf("a second save over a pending one: %v, want a refusal naming the first commit", err)
+	}
+	if _, err := g.commit(ioState("a: 1\nb: 3\n", "a: 1\nb: 5\n"), server.IOCommit{By: "user:akhan", ID: "3"}); err == nil || !strings.Contains(err.Error(), "waiting for a restart") {
+		t.Fatalf("a live commit over a pending save: %v", err)
+	}
+	if gitIn(t, dir, "rev-parse", "HEAD") != head || readFile(t, dir, "modbus.yaml") != "a: 1\nb: 3\n" {
+		t.Fatal("a refused write changed the pending change")
+	}
+	// a hand edit or a revert of the saved file releases it: there is nothing left to protect
+	os.WriteFile(filepath.Join(dir, "modbus.yaml"), []byte("a: 1\nb: 2\n"), 0o644)
+	gitIn(t, dir, "commit", "-q", "-am", "reverted by hand")
+	g.boot = gitIn(t, dir, "rev-parse", "HEAD")
+	if _, err := g.save(server.IOSave{By: "user:akhan", ID: "5", Files: map[string]string{"modbus.yaml": "a: 1\nb: 9\n"}}); err != nil {
+		t.Fatalf("after the saved change was reverted by hand: %v", err)
+	}
+	// after a restart the file is the committed one, and a new candidate is staged from it
+	g2 := committer(t, dir)
+	if _, err := g2.save(server.IOSave{By: "user:akhan", ID: "4", Files: map[string]string{"modbus.yaml": "a: 1\nb: 4\n"}}); err != nil {
+		t.Fatalf("after a restart: %v", err)
+	}
+}
+
+// A candidate that brings a file the project's manifest does not name (a new
+// profile) is refused with the way out for a save, not for naut pull.
+func TestConfigSaveNamesTheWayOutForANewFile(t *testing.T) {
+	dir := gitProject(t, "a: 1\nb: 2\n")
+	_, err := committer(t, dir).save(server.IOSave{By: "user:akhan", ID: "1", Files: map[string]string{
+		"nautilus.yaml":         "name: x\ndevices:\n  - { name: D, profile: newprof, endpoint: 127.0.0.1 }\n",
+		"profiles/newprof.yaml": "profile: newprof\n",
+	}})
+	if err == nil || !errors.Is(err, server.ErrIOCommitRefused) || !strings.Contains(err.Error(), "naut devices add") || strings.Contains(err.Error(), "naut pull") {
+		t.Fatalf("err = %v, want the save's way out (vendor the profile in the repository), not naut pull", err)
+	}
+}

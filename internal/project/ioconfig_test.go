@@ -340,6 +340,22 @@ func TestIOValidateRefuses(t *testing.T) {
 			"  - {name: A_C1, source: DEV_A, table: coil, address: 2, writable: true}\n"+
 				"  - {name: A_C2, source: DEV_A, table: coil, address: 2, writable: true}\n")), false},
 		{"nothing changed", "changes", files, false},
+		// a device added is also checked for what needs no running baseline: it
+		// writes the register DEV_A's Cmd writes, on the same endpoint
+		{"a new device writing another device's point", "outputs", withFile(files, "modbus.yaml", modbusYAML(pa, pb, mbSource("DEV_C", pa),
+			"  - {name: C_Cmd, source: DEV_C, table: holding, address: 10, format: int16, writable: true}\n")), false},
+		// a device added, with a program edit that does not compile: the whole
+		// candidate is loaded, not only the I/O sections
+		{"a new device with a broken program", "load", withFile(withFile(files, "modbus.yaml", modbusYAML(pa, pb, mbSource("DEV_C", pb), "")),
+			"main.st", "PROGRAM Main\nthis is not structured text\nEND_PROGRAM\n"), false},
+		// a device added with a program edit that compiles: a save would not
+		// write it, so the screen does not offer one
+		{"a new device with a program edit", "topology", withFile(withFile(files, "modbus.yaml", modbusYAML(pa, pb, mbSource("DEV_C", pb), "")),
+			"main.st", strings.Replace(string(files["main.st"].Data), "A_In + 1", "A_In + 2", 1)), false},
+		// a device added with a change outside the I/O sections: saved from the
+		// repository, not this screen
+		{"a new device with a manifest change outside the I/O", "topology", withFile(withFile(files, "modbus.yaml", modbusYAML(pa, pb, mbSource("DEV_C", pb), "")),
+			"nautilus.yaml", strings.Replace(string(files["nautilus.yaml"].Data), "name: io", "name: renamed", 1)), false},
 		{"a redundant project with no retain: block", "kept", withFile(files, "modbus.yaml", modbusYAML(pb, pa, "", "")), true},
 	}
 	for _, tc := range cases {
@@ -352,6 +368,13 @@ func TestIOValidateRefuses(t *testing.T) {
 			v := r.io.Validate(c)
 			if v.Valid || !strings.Contains(" "+strings.Join(failed(v), " ")+" ", " "+tc.check+" ") {
 				t.Fatalf("valid %v, failed %v; want %s to fail: %+v", v.Valid, failed(v), tc.check, v.Checks)
+			}
+			// Only what is fixed while the runtime runs fails for these: a restart
+			// would apply them, so they can be saved for one (#711). Every other
+			// refusal is not that.
+			restart := tc.name == "a new device" || tc.name == "a new tag" || tc.name == "a retyped tag"
+			if v.NeedsRestart != restart {
+				t.Fatalf("NeedsRestart = %v, want %v (failed %v)", v.NeedsRestart, restart, failed(v))
 			}
 			if _, err := r.io.Apply(r.ctx, c, "tester"); err == nil {
 				t.Fatal("an invalid candidate was applied")
@@ -1112,5 +1135,35 @@ devices:
 		if v.Valid || !strings.Contains(detail, "desc") || !strings.Contains(detail, "PF1.Serial") {
 			t.Fatalf("a profile desc edit: valid %v, fields %q; want PF1.Serial's desc refused", v.Valid, detail)
 		}
+	}
+}
+
+// A save for restart may change the I/O sections of the manifest and nothing
+// else: the check reads the documents, so a device row added to nautilus.yaml
+// (what the configuration screen writes) is not "more than I/O", while any
+// other key changing is, and unreadable text counts as different (#711).
+func TestChangesBeyondIOComparesTheDocumentsMinusTheIOSections(t *testing.T) {
+	fsOf := func(text string) fs.FS { return fstest.MapFS{"nautilus.yaml": {Data: []byte(text)}} }
+	const boot = "name: x\ntasks:\n  - { program: main.st }\ndriver:\n  type: modbus\n  manifest: modbus.yaml\n"
+	io := &IOConfig{manifest: "nautilus.yaml", bootFS: fsOf(boot)}
+	for _, c := range []struct {
+		name, cand string
+		beyond     bool
+	}{
+		{"nothing changed", boot, false},
+		{"a device row added", boot + "devices:\n  - { name: D, profile: p, endpoint: 127.0.0.1 }\n", false},
+		{"a driver setting changed", strings.Replace(boot, "modbus.yaml", "other.yaml", 1), false},
+		{"a second driver", strings.Replace(boot, "driver:\n  type: modbus\n  manifest: modbus.yaml\n", "drivers:\n  - { type: modbus, manifest: modbus.yaml }\n  - { type: opcua-client, endpoint: 'opc.tcp://h:4840', manifest: o.yaml }\n", 1), false},
+		{"the name changed", strings.Replace(boot, "name: x", "name: y", 1), true},
+		{"a task changed", strings.Replace(boot, "main.st", "other.st", 1), true},
+		{"a section added", boot + "alarms:\n  defs: []\n", true},
+		{"not yaml", "name: [x\n", true},
+	} {
+		if got := io.changesBeyondIO(&IOCandidate{fsys: fsOf(c.cand)}); got != c.beyond {
+			t.Errorf("%s: changesBeyondIO = %v, want %v", c.name, got, c.beyond)
+		}
+	}
+	if !io.changesBeyondIO(&IOCandidate{fsys: fstest.MapFS{}}) {
+		t.Error("a candidate with no manifest counts as unchanged")
 	}
 }

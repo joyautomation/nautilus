@@ -146,6 +146,7 @@ var actionClass = map[string]string{
 	// Saving an applied configuration as a commit (#711) writes to the
 	// repo the controller runs from, in the principal's name.
 	"config.commit": strict,
+	"config.save":   strict,
 	// A parameter is written to the device on an IO-Link port, through its
 	// master: a change to a device, like a configuration apply.
 	"param.write": strict,
@@ -1430,6 +1431,20 @@ func configCommitTarget(_ *http.Request, body []byte) auditTarget {
 			return nil
 		}
 		return map[string]any{"commit": c.Commit, "branch": capText(c.Branch, byMax), "files": capText(strings.Join(c.Files, ","), reasonMax)}
+	}}
+}
+
+// configSaveTarget is the audit target of a save for restart: the candidate,
+// and what it committed.
+func configSaveTarget(_ *http.Request, body []byte) auditTarget {
+	var req commitRequest
+	decodeBody(body, &req)
+	return auditTarget{target: req.ID, answered: func(b []byte) any {
+		var c IOSaved
+		if json.Unmarshal(b, &c) != nil || c.Commit == "" {
+			return nil
+		}
+		return map[string]any{"commit": c.Commit, "branch": capText(c.Branch, byMax), "files": capText(strings.Join(c.Files, ","), reasonMax), "pendingRestart": true}
 	}}
 }
 

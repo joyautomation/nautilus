@@ -38,6 +38,11 @@ type fakeIO struct {
 	commit  func(IOCommit) (IOCommitted, error)
 	commits []IOCommit
 	patch   func() (string, error)
+	// restart, when set, is the hook's Restart (the candidate needs a restart,
+	// and its files); save its Save; saves what it was asked
+	restart func(any) (bool, map[string]string)
+	save    func(IOSave) (IOCommitted, error)
+	saves   []IOSave
 }
 
 func (f *fakeIO) hook() *IOHook {
@@ -91,6 +96,16 @@ func (f *fakeIO) hook() *IOHook {
 		Differs: func() []IODiffer { return f.differs },
 		Fault:   func() string { return f.fault },
 		Patch:   f.patch,
+		Restart: f.restart,
+		Save: func() func(IOSave) (IOCommitted, error) {
+			if f.save == nil {
+				return nil
+			}
+			return func(c IOSave) (IOCommitted, error) {
+				f.saves = append(f.saves, c)
+				return f.save(c)
+			}
+		}(),
 		Commit: func() func(IOCommit) (IOCommitted, error) {
 			if f.commit == nil {
 				return nil

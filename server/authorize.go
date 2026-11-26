@@ -83,6 +83,7 @@ var actionPerm = map[string]string{
 	"config.validate":      PermConfig,
 	"config.apply":         PermConfig,
 	"config.commit":        PermConfig,
+	"config.save":          PermConfig,
 	"param.commit":         PermConfig,
 	"param.import":         PermConfig,
 	"config.revert.cancel": PermConfig,
