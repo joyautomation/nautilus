@@ -209,7 +209,7 @@ func TestSessionsOverTheRealLog(t *testing.T) {
 		l := NewSessionLog()
 		l.bind(ss)
 		stores[i], logs[i] = ss, l
-		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p, p.urls[i]},
+		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p: p, self: p.urls[i]},
 			Token: "t", Ephemeral: true, Apply: func(e oplog.Entry) error { _, err := l.Apply(e); return err }})
 		if err != nil {
 			t.Fatal(err)

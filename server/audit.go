@@ -811,6 +811,10 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		// effect (substitutes_oplog.go).
 		e.Result = audit.ResultUnknown
 	}
+	if buf.header.Get(journalAsHeader) == audit.ResultRefused && e.Result == audit.ResultError {
+		// A definite no answered 5xx (no leader known: nothing was sent).
+		e.Result = audit.ResultRefused
+	}
 	valueCap := valueMax
 	if e.Result == audit.ResultOK {
 		if t.done != nil {

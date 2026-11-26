@@ -89,7 +89,7 @@ func TestAnUnsyncedTakeoverNeverWaitsOnTheCatchUpsCommit(t *testing.T) {
 			p.stores[i] = &subStore{}
 			rt, err := runtime.New(runtime.Options{
 				Program: pairProgram, Driver: nio.NewMemory(), Clock: p.clks[i], Retain: p.stores[i],
-				Coordinator:   seat{p, p.urls[i]},
+				Coordinator:   seat{p: p, self: p.urls[i]},
 				Inputs:        []string{"Level", "Flow"},
 				Seed:          nio.Values{"Level": 40.0, "Flow": 3.0, "First": 0.0, "Seen": false},
 				Substitutable: []string{"Level", "Flow"},
@@ -113,7 +113,7 @@ func TestAnUnsyncedTakeoverNeverWaitsOnTheCatchUpsCommit(t *testing.T) {
 				return err
 			}
 		}
-		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p, p.urls[i]},
+		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p: p, self: p.urls[i]},
 			Token: "t", Ephemeral: true, Apply: apply})
 		if err != nil {
 			t.Fatal(err)
