@@ -53,6 +53,11 @@ export type AuditAnswer =
 	| { ok: true; entries: AuditEntry[]; truncated: boolean }
 	| { ok: false; status: number; message: string };
 
+/** What an export gives: the CSV, and the name the controller suggests for it. */
+export type AuditCsvAnswer =
+	| { ok: true; blob: Blob; filename: string }
+	| { ok: false; status: number; message: string };
+
 /** The query string for a filter (no leading '?'); blank fields left out. */
 export function auditQuery(f: AuditFilter = {}): string {
 	const q = new URLSearchParams();
@@ -88,6 +93,26 @@ export class AuditClient {
 		this.#url = opts.url ?? '/api/audit';
 		this.#token = opts.token;
 		this.#fetch = opts.fetch ?? kitFetch;
+	}
+
+	/** The journal as CSV, oldest first, for the same filter (no row limit). */
+	async csv(f: AuditFilter = {}): Promise<AuditCsvAnswer> {
+		// An export is the whole range: the table's row limit is not sent.
+		const qs = auditQuery({ ...f, limit: undefined });
+		const url = this.#url.replace(/\/?$/, '.csv');
+		let res: Response;
+		try {
+			res = await this.#fetch(qs ? `${url}?${qs}` : url, { headers: this.#token ? { 'X-Nautilus-Token': this.#token } : {} });
+		} catch {
+			return { ok: false, status: 0, message: 'controller unreachable' };
+		}
+		if (!res.ok) {
+			const text = await res.text();
+			if (res.status === 404) return { ok: false, status: 404, message: 'this controller cannot export the journal' };
+			return { ok: false, status: res.status, message: refusalMessage(res.status, text, 'the export failed') };
+		}
+		const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? 'audit.csv';
+		return { ok: true, blob: await res.blob(), filename: name };
 	}
 
 	/** The entries matching `f`, newest first. */

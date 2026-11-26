@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -1472,29 +1473,16 @@ type auditResponse struct {
 // entries say who did what from where. The users and roles PRs give it
 // the "audit" permission (design §4).
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
-	if s.policy != nil {
-		// With an auth: block, reading the journal is the audit permission
-		// (design §6 Q1).
-		if code, msg := s.authorize(r, PermAudit, ""); code != 0 {
-			writeJSON(w, code, map[string]string{"error": msg})
-			return
-		}
-	} else if s.authToken != "" && !tokenMatches(r, s.authToken) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "the audit journal needs the auth token"})
+	if !s.auditReadable(w, r) {
 		return
 	}
 	q := r.URL.Query()
-	from, err := parseTime(q.Get("from"), time.Time{})
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from: " + err.Error()})
-		return
-	}
-	to, err := parseTime(q.Get("to"), time.Time{})
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "to: " + err.Error()})
+	f, ok := s.auditFilterOf(w, q)
+	if !ok {
 		return
 	}
 	limit := 100
+	var err error
 	if l := q.Get("limit"); l != "" {
 		if limit, err = strconv.Atoi(l); err != nil || limit < 1 {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "limit: want a positive integer"})
@@ -1503,9 +1491,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	out := auditResponse{Entries: []audit.Entry{}}
 	for _, e := range s.audit.ring.Recent() {
-		if (!from.IsZero() && e.TS.Before(from)) || (!to.IsZero() && e.TS.After(to)) ||
-			!matchesUser(q.Get("user"), e.User) || !matches(q.Get("action"), e.Action) ||
-			!matches(q.Get("target"), e.Target) || !matches(q.Get("result"), e.Result) {
+		if !f(e) {
 			continue
 		}
 		if len(out.Entries) == limit {
@@ -1515,6 +1501,44 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		out.Entries = append(out.Entries, e)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// auditReadable answers a refusal and reports false when the request may
+// not read the journal: with an auth: block it is the audit permission
+// (design §6 Q1), without one the token.
+func (s *Server) auditReadable(w http.ResponseWriter, r *http.Request) bool {
+	if s.policy != nil {
+		if code, msg := s.authorize(r, PermAudit, ""); code != 0 {
+			writeJSON(w, code, map[string]string{"error": msg})
+			return false
+		}
+	} else if s.authToken != "" && !tokenMatches(r, s.authToken) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "the audit journal needs the auth token"})
+		return false
+	}
+	return true
+}
+
+// auditFilterOf reads the journal's filters (from, to, user, action,
+// target, result) from a query; on a bad one it answers 400 and reports
+// false.
+func (s *Server) auditFilterOf(w http.ResponseWriter, q url.Values) (func(audit.Entry) bool, bool) {
+	from, err := parseTime(q.Get("from"), time.Time{})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from: " + err.Error()})
+		return nil, false
+	}
+	to, err := parseTime(q.Get("to"), time.Time{})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "to: " + err.Error()})
+		return nil, false
+	}
+	user, action, target, result := q.Get("user"), q.Get("action"), q.Get("target"), q.Get("result")
+	return func(e audit.Entry) bool {
+		return !(!from.IsZero() && e.TS.Before(from)) && !(!to.IsZero() && e.TS.After(to)) &&
+			matchesUser(user, e.User) && matches(action, e.Action) &&
+			matches(target, e.Target) && matches(result, e.Result)
+	}, true
 }
 
 // matches is a filter: empty matches everything, else equal ignoring case.

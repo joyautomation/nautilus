@@ -33,6 +33,19 @@ describe('the query', () => {
 	});
 });
 
+describe('the export', () => {
+	it('asks /api/audit.csv with the filter and no row limit, and keeps the suggested name', async () => {
+		const { c, asked } = client(new Response('ts,seq\n', { status: 200, headers: { 'Content-Disposition': 'attachment; filename="audit-1.csv"' } }));
+		const r = await c.csv({ user: 'alice', limit: 200 });
+		expect(asked).toEqual(['/api/audit.csv?user=alice']);
+		expect(r.ok && r.filename).toBe('audit-1.csv');
+	});
+	it('says why when it is refused', async () => {
+		const r = await client(json({ error: 'jsmith may not audit' }, 403)).c.csv();
+		expect(r).toEqual({ ok: false, status: 403, message: 'jsmith may not audit' });
+	});
+});
+
 describe('the answers', () => {
 	it('entries and whether the controller cut the list', async () => {
 		const e: AuditEntry = { id: '1', ts: '2026-11-20T09:00:00Z', user: 'user:akhan', source: 'hmi', action: 'force.set', target: 'Setpoint', after: 7, result: 'ok' };

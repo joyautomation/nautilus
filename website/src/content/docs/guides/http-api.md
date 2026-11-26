@@ -247,6 +247,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/config/patch`](#saving-a-change) | The applied change as a patch for `git apply` (needs the edit permission) |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 | `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
+| `GET` | [`/api/audit.csv`](#audit-journal) | The same journal as CSV, oldest first, read from its files |
 | `GET` | [`/api/me`](/guides/auth/#browser-sign-in) | Who the request acts as, and what it may do |
 | `POST` | [`/api/elevate`](/guides/auth/#elevation) | A signed-in browser enters its password again, for the elevated permissions |
 | `GET` | [`/healthz`](#healthz-and-readyz) | Liveness: `200 ok` |
@@ -1611,6 +1612,22 @@ body over 16 MiB is refused with `413`. On a redundant pair, a write is
 journalled by the leader that applies it; one a standby answers itself
 (`503` while it holds the lease with its scans stalled, `502` when the
 leader cannot be reached) is journalled by the standby.
+
+### Export as CSV
+
+`GET /api/audit.csv` takes the same filters as `/api/audit` (`from`, `to`,
+`user`, `action`, `target`, `result`) and needs the same permission
+(`audit`, or the token). It answers `text/csv` as a download, oldest first,
+with the columns `ts, seq, id, user, source, action, target, result,
+before, after, from, session, detail` (`before`, `after` and `detail` as
+JSON text). There is **no row limit** unless you send `limit`: an export is
+the whole range. With the journal on disk it reads the journal's files, one
+line at a time, so a range reaches back past the recent entries
+`/api/audit` holds, as far as the files are kept (`audit.keep-days`); without
+one (the playground) it is those recent entries. A cell that starts with
+`=`, `+`, `-` or `@` gets a leading `'` so a spreadsheet shows it as text.
+The kit's `AuditTable` has an Export CSV button that sends the filter in
+the toolbar.
 
 ### When the journal cannot be written
 
