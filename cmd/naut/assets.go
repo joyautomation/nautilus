@@ -82,9 +82,12 @@ func deviceAsset(d devbind.DevicePoints) map[string]any {
 			continue
 		}
 		r := assetReading{Tag: member, Label: label, Unit: pt.Unit, Alarm: d.Alarms[strings.ToLower(pt.Name)]}
-		if strings.EqualFold(pt.Type, "BOOL") {
+		switch {
+		case strings.EqualFold(pt.Type, "BOOL") && r.Alarm:
+			// no words of its own: the kit says Alarm / Normal for an alarmed BOOL
+		case strings.EqualFold(pt.Type, "BOOL"):
 			r.On, r.Off = "On", "Off"
-		} else {
+		default:
 			r.Decimals = decimalsOf(pt)
 		}
 		readings = append(readings, r)

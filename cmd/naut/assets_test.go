@@ -316,6 +316,11 @@ func TestDeviceAssetShowsDerivedMembersAndFlagsAlarmed(t *testing.T) {
 	if strings.Join(reads, ",") != "CONV__Online,CONV.StatusWord,CONV.Fault,CONV.Tripped" {
 		t.Errorf("readings %v, want the derived member after the points", reads)
 	}
+	for _, r := range a.Panel.Readings {
+		if r.Tag == "CONV.Fault" && (r.On != "" || r.Off != "") {
+			t.Errorf("an alarmed BOOL reading carries words %q/%q: the kit's Alarm/Normal would be hidden", r.On, r.Off)
+		}
+	}
 	last := a.Panel.Readings[len(a.Panel.Readings)-1]
 	if last.Label != "The drive has tripped" || last.On != "Yes" || last.Off != "No" {
 		t.Errorf("derived reading %+v", last)
