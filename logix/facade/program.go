@@ -166,7 +166,11 @@ func (p *programPlane) auditTarget(deploy bool) func(*http.Request, []byte) serv
 			if t.Detail == nil {
 				t.Detail = map[string]any{}
 			}
-			t.Detail["mode"] = req.Mode
+			mode := "other" // the client's own words are never journalled
+			if req.Mode == "online" || req.Mode == "download" {
+				mode = req.Mode
+			}
+			t.Detail["mode"] = mode
 		}
 		return t
 	}

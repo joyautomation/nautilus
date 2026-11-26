@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,7 +74,7 @@ func TestDeployIsJournalled(t *testing.T) {
 	}
 	postDeploy(t, url, map[string]any{"mode": "download", "source": ladderB}) // no "yes" (and no download here)
 	es = waitEntries(t, url, "logix.deploy", 3)
-	if len(es) != 3 || es[0]["result"] == "ok" {
+	if len(es) != 3 || es[0]["result"] != "error" { // a 501: this server does not download
 		t.Fatalf("a refused deploy: %v", es)
 	}
 }
@@ -141,5 +142,28 @@ func TestProgramEditIsJournalled(t *testing.T) {
 		if es := waitEntries(t, url, p.action, 1); len(es) != 1 || es[0]["result"] != "refused" {
 			t.Fatalf("%s: %v", p.action, es)
 		}
+	}
+}
+
+// A failure whose error line is far longer than any buffer the seam keeps
+// (a controller's raw error text) is still journalled as a failure, and
+// the journal holds no source and no client-chosen mode text.
+func TestLongErrorLineIsStillAFailure(t *testing.T) {
+	long := strings.Repeat("x", 40<<10)
+	url := startPlaneWith(t, &ProgramPlane{
+		Source: ladderA, Controller: "DemoLine",
+		Deploy: func(_ context.Context, _ string, _ func(string)) (*deploy.Report, error) {
+			return nil, errors.New(long)
+		},
+	})
+	postDeploy(t, url, map[string]any{"mode": "online", "source": ladderB})
+	postDeploy(t, url, map[string]any{"mode": "SECRET-MODE-TEXT", "source": ladderB})
+	es := waitEntries(t, url, "logix.deploy", 2)
+	if len(es) != 2 || es[1]["result"] != "error" {
+		t.Fatalf("a long error line: %d entries, %v; want the first to be an error", len(es), es)
+	}
+	raw, _ := json.Marshal(es)
+	if bytes.Contains(raw, []byte("SECRET-MODE-TEXT")) || bytes.Contains(raw, []byte("RUNG r")) {
+		t.Fatalf("the journal holds the client's mode text or the source: %s", raw)
 	}
 }

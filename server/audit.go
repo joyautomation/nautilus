@@ -757,7 +757,7 @@ func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set(auditJournalHeader, "down")
 	}
-	a.answer(w, r, t, a.h)
+	a.answerAs(w, r, t, a.h, a.stream)
 }
 
 // refuse answers r with h instead of the route's handler, through the
@@ -780,9 +780,16 @@ func auditedAnswer(routes *http.ServeMux, w http.ResponseWriter, r *http.Request
 
 // answer runs h into a buffer, records the entry, then answers.
 func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTarget, h http.HandlerFunc) {
+	a.answerAs(w, r, t, h, false)
+}
+
+// answerAs is answer; stream passes the handler's bytes through as they
+// are written (only the route's own handler streams: a refusal is held
+// until its entry is recorded, as on every route).
+func (a *auditedRoute) answerAs(w http.ResponseWriter, r *http.Request, t auditTarget, h http.HandlerFunc, stream bool) {
 	buf := &bufferedResponse{header: w.Header()}
 	var sw *auditStreamWriter
-	if a.stream {
+	if stream {
 		sw = &auditStreamWriter{ResponseWriter: w, buf: buf}
 	}
 	// The entry's id, decided now: a route that answers "outcome unknown"
