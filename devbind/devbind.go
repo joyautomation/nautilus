@@ -13,7 +13,6 @@
 package devbind
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -95,26 +94,25 @@ func (o *OfflineAlarm) UnmarshalYAML(node *yaml.Node) error {
 		*o = OfflineAlarm{Off: !b}
 		return nil
 	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("line %d: offline-alarm: want false, true or {priority, on-delay}", node.Line)
+	}
+	// Keys are checked by hand: yaml.Marshal (what a strict re-decode would
+	// need) pulls the encoder into the playground's wasm.
 	var w struct {
 		Priority string `yaml:"priority"`
 		OnDelay  string `yaml:"on-delay"`
 	}
-	if err := strictNode(node, &w); err != nil {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if k := node.Content[i].Value; k != "priority" && k != "on-delay" {
+			return fmt.Errorf("line %d: offline-alarm: unknown key %q (want priority or on-delay)", node.Content[i].Line, k)
+		}
+	}
+	if err := node.Decode(&w); err != nil {
 		return fmt.Errorf("offline-alarm: %w", err)
 	}
 	*o = OfflineAlarm{Priority: w.Priority, OnDelay: w.OnDelay}
 	return nil
-}
-
-// strictNode decodes node into v, refusing keys v has no field for.
-func strictNode(node *yaml.Node, v any) error {
-	raw, err := yaml.Marshal(node)
-	if err != nil {
-		return err
-	}
-	dec := yaml.NewDecoder(bytes.NewReader(raw))
-	dec.KnownFields(true)
-	return dec.Decode(v)
 }
 
 // checkOfflineAlarm validates the row's offline-alarm.
