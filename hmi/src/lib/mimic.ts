@@ -945,6 +945,14 @@ function bindValue(tag: string, tags: Record<string, unknown>): unknown {
 	return tag.includes('.') ? tagAt(tags, tag) : undefined;
 }
 
+/** The banner's words for `unresolvedBindings`. A frame can leave a tag out
+ * on purpose (a `?tags=` subscription narrows it, server/stream.go
+ * filterTags), so the message does not call the name wrong: it says the tag
+ * is absent from the frame. */
+export function unresolvedMessage(refs: string[]): string {
+	return `${refs.length} binding${refs.length === 1 ? '' : 's'} not in the live frame (no such tag, or not subscribed or readable): ${refs.join(', ')}`;
+}
+
 /** The tag references of a drawing's live bindings that resolve to nothing
  * in `tags`, in document order, each once. A bind that never resolves is
  * silent in resolveBindings (the component keeps its default), so the

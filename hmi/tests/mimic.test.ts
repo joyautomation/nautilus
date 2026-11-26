@@ -18,6 +18,7 @@ import {
 	labelState,
 	resolveBindings,
 	unresolvedBindings,
+	unresolvedMessage,
 	type MimicDoc,
 	type MimicEquipment
 } from '../src/lib/mimic.js';
@@ -443,5 +444,15 @@ describe('unresolvedBindings', () => {
 	});
 	it('is empty before any frame has arrived', () => {
 		expect(unresolvedBindings(doc, {})).toEqual([]);
+	});
+});
+
+describe('unresolvedMessage', () => {
+	it('does not call an absent tag a wrong name: a subscription or a read scope can leave it out', () => {
+		const m = unresolvedMessage(['A.B']);
+		expect(m.includes('not in the live frame')).toBe(true);
+		expect(m.includes('not subscribed or readable')).toBe(true);
+		expect(m.startsWith('1 binding ')).toBe(true);
+		expect(unresolvedMessage(['A', 'B']).startsWith('2 bindings')).toBe(true);
 	});
 });

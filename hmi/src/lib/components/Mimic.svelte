@@ -20,7 +20,7 @@
 	import Pipe from './Pipe.svelte';
 	import StatusPill from './StatusPill.svelte';
 	import { sampleTag, tagHistory } from '../taghistory.svelte.js';
-	import { BUILTIN_PORTS, autoRoutes, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints, unresolvedBindings } from '../mimic.js';
+	import { BUILTIN_PORTS, autoRoutes, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints, unresolvedBindings, unresolvedMessage } from '../mimic.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
@@ -370,8 +370,8 @@
 	style="height: {doc.canvas.height * scale}px"
 >
 	{#if unresolved.length > 0}
-		<div class="unresolved" role="alert">
-			{unresolved.length} binding{unresolved.length === 1 ? '' : 's'} match no tag: {unresolved.join(', ')}
+		<div class="unresolved" role="status">
+			{unresolvedMessage(unresolved)}
 		</div>
 	{/if}
 	<div

@@ -7,7 +7,7 @@
 - **A mimic's `bind` reaches a struct member, and a bind that matches no tag says so** (#717): `resolveBindings`
   resolves a dotted path (`CONV.Run`) through the frame's nested struct, after a flat key of that name, so a device
   tag's members bind like any tag. A `bind` that resolves to nothing was silent (the component kept its default);
-  `<Mimic>` now shows a banner naming each one (`data-unresolved` on the root), once a frame has arrived. New
+  `<Mimic>` now shows a status banner naming each one (worded "not in the live frame", since a `?tags=` subscription can leave a tag out on purpose) (`data-unresolved` on the root), once a frame has arrived. New
   export `unresolvedBindings`.
 - **Live video from an RTSP camera plays in the panel** (#724 slice 3b, kit side): a camera the controller marks
   `hls` shows a muted `<video>` instead of the motion-JPEG `<img>`, started only by "Watch live" and stopped by Stop,
