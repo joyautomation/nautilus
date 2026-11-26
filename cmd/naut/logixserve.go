@@ -333,7 +333,12 @@ func logixProgramPlane(dir string, p *logixProject, client *logixd.Client) (plan
 			// replaces: let go of it first.
 			if sess != nil {
 				logf("closing the online session: the download replaces its project")
-				_ = sess.Close(ctx)
+				// Its own bounded time, as release does (#1410): a request
+				// that is already gone must not leave the agent holding the
+				// project online.
+				cctx, ccancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+				_ = sess.Close(cctx)
+				ccancel()
 				sess = nil
 			}
 			if w := writer.LocalModuleWarning(fresh.target.Processor); w != "" {

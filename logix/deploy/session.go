@@ -196,6 +196,19 @@ func (s *Session) drop() {
 func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.edit(ctx, src, false)
+}
+
+// sessionGone says the agent no longer holds our session: it answered
+// not_found on a session route (reaped on idle, or the agent restarted).
+func sessionGone(err error) bool { return logixd.Kind(err) == "not_found" }
+
+// edit is Edit with s.mu held. reopened says this is the retry after the
+// agent dropped the session: a second answer that the session is gone is
+// not retried again (#1410). Only calls before the import, and the
+// import's own refusal (nothing was written), are retried; once the
+// import may have taken, the failure is in doubt, never repeated.
+func (s *Session) edit(ctx context.Context, src string, reopened bool) (*Report, error) {
 	started := time.Now()
 	rep := &Report{}
 	done := func(err error) (*Report, error) {
@@ -285,7 +298,12 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 	if err := s.c.PutFile(ctx, rel, partial); err != nil {
 		return done(err)
 	}
-	mode, _ := s.s.Mode(ctx)
+	mode, merr := s.s.Mode(ctx)
+	if sessionGone(merr) && !reopened {
+		s.log("the agent no longer holds the online session; reopening it once")
+		s.drop()
+		return s.edit(ctx, src, true)
+	}
 	rep.ModeBefore = string(mode)
 	// The point of no return (outcome.go, #1404): a cancel before here
 	// changed nothing; from the import on, only the deadline stops it.
@@ -320,6 +338,12 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 	}
 	if ierr != nil {
 		ierr = withEvents(step, ierr, evs)
+		if sessionGone(ierr) && !reopened {
+			// The agent's word that it did not import: nothing changed.
+			s.log("the agent no longer holds the online session; reopening it once")
+			s.drop()
+			return s.edit(ctx, src, true)
+		}
 		if unsettled(ierr) {
 			return inDoubt(step, ierr)
 		}
