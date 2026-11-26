@@ -291,22 +291,29 @@ func (p *Project) AlarmDefs(rt *runtime.Runtime) ([]alarm.Def, error) {
 	if p.Alarms == nil {
 		return nil, nil
 	}
-	defs, _, _, err := p.alarmDefsTuned(rt)
+	defs, _, _, _, err := p.alarmDefsTuned(rt)
 	return defs, err
 }
 
 // alarmDefsTuned is AlarmDefs with the overlay's account: the rows applied
 // and the ids no alarm has (CheckAlarms refuses those; a start logs them).
-func (p *Project) alarmDefsTuned(rt *runtime.Runtime) (defs []alarm.Def, applied []AlarmTuning, missing []string, err error) {
+//
+// The devices' comms-loss alarms (deviceCommsAlarms) are tuned by the same
+// overlay: comms returns them with their delays applied, and an overlay row
+// naming one is not a missing id.
+func (p *Project) alarmDefsTuned(rt *runtime.Runtime) (defs, comms []alarm.Def, applied []AlarmTuning, missing []string, err error) {
 	if p.Alarms == nil {
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	defs, err = p.Alarms.alarmConfig().ComposeAfter(p.deviceAlarmFiles(), p.deviceAlarmRules(), p.alarmTagInfo(rt))
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
-	defs, applied, missing = p.Alarms.tuneDefs(defs)
-	return defs, applied, missing, nil
+	for _, sa := range p.deviceCommsAlarms(rt) {
+		comms = append(comms, sa.Def)
+	}
+	all, applied, missing := p.Alarms.tuneDefs(append(append([]alarm.Def(nil), defs...), comms...))
+	return all[:len(defs)], all[len(defs):], applied, missing, nil
 }
 
 // deviceAlarmFiles are the alarms the project's devices raise by default
@@ -517,6 +524,9 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 	byIDDef := make(map[string]alarm.Def, len(defs))
 	for _, d := range defs {
 		byIDDef[d.ID] = d
+	}
+	for _, sa := range p.deviceCommsAlarms(rt) { // the overlay tunes these too
+		byIDDef[sa.Def.ID] = sa.Def
 	}
 	for _, t := range p.Alarms.TuningRows {
 		d, ok := byIDDef[t.ID]
@@ -758,7 +768,7 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 	if p.Alarms == nil {
 		return nil, nil
 	}
-	defs, applied, missing, err := p.alarmDefsTuned(rt)
+	defs, commsDefs, applied, missing, err := p.alarmDefsTuned(rt)
 	if err != nil {
 		return nil, err
 	}
@@ -774,7 +784,11 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 	}
 	tags := rt.Tags()
 	read := tags.ReadPath
-	sys = append(p.deviceCommsAlarms(rt), sys...)
+	comms := p.deviceCommsAlarms(rt)
+	for i := range comms {
+		comms[i].Def = commsDefs[i] // with the overlay's delays
+	}
+	sys = append(comms, sys...)
 	if len(sys) > 0 {
 		conds := make(map[string]func() bool, len(sys))
 		for _, a := range sys {

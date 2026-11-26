@@ -42,3 +42,24 @@ func TestCheckRefusesDevicesOnAVendorTarget(t *testing.T) {
 		}
 	}
 }
+
+// Devices without an alarms: section are not watched: check says so, and
+// `alarms: {}` is enough to turn the devices' own alarms on.
+func TestCheckWarnsOfDevicesWithoutAlarms(t *testing.T) {
+	prof, _ := os.ReadFile("../../devprofile/profiles/abb-acs355-fmbt21.yaml")
+	sim, _ := os.ReadFile("../../devprofile/profiles/abb-drives.st")
+	files := func(alarms string) map[string]string {
+		return map[string]string{
+			"nautilus.yaml":                   "name: d\ntasks:\n  - program: main.st\n    scan: 100ms\ndevices:\n  - { name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.9 }\n" + alarms,
+			"main.st":                         "PROGRAM main\nVAR t : BOOL; END_VAR\nt := CONV.Tripped;\nEND_PROGRAM\n",
+			"profiles/abb-acs355-fmbt21.yaml": string(prof),
+			"profiles/abb-drives.st":          string(sim),
+		}
+	}
+	if out, _ := checkIn(t, files("")); !strings.Contains(out, "no alarms: section") {
+		t.Errorf("no warning for devices without alarms:\n%s", out)
+	}
+	if out, code := checkIn(t, files("alarms: {}\n")); code != 0 || strings.Contains(out, "no alarms: section") {
+		t.Errorf("alarms: {} still warns (exit %d):\n%s", code, out)
+	}
+}

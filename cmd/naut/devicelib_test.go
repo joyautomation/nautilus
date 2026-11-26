@@ -124,8 +124,12 @@ func TestDevicesProjectChecks(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("check exited %d:\n%s", code, out)
 	}
-	if strings.Contains(out, "warning") {
-		t.Errorf("a device's unwritten command tags are not dead outputs:\n%s", out)
+	// (a project with devices and no alarms: gets its own warning; this one
+	// is about dead outputs)
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "warning:") && !strings.Contains(line, "no alarms: section") {
+			t.Errorf("a device's unwritten command tags are not dead outputs:\n%s", out)
+		}
 	}
 	bad := libProject(t, strings.Replace(libProgram, "StatusWord", "StatusWrod", 1))
 	if err := addProfile(bad, "abb-acs355-fmbt21", "", io.Discard); err != nil {

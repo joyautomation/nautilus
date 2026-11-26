@@ -52,6 +52,9 @@ func (p *Profile) validateAlarms() error {
 			return fmt.Errorf("alarms[%d]: %s has an alarm already", i, name)
 		}
 		seen[k] = true
+		if err := checkTemplate(a.Name); err != nil {
+			return fmt.Errorf("alarms[%d]: name: %w", i, err)
+		}
 		if a.Priority != "" {
 			found := false
 			for _, n := range AlarmPriorities {
@@ -81,4 +84,29 @@ func (p *Profile) boolPoint(name string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// alarmPlaceholders are what an alarm name template may interpolate (the
+// alarm package's, which this leaf cannot import; a test in internal/project
+// compiles a profile's names through the alarm package).
+var alarmPlaceholders = map[string]bool{"tag": true, "member": true, "site": true, "area": true, "desc": true, "type": true, "path": true}
+
+// checkTemplate refuses an unknown or unclosed {placeholder} in a name.
+func checkTemplate(s string) error {
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '{':
+			j := strings.IndexByte(s[i:], '}')
+			if j < 0 {
+				return fmt.Errorf("%q has an unclosed {", s)
+			}
+			if name := s[i+1 : i+j]; !alarmPlaceholders[name] {
+				return fmt.Errorf("%q: unknown placeholder {%s} (want {tag} {member} {site} {area} {desc} {type} {path})", s, name)
+			}
+			i += j
+		case '}':
+			return fmt.Errorf("%q has a } with no {", s)
+		}
+	}
+	return nil
 }

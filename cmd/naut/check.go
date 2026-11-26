@@ -621,6 +621,13 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		fmt.Printf("%s: error: %s\n", loc.file, devicesOnTargetMessage(target))
 	}
 
+	// Without an alarms: section nothing watches the devices: the profiles'
+	// alarms and every device's comms-loss alarm are alarms like the rest.
+	if proj.Devices().Len() > 0 && proj.Alarms == nil {
+		warns++
+		fmt.Printf("%s: warning: devices: rows are declared but there is no alarms: section, so a device that stops answering raises nothing (add `alarms: {}` to get the devices' comms-loss and profile alarms)\n", loc.file)
+	}
+
 	// The Siemens writer's rules, on the project it would write.
 	if target == "siemens" {
 		errs += checkSiemensTarget(dir, manifestName, loc.file)

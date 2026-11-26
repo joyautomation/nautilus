@@ -299,10 +299,18 @@ have to be on: the project needs an `alarms:` section.
   master). An alarm that cannot be evaluated is not an alarm of nothing, so
   every `devices:` row also raises a **comms-loss alarm**, `<Device>__Offline`:
   high priority, class `comms`, 5 s on-delay, raised while `<Device>__Online`
-  is false and never suppressed by the device itself. (It is a system alarm
+  is false, **missing or not a BOOL** (it fails active: `enable:` reads the
+  same tag, and an alarm whose enable tag is missing or not a BOOL is
+  suppressed as unreadable, so a device not known to answer must raise, not go
+  quiet; the companion is in fact declared and seeded false at load) and never
+  suppressed by the device itself. The alarms: tuning overlay (#1249) reaches
+  it by the id `<Device>__Offline`. (It is a system alarm
   because an alarm's condition is true-is-alarm and the driver's companion is
   true-is-healthy.) Equipment out of service (#715) covers it with the
   device's other alarms; the equipment is the device's name.
+- **No `alarms:` section, no alarms**: the profiles' alarms and the comms-loss
+  alarm are the engine's, so a project with `devices:` and no `alarms:` gets
+  none of them; `naut check` warns (`alarms: {}` turns them on).
 - **Tuning it:** a row's `offline-alarm:` takes `{priority, on-delay}`, or
   `false` to turn it off on purpose (a typo or a bad value is a load error,
   and `naut check` warns on every run that a device has none).

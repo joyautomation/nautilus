@@ -328,3 +328,54 @@ func TestOfflineAlarmFailsActiveWhenTheCompanionIsMissing(t *testing.T) {
 		t.Fatalf("with no CONV__Online tag the comms alarm is quiet: %+v", c)
 	}
 }
+
+// The #1249 tuning overlay reaches the comms-loss alarm by its id, and a
+// row naming it is not a dead id.
+func TestTuningOverlayTunesTheOfflineAlarm(t *testing.T) {
+	fsys := deviceAlarmFS(t, "  tuning: tuning.yaml\n")
+	fsys["tuning.yaml"] = &fstest.MapFile{Data: []byte("tuning:\n  - { id: CONV__Offline, on-delay: 20s, why: \"the drive is slow to come up after a power cycle\" }\n")}
+	proj, rt := loadAlarms(t, fsys)
+	_, comms, applied, missing, err := proj.alarmDefsTuned(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missing) != 0 || len(applied) != 1 || len(comms) != 1 || comms[0].OnDelay != 20*time.Second {
+		t.Errorf("applied %v missing %v comms %+v", applied, missing, comms)
+	}
+	if _, errs, _, err := proj.CheckAlarms(rt); err != nil || len(errs) != 0 {
+		t.Errorf("check: %v %v", errs, err)
+	}
+	// and the engine that runs has the tuned delay, not the default
+	eng, err := proj.AlarmEngine(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	if r, ok := eng.Lookup("CONV__Offline"); !ok || r.OnDelay != 20*time.Second {
+		t.Errorf("running comms alarm %+v (found %v), want on-delay 20s", r.Def.OnDelay, ok)
+	}
+}
+
+// A profile's name template compiles through the alarm package: a profile
+// that validates never fails the whole alarm load later.
+func TestProfileAlarmNamesCompileInTheAlarmPackage(t *testing.T) {
+	for _, id := range []string{"abb-acs355-fmbt21", "abb-acs550-reta01", "abb-acs580-fmbt21", "fdc-mct4"} {
+		raw, err := os.ReadFile("../../devprofile/profiles/" + id + ".yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := devprofile.ParseProfile(raw, id+".yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range p.Alarms {
+			if a.Name == "" {
+				continue
+			}
+			r := alarm.Rule{Match: alarm.Match{Tag: "X"}, Name: a.Name}
+			if _, err := alarm.Expand([]alarm.Rule{r}, nil, []alarm.TagInfo{{Name: "X", TypeName: "BOOL"}}); err != nil {
+				t.Errorf("%s: %q: %v", id, a.Name, err)
+			}
+		}
+	}
+}

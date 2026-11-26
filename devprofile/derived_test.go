@@ -149,6 +149,10 @@ func TestAlarmValidation(t *testing.T) {
 		{`  - { point: Tripped }` + "\n" + `  - { point: Tripped }`, "has an alarm already"},
 		{`  - { point: Tripped, priority: urgent }`, "priority"},
 		{`  - { point: Tripped, on-delay: soon }`, "on-delay"},
+		{`  - { point: Tripped, name: "{descr} tripped" }`, "unknown placeholder {descr}"},
+		{`  - { point: Tripped, name: "{desc tripped" }`, "unclosed"},
+		{`  - { point: Tripped, name: "desc} tripped" }`, "no {"},
+		{`  - { point: Tripped, name: "{tag}.{member} of {desc} ({type}, {path}, {site}, {area})" }`, ""},
 	} {
 		src := derivedBase + `  - { name: Tripped, from: Word, bit: 3, doc: "m p. 2" }` + "\nalarms:\n" + tc.alarms + "\n"
 		src = strings.Replace(src, "docs:\n", "docs:\n", 1)

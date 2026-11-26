@@ -837,7 +837,9 @@ func (c *Config) Compose(files []File, tags []TagInfo) ([]Def, error) {
 // first match wins and a rule is tried in order, so what the manifest
 // declares claims a condition before an after-file's rule can. Defaults the
 // project's tooling generates (a device profile's alarms) go there, so a
-// project's rule on the same member always wins.
+// project's RULE on the same member wins. A hand-written alarm is not a
+// rule: one whose id is an id an after-file's rule generates is the
+// ordinary duplicate-id error, naming both.
 func (c *Config) ComposeAfter(files, after []File, tags []TagInfo) ([]Def, error) {
 	rules := make([]Rule, 0, len(c.Rules))
 	defs := make([]Def, 0, len(c.Defs))
