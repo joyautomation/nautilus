@@ -148,7 +148,7 @@ func (pw *progWriter) typ0(e st.Expression) string {
 			return l.typ
 		}
 		if g, ok := pw.w.globals[strings.ToLower(e.Name)]; ok {
-			return strings.ToUpper(strings.TrimSpace(g.Type))
+			return pw.w.canonArray(strings.ToUpper(strings.TrimSpace(g.Type)), nil)
 		}
 		if d, ok := pw.w.lib.constDecls[strings.ToLower(e.Name)]; ok {
 			return strings.ToUpper(strings.TrimSpace(d.Datatype))
@@ -164,15 +164,28 @@ func (pw *progWriter) typ0(e st.Expression) string {
 		// A pin or static of the project's block: its declared type.
 		if p := pw.w.userFB(ot); p != nil {
 			if pn, ok := p.pins()[strings.ToUpper(e.Member)]; ok {
-				return pn.typ
+				// An array pin's bounds as its block folds them.
+				return pw.w.canonArray(pn.typ, pw.w.localConsts(p.vbs))
 			}
 			return ""
 		}
 		// A struct's member: its declared type (#1299).
 		if sd := pw.w.structOf(pw.typ(e.Object)); sd != nil {
 			if f, ok := sd.fieldOf(e.Member); ok {
-				return strings.ToUpper(strings.TrimSpace(f.Datatype))
+				return pw.w.canonArray(strings.ToUpper(strings.TrimSpace(f.Datatype)), nil)
 			}
+		}
+	case *st.IndexExpr:
+		// An element: the array's element type, or the rest of the array
+		// for a partial index of more dimensions (arrays.go).
+		a, _ := pw.arrayOf(pw.rawTyp(e.Array))
+		if a == nil {
+			return ""
+		}
+		if n := len(e.Indices); n < len(a.dims) {
+			return a.typeString(n)
+		} else if n == len(a.dims) {
+			return strings.ToUpper(strings.TrimSpace(a.elem))
 		}
 	case *st.UnaryExpr:
 		t := pw.typ(e.Operand)

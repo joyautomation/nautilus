@@ -14,9 +14,9 @@
 //
 // What it does not translate yet it refuses with a rule-tagged
 // diagnostic, never a guess, worded as the writer's gap with the issue
-// that closes it (gaps.go): enums, arrays, WSTRING,
-// LTIME, TIME arithmetic, SFC, and every builtin outside the table in
-// expr.go. The project's FUNCTION_BLOCKs and FUNCTIONs are written as FBs
+// that closes it (gaps.go): WSTRING, LTIME, TIME arithmetic, and every
+// builtin outside the table in expr.go. Arrays are written with their
+// indices checked where nautilus would fault the scan (arrays.go). The project's FUNCTION_BLOCKs and FUNCTIONs are written as FBs
 // (multi-instances in their callers) and FCs (pous.go). Each task is its
 // own cyclic interrupt OB, and
 // the tags tasks share are copied per task as nautilus copies them
@@ -51,6 +51,7 @@ import (
 	"fmt"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -184,16 +185,27 @@ func (o Output) Symbol(path string) (string, bool) {
 // must be a name the writer declared there.
 func (o Output) member(k, root, path string) (string, bool) {
 	parts := strings.Split(path, ".")
-	s, known := o.names[strings.ToLower(k)][strings.ToLower(parts[0])]
+	head, idx, ok := cutIndex(parts[0])
+	if !ok {
+		return "", false
+	}
+	s, known := o.names[strings.ToLower(k)][strings.ToLower(head)]
 	if !known {
 		return "", false
 	}
 	// Each part as the writer declared it: the caller's case may differ.
 	sym := root + "." + sclName(s.name)
+	if s, sym, ok = s.indexed(sym, idx); !ok {
+		return "", false
+	}
 	for i, p := range parts[1:] {
+		p, idx, ok := cutIndex(p)
+		if !ok {
+			return "", false
+		}
 		switch {
 		case s.instance:
-			if i != len(parts)-2 || p == "" {
+			if i != len(parts)-2 || p == "" || idx != nil {
 				return "", false
 			}
 			sym += "." + p // an IEC pin, as nautilus names it
@@ -206,9 +218,51 @@ func (o Output) member(k, root, path string) (string, bool) {
 			}
 			s = next
 			sym += "." + sclName(s.name)
+			if s, sym, ok = s.indexed(sym, idx); !ok {
+				return "", false
+			}
 		}
 	}
 	return sym, true
+}
+
+// cutIndex splits a path part into its name and the indices after it
+// (Recipes[2], B[-1, 3]); idx is nil for a part with none.
+func cutIndex(p string) (name string, idx []int64, ok bool) {
+	open := strings.IndexByte(p, '[')
+	if open < 0 {
+		return p, nil, true
+	}
+	if !strings.HasSuffix(p, "]") || open == 0 {
+		return "", nil, false
+	}
+	for _, f := range strings.Split(p[open+1:len(p)-1], ",") {
+		n, err := strconv.ParseInt(strings.TrimSpace(f), 10, 64)
+		if err != nil {
+			return "", nil, false
+		}
+		idx = append(idx, n)
+	}
+	return p[:open], idx, true
+}
+
+// indexed is the element of the array s at idx, written after sym: every
+// dimension indexed, inside its bounds. No idx is s itself.
+func (s *shape) indexed(sym string, idx []int64) (*shape, string, bool) {
+	if idx == nil {
+		return s, sym, true
+	}
+	if len(idx) != len(s.dims) {
+		return nil, "", false
+	}
+	parts := make([]string, len(idx))
+	for i, n := range idx {
+		if n < s.dims[i].lo || n > s.dims[i].hi {
+			return nil, "", false
+		}
+		parts[i] = strconv.FormatInt(n, 10)
+	}
+	return s.elem, sym + "[" + strings.Join(parts, ",") + "]", true
 }
 
 // Source is where one generated file came from: the nautilus file, and
@@ -344,6 +398,12 @@ func Write(in Input) (Output, []Diag, error) {
 			continue
 		}
 		progs[strings.ToLower(prog.Name)] = true
+		if pw.faults {
+			if w.faultProgs == nil {
+				w.faultProgs = map[string]bool{}
+			}
+			w.faultProgs[strings.ToLower(prog.Name)] = true
+		}
 		out.names[strings.ToLower(prog.Name)] = pw.statics
 		out.Files = append(out.Files,
 			File{Path: fbName + ".scl", Data: pw.fb},
@@ -401,6 +461,20 @@ func Write(in Input) (Output, []Diag, error) {
 		out.Files = append(out.Files, File{Path: clock + ".db", Data: clockDB(clock, in.Tasks, dts)})
 		out.Sources[clock+".db"] = Source{Path: "nautilus.yaml"}
 	}
+	// The faults DB, when a program can fault the scan (arrays.go): a
+	// record for each task whose program can.
+	faults := ""
+	var faultTasks []string
+	for _, t := range in.Tasks {
+		if w.faultProgs[strings.ToLower(t.Program)] {
+			faultTasks = append(faultTasks, t.Name)
+		}
+	}
+	if len(faultTasks) > 0 && claim(prefix+faultsDB, "the faults DB") {
+		faults = prefix + faultsDB
+		out.Files = append(out.Files, File{Path: faults + ".db", Data: faultsSource(faults, faultTasks)})
+		out.Sources[faults+".db"] = Source{Path: "nautilus.yaml"}
+	}
 	// One cyclic interrupt OB per task: OB30 to OB38, then from 123, the
 	// numbers an S7-1500 gives cyclic interrupts.
 	runBy := map[string]string{}
@@ -447,7 +521,11 @@ func Write(in Input) (Output, []Diag, error) {
 			out.Files = append(out.Files, File{Path: sh.db + ".db", Data: db})
 			out.Sources[sh.db+".db"] = Source{Path: "nautilus.yaml"}
 		}
-		src, why := w.obSource(ob, prefix+t.Program+"_DB", sh, dts[t.Name])
+		fdb := ""
+		if w.faultProgs[pk] {
+			fdb = faults
+		}
+		src, why := w.obSource(ob, prefix+t.Program+"_DB", sh, dts[t.Name], fdb, t.Name)
 		if why != "" {
 			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: %s", t.Name, why))
 			continue
@@ -469,6 +547,14 @@ func Write(in Input) (Output, []Diag, error) {
 	// the tags DB, the scan DBs, the programs and the project's blocks
 	// each reach some.
 	typeOrder := w.writeTypes(&out, claim)
+	// The data type a block that can fault keeps its fault in (arrays.go),
+	// first: the blocks declare it.
+	if w.faultType && claim(prefix+faultType, "the data type of a block's fault") {
+		name := prefix + faultType + ".udt"
+		out.Files = append(out.Files, File{Path: name, Data: faultTypeSource(prefix + faultType)})
+		out.Sources[name] = Source{Path: "nautilus.yaml"}
+		typeOrder = append([]string{name}, typeOrder...)
+	}
 
 	if len(w.diags) > 0 {
 		return Output{Warnings: w.warnings}, w.diags, nil
@@ -531,6 +617,13 @@ type writer struct {
 	// types are the STRUCTs the written SCL names (lower-cased), each
 	// with the first nautilus file that names it (structs.go).
 	types map[string]string
+	// faulty and impure memoize canFault and fcImpure by block
+	// (lower-cased; arrays.go); faultProgs are the programs (lower-cased)
+	// whose FB checks or propagates a fault.
+	faulty, impure map[string]int
+	faultProgs     map[string]bool
+	// faultType: a block keeps a fault, so the PLC data type is written.
+	faultType bool
 }
 
 func (w *writer) useGuarded(fn, path string) {
@@ -623,8 +716,26 @@ func (w *writer) globalDB() ([]byte, bool) {
 			ok = false
 			continue
 		}
-		if g.Start != nil {
-			w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, gapMessage(gapStructured, fmt.Sprintf("the start value %v of a %s", g.Start, g.Type), "")))
+		if g.Start != nil && isArrayType(g.Type) {
+			if g.Init != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: init %s is not an array's start value", g.Name, g.Init))
+				ok = false
+				continue
+			}
+			if why := w.seedCheck(g.Type, g.Start); why != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: nautilus refuses the start value: %s", g.Name, why))
+				ok = false
+				continue
+			}
+			ls, why := w.arrayOverrides(g.Type, sclName(g.Name), g.Start)
+			if why != "" {
+				w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, why))
+				ok = false
+				continue
+			}
+			begin = append(begin, ls...)
+		} else if g.Start != nil {
+			w.diag("siemens/init", "nautilus.yaml", 0, fmt.Sprintf("tag %s: %s", g.Name, gapMessage(gapOther, fmt.Sprintf("the start value %v of a %s", g.Start, g.Type), "")))
 			ok = false
 			continue
 		}
@@ -641,6 +752,8 @@ func (w *writer) globalDB() ([]byte, bool) {
 			}
 			line += " := " + init
 		} else if n, isEnum := w.enumStart(g.Type); isEnum {
+			line += " := " + n
+		} else if n := w.arrayStart(g.Type, nil); n != "" {
 			line += " := " + n
 		}
 		line += ";"
@@ -707,7 +820,7 @@ func constValue(lib *library, e st.Expression) (string, string) {
 	switch e.(type) {
 	case *st.NumberLit, *st.BoolLit, *st.StringLit, *st.TimeLit, *st.TypedLit:
 	default:
-		return "", gapMessage(gapStructured, "an initial value written as an expression", "a start value is one literal in SCL")
+		return "", gapMessage(gapOther, "an initial value written as an expression", "a start value is one literal in SCL")
 	}
 	scratch := &writer{globals: map[string]Global{}, lib: lib}
 	pw := &progWriter{w: scratch, locals: map[string]local{}}

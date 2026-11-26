@@ -452,7 +452,7 @@ func TestFunctionStructInputWrites(t *testing.T) {
 	} {
 		lib := types + "FUNCTION G : INT\nVAR_INPUT m : M; END_VAR\nVAR o : M; END_VAR\n" + body + "G := 1;\nEND_FUNCTION\n"
 		_, diags := writeStructs("PROGRAM P\nVAR a : M; n : INT; END_VAR\nn := G(m := a);\nEND_PROGRAM\n", nil, lib)
-		if len(diags) != 1 || !strings.Contains(diags[0].Message, "a STRUCT input of FUNCTION G yet (#1299): TIA hands a function its STRUCT input by reference") {
+		if len(diags) != 1 || !strings.Contains(diags[0].Message, "a STRUCT or ARRAY input of FUNCTION G yet (#1305): TIA hands a function its STRUCT or ARRAY input by reference") {
 			t.Errorf("%s: %v", name, diags)
 		}
 	}
@@ -536,11 +536,11 @@ func TestFunctionStructInputAliasesATag(t *testing.T) {
 	prog := "PROGRAM P\nVAR_EXTERNAL T : M; K : INT; END_VAR\nVAR b : BOOL; END_VAR\nb := F(s := T);\nEND_PROGRAM\n"
 	for name, c := range map[string]struct{ lib, want string }{
 		"direct": {"FUNCTION F : BOOL\nVAR_INPUT s : M; END_VAR\nVAR_EXTERNAL T : M; END_VAR\nT.run := TRUE;\nF := s.run;\nEND_FUNCTION\n",
-			"FUNCTION F, which takes the STRUCT input s and writes the STRUCT tag T yet (#1299)"},
+			"FUNCTION F, which takes the STRUCT or ARRAY input s and writes the STRUCT or ARRAY tag T yet (#1305)"},
 		"whole": {"FUNCTION F : BOOL\nVAR_INPUT s : M; END_VAR\nVAR o : M; END_VAR\nVAR_EXTERNAL T : M; END_VAR\nT := o;\nF := s.run;\nEND_FUNCTION\n",
-			"writes the STRUCT tag T yet"},
+			"writes the STRUCT or ARRAY tag T yet"},
 		"through": {"FUNCTION G : BOOL\nVAR_INPUT x : BOOL; END_VAR\nVAR_EXTERNAL T : M; END_VAR\nT.n := 1;\nG := x;\nEND_FUNCTION\nFUNCTION F : BOOL\nVAR_INPUT s : M; END_VAR\nF := G(x := s.run);\nEND_FUNCTION\n",
-			"writes the STRUCT tag T (through FUNCTION G) yet"},
+			"writes the STRUCT or ARRAY tag T (through FUNCTION G) yet"},
 	} {
 		_, diags := writeStructs(prog, globals, types+c.lib)
 		if !strings.Contains(fmt.Sprint(diags), c.want) {

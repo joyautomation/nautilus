@@ -56,8 +56,8 @@ func TestCheckPassesAGoodSiemensStation(t *testing.T) {
 
 var goodSiemensManifest = strings.NewReplacer("AGENT", "http://127.0.0.1:8190", "NAME", "plc-1").Replace(siemensCheckManifest)
 
-// A construct the SCL writer refuses (an array, on line 2).
-const siemensRefusedProgram = "PROGRAM main\nVAR k : ARRAY[1..2] OF REAL; END_VAR\nVAR x : REAL; END_VAR\nx := Level * k[1];\nEND_PROGRAM\n"
+// A construct the SCL writer refuses (an array of timers, on line 2).
+const siemensRefusedProgram = "PROGRAM main\nVAR k : ARRAY[1..2] OF TON; END_VAR\nVAR x : REAL; END_VAR\nx := Level;\nEND_PROGRAM\n"
 
 // TestCheckSiemensTargetRunsTheWritersRules: a project with a
 // target.siemens section is checked against the writer without a flag,
@@ -67,7 +67,7 @@ func TestCheckSiemensTargetRunsTheWritersRules(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1:\n%s", code, out)
 	}
-	if !strings.Contains(out, "main.st:2:1: siemens target: k: the Siemens writer doesn't translate arrays yet (#1299) [siemens/type]") {
+	if !strings.Contains(out, "main.st:2:1: siemens target: k: the Siemens writer doesn't translate an array of function block instances yet (#1305) [siemens/type]") {
 		t.Fatalf("no writer diagnostic at main.st:2:\n%s", out)
 	}
 }

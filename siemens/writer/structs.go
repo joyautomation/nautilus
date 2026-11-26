@@ -258,16 +258,19 @@ func (w *writer) typeRefusal(typ string, seen map[string]bool) string {
 	}
 	k := strings.ToLower(sd.name)
 	if seen[k] {
-		return gapMessage(gapStructured, "the recursive type "+sd.name, "")
+		return gapMessage(gapOther, "the recursive type "+sd.name, "")
 	}
 	seen[k] = true
 	defer delete(seen, k)
 	for _, f := range sd.fields {
+		if why := boundsRefusal(f.Type); why != "" {
+			return fmt.Sprintf("member %s: %s", f.Name, why)
+		}
 		if why := w.typeRefusal(f.Datatype, seen); why != "" {
 			return fmt.Sprintf("member %s: %s", f.Name, why)
 		}
 		if f.Initial != nil && w.structOf(f.Datatype) != nil {
-			return fmt.Sprintf("member %s: %s", f.Name, gapMessage(gapStructured, "a struct member's initializer", ""))
+			return fmt.Sprintf("member %s: %s", f.Name, gapMessage(gapOther, "a struct member's initializer", ""))
 		}
 		if f.Initial != nil {
 			if _, why := w.memberInit(f); why != "" {
@@ -281,13 +284,16 @@ func (w *writer) typeRefusal(typ string, seen map[string]bool) string {
 // sclType maps a declared type that is not a struct to its SCL spelling,
 // or says why not.
 func (w *writer) sclType(t string) (string, string) {
+	if isArrayType(t) {
+		return w.arrayDecl(t, nil)
+	}
 	typ, why := sclType(t)
 	if why == "" {
 		return typ, ""
 	}
 	k := strings.ToLower(strings.TrimSpace(t))
 	if name, ok := w.lib.conflicts[k]; ok {
-		return "", gapMessage(gapStructured, "the TYPE "+name+", which two programs declare differently", "nautilus gives each program its own; the tags DB takes one")
+		return "", gapMessage(gapOther, "the TYPE "+name+", which two programs declare differently", "nautilus gives each program its own; the tags DB takes one")
 	}
 	if name, ok := w.lib.fbs[k]; ok {
 		return "", gapMessage(gapOther, "the project's function block "+name+" here", "")
@@ -344,6 +350,9 @@ func (w *writer) typeName(sd *structDef, path string) string {
 // type lacks, or a struct given something else than a map, is refused,
 // never dropped.
 func (w *writer) overrides(typ, path string, start any) ([]string, string) {
+	if isArrayType(typ) {
+		return w.arrayOverrides(typ, path, start)
+	}
 	sd := w.structOf(typ)
 	if sd == nil && w.enumOf(typ) != nil {
 		v, why := w.enumInit(typ, fmt.Sprint(start))
@@ -484,6 +493,8 @@ func (w *writer) udtSource(sd *structDef) ([]byte, string) {
 			line += " := " + v
 		} else if n, ok := w.enumStart(f.Datatype); ok {
 			line += " := " + n
+		} else if n := w.arrayStart(f.Datatype, nil); n != "" {
+			line += " := " + n
 		}
 		b.WriteString(line + ";\n")
 	}
@@ -505,7 +516,7 @@ func (w *writer) leaves(typ, path string) ([]leaf, string) {
 		u := strings.ToUpper(strings.TrimSpace(typ))
 		init, ok := w.zeroOf(u)
 		if !ok {
-			return nil, gapMessage(gapStructured, "a "+typ+" member here", "")
+			return nil, gapMessage(gapOther, "a "+typ+" member here", "")
 		}
 		return []leaf{{path: path, typ: u, init: init}}, ""
 	}
@@ -546,16 +557,26 @@ func (w *writer) seedCheck(typ string, start any) string {
 
 // shape is what a readable name holds below it, for Output.Symbol, with
 // the name as declared: members for a struct; any member one level down
-// for a function block instance; neither for a scalar.
+// for a function block instance; for an array, its dimensions and what
+// each element holds; none of these for a scalar.
 type shape struct {
 	name     string
 	instance bool
 	members  map[string]*shape // lower-cased
+	dims     []arrayDim
+	elem     *shape
 }
 
 // shapeOf is the shape of a name declared with type typ.
 func (w *writer) shapeOf(name, typ string) *shape {
 	s := &shape{name: name}
+	if isArrayType(typ) {
+		if a, _ := w.arrayOf(typ, nil); a != nil {
+			s.dims = a.dims
+			s.elem = w.shapeOf("", a.elem)
+		}
+		return s
+	}
 	sd := w.structOf(typ)
 	if sd == nil {
 		return s

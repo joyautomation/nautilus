@@ -115,8 +115,7 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 		}
 		return pw.widen(pw.typ(e), pw.expr(e.Object, unaryPrec+1)+"."+sclName(member))
 	case *st.IndexExpr:
-		pw.gap("siemens/type", e.Pos.Line, gapStructured, "arrays", "")
-		return ""
+		return pw.widen(pw.typ(e), pw.index(e))
 	case *st.UnaryExpr:
 		return pw.unary(e, parent)
 	case *st.BinaryExpr:
@@ -286,7 +285,7 @@ func nonZeroConstant(e st.Expression) bool {
 func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 	line := c.Pos.Line
 	if c.Callee != nil {
-		pw.gap("siemens/type", line, gapStructured, "calls through an array of instances", "")
+		pw.gap("siemens/type", line, gapOther, "calls through an array of instances", "")
 		return ""
 	}
 	name := strings.ToUpper(c.Name)

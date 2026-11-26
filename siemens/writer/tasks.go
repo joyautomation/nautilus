@@ -117,11 +117,15 @@ func (pw *progWriter) assignTarget(e st.Expression) (g Global, path, typ string,
 // wrote.
 func (pw *progWriter) assigned(b *strings.Builder, in string, at int, target st.Expression) {
 	pw.fcInputWrite(target, at)
+	if hasIndex(target) || hasIndex(bitObject(target)) {
+		pw.assignedElement(at, target)
+		return
+	}
 	g, path, typ, bit, ok := pw.assignTarget(target)
 	if !ok {
 		return
 	}
-	if pw.structTag == "" && pw.w.structOf(g.Type) != nil {
+	if pw.structTag == "" && (pw.w.structOf(g.Type) != nil || isArrayType(g.Type)) {
 		pw.structTag = g.Name
 	}
 	u := pw.use(g)
@@ -158,31 +162,58 @@ func (pw *progWriter) assigned(b *strings.Builder, in string, at int, target st.
 	}
 }
 
-// fcInputWrite refuses a write to a FUNCTION's STRUCT input, or to any
-// member of it: TIA hands an FC a STRUCT input by reference, so the write
-// would land in the caller's variable, where nautilus writes the
-// function's own copy (pous.go).
+// fcInputWrite refuses a write to a FUNCTION's STRUCT or ARRAY input, or
+// to any member or element of it: TIA hands an FC such an input by
+// reference, so the write would land in the caller's variable, where
+// nautilus writes the function's own copy (pous.go).
 func (pw *progWriter) fcInputWrite(target st.Expression, at int) {
 	if pw.kind != kindFC {
 		return
 	}
-	root := target
-	for {
-		m, ok := root.(*st.MemberExpr)
-		if !ok {
-			break
-		}
-		root = m.Object
-	}
-	id, ok := root.(*st.IdentExpr)
-	if !ok {
+	id := rootIdent(target)
+	if id == nil {
 		return
 	}
 	pn, ok := pw.pou.pins()[strings.ToUpper(id.Name)]
-	if !ok || pn.kind != "VAR_INPUT" || pw.w.structOf(pn.typ) == nil {
+	if !ok || pn.kind != "VAR_INPUT" || pw.w.structOf(pn.typ) == nil && !isArrayType(pn.typ) {
 		return
 	}
-	pw.gap("siemens/var", at, gapStructured, "writing "+exprShort(target)+", a STRUCT input of "+pw.what(), "TIA hands a function its STRUCT input by reference, so the write would reach the caller's variable; nautilus writes the function's own copy")
+	pw.gap("siemens/var", at, gapOther, "writing "+exprShort(target)+", a STRUCT or ARRAY input of "+pw.what(), "TIA hands a function its STRUCT or ARRAY input by reference, so the write would reach the caller's variable; nautilus writes the function's own copy")
+}
+
+// bitObject is the word a bit access writes (w in w.%X3), or nil.
+func bitObject(e st.Expression) st.Expression {
+	if m, ok := e.(*st.MemberExpr); ok {
+		if _, bit := bitIndex(m.Member); bit {
+			return m.Object
+		}
+	}
+	return nil
+}
+
+// assignedElement records a write through an array element (a[i] := …,
+// a[i].x := …, a[i].%X0 := …). nautilus lands the elements a scan
+// assigned one by one; a shared tag is copied back per member here, so a
+// write into an element of a shared tag is refused (#1305).
+func (pw *progWriter) assignedElement(at int, target st.Expression) {
+	id := rootIdent(target)
+	if id == nil {
+		return
+	}
+	if _, local := pw.locals[strings.ToLower(id.Name)]; local {
+		return
+	}
+	g, ok := pw.w.globals[strings.ToLower(id.Name)]
+	if !ok {
+		return
+	}
+	if pw.structTag == "" {
+		pw.structTag = g.Name
+	}
+	pw.use(g).written = true
+	if sh := pw.share; sh != nil && sh.tags[strings.ToLower(g.Name)] != nil {
+		pw.gap("siemens/task", at, gapOther, "writing an element of "+g.Name+", a tag several tasks share", "nautilus lands each element a scan assigned; the writer copies a shared tag back member by member")
+	}
 }
 
 // flagAll is the value that marks leaf l of a shared tag wholly assigned:
@@ -329,7 +360,12 @@ func (w *writer) flagType(typ, path, ind string, u *tagUse) (string, string) {
 // obSource writes a task's OB: it calls the program's FB, and when the
 // task shares tags, copies them in first and lands what the scan
 // assigned after.
-func (w *writer) obSource(ob OB, instDB string, sh *share, dt *dtOf) ([]byte, string) {
+//
+// When the program can fault the scan (arrays.go), faults is the faults
+// DB: the OB counts the program's fault (its instance's naut_fault) into
+// the task's record last, after the copy-out (nautilus commits what a
+// faulted scan wrote).
+func (w *writer) obSource(ob OB, instDB string, sh *share, dt *dtOf, faults, task string) ([]byte, string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "ORGANIZATION_BLOCK %s\n", quote(ob.Name))
 	fmt.Fprintf(&b, "TITLE = \"Cyclic interrupt, %s\"\n", ob.Cycle)
@@ -346,6 +382,9 @@ func (w *writer) obSource(ob OB, instDB string, sh *share, dt *dtOf) ([]byte, st
 	}
 	if sh == nil {
 		fmt.Fprintf(&b, "\t%s();\n", quote(instDB))
+		if faults != "" {
+			b.WriteString(faultCount(faults, task, instDB))
+		}
 		b.WriteString("END_ORGANIZATION_BLOCK\n")
 		return []byte(b.String()), ""
 	}
@@ -400,6 +439,9 @@ func (w *writer) obSource(ob OB, instDB string, sh *share, dt *dtOf) ([]byte, st
 			fmt.Fprintf(&b, "\t\tIF %s%s THEN\n\t\t\t%s%s := %s%s;\n\t\tEND_IF;\n", flag, bit, to, bit, from, bit)
 		}
 		fmt.Fprintf(&b, "\tEND_IF;\n\t%s := %s;\n", flag, bitsLit(0, mask))
+	}
+	if faults != "" {
+		b.WriteString(faultCount(faults, task, instDB))
 	}
 	b.WriteString("END_ORGANIZATION_BLOCK\n")
 	return []byte(b.String()), ""

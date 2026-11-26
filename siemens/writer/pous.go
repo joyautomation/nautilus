@@ -3,6 +3,7 @@ package writer
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -334,7 +335,7 @@ func (w *writer) structInputAliases(written map[string]*pouFile, order []string)
 		}
 		input := ""
 		for _, in := range p.inputs() {
-			if w.structOf(in.typ) != nil {
+			if w.structOf(in.typ) != nil || isArrayType(in.typ) {
 				input = in.name
 				break
 			}
@@ -368,13 +369,13 @@ func (w *writer) structInputAliases(written map[string]*pouFile, order []string)
 		if tag == "" {
 			continue
 		}
-		what := "writes the STRUCT tag " + tag
+		what := "writes the STRUCT or ARRAY tag " + tag
 		if !strings.EqualFold(via, p.name) {
 			what += " (through FUNCTION " + via + ")"
 		}
 		s := w.needed[k]
-		w.diag("siemens/var", s.path, s.line, gapMessage(gapStructured, fmt.Sprintf("%s, which takes the STRUCT input %s and %s", p.what(), input, what),
-			"TIA hands a function its STRUCT input by reference, so a caller passing that tag would have the function read its own write; nautilus reads the copy it was handed"))
+		w.diag("siemens/var", s.path, s.line, gapMessage(gapOther, fmt.Sprintf("%s, which takes the STRUCT or ARRAY input %s and %s", p.what(), input, what),
+			"TIA hands a function a STRUCT or ARRAY input by reference, so a caller passing that tag would have the function read its own write; nautilus reads the copy it was handed"))
 	}
 }
 
@@ -550,9 +551,21 @@ func (pw *progWriter) fbCall(b *strings.Builder, c *st.CallExpr, l local, p *pou
 			return
 		}
 	}
+	faults := pw.w.canFault(p)
+	if faults && len(inouts) > 0 {
+		// nautilus copies an in-out back only when the block finishes; TIA
+		// passes it by reference, so a write before a fault would stay.
+		pw.gap("siemens/call", line, gapOther, "an in-out bound to "+p.what()+", which can fault the scan", "nautilus copies the in-out back only when the block finishes; TIA passes it by reference")
+		return
+	}
 	pw.emit(b, at, "%s#%s(%s);\n", in, sclName(l.name), strings.Join(parts, ", "))
 	for _, t := range inouts {
 		pw.assigned(b, in, at, t)
+	}
+	if faults {
+		// A fault in the block ends this one too, before its outputs are
+		// stored: nautilus stores them only when the block finishes.
+		pw.faultCheck(b, in, at, "#"+sclName(l.name)+"."+faultVar)
 	}
 	for _, o := range c.OutputBindings {
 		pn, ok := pins[strings.ToUpper(o.Name)]
@@ -615,6 +628,15 @@ func (pw *progWriter) fcCall(c *st.CallExpr, p *pou, stmt bool) string {
 		}
 		parts[i] = sclName(pn.name) + " := " + v
 	}
+	if pw.w.canFault(p) {
+		// A FUNCTION that can fault hands its fault back through its
+		// output; lift calls it ahead of the statement with a temp for it.
+		if pw.fcFault == "" {
+			pw.diag("siemens/call", line, p.what()+" can fault the scan and is called where the writer did not check it (a writer bug, please report it)")
+			return ""
+		}
+		parts = append(parts, faultVar+" => "+pw.fcFault)
+	}
 	pw.need(p, line)
 	return quote(pw.w.prefix+p.name) + "(" + strings.Join(parts, ", ") + ")"
 }
@@ -625,7 +647,7 @@ func (pw *progWriter) constants(vb st.VarBlock) {
 	for _, v := range vb.Variables {
 		u := strings.ToUpper(strings.TrimSpace(v.Datatype))
 		if pw.w.structOf(v.Datatype) != nil {
-			pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapStructured, "a STRUCT constant", ""))
+			pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "a STRUCT constant", ""))
 			continue
 		}
 		t, why := pw.w.sclType(v.Datatype)
@@ -671,7 +693,20 @@ func (pw *progWriter) constInit(e st.Expression, typ string, seen map[string]boo
 			return pw.constInit(d.Initial, strings.ToUpper(strings.TrimSpace(d.Datatype)), seen)
 		}
 	}
-	return constValue(pw.w.lib, e)
+	v, why := constValue(pw.w.lib, e)
+	if why != "" && isInt(typ) {
+		// Integer arithmetic on literals and constants (STAGES : INT :=
+		// 2 + 1): folded as nautilus folds it, into one literal.
+		// A project constant's initializer names project constants only.
+		n, ok := pw.fold(e)
+		if len(seen) > 0 {
+			n, ok = pw.w.foldInt(e, nil, map[string]bool{})
+		}
+		if ok && inRange(n, typ) {
+			return strconv.FormatInt(n, 10), ""
+		}
+	}
+	return v, why
 }
 
 // useConst records the project's global constant k (a library's
@@ -699,7 +734,7 @@ func (pw *progWriter) globalConsts() []string {
 		d := pw.w.lib.constDecls[k]
 		u := strings.ToUpper(strings.TrimSpace(d.Datatype))
 		if pw.w.structOf(d.Datatype) != nil {
-			pw.gap("siemens/library", pw.gconsts[k], gapStructured, "the project's STRUCT constant "+d.Name, "")
+			pw.gap("siemens/library", pw.gconsts[k], gapOther, "the project's STRUCT constant "+d.Name, "")
 			continue
 		}
 		t, why := pw.w.sclType(d.Datatype)

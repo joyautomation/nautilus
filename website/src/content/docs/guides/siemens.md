@@ -333,6 +333,7 @@ refused at check time, with one exception, the table below.
 | Manifest tags | one global DB, `naut_Tags`, with each tag's `init:` as its start value (I/O tags as a PLC tag table come later) |
 | STRUCT types, in a library file or the program | a PLC data type each (`naut_Motor`), in the PLC data types group named like the block group, written only when something uses it (declared but unused types are not written). The type carries the TYPE's initial values; a tag's `init:` map is written as start values in `naut_Tags`. Your blocks can take a STRUCT as an input, output or in-out, and a function can return one. A whole struct is copied whole |
 | Enumerations (`TYPE Mode : (Idle, Run := 10);`) | TIA has no enumerated type, so an enumeration is the integer nautilus carries for it: a `DInt`, the Int32 nautilus's OPC UA server serves every enumeration as, whatever base type you declare (`(A, B) INT`), or an `LInt` when a value needs 64 bits. Each member a block names is a `VAR CONSTANT` of that block, `<Enum>_<Member>` (`#Mode_Run`), so the SCL still reads by name, CASE labels included. A variable, member or tag starts at the type's initial member, or at the member its initial value or `init:` names. `TO_INT` and the other integer conversions of an enumeration convert its integer; `TO_Mode(n)` keeps n's value, so n must fit the enumeration's integer |
+| Arrays (`ARRAY[1..3, 0..4] OF REAL`) | TIA's `Array` with the same bounds, any lower bound, more than one dimension (`a[i, j]`). Bounds may name a constant (`ARRAY[1..STAGES]`), and a project constant written as arithmetic (`STAGES : INT := 2 + 1`) is folded to one number. Elements can be any elementary type, `String`, a STRUCT or an enumeration. A tag's `init:` list is written as start values element by element. An index the writer cannot prove in bounds is checked before it is used, as nautilus checks it (see [An index out of bounds](#an-index-out-of-bounds)) |
 | TON, TOF, TP, R_TRIG, F_TRIG, CTU, CTD, CTUD | the IEC instructions as multi-instances; counters are 64-bit. A timer `t` has a static beside it, `naut_t_last`, that holds its `Q` and `ET` as its last call left them: the CPU's timer updates `Q` and `ET` whenever the program reads them, while nautilus returns the last call's values, so every read of `t.Q` or `t.ET` reads the static. A program that writes a timer's `Q` or `ET` is refused. The first deploy of a program with timers after this change needs `--reset-data` (the block gained the statics) |
 | SR, RS | written inline on a static |
 | SFC | the state machine nautilus itself runs, written into the program's FB: each step's flag (`_S_Fill_X`) and timer are statics of the FB, named as in nautilus. On the CPU, every scan of every conformance chart matched nautilus's, at a task interval that puts no timer preset on a scan boundary (a timer that ends exactly on a scan may end one scan apart, as on any two clocks), and a STOP to RUN starts the chart over at its initial step, as in nautilus. A change that leaves the FB's statics as they were, such as a named transition's condition or an action's statements, loads in RUN and keeps the active step. A new step, qualifier or timed association, a first `Step.T` read, or a line added above an unnamed transition (its hidden name carries its line number) changes them: the deploy asks for `--reset-data`, which starts the chart over. Name your transitions to keep edits live |
@@ -394,6 +395,45 @@ A block called from a program with several tasks can't read a manifest
 tag inside its body: each task works on its own copy of the tags it
 shares. Pass the tag to the block as a pin instead.
 
+## An index out of bounds
+
+nautilus faults the scan when an array index is out of bounds: the rest
+of that scan is skipped, what the scan wrote before the fault stays, the
+fault is counted, and the next scan runs. An S7-1500 stops instead (it
+goes to STOP on any index out of bounds, read or write). So the writer
+checks every index it cannot prove in bounds before using it, and makes
+the scan end where nautilus's ends:
+
+- A literal index inside the bounds, or the variable of a FOR loop whose
+  start and end are constants inside the bounds and whose body never
+  writes it, needs no check.
+- Any other index is computed into a temp (`naut_ix1`) and compared with
+  the bounds. Out of bounds, the block records the fault in its own
+  `naut_fault` (a static of an FB, an output of a function) and returns.
+- Each block that calls a block that can fault checks for a fault after
+  the call and returns too, before it stores the call's outputs (`=>`),
+  as nautilus stores them only when the block finishes. A function that
+  can fault is called into a temp (`naut_fc1`) ahead of the statement
+  that uses it, so the statement's target is not written either.
+- The task's OB reads its program's `naut_fault` and counts the fault
+  after it has copied the scan's shared tags out, since nautilus keeps
+  what a faulted scan wrote. The fault travels with the calls, never
+  through a shared variable, so one task can't clear another's.
+
+The counts are in a data block, `naut_Faults`, with one record per task
+whose program can fault, readable over the Web API like any tag. They are
+the counterpart of the `logicErrors` that `naut status` shows:
+
+| Member | Holds |
+|---|---|
+| `naut_Faults.<task>.LogicErrors` | faults counted since the CPU started |
+| `naut_Faults.<task>.Faulting` | the last scan faulted |
+| `naut_Faults.<task>.LastLine` | the line of the last fault, in the nautilus file of its block |
+| `naut_Faults.<task>.LastBlock` | the PROGRAM, FUNCTION or FUNCTION_BLOCK it was in |
+
+A project whose indices are all proved in bounds gets no checks and no
+`naut_Faults`.
+
 ## What does not translate yet
 
 These are gaps in the writer, not rules for you. The diagnostic reads
@@ -402,11 +442,10 @@ that closes it.
 
 | Issue | Not translated yet |
 |---|---|
-| #1299 | arrays, a function writing its own STRUCT input (TIA hands a function a STRUCT input by reference, so the write would reach the caller's variable) |
 | #1303 | WSTRING, and a STRING literal with characters outside ASCII |
 | #1375 | the conversions to and from STRING TIA has no match for: REAL and LREAL to STRING (TIA writes `+2.150000E+1` where nautilus writes `21.5`), TIME, BYTE, WORD, DWORD, LWORD, and STRING_TO_BOOL |
 | #1304 | TIME arithmetic, LTIME, dates |
-| #1305 | the rest: type aliases, converting an enumeration to anything but an integer (such as `TO_STRING`), ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, an instance of your own block in a program's `VAR RETAIN`, reading or writing an instance's in-out from outside it, a manifest tag named inside a block when the project has several tasks, and more |
+| #1305 | the rest: an array of function block instances, an array temp (a function's local array included), an index inside a REPEAT's UNTIL, a function writing its own STRUCT or ARRAY input (TIA hands a function such an input by reference, so the write would reach the caller's variable), writing an element of a tag several tasks share, type aliases, converting an enumeration to anything but an integer (such as `TO_STRING`), ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, an instance of your own block in a program's `VAR RETAIN`, reading or writing an instance's in-out from outside it, a manifest tag named inside a block when the project has several tasks, and more |
 
 Real limits keep their own words, such as a task interval over 60 s or a
 block name collision.
