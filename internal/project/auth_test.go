@@ -346,4 +346,9 @@ func TestLoadAuthOIDCOnAPair(t *testing.T) {
 	if err != nil || p.AuthOIDC == nil || p.AuthOIDC.Issuer != "https://login.example" {
 		t.Fatalf("err = %v", err)
 	}
+	// The Kubernetes Lease mode carries no pins: refused, naming the ways out.
+	fs = authProject("auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\nredundancy:\n  lease: naut-leader\n")
+	if _, err := Load(fs, ""); err == nil || !strings.Contains(err.Error(), "Kubernetes Lease mode") || !strings.Contains(err.Error(), "redundancy.peers") {
+		t.Errorf("Lease mode: err = %v", err)
+	}
 }

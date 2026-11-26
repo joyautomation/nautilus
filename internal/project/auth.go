@@ -315,3 +315,10 @@ func compileAuth(c *AuthConfig) (*auth.Policy, error) {
 	// The auth package's errors already begin "auth: ".
 	return auth.Compile(c.settings())
 }
+
+// errOIDCLease refuses auth.oidc under the Kubernetes Lease mode
+// (redundancy: without peers:): each OIDC name is pinned on its first
+// sign-in in the replica's state directory, and the Lease replicas share
+// no operator log to carry the pins, so after a failover the name could
+// be pinned afresh to another account. A pair (peers:) carries them (#710).
+var errOIDCLease = fmt.Errorf("auth: oidc cannot be used with the Kubernetes Lease mode (redundancy: without peers:): its replicas do not share the OIDC name pins. Use a redundant pair (redundancy.peers), local users (naut users add), or one controller")

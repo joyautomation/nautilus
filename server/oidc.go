@@ -553,12 +553,18 @@ const oidcHopPageHTML = `<!doctype html>
 // name to that account, and this controller holds the same pin, so the
 // session acts here after a takeover and no other account can take the
 // name here first. Only a session that would stand here is used: this
-// controller's issuer, not signed out here. A name pinned here to
+// controller's issuer, not signed out here, still held, the log synced. A name pinned here to
 // another account keeps its pin: the session does not act here, and the
 // journal names the fix. Nothing is pinned that the session's own
 // sign-in did not (a sign-out or an unpin ended it before it was adopted).
 func (s *Server) pinFromLog(se session) {
 	if !se.oidc || s.oidc == nil || s.users == nil || !s.policy.OIDC() {
+		return
+	}
+	// Only a session held now, from a copy of the log known complete: one
+	// adopted while this copy caught up may be ended by an entry still to
+	// come. It is pinned at its first use instead (sessionStands).
+	if !s.sessions.has(se.hash) || !s.sessions.syncedNow() {
 		return
 	}
 	target := se.key()
@@ -572,8 +578,14 @@ func (s *Server) pinFromLog(se session) {
 			"give both controllers the same auth.oidc.issuer (deploy the same project to both), then sign in again")
 		return
 	}
-	if at, out, err := s.users.SignedOut(target); err != nil || out && !se.created.After(at) {
-		return // it acts nowhere: nothing to pin
+	at, out, err := s.users.SignedOut(target)
+	if err != nil {
+		refused("this controller cannot read its sign-outs: "+err.Error(),
+			"see the journal's users.unavailable entry for which file in this controller's state directory to fix, then sign in again")
+		return
+	}
+	if out && !se.created.After(at) {
+		return // signed out here: it acts nowhere, nothing to pin
 	}
 	pin, fresh, err := s.users.PinFirst(se.user, se.issuer, se.sub, s.sessions.clock())
 	switch {

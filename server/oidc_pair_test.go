@@ -31,13 +31,19 @@ func joinBus(bus *fakeBus, l *SessionLog) {
 
 func oidcPairOn(t *testing.T, bus *fakeBus, issuer string, before ...oplog.Entry) oidcPairMember {
 	t.Helper()
+	return oidcPairAt(t, bus, issuer, "", before...)
+}
+
+// oidcPairAt is oidcPairOn on the users file at path (a restart).
+func oidcPairAt(t *testing.T, bus *fakeBus, issuer, path string, before ...oplog.Entry) oidcPairMember {
+	t.Helper()
 	l := NewSessionLog()
 	t.Cleanup(l.Close)
 	for _, e := range before { // the log's replay at start, before the server binds
 		l.Apply(e)
 	}
-	srv, fake, path := oidcServer(t, Options{SessionLog: l, OIDCIssuer: issuer})
-	joinBus(bus, l)
+	joinBus(bus, l) // before the server, as naut run starts the log first
+	srv, fake, path := oidcServerAt(t, Options{SessionLog: l, OIDCIssuer: issuer}, path)
 	return oidcPairMember{srv: srv, fake: fake, path: path, log: l}
 }
 
@@ -245,5 +251,101 @@ func TestOIDCPairSignedOutNameIsNotPinned(t *testing.T) {
 	waitFor(t, "b to adopt it", func() bool { return b.srv.sessions.has(sessionHash(c.Value)) })
 	if _, ok := b.pin(t, "jsmith@corp.example"); ok {
 		t.Error("b pinned a name from a session its sign-out ended")
+	}
+}
+
+// An unpin made while a controller was stopped wins over the open its log
+// replays at the restart (no end for it reached this copy): the users
+// files' catch-up ends the session before the pins are made.
+func TestOIDCPairUnpinWhileStoppedIsKept(t *testing.T) {
+	bus := &fakeBus{synced: true}
+	a := oidcPairOn(t, bus, pairIssuer)
+	a.fake.as("jsmith@corp.example", "sub-1")
+	_, c := oidcSignIn(t, a.srv, a.fake, "/")
+	if c == nil {
+		t.Fatal("sign-in on a failed")
+	}
+	var open oplog.Entry
+	waitFor(t, "the open to commit", func() bool {
+		bus.mu.Lock()
+		defer bus.mu.Unlock()
+		for _, e := range bus.log {
+			if b, ok := e.SessionBody(); ok && b.Op == oplog.SessionOpen {
+				open = e
+				return true
+			}
+		}
+		return false
+	})
+	b := oidcPairOn(t, &fakeBus{synced: true}, pairIssuer, open) // pins it at start
+	if _, ok := b.pin(t, "jsmith@corp.example"); !ok {
+		t.Fatal("b did not pin from the replayed open")
+	}
+	// b stops; the name is unpinned there meanwhile; b starts again and its
+	// log replays the open with no end.
+	if err := users.UpdatePins(users.PinsPath(b.path), "opsadmin", func(p *users.Pins) error { return p.Unpin("jsmith@corp.example") }); err != nil {
+		t.Fatal(err)
+	}
+	r := oidcPairAt(t, &fakeBus{synced: true}, pairIssuer, b.path, open)
+	if p, ok := r.pin(t, "jsmith@corp.example"); ok {
+		t.Errorf("the restart pinned the name again, undoing the unpin: %+v", p)
+	}
+	if got := r.me(t, c.Value); !strings.Contains(got, `"principal":"anonymous"`) {
+		t.Errorf("the unpinned account's session acts after the restart: %s", got)
+	}
+}
+
+// A session adopted while this copy of the log is not known complete pins
+// nothing then (an end may still be on its way); once the copy is synced it
+// is pinned at its first use, and acts.
+func TestOIDCPairPinsOnlyFromASyncedLog(t *testing.T) {
+	bus := &fakeBus{synced: true}
+	a := oidcPairOn(t, bus, pairIssuer)
+	b := oidcPairOn(t, bus, pairIssuer)
+	bus.mu.Lock()
+	bus.synced = false
+	bus.mu.Unlock()
+	a.fake.as("jsmith@corp.example", "sub-1")
+	_, c := oidcSignIn(t, a.srv, a.fake, "/")
+	if c == nil {
+		t.Fatal("sign-in on a failed")
+	}
+	waitFor(t, "b to adopt it", func() bool { return b.srv.sessions.has(sessionHash(c.Value)) })
+	time.Sleep(50 * time.Millisecond) // the adopt's pin runs apart from the log
+	if _, ok := b.pin(t, "jsmith@corp.example"); ok {
+		t.Error("b pinned from a session adopted while its log was not synced")
+	}
+	bus.mu.Lock()
+	bus.synced = true
+	bus.mu.Unlock()
+	if got := b.me(t, c.Value); !strings.Contains(got, `"principal":"oidc:jsmith@corp.example"`) {
+		t.Errorf("after the sync the session does not act on b: %s", got)
+	}
+	if p, ok := b.pin(t, "jsmith@corp.example"); !ok || !p.Same(pairIssuer, "sub-1") {
+		t.Errorf("not pinned at first use: %+v %v", p, ok)
+	}
+}
+
+// A pair member without a configured issuer honours no OIDC session, even
+// with a pin that names the account: it fails closed.
+func TestOIDCPairWithoutIssuerFailsClosed(t *testing.T) {
+	bus := &fakeBus{synced: true}
+	a := oidcPairOn(t, bus, pairIssuer)
+	b := oidcPairOn(t, bus, "")
+	if err := users.UpdatePins(users.PinsPath(b.path), "opsadmin", func(p *users.Pins) error {
+		p.Pins["jsmith@corp.example"] = users.Pin{Issuer: pairIssuer, Subject: "sub-1", Pinned: time.Now()}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.srv.users.Reload()
+	a.fake.as("jsmith@corp.example", "sub-1")
+	_, c := oidcSignIn(t, a.srv, a.fake, "/")
+	if c == nil {
+		t.Fatal("sign-in on a failed")
+	}
+	waitFor(t, "b to adopt it", func() bool { return b.srv.sessions.has(sessionHash(c.Value)) })
+	if got := b.me(t, c.Value); !strings.Contains(got, `"principal":"anonymous"`) {
+		t.Errorf("a pair member without an issuer honours an OIDC session: %s", got)
 	}
 }

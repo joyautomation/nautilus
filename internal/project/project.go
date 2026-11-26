@@ -1589,6 +1589,9 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 	if m.authPolicy, err = compileAuth(m.Auth); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
+	if m.Auth != nil && m.Auth.OIDC != nil && m.Redundancy != nil && !m.Redundancy.Pair() {
+		return nil, fmt.Errorf("%s: %w", name, errOIDCLease)
+	}
 	if m.Server.TLS != nil && m.Server.TLS.SelfSigned && m.Redundancy != nil {
 		return nil, fmt.Errorf("%s: %w", name, errSelfSignedPair)
 	}

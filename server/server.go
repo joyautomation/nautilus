@@ -691,6 +691,7 @@ type Server struct {
 	oidcTickets  *oidcTickets
 	oidcRedirect string
 	oidcIssuer   string
+	oidcPair     bool // a redundant pair's: names are pinned from the log too (#710)
 
 	// unforceAllChecked, when set (tests only), runs between clear-all's
 	// check of the forced tags and its clearing of them.
@@ -867,20 +868,24 @@ func newServer(rt *runtime.Runtime, opts ...Options) *Server {
 				s.signin = newSignInGate()
 				if opts[0].OIDC != nil && s.policy.OIDC() {
 					s.oidc, s.oidcFlows, s.oidcTickets, s.oidcRedirect = opts[0].OIDC, newOIDCFlows(), newOIDCTickets(), opts[0].OIDCRedirectURL
-					s.oidcIssuer = opts[0].OIDCIssuer
-					if opts[0].SessionLog != nil {
-						// a pair: pin names from the other controller's
-						// sign-ins, those the log replayed at start first
-						for _, se := range s.sessions.OnAdopted(s.pinFromLog) {
-							s.pinFromLog(se)
-						}
-					}
+					s.oidcIssuer, s.oidcPair = opts[0].OIDCIssuer, opts[0].SessionLog != nil
 				}
 			}
 			u.OnChange(s.journalUsersChange)
 			u.OnHealth(s.journalUsersHealth)
-			// What changed while the controller was stopped.
+			// What changed while the controller was stopped: first, so an
+			// unpin made then ends the replayed sessions before any pins.
 			u.CatchUp()
+			if s.oidcPair {
+				// a pair: pin names from the other controller's sign-ins,
+				// those the log replayed at start first
+				// The log's apply path tells adopted: pinning asks the log
+				// whether it is synced, so it runs apart from that path.
+				adopted := func(se session) { go s.pinFromLog(se) }
+				for _, se := range s.sessions.OnAdopted(adopted) {
+					s.pinFromLog(se)
+				}
+			}
 		}
 	}
 	if unavailable != nil {

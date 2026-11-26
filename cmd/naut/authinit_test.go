@@ -726,6 +726,7 @@ func TestAuthInitOIDC(t *testing.T) {
 		{plainManifest, []string{"--oidc", "https://x.example\"\n  anonymous: viewer\n#", "--client-id", "a"}, "letters, digits"},
 		{plainManifest, []string{"--oidc", "https://x.example", "--client-id", "a b"}, "letters, digits"},
 		{plainManifest, []string{"--oidc", "http://x.example", "--client-id", "a"}, "would not load"},
+		{plainManifest + "redundancy: {}\n", []string{"--oidc", "https://x.example", "--client-id", "a"}, "Kubernetes Lease mode"},
 	} {
 		dir := authProject(t, tc.manifest)
 		code, _, errs := nautAuth(append([]string{"init", "--project", dir, "--no-tls"}, tc.args...)...)
