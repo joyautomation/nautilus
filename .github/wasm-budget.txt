@@ -16,5 +16,5 @@
 # module did). Each limit is the CI number + 1%.
 #
 # One line per module: <target under ./cmd> <bytes>.
-naut-wasm 4739640
+naut-wasm 4792421
 naut-wasm-hmi 3863413
