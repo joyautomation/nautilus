@@ -38,7 +38,7 @@ func newNotesPair(t *testing.T) *notesPair {
 	for i := 0; i < 3; i++ {
 		nl := NewNotesLog()
 		np.nls[i] = nl
-		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p, p.urls[i]},
+		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p: p, self: p.urls[i]},
 			Token: "t", Ephemeral: true, Apply: func(e oplog.Entry) error { _, err := nl.Apply(e); return err }})
 		if err != nil {
 			t.Fatal(err)

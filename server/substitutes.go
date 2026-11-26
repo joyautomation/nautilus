@@ -85,6 +85,10 @@ type substitutesResponse struct {
 	// acknowledgement that could not be saved still took effect, and
 	// __Substitute_Fault says so until the next save.
 	Kept *bool `json:"kept,omitempty"`
+	// Committed and Message mark a 202: the start is in the pair's log
+	// but this replica has not seen it yet.
+	Committed bool   `json:"committed,omitempty"`
+	Message   string `json:"message,omitempty"`
 	// Warning says what an answer with kept false means for the plant.
 	Warning string `json:"warning,omitempty"`
 	// Lapsed are the recent substitute starts a redundant pair's log

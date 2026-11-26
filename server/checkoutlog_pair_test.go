@@ -48,7 +48,7 @@ func newCheckoutPair(t *testing.T) *checkoutPair {
 		}
 		cl.Store().SetSheet(ckSheet())
 		cp.cls[i] = cl
-		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p, p.urls[i]},
+		n, err := oplog.New(oplog.Options{Self: p.urls[i], Peers: p.urls[:], Leadership: seat{p: p, self: p.urls[i]},
 			Token: "t", Ephemeral: true, Apply: func(e oplog.Entry) error { _, err := cl.Apply(e); return err }})
 		if err != nil {
 			t.Fatal(err)

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -196,6 +197,10 @@ func (l *SubstituteLog) propose(ctx context.Context, e oplog.Entry) (oplog.Entry
 // seam (journalled as result "unknown").
 const outcomeHeader = "X-Nautilus-Outcome"
 
+// journalAsHeader makes the audit seam journal a 5xx answer as refused:
+// it was a definite no (nothing was sent), not an error.
+const journalAsHeader = "X-Nautilus-Journal-As"
+
 // substituteProposeWait bounds a proposal's wait for its commit.
 const substituteProposeWait = 10 * time.Second
 
@@ -205,6 +210,13 @@ const substituteProposeWait = 10 * time.Second
 func unknownOutcome(w http.ResponseWriter, err error) {
 	if errors.Is(err, oplog.ErrTooLarge) {
 		refuse(w, "too large for the operator-intent log: "+err.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
+	if errors.Is(err, oplog.ErrNoLeader) {
+		// Nothing was sent: a definite no, so a client may retry at once.
+		w.Header().Set(outcomeHeader, "refused")
+		w.Header().Set(journalAsHeader, audit.ResultRefused)
+		http.Error(w, "no leader, retry: nothing was proposed ("+err.Error()+")", http.StatusServiceUnavailable)
 		return
 	}
 	w.Header().Set(outcomeHeader, "unknown")
@@ -244,8 +256,19 @@ func (s *Server) startThroughLog(w http.ResponseWriter, r *http.Request, tag str
 		refuse(w, fmt.Sprintf("%v: entry %d was started with it for something else", runtime.ErrRequestReused, started.ID), http.StatusConflict)
 		return
 	}
+	if !ok && e.Lapsed {
+		// Committed too late to be carried out: it never started.
+		refuse(w, fmt.Sprintf("entry %d committed but lapsed (it was proposed too long before it committed) and did not start: re-read GET /api/substitutes", e.Seq), http.StatusConflict)
+		return
+	}
 	if !ok {
-		refuse(w, fmt.Sprintf("entry %d committed but did not start here (see the controller log): re-read GET /api/substitutes", e.Seq), http.StatusConflict)
+		// The start committed; this replica is only behind. Not a
+		// refusal and not a 409: a client must not retry or give up.
+		logAction(r, "substitute: committed, not yet visible here", "tag", tag, "id", e.Seq)
+		resp := s.substitutesResponse()
+		resp.Committed = true
+		resp.Message = fmt.Sprintf("entry %d committed, not yet visible here; re-read GET /api/substitutes", e.Seq)
+		writeJSON(w, http.StatusAccepted, resp)
 		return
 	}
 	logAction(r, "substitute: started (replicated)", "tag", started.Name, "id", started.ID, "for", d)
