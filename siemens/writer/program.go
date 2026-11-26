@@ -3,6 +3,7 @@ package writer
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/st"
@@ -60,9 +61,23 @@ type progWriter struct {
 	// declare.
 	enums    map[string]enumConst
 	enumHint string
-	// structTag is the first STRUCT manifest tag this block writes
-	// (whole or a member of it), "" for none (pous.go, aliasing).
+	// structTag is the first STRUCT or ARRAY manifest tag this block
+	// writes (whole, a member or an element of it), "" for none (pous.go,
+	// aliasing).
 	structTag string
+
+	// Arrays (arrays.go): consts0 resolves the block's own constants for
+	// an array bound; ixTemps are the temps that hold a checked index;
+	// forRange the FOR variables whose values are proved, while their loop
+	// is written; hoistN numbers the temps a statement computes first, and
+	// hoistDecls declares them; faults is set once the block checks or
+	// propagates a fault.
+	consts0    constLookup
+	ixTemps    map[string]bool
+	forRange   map[string]forBounds
+	hoistN     int
+	hoistDecls []string
+	faults     bool
 }
 
 // elementary maps the IEC elementary types the subset writes. SCL spells
@@ -113,10 +128,7 @@ func sclType(t string) (string, string) {
 	if u == "DT" || u == "DATE_AND_TIME" || u == "LDT" || u == "DTL" {
 		return "", gapMessage(gapTime, u, "which of DT, LDT and DTL it maps to is still to be decided")
 	}
-	if strings.HasPrefix(u, "ARRAY") {
-		return "", gapMessage(gapStructured, "arrays", "")
-	}
-	return "", gapMessage(gapStructured, "the type "+t, "UDTs, enums and user function blocks")
+	return "", gapMessage(gapOther, "the type "+t, "")
 }
 
 func (w *writer) program(path string, libs []string, src string, lines []int, prog *st.Program) *progWriter {
@@ -157,6 +169,9 @@ var sectionRank = map[string]int{"VAR_INPUT": 0, "VAR_OUTPUT": 1, "VAR_IN_OUT": 
 func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st.Statement) bool {
 	w := pw.w
 	before := len(w.diags)
+	pw.consts0 = pw.localConst(vbs)
+	pw.ixTemps = map[string]bool{}
+	pw.forRange = map[string]forBounds{}
 	sections := pw.declare(vbs)
 	if pw.kind == kindFC {
 		// The return value, as nautilus names it inside the body: a temp
@@ -208,6 +223,9 @@ func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st
 	consts := append(append(pw.consts, pw.globalConsts()...), pw.enumConsts()...)
 	if len(w.diags) > before {
 		return false
+	}
+	if len(pw.hoistDecls) > 0 {
+		sections = append(sections, section{"VAR_TEMP", pw.hoistDecls})
 	}
 
 	sort.SliceStable(sections, func(i, j int) bool { return sectionRank[sections[i].header] < sectionRank[sections[j].header] })
@@ -331,13 +349,13 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 					continue
 				}
 				if v.Initial != nil {
-					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapStructured, "a struct variable's initializer", ""))
+					pw.diag("siemens/init", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "a struct variable's initializer", ""))
 					continue
 				}
 				if kind == "VAR_IN_OUT" && !block {
 					// The task's OB calls the program's FB with no
 					// arguments: nothing would bind it.
-					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapStructured, "a struct in a program's VAR_IN_OUT", "the task's OB calls the program with nothing to bind it to"))
+					pw.diag("siemens/var", v.Pos.Line, v.Name+": "+gapMessage(gapOther, "a struct in a program's VAR_IN_OUT", "the task's OB calls the program with nothing to bind it to"))
 					continue
 				}
 				pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
@@ -420,6 +438,14 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 				typ = inst
 			} else {
 				t, why := w.sclType(v.Datatype)
+				if isArrayType(u) {
+					if why = boundsRefusal(v.Type); why == "" {
+						t, why = w.arrayDecl(v.Datatype, pw.consts0)
+					}
+					if why == "" && kind == "VAR_IN_OUT" && !block {
+						why = gapMessage(gapOther, "an array in a program's VAR_IN_OUT", "the task's OB calls the program with nothing to bind it to")
+					}
+				}
 				if why != "" {
 					// Once per type in a program: a plant model with 84
 					// instances of one block says so once.
@@ -431,7 +457,8 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 				}
 				typ = t
 			}
-			pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: u}
+			// An array's bounds folded here, in the block that declares it.
+			pw.locals[strings.ToLower(v.Name)] = local{name: v.Name, typ: w.canonArray(u, pw.consts0)}
 			line := fmt.Sprintf("      %s : %s", sclName(v.Name), typ)
 			if temp {
 				// TIA has no start values for temps, and nautilus resets a
@@ -448,7 +475,7 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 			if _, isInst := instances[u]; isInst {
 				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name, instance: true}
 			} else if kind != "VAR_IN_OUT" {
-				pw.statics[strings.ToLower(v.Name)] = &shape{name: v.Name}
+				pw.statics[strings.ToLower(v.Name)] = w.shapeOf(v.Name, v.Datatype)
 			}
 			if v.Initial != nil && !(pw.kind == kindFC && kind == "VAR_INPUT") {
 				// (An FC's input has no start value in TIA; nautilus binds
@@ -463,6 +490,8 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 					line += " := " + pw.initValue(v.Initial)
 				}
 			} else if n, ok := w.enumStart(v.Datatype); ok && !(pw.kind == kindFC && kind == "VAR_INPUT") {
+				line += " := " + n
+			} else if n := w.arrayStart(v.Datatype, pw.consts0); n != "" && !(pw.kind == kindFC && kind == "VAR_INPUT") {
 				line += " := " + n
 			}
 			lines = append(lines, line+";")
@@ -541,6 +570,12 @@ func (pw *progWriter) stmts(b *strings.Builder, ss []st.Statement, depth int) {
 func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 	in := indent(d)
 	at := lineAt(s)
+	// What the statement computes first: its array checks and the
+	// FUNCTIONs that can fault (arrays.go).
+	orig := s
+	if s = pw.liftStmt(b, s, d); s == nil {
+		return
+	}
 	switch s := s.(type) {
 	case *st.AssignStmt:
 		// A write to a counter's member outside its call: whether TIA's
@@ -567,7 +602,7 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		}
 		restore := pw.hint(pw.rawTyp(te))
 		defer restore()
-		if pw.w.structOf(tt) != nil {
+		if pw.w.structOf(tt) != nil || isArrayType(tt) {
 			pw.assignStruct(b, target, s.Value, in, at)
 		} else {
 			pw.emit(b, at, "%s%s := %s;\n", in, target, pw.store(s.Value, tt, s.Pos.Line))
@@ -588,10 +623,21 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 	case *st.ForStmt:
 		step := ""
 		if s.Step != nil {
-			step = " BY " + pw.expr(s.Step, 0)
+			step = " BY " + pw.forBound(s.Step, s.Variable)
 		}
-		pw.emit(b, at, "%sFOR %s := %s TO %s%s DO\n", in, pw.ident(s.Variable, s.Pos.Line), pw.expr(s.Start, 0), pw.expr(s.End, 0), step)
+		pw.emit(b, at, "%sFOR %s := %s TO %s%s DO\n", in, pw.ident(s.Variable, s.Pos.Line), pw.forBound(s.Start, s.Variable), pw.forBound(s.End, s.Variable), step)
+		// The loop variable's values, proved for the body's indices.
+		k := strings.ToLower(s.Variable)
+		prev, had := pw.forRange[k]
+		delete(pw.forRange, k)
+		if r, ok := pw.forBoundsOf(orig.(*st.ForStmt)); ok {
+			pw.forRange[k] = r
+		}
 		pw.stmts(b, s.Body, d+1)
+		delete(pw.forRange, k)
+		if had {
+			pw.forRange[k] = prev
+		}
 		pw.emit(b, at, "%sEND_FOR;\n", in)
 	case *st.WhileStmt:
 		pw.emit(b, at, "%sWHILE %s DO\n", in, pw.expr(s.Condition, 0))
@@ -669,6 +715,21 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 	}
 }
 
+// forBound prints a FOR loop's start, end or step: a negated literal or
+// constant arithmetic (FOR i := -2 TO N - 1, the bounds of an array with
+// a negative lower bound) as the one literal nautilus folds it to, when
+// the loop variable's type holds it; anything else as an expression.
+func (pw *progWriter) forBound(e st.Expression, v string) string {
+	switch e.(type) {
+	case *st.UnaryExpr, *st.BinaryExpr:
+		t := pw.typ(&st.IdentExpr{Name: v})
+		if n, ok := pw.fold(e); ok && isInt(t) && inRange(n, t) {
+			return strconv.FormatInt(n, 10)
+		}
+	}
+	return pw.expr(e, 0)
+}
+
 // emit writes one or more body lines, each from source line at (in the
 // ST the writer parsed): the line map a TIA compile message is read back
 // through (Output.Locate).
@@ -695,15 +756,16 @@ func lineAt(n any) int {
 	return 0
 }
 
-// assignStruct writes an assignment of a whole struct: both sides are of
-// one PLC data type (nautilus's lowering, which ran first, has checked
-// the value's type), so TIA copies it whole, as nautilus does. The value
-// is a variable, a member, or a function returning the struct.
+// assignStruct writes an assignment of a whole struct or array: both
+// sides are of one PLC data type, or arrays of one shape (nautilus's
+// lowering, which ran first, has checked the value's type), so TIA copies
+// it whole, as nautilus does. The value is a variable, a member, an
+// element, or a function returning the struct.
 func (pw *progWriter) assignStruct(b *strings.Builder, target string, v st.Expression, in string, at int) {
 	switch v.(type) {
-	case *st.IdentExpr, *st.MemberExpr, *st.CallExpr:
+	case *st.IdentExpr, *st.MemberExpr, *st.IndexExpr, *st.CallExpr:
 	default:
-		pw.gap("siemens/struct", at, gapStructured, "a struct assigned from "+exprShort(v), "")
+		pw.gap("siemens/struct", at, gapOther, "a struct assigned from "+exprShort(v), "")
 		return
 	}
 	pw.emit(b, at, "%s%s := %s;\n", in, target, pw.expr(v, 0))

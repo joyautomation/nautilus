@@ -148,7 +148,7 @@ func TestTimerOutputWritesRefused(t *testing.T) {
 		{"PROGRAM P\nVAR t : TOF; h : H; END_VAR\nh(io := t.Q);\nEND_PROGRAM\n", "a write to t.Q, a timer's output"},
 		{"PROGRAM P\nVAR p : TP; s : SR; x : BOOL; END_VAR\ns(S1 := x, R := FALSE, Q1 => p.Q);\nEND_PROGRAM\n", "a write to p.Q, a timer's output"},
 		{"PROGRAM P\nVAR t : TON; u : TON; x : BOOL; END_VAR\nt(IN := TRUE, PT := T#1s);\nu := t;\nx := u.Q;\nEND_PROGRAM\n", "assigning a whole timer instance"},
-		{"PROGRAM P\nVAR t : ARRAY[0..1] OF TON; x : BOOL; END_VAR\nx := t[0].Q;\nEND_PROGRAM\n", "arrays"},
+		{"PROGRAM P\nVAR t : ARRAY[0..1] OF TON; x : BOOL; END_VAR\nx := t[0].Q;\nEND_PROGRAM\n", "an array of function block instances"},
 	} {
 		_, diags := writePOU(t, c.src, lib)
 		if !hasDiag(diags, c.want) {

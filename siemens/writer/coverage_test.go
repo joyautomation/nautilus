@@ -370,7 +370,8 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 	notGaps := map[string]bool{"siemens/nautilus": true, "siemens/name": true, "siemens/program": true}
 	var diags []Diag
 	for _, src := range []string{
-		"PROGRAM P\nVAR s : WSTRING; t : LTIME; x : ARRAY[1..2] OF INT; d : DT; END_VAR\nEND_PROGRAM\n",
+		"PROGRAM P\nVAR s : WSTRING; t : LTIME; x : ARRAY[1..2] OF TON; d : DT; END_VAR\nEND_PROGRAM\n",
+		"PROGRAM P\nVAR a : ARRAY[1..2] OF INT; i : INT; END_VAR\nREPEAT i := i + 1; UNTIL a[i] > 0 END_REPEAT;\nEND_PROGRAM\n",
 		"PROGRAM P\nFUNCTION_BLOCK H\nVAR RETAIN n : INT; END_VAR\nEND_FUNCTION_BLOCK\nVAR h : H; END_VAR\nh();\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a, b : TIME; r, q : REAL; u : ULINT; END_VAR\na := a + b;\nr := r MOD q;\nu := u + 1;\na := T#1500us;\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a : INT; r : REAL; t : TON; END_VAR\nr := ATAN2(r, r);\nt(IN := TRUE, PT := INT_TO_TIME(a + 1));\nEND_PROGRAM\n",

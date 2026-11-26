@@ -1,0 +1,15 @@
+ORGANIZATION_BLOCK "naut_OB_main"
+TITLE = "Cyclic interrupt, 100ms"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	"naut_Faults".scan.faulted := FALSE;
+	"naut_Main_DB"();
+	IF "naut_Faults".scan.faulted THEN
+		"naut_Faults".main.LogicErrors := "naut_Faults".main.LogicErrors + 1;
+		"naut_Faults".main.LastLine := "naut_Faults".scan.line;
+		"naut_Faults".main.LastBlock := "naut_Faults".scan.block;
+	END_IF;
+	"naut_Faults".main.Faulting := "naut_Faults".scan.faulted;
+END_ORGANIZATION_BLOCK

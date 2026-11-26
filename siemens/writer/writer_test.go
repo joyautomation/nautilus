@@ -186,7 +186,7 @@ func TestRefusals(t *testing.T) {
 		{"bitwise of int and lword", "a : INT; w : LWORD;", "w := w AND a;", "siemens/int-width", 3},
 		{"byte access", "w : WORD; b : BYTE;", "b := w.%B0;", "siemens/partial", 3},
 		{"bitwise in an FB input", "t : TON; a, b : INT; q : BOOL;", "t(IN := q, PT := INT_TO_TIME(NOT a));", "siemens/int-width", 3},
-		{"array", "a : ARRAY[1..3] OF INT;", "", "siemens/type", 2},
+		{"array of instances", "a : ARRAY[1..3] OF TON;", "", "siemens/type", 2},
 		{"unknown function (nautilus refuses first)", "a : INT;", "a := FOO(a);", "siemens/nautilus", 3},
 		{"unknown name (nautilus refuses first)", "a : INT;", "a := Nope;", "siemens/nautilus", 3},
 		{"ltime", "t : LTIME;", "", "siemens/type", 2},

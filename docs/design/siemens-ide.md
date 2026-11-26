@@ -318,9 +318,10 @@ The rules:
   function, a CASE selector, a REAL target), integer arithmetic is refused.
 - **What it does not translate yet is a writer gap,** never a rule for
   the person: the diagnostic reads "the Siemens writer doesn't translate X
-  yet (#N)", N the issue that closes it. B #1299 arrays (structs and
+  yet (#N)", N the issue that closes it. B #1299 (closed: structs and
   their start values are written, the library is in scope; enumerations
-  are written as their integer, below); C #1300
+  are written as their integer and arrays as TIA's Array with checked
+  indices, below); C #1300
   more than one task (written since C: per-task copies of shared tags);
   D #1301 (closed: the project's FUNCTIONs, FUNCTION_BLOCKs, dialect
   blocks such as TONR and VAR CONSTANT are written since D1, STRUCT pins
@@ -475,6 +476,41 @@ The rules:
     its line) changes the layout, so the check asks for `--reset-data` and
     the chart restarts at its initial step, where nautilus keeps it live
     (documented, not measured; `_en_`/`_f_` could become temps, #616).
+- **Arrays (B, #1299)** (`siemens/writer/arrays.go`). An ARRAY is TIA's
+  `Array` of the same bounds (any lower bound, several dimensions,
+  `a[i, j]`; a[i][j] on a 2-D array is merged), bounds folded as nautilus
+  folds them. The bench CPU STOPs on any index out of bounds, read or
+  write (randd/siemens-target/oob-1299), where nautilus faults the scan,
+  keeps what it wrote, counts LogicErrors and runs the next scan. naut-lead
+  ruled (11-26) a guard that mirrors the fault: an index not proved in
+  bounds (a literal inside them, or a FOR variable with a constant range
+  inside them and a body that never writes it) is computed into a LINT
+  temp and checked; out of bounds the block sets the scan's fault (flag,
+  nautilus line, block) in `<prefix>Faults` and RETURNs. Every caller of
+  a block that can fault (an over-approximation: any index) checks the
+  flag after the call and RETURNs, before the call's `=>` outputs, which
+  nautilus stores only when the block finishes. The task's OB clears the
+  flag first and counts into the task's record last, after the
+  copy-out, since nautilus commits a faulted scan. The flag is one for
+  all tasks: the OBs share one priority, so none interrupts another
+  (tasks.go); different priorities need a flag per priority. The checks
+  follow nautilus's order of evaluation (lang/ir vm.go): an assignment's
+  value before its target; an ELSIF's condition only in its branch; a
+  WHILE's before each pass; an FB's inputs one by one into the instance
+  (with a check past the first input the inputs become assignments to
+  the instance's pins, so a fault leaves the earlier ones copied, as in
+  nautilus); a FUNCTION that can fault into a temp, flag checked, ahead
+  of the statement. nautilus does not short-circuit, so a check lifted
+  above its statement is exact. What would move a check across something
+  nautilus does first is refused (#1305): a FUNCTION that writes a tag
+  before the check in one statement, an index in an UNTIL, an index in
+  an in-out argument (nautilus reads it twice), an in-out bound to a block
+  that can fault (nautilus copies it back only when the block finishes;
+  TIA passes it by reference), an index in an input of a TIA instruction
+  past the first. The printer refuses any index no statement checked.
+  TIA hands an FC an ARRAY input by reference, as a STRUCT, so the same
+  refusals apply. A shared array tag is copied whole; a write into an
+  element of one is refused, since nautilus lands element by element.
 - **Enumerations (B, #1299)** (`siemens/writer/enums.go`). TIA has no
   enumerated type. An enumeration is the integer nautilus carries for it
   (`ir.EnumDef`, an int64 value): a DInt, because nautilus's OPC UA server

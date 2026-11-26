@@ -1,0 +1,20 @@
+FUNCTION_BLOCK "naut_Outer"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      k : INT;
+   END_VAR
+   VAR_OUTPUT 
+      y : REAL;
+   END_VAR
+   VAR 
+      g : "naut_Grid";
+   END_VAR
+
+BEGIN
+	#g(k := #k, x := 2.0);
+	IF "naut_Faults".scan.faulted THEN
+		RETURN;
+	END_IF;
+	#y := #g.y;
+END_FUNCTION_BLOCK

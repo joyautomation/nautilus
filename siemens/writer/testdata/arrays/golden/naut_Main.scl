@@ -1,0 +1,165 @@
+FUNCTION_BLOCK "naut_Main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      a : Array[1..4] of DINT;
+      b : Array[-2..2, 0..3] of INT;
+      r : Array[1..3] of "naut_R";
+      m : Array[0..1] of DINT := [2(5)];
+      s : Array[1..2] of String;
+      i : INT;
+      j : INT;
+      sum : DINT;
+      x : REAL;
+      y : REAL;
+      act : "naut_R";
+      inst : "naut_Grid";
+      o : "naut_Outer";
+      outs : Array[0..2] of REAL;
+   END_VAR
+   VAR_TEMP 
+      naut_ix1 : LINT;
+      naut_ix2 : LINT;
+      naut_ix3 : LINT;
+      naut_ix4 : LINT;
+      naut_ix5 : LINT;
+      naut_fc6 : REAL;
+      naut_ix7 : LINT;
+      naut_ix8 : LINT;
+      naut_ix9 : LINT;
+      naut_ix10 : LINT;
+      naut_ix11 : LINT;
+      naut_fc12 : REAL;
+      naut_ix13 : LINT;
+   END_VAR
+   VAR CONSTANT 
+      N : INT := 4;
+      Mode_Idle : DINT := 0;
+   END_VAR
+
+BEGIN
+	FOR #i := 1 TO #N DO
+		#a[#i] := #i;
+		#sum := LINT_TO_DINT((((DINT_TO_LINT(#sum) + DINT_TO_LINT(#a[#i])) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	END_FOR;
+	#a[2] := 7;
+	#naut_ix1 := #i;
+	IF #naut_ix1 < -2 OR #naut_ix1 > 2 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 20;
+		"naut_Faults".scan.block := 'Main';
+		RETURN;
+	END_IF;
+	#naut_ix2 := INT_TO_LINT(#j) + 1;
+	IF #naut_ix2 < 0 OR #naut_ix2 > 3 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 20;
+		"naut_Faults".scan.block := 'Main';
+		RETURN;
+	END_IF;
+	#b[#naut_ix1, #naut_ix2] := #b[-2, 0];
+	#naut_ix3 := "naut_Tags".sel;
+	IF #naut_ix3 < 1 OR #naut_ix3 > 3 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 21;
+		"naut_Faults".scan.block := 'Main';
+		RETURN;
+	END_IF;
+	#act := #r[#naut_ix3];
+	#naut_ix4 := #j;
+	IF #naut_ix4 < 0 OR #naut_ix4 > 2 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 22;
+		"naut_Faults".scan.block := 'Main';
+		RETURN;
+	END_IF;
+	#r[1].hist[#naut_ix4] := #i;
+	#naut_ix5 := #i;
+	IF #naut_ix5 < 1 OR #naut_ix5 > 3 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 23;
+		"naut_Faults".scan.block := 'Main';
+		RETURN;
+	END_IF;
+	#naut_fc6 := "naut_Pick"(k := #j, t := "naut_Tags".tbl);
+	IF "naut_Faults".scan.faulted THEN
+		RETURN;
+	END_IF;
+	#x := "naut_Tags".tbl[#naut_ix5] + #naut_fc6 * 2.0;
+	#inst.k := "naut_Tags".sel;
+	#naut_ix7 := #j;
+	IF #naut_ix7 < 1 OR #naut_ix7 > 3 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 24;
+		"naut_Faults".scan.block := 'Main';
+		RETURN;
+	END_IF;
+	#inst.x := "naut_Tags".tbl[#naut_ix7];
+	#inst();
+	IF "naut_Faults".scan.faulted THEN
+		RETURN;
+	END_IF;
+	#naut_ix8 := #i;
+	IF #naut_ix8 < 0 OR #naut_ix8 > 2 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 24;
+		"naut_Faults".scan.block := 'Main';
+		RETURN;
+	END_IF;
+	#outs[#naut_ix8] := #inst.y;
+	#o(k := #j);
+	IF "naut_Faults".scan.faulted THEN
+		RETURN;
+	END_IF;
+	#y := #o.y;
+	IF #x > 0.0 THEN
+		#y := 1.0;
+	ELSE
+		#naut_ix9 := #j;
+		IF #naut_ix9 < 1 OR #naut_ix9 > 3 THEN
+			"naut_Faults".scan.faulted := TRUE;
+			"naut_Faults".scan.line := 26;
+			"naut_Faults".scan.block := 'Main';
+			RETURN;
+		END_IF;
+		IF "naut_Tags".tbl[#naut_ix9] > 1.0 THEN
+			#y := 2.0;
+		ELSE
+			#y := 3.0;
+		END_IF;
+	END_IF;
+	WHILE TRUE DO
+		#naut_ix10 := #i;
+		IF #naut_ix10 < 1 OR #naut_ix10 > 4 THEN
+			"naut_Faults".scan.faulted := TRUE;
+			"naut_Faults".scan.line := 27;
+			"naut_Faults".scan.block := 'Main';
+			RETURN;
+		END_IF;
+		IF NOT (#a[#naut_ix10] > 0) THEN
+			EXIT;
+		END_IF;
+		#i := LINT_TO_INT((((INT_TO_LINT(#i) + 1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	END_WHILE;
+	#naut_ix11 := #j;
+	IF #naut_ix11 < 1 OR #naut_ix11 > 3 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 28;
+		"naut_Faults".scan.block := 'Main';
+		RETURN;
+	END_IF;
+	#naut_fc12 := "naut_Pick"(k := #i, t := "naut_Tags".tbl);
+	IF "naut_Faults".scan.faulted THEN
+		RETURN;
+	END_IF;
+	#naut_ix13 := #i;
+	IF #naut_ix13 < 0 OR #naut_ix13 > 2 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 28;
+		"naut_Faults".scan.block := 'Main';
+		RETURN;
+	END_IF;
+	#outs[#naut_ix13] := "naut_Tags".tbl[#naut_ix11] + #naut_fc12;
+	#s[1] := 'x';
+	#m[0] := #Mode_Idle;
+END_FUNCTION_BLOCK

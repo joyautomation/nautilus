@@ -1,0 +1,52 @@
+FUNCTION_BLOCK "naut_Grid"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      k : INT;
+      x : REAL;
+   END_VAR
+   VAR_OUTPUT 
+      y : REAL;
+   END_VAR
+   VAR 
+      tbl : Array[-2..2, 0..3] of REAL;
+   END_VAR
+   VAR_TEMP 
+      naut_ix1 : LINT;
+      naut_ix2 : LINT;
+      naut_ix3 : LINT;
+      naut_ix4 : LINT;
+   END_VAR
+
+BEGIN
+	#naut_ix1 := #k;
+	IF #naut_ix1 < -2 OR #naut_ix1 > 2 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 23;
+		"naut_Faults".scan.block := 'Grid';
+		RETURN;
+	END_IF;
+	#naut_ix2 := INT_TO_LINT(#k) + 1;
+	IF #naut_ix2 < 0 OR #naut_ix2 > 3 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 23;
+		"naut_Faults".scan.block := 'Grid';
+		RETURN;
+	END_IF;
+	#tbl[#naut_ix1, #naut_ix2] := #x;
+	#naut_ix3 := #k;
+	IF #naut_ix3 < -2 OR #naut_ix3 > 2 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 24;
+		"naut_Faults".scan.block := 'Grid';
+		RETURN;
+	END_IF;
+	#naut_ix4 := INT_TO_LINT(#k) + 1;
+	IF #naut_ix4 < 0 OR #naut_ix4 > 3 THEN
+		"naut_Faults".scan.faulted := TRUE;
+		"naut_Faults".scan.line := 24;
+		"naut_Faults".scan.block := 'Grid';
+		RETURN;
+	END_IF;
+	#y := #tbl[#naut_ix3, #naut_ix4];
+END_FUNCTION_BLOCK
