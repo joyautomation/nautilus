@@ -264,8 +264,17 @@ type Source struct {
 	// map every distinct change is delivered, in the order it was made.
 	pending []queuedWrite
 	written map[string]ir.Value // baseline / last value handed to Write
-	kick    chan struct{}
+	// gated is the last value handed over per command tag while the write
+	// gate was closed, so a change made then is seen (and warned of) as a
+	// dropped command; gateWarnAt is when that warning was last logged.
+	gated      map[string]ir.Value
+	gateWarnAt time.Time
+	kick       chan struct{}
 }
+
+// gateWarnEvery bounds the dropped-at-a-closed-gate warning to one log
+// line per source per interval; the row keeps the latest one.
+const gateWarnEvery = time.Minute
 
 // NewBase validates the whole configuration offline and builds the driver
 // state; nothing is polled until Start.
@@ -582,6 +591,18 @@ func (b *Base) SetWriteGate(gate func() bool) {
 	b.gateMu.Unlock()
 }
 
+// PlainWriteGate makes Base io.PlainGated (#938): `naut run` gives it the
+// liveness gate in a project without `redundancy:` (#625), closed while
+// the scans hang. Its gate rules already fit a plain gate: closed, nothing
+// is queued or sent (a command queued before it closed waits, and goes out
+// on reopen only while younger than StaleAfter); a value handed over while
+// it is closed is dropped, and the next one after it reopens is a baseline
+// (WriteOutputs rule 2), so nothing goes out twice. Base treats every gate
+// alike, so this is only the marker.
+func (b *Base) PlainWriteGate() {}
+
+var _ nio.PlainGated = (*Base)(nil)
+
 // WriteSources lists the sources that take commands (sorted), for a
 // driver's WriteTimeouts.
 func (b *Base) WriteSources() []string {
@@ -822,15 +843,40 @@ func (b *Base) WriteOutputs(vals nio.Values) error {
 		}
 		s := w.src
 		open, term := b.look()
-		if !open || !s.isEnabled() {
+		enabled := s.isEnabled()
+		if !open || !enabled {
 			// Rules 2 and 5: neither queued nor recorded; forget the last
 			// value too, so the first one after is a baseline.
 			s.mu.Lock()
+			last, known := s.written[name]
+			if g, ok := s.gated[name]; ok {
+				last, known = g, true
+			}
 			delete(s.written, name)
+			warn := false
+			if !open && enabled {
+				// A change the program made while the gate was closed is a
+				// command dropped: say so, on the row and in the log (#938).
+				if s.gated == nil {
+					s.gated = map[string]ir.Value{}
+				}
+				s.gated[name] = v
+				if known && !sameScalar(last, v) {
+					s.lastWrite = fmt.Errorf("write %s: dropped: the write gate was closed (scans were hung, or this controller does not lead); the next change after it reopens is sent", name)
+					if now := b.now(); s.gateWarnAt.IsZero() || now.Sub(s.gateWarnAt) >= gateWarnEvery {
+						s.gateWarnAt, warn = now, true
+					}
+				}
+			}
 			s.mu.Unlock()
+			if warn {
+				b.log.Warn(b.kind+": command dropped: the write gate was closed (scans were hung, or this controller does not lead); the next change after it reopens is sent",
+					"source", s.cfg.ID, "tag", name, "value", v)
+			}
 			continue
 		}
 		s.mu.Lock()
+		delete(s.gated, name)
 		prev, seen := s.written[name]
 		if !seen {
 			s.written[name] = v // baseline

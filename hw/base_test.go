@@ -1,9 +1,11 @@
 package hw
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
@@ -983,6 +985,204 @@ func TestBaseStaleCommandsDropped(t *testing.T) {
 	if got := writes(); got != "PDU1/PDU1_Outlet03.On=true" {
 		t.Fatalf("fresh command: %q", got)
 	}
+}
+
+// The liveness gate naut run installs in a project without `redundancy:`
+// (io.SetPlainGate, #625) reaches hw.Base (#938). A command the program
+// queued in its last scan before a hang, still waiting for a slow device,
+// must not go out while the gate is closed: a Redfish ForceOff or an SNMP
+// SET younger than StaleAfter. When the scans come back (the same term: a
+// plain gate has none) it goes out, as after any same-term reopen.
+func TestBasePlainGateHoldsAQueuedCommand(t *testing.T) {
+	w := newFakeWire()
+	cfg := Config{
+		Kind:    "test",
+		Sources: []SourceConfig{{ID: "PDU1", Interval: 10 * time.Millisecond, StaleAfter: time.Minute, RetryMin: 5 * time.Millisecond, RetryMax: 10 * time.Millisecond}},
+		Tags: []TagDecl{{Name: "PDU1_Outlet03", Type: "PDUOutlet", Source: "PDU1", Members: map[string]Binding{
+			"Index": {Const: 3}, "On": {},
+		}}},
+		Writes: []WriteDecl{{Name: "PDU1_Outlet03_Cmd", Tag: "PDU1_Outlet03", Member: "On"}},
+		Poll:   w.poll,
+		Write:  w.write,
+	}
+	b, err := NewBase(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gmu sync.Mutex
+	open := true
+	setGate := func(v bool) { gmu.Lock(); open = v; gmu.Unlock() }
+	if n := nio.SetPlainGate(b, func() bool { gmu.Lock(); defer gmu.Unlock(); return open }); n != 1 {
+		t.Fatalf("io.SetPlainGate took %d drivers; want 1: the liveness gate does not reach hw.Base", n)
+	}
+	w.set("PDU1", DefaultClass, Result{Updates: []Update{{"PDU1_Outlet03", "On", ir.BoolVal(true)}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.watch(b)
+	b.Start(ctx)
+	defer b.Stop()
+	w.waitPoll(t, "PDU1/default")
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": true}) // baseline
+	writes := func() string { w.mu.Lock(); defer w.mu.Unlock(); return strings.Join(w.writes, ",") }
+
+	// The device is down, so the command queues; then the scans hang and
+	// the gate closes; then the device answers again.
+	w.setErr("PDU1", DefaultClass, errors.New("timeout"))
+	deadline := time.Now().Add(2 * time.Second)
+	for b.Health().Sources[0].State != "error" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if st := b.Health().Sources[0].State; st != "error" {
+		t.Fatalf("source never went down: %s", st)
+	}
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": false})
+	if q := b.Health().Sources[0].QueuedWrites; q != 1 {
+		t.Fatalf("queued writes = %d, want 1", q)
+	}
+	setGate(false)
+	w.setErr("PDU1", DefaultClass, nil)
+	// Good polls with a flush between them (poll, flush, poll).
+	for len(w.polled) > 0 {
+		<-w.polled
+	}
+	for range 3 {
+		w.waitPoll(t, "PDU1/default")
+	}
+	if got := writes(); got != "" {
+		t.Fatalf("a queued command reached the device while the liveness gate was closed: %q", got)
+	}
+
+	// The scans are live again: the command, still fresh, goes out once.
+	setGate(true)
+	deadline = time.Now().Add(time.Second)
+	for writes() == "" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	for len(w.polled) > 0 {
+		<-w.polled
+	}
+	w.waitPoll(t, "PDU1/default") // a flush later: still sent only once
+	w.waitPoll(t, "PDU1/default")
+	if got := writes(); got != "PDU1/PDU1_Outlet03.On=false" {
+		t.Fatalf("after the gate reopened: %q", got)
+	}
+	// Nothing was pushed while the gate was closed (the scans hung), so the
+	// next change is a command, not a baseline.
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": true})
+	deadline = time.Now().Add(time.Second)
+	for !strings.HasSuffix(writes(), "On=true") && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := writes(); got != "PDU1/PDU1_Outlet03.On=false,PDU1/PDU1_Outlet03.On=true" {
+		t.Fatalf("the first change after the gate reopened: %q", got)
+	}
+}
+
+// A command the program changes while the write gate is closed (the
+// scans resumed a moment before the liveness gate reopens) is dropped:
+// the row says so and a WARN names the tag and the source, at most once a
+// minute per source. A value handed over unchanged is no command and
+// warns nothing (#938 review).
+func TestBaseClosedGateDropWarns(t *testing.T) {
+	w := newFakeWire()
+	var buf bytes.Buffer
+	var bmu sync.Mutex
+	logged := func() []string {
+		bmu.Lock()
+		defer bmu.Unlock()
+		var out []string
+		for _, l := range strings.Split(buf.String(), "\n") {
+			if strings.Contains(l, "command dropped: the write gate was closed") {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	var cmu sync.Mutex
+	clock := time.Unix(1_000_000, 0)
+	advance := func(d time.Duration) { cmu.Lock(); clock = clock.Add(d); cmu.Unlock() }
+	cfg := Config{
+		Kind:    "test",
+		Sources: []SourceConfig{{ID: "PDU1", Interval: 10 * time.Millisecond, StaleAfter: time.Hour, RetryMin: 5 * time.Millisecond, RetryMax: 10 * time.Millisecond}},
+		Tags: []TagDecl{{Name: "PDU1_Outlet03", Type: "PDUOutlet", Source: "PDU1", Members: map[string]Binding{
+			"Index": {Const: 3}, "On": {},
+		}}},
+		Writes: []WriteDecl{{Name: "PDU1_Outlet03_Cmd", Tag: "PDU1_Outlet03", Member: "On"}},
+		Poll:   w.poll,
+		Write:  w.write,
+		Log:    slog.New(slog.NewTextHandler(&lockedWriter{w: &buf, mu: &bmu}, nil)),
+		Now:    func() time.Time { cmu.Lock(); defer cmu.Unlock(); return clock },
+	}
+	b, err := NewBase(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gmu sync.Mutex
+	open := true
+	setGate := func(v bool) { gmu.Lock(); open = v; gmu.Unlock() }
+	if n := nio.SetPlainGate(b, func() bool { gmu.Lock(); defer gmu.Unlock(); return open }); n != 1 {
+		t.Fatalf("io.SetPlainGate took %d drivers; want 1", n)
+	}
+	w.set("PDU1", DefaultClass, Result{Updates: []Update{{"PDU1_Outlet03", "On", ir.BoolVal(true)}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.watch(b)
+	b.Start(ctx)
+	defer b.Stop()
+	w.waitPoll(t, "PDU1/default")
+	push := func(v bool) { _ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": v}) }
+	rowErr := func() string { return b.Health().Sources[0].LastWriteError }
+
+	push(true) // baseline
+	setGate(false)
+	push(true) // unchanged: no command, nothing dropped
+	if l := logged(); len(l) != 0 || rowErr() != "" {
+		t.Fatalf("an unchanged value warned: log %q, row %q", l, rowErr())
+	}
+	push(false) // the program changed the command: dropped
+	if l := logged(); len(l) != 1 || !strings.Contains(l[0], "source=PDU1") || !strings.Contains(l[0], "tag=PDU1_Outlet03_Cmd") {
+		t.Fatalf("a dropped command: log %q; want one WARN naming the source and the tag", l)
+	}
+	if r := rowErr(); !strings.Contains(r, "PDU1_Outlet03_Cmd: dropped: the write gate was closed") {
+		t.Fatalf("row: %q", r)
+	}
+	push(true) // another drop within the minute: on the row, not logged again
+	advance(59 * time.Second)
+	push(false)
+	if l := logged(); len(l) != 1 {
+		t.Fatalf("drops within a minute logged %d times; want once", len(l))
+	}
+	advance(time.Second)
+	push(true)
+	if l := logged(); len(l) != 2 {
+		t.Fatalf("a drop a minute later logged %d lines in all; want 2", len(l))
+	}
+
+	// Reopened: the first value is a baseline, the next change goes out,
+	// and nothing dropped while closed was sent.
+	setGate(true)
+	push(true)
+	push(false)
+	writes := func() string { w.mu.Lock(); defer w.mu.Unlock(); return strings.Join(w.writes, ",") }
+	deadline := time.Now().Add(time.Second)
+	for writes() == "" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := writes(); got != "PDU1/PDU1_Outlet03.On=false" {
+		t.Fatalf("writes after the gate reopened: %q", got)
+	}
+}
+
+// lockedWriter serialises a log handler's writes into a shared buffer.
+type lockedWriter struct {
+	w  *bytes.Buffer
+	mu *sync.Mutex
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 // A class that never answers, next to one that does, does not hide: its

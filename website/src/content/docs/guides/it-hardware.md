@@ -140,7 +140,17 @@ off, 4 restart — posted once on the change to a non-zero value; the program
 returns it to 0. Every command goes through the runtime's existing gates:
 the leader only, the write token, the HMI's confirm dialog. The first value
 seen after a start is a baseline that is never written, so `init: false` on
-an outlet command cannot switch the outlet off at boot. Automatic power
+an outlet command cannot switch the outlet off at boot. With or without
+`redundancy:`, a hung scan closes the gate (about 5 to 8 s into the
+hang): a command still queued for a slow device waits, and goes out when
+the scans complete again, unless it is older than `stale-after` by then.
+A command the program changes while the gate is closed (another task
+still scanning, or the moment between the scans resuming and the gate
+reopening) is not sent. The device row says so, and a warning names the
+tag and the source, at most once a minute per source. The next value
+after the gate reopens is a baseline, so a reset or power action is
+never sent twice; the device and the tag can then disagree until the
+program changes the command again. Automatic power
 actions from control logic are deliberately out of scope: a controller
 that can power-cycle the node it runs on is a loop, and fencing belongs to
 the cluster's own tooling.

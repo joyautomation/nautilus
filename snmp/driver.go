@@ -345,8 +345,16 @@ func (d *Driver) OutputNames() []string { return d.base.OutputNames() }
 // ScanClasses maps each class to the "Tag.Member" paths it polls.
 func (d *Driver) ScanClasses() map[string][]string { return d.base.ScanClasses() }
 
-// SetWriteGate installs the leadership gate for commands.
+// SetWriteGate installs the write gate for commands: a pair's leadership,
+// or naut run's liveness gate (PlainWriteGate).
 func (d *Driver) SetWriteGate(gate func() bool) { d.base.SetWriteGate(gate) }
+
+// PlainWriteGate marks the write gate as only a gate (io.PlainGated,
+// #938): naut run gives it the liveness gate in a project without
+// `redundancy:`, so a hung scan stops queued commands (hw.Base).
+func (d *Driver) PlainWriteGate() { d.base.PlainWriteGate() }
+
+var _ nio.PlainGated = (*Driver)(nil)
 
 // SetSendGate installs a pair's gate with its send budget, read before
 // each command (hw.Base.SetSendGate, design §3.4).

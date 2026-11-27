@@ -22,8 +22,6 @@ func init() {
 		// A reset is an event: dropped while the gate is closed, never
 		// replayed (hw/base.go WriteOutputs rule 2).
 		gate: dropAndRebaseline,
-		// The liveness gate naut run installs does not reach hw.Base.
-		expect: map[string]string{"C5": "#938"},
 		start: func(t tb, o startOpts) *rig {
 			tree, err := mockup.LoadDir("../../redfish/testdata/subsystem-1u")
 			if err != nil {
