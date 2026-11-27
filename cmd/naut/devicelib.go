@@ -16,6 +16,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/project"
 )
@@ -154,10 +155,22 @@ func runDevicesRender(args []string, w io.Writer) int {
 		fmt.Fprintf(w, "%s declares no devices:\n", project.ManifestName)
 		return 0
 	}
-	src, err := set.TypesST()
-	if err != nil {
+	if err := renderSet(w, set, m.Drivers); err != nil {
 		fmt.Fprintln(os.Stderr, "naut devices render:", err)
 		return 1
+	}
+	return 0
+}
+
+// renderSet prints what a device set derives: the types, tags, derived
+// points, driver bindings and alarms. It is `naut devices render`'s body and
+// what `naut devices update` compares, so the two agree on what "produces"
+// means. drivers are the project's drivers: sections (an OPC UA device's
+// connection line names its section).
+func renderSet(w io.Writer, set *devbind.Set, drivers []project.DriverConfig) error {
+	src, err := set.TypesST()
+	if err != nil {
+		return err
 	}
 	fmt.Fprintf(w, "# types\n\n%s\n", strings.TrimSpace(src))
 
@@ -212,7 +225,7 @@ func runDevicesRender(args []string, w io.Writer) int {
 		conn := "security None, anonymous"
 		if od.Driver != "" {
 			conn = "connects as drivers: section " + od.Driver + " says"
-			for _, c := range m.Drivers {
+			for _, c := range drivers {
 				if strings.EqualFold(c.Name, od.Driver) {
 					sec := c.Security
 					if sec == "" {
@@ -239,7 +252,16 @@ func runDevicesRender(args []string, w io.Writer) int {
 		tw.Flush()
 	}
 	fmt.Fprintf(w, "\n%s.<point> bindings are the struct's members (read back); %s_<point> are the command tags.\n", "<device>", "<device>")
-	return 0
+	if rows := set.AlarmRows(); len(rows) > 0 {
+		fmt.Fprint(w, "\n# alarms (default, from the profile)\n\n")
+		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "TYPE\tMEMBER\tNAME\tPRIORITY\tON DELAY\tCLASS")
+		for _, a := range rows {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", a.Type, a.Member, a.Name, a.Priority, a.OnDelay, a.Class)
+		}
+		tw.Flush()
+	}
+	return nil
 }
 
 // existingCopy reports whether dir/name is already a regular file holding

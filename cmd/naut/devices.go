@@ -27,6 +27,14 @@ Usage:
                                  copy a profile (and its simulator) into the
                                  project's profiles/ folder: the project's pinned
                                  copy, which devices: rows refer to
+  naut devices update [profile] [project-dir] [--from dir] [--yes] [--discard-edits]
+                                 compare the project's vendored profiles with their
+                                 source (the built-in library, or --from): what the
+                                 project would derive differently, a hand-edited
+                                 copy, a shared simulator. --yes replaces the copies
+                                 that differ, but never a hand-edited one unless
+                                 --discard-edits too, and not while the project's
+                                 check would fail with the new copy
   naut devices render [dir]      print what nautilus.yaml's devices: derive at load:
                                  the struct types, the tags, the driver bindings
   naut devices up [dir]          start every virtual device (below) on its wire
@@ -84,6 +92,8 @@ func runDevices(args []string) int {
 		return runDevicesCheck(args[1:])
 	case "profiles":
 		return runDevicesProfiles(args[1:], os.Stdout)
+	case "update":
+		return runDevicesUpdate(args[1:], os.Stdout)
 	case "show":
 		return runDevicesShow(args[1:], os.Stdout)
 	case "help", "-h", "--help":

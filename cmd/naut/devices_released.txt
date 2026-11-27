@@ -1,0 +1,37 @@
+# Hashes of every built-in profile (file + simulator) naut has released:
+# `id version sha256(yaml 0x00 simulator)`. `naut devices update` calls a
+# vendored copy whose hash is listed here unedited, and any other a hand
+# edit. A line marked `history` is a pair from before this list was kept.
+# TestReleasedProfiles fails when a built-in changes without its new hash
+# being added here, and when one version of a profile has two hashes: bump
+# the profile's version: with the change.
+abb-acs355-fmbt21 1 484f0d00069374187c0c47f482ce134db618ae2123067140fb92266c01f9f4b2 history
+abb-acs355-fmbt21 1 ae9d7bdb8a4382498017e900a3d3a9a588110d3512f8d24f9a1673f586315159 history
+abb-acs355-fmbt21 1 ff09a5bf1091e77fc7b2d44bbdbd9461d615bf00023fe2f4adde6cd27af73963
+abb-acs550-reta01 1 4591b9f4d7f97eea187c52f63e4c9256517aface52d129cd8af75902fabba5c2 history
+abb-acs550-reta01 1 441eb4dbe8a5f271a460af8d3a6601b4e660d78cff9878dd7ea298f4de1a2b74 history
+abb-acs550-reta01 1 5e666fd71ef95582b27949d6b80b20e77fc9cbc13d669261028faca522250ad6
+abb-acs580-fmbt21 1 36631528fa5f7729a4d5eb5cd4e849b1e6578791d50cc86653de56c3c7244297 history
+abb-acs580-fmbt21 1 c5f1bd5441412d648cc415c827e715c5a09021cdd62bbc0d0b9cc90668f0b768 history
+abb-acs580-fmbt21 1 9e199f479ae306a232e2fae7df78087ba6f9e7346b10f60de1bcabafaa8983c7
+asi-275m 1 f6870f700c23c29d44e6f7d407c0514bd4fd6972a3f806c28ec32bb94bb3b3ef history
+asi-275m 1 9767f03fb018ef38f4e840e715a45d269803284521244570da7294fd12c595cb
+fdc-mct4 1 18aab0fe895112e730a8140061b6102c34febd71197290674cd6cacde51878a8 history
+fdc-mct4 1 af50ee31a606f5477850af63f19162da5283fb074f78f6c1eb73616766778841 history
+fdc-mct4 1 5f0eff9fc6d15a65717638e6d8c5aa3496d7875103fd4cf91be2f351fb8b78aa
+ifm-al1590 3 1a646dc8a33e0dc037762bbfbdc765a1fb98a15631cb450cee39b6343f13b3de history
+ifm-al1590 2 9e18b9c696a52acc0782718bc6ebe77c31f28411e29af79bb78f7d592e514c7e history
+ifm-al1590 2 6ec95e716b28fc2c7432c080447fb119d3776288207b828d2a65149b026575db history
+ifm-al1590 1 213be0a3f1f23613c04d658053ae09160d1814b44a95372b85d6c9e9ed7f9c26 history
+ifm-al1590 4 0e047dd6108a96f072ebdf5810ee150ad08ea48973c2c7d4052f395e5f8ca7bd
+pepperl-fuchs-ice3 4 9be42f62062b1a9513d1990af03016116ae3e56dae94130a8f21037c950d38ac history
+pepperl-fuchs-ice3 3 749afd8834b7c3aea378f8e9a20742380d0a2e2955c9889f17b4523c461d1347 history
+pepperl-fuchs-ice3 3 2a120680d1b8412ccb0fff4fe24f1a48855ecd3c376c960683d785e8dad0a300 history
+pepperl-fuchs-ice3 2 b132f1b57936b4b5fa87c5876f8798a3cb17fefff383d4b1165b1fc951660675 history
+pepperl-fuchs-ice3 2 d6f1e0400a0354787585a198c6ce933248c284d63a326b77b462740b9d5bd8e6 history
+pepperl-fuchs-ice3 1 6e78ed224f1c1d90519048da054a6de58e4f084d4e17bef1ebfcbb84884efc31 history
+pepperl-fuchs-ice3 5 a4028ddd4aba4d9289f34f7cfb6e380fed983ad6270d16c044da49a65a076821
+sick-sig300 2 c88ae970c15a42577bc7e5cd4f1133fea63339ecb09eac899b5841a2550ab223 history
+sick-sig300 1 12a34c8153f02964d21cd3089a6c5545306bfca004192b77bb33f92c706e0f2e history
+sick-sig300 4 79ba3135b52e8841850ff3c5e587577f3862e97978fdf47f63e07485b32eaf10
+waveshare-relay-16ch 1 fe5542ab67f8deed007dfd6cd2e6f2518d6e08a6f83c21abaf35f23d9612eea0

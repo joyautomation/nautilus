@@ -68,12 +68,21 @@ alarms. For each vendored profile it reports:
 
 - **the copy against the source:** what would change in the project if the
   source replaced the copy;
-- **a hand-edited copy:** the copy produces something no released version
-  of the source produces. `update` names those rows and does not
-  overwrite them without `--yes`;
-- **a changed profile with no new `version:`:** the source's output
-  differs from the copy's at the same version number. That is reported
-  as a fault of the source, so a team bumps the version;
+- **a hand-edited copy:** the copy is not byte-for-byte any file pair
+  naut has released (`cmd/naut/devices_released.txt` lists the hash of
+  every built-in profile and its simulator, history included; a test fails
+  when a built-in changes without its new hash being listed, or when one
+  version has two). `update` says HAND-EDITED, shows what differs from the
+  source, and does not replace it, not even with `--yes`: only
+  `--yes --discard-edits` does, so an edit never goes silently. A
+  cosmetic edit counts as one. A `--from` folder keeps no
+  releases of its own, so a copy of a profile that is not a built-in is
+  treated as edited ("as far as naut can tell") and needs `--discard-edits`
+  after you have read the diff; a copy of a built-in is judged against the
+  built-in releases as usual;
+- **a changed profile with no new `version:`:** the built-in library's
+  test fails (above), so it cannot ship; against a `--from` source `update`
+  notes that the source changed at the same version, so a team bumps it;
 - **a shared simulator file** (`abb-drives.st` serves three ABB profiles):
   it is replaced only when every profile vendored with it moves to the
   same source, else `update` refuses and names the profiles;
