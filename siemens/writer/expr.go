@@ -50,6 +50,9 @@ var namedFuncs = map[string][]string{
 func (pw *progWriter) expr(e st.Expression, parent int) string {
 	switch e := e.(type) {
 	case *st.NumberLit:
+		if f, long := longReal(e); long && pw.lreal {
+			return lrealBits(f)
+		}
 		return number(e)
 	case *st.BoolLit:
 		if e.Value {
@@ -200,6 +203,9 @@ func (pw *progWriter) wideRefused(line int) {
 }
 
 func (pw *progWriter) binary(e *st.BinaryExpr, parent int) string {
+	if ctx := pw.realContext(pw.typ(e.Left), pw.typ(e.Right)); ctx != pw.lreal {
+		return pw.inLREAL(ctx, func() string { return pw.binary(e, parent) })
+	}
 	op := strings.ToUpper(e.Op)
 	p, ok := precedence[op]
 	if !ok {
@@ -414,9 +420,18 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			return ""
 		}
 	}
+	// A call that returns an LREAL takes LREAL arguments (a literal there is
+	// an LREAL); one that returns a REAL takes REALs.
+	argCtx := pw.lreal
+	switch pw.typ(c) {
+	case "LREAL":
+		argCtx = true
+	case "REAL":
+		argCtx = false
+	}
 	args := make([]string, len(argExprs))
 	for i, a := range argExprs {
-		args[i] = pw.expr(a, 0)
+		args[i] = pw.inLREAL(argCtx, func() string { return pw.expr(a, 0) })
 	}
 	switch {
 	case name == "TRUNC":

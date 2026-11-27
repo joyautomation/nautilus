@@ -823,6 +823,12 @@ func literal(src string) (string, string) {
 // and whatever the expression printer refuses is refused here, never
 // printed as an empty value.
 func constValue(lib *library, e st.Expression) (string, string) {
+	if f, long := longReal(e); long {
+		// TIA keeps 15 significant digits of a literal (#1429), and a
+		// start value is one literal.
+		return "", fmt.Sprintf("the start value %s has more than the 15 significant digits TIA keeps of a literal (it would start at %s); write at most 15 (#1429)",
+			strconv.FormatFloat(f, 'g', -1, 64), strconv.FormatFloat(f, 'g', 15, 64))
+	}
 	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
 		if n, ok := u.Operand.(*st.NumberLit); ok {
 			return "-" + number(n), ""
