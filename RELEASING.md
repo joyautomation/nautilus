@@ -125,7 +125,7 @@ replica on v0.22.0 or older drops what a live apply keeps, and a
 Lease-mode replica cannot ask the others. Through every release of the
 first minor series after v0.22.0 (v0.23.x, if that is next), leave it as
 it is, and in that series' first release write its version here (first
-release that keeps a live apply: _not yet released_). In the next minor
+release that keeps a live apply: v0.23.0). In the next minor
 release (v0.24.0 then), in the release commit:
 
 - set `leaseModeRefusesKeep` to `false` and update its comment, or remove
