@@ -3,6 +3,9 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"io"
 	"log/slog"
@@ -56,24 +59,39 @@ func (l *logBuf) count(level, msg string) int {
 type voterWay int
 
 const (
-	wayCut    voterWay = iota // no answer: a refused connection
-	wayGrant                  // grants every campaign, refuses probes
-	wayHeld                   // answers probes, never a campaign (its write holds the grant)
-	wayInc9                   // grants, as witness incarnation 9 (the pair counts 5)
-	wayMarked                 // refuses everything, marking the asker a duplicate
-	wayRefuse                 // refuses every campaign: promised a higher term elsewhere
+	wayCut       voterWay = iota // no answer: a refused connection
+	wayGrant                     // grants every campaign, refuses probes
+	wayHeld                      // answers probes, never a campaign (its write holds the grant)
+	wayInc9                      // grants, as witness incarnation 9 (the pair counts 5)
+	wayMarked                    // refuses everything, marking the asker a duplicate
+	wayRefuse                    // refuses every campaign: promised a higher term elsewhere
+	wayRefuseLow                 // refuses every campaign, its promise below the term (a restart wait)
 )
 
 // fakeVoters answers a's vote calls for b and the witness.
 type fakeVoters struct {
 	mu  sync.Mutex
 	way map[string]voterWay // by host
+	cn  map[string]string   // the certificate each host answers under (peer TLS), by host
+	// answered counts the requests other than campaigns each host
+	// answered (probes).
+	answered map[string]int
+}
+
+func (f *fakeVoters) probes(host string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.answered[host]
 }
 
 func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 	f.mu.Lock()
-	way := f.way[r.URL.Hostname()]
+	way, cn := f.way[r.URL.Hostname()], f.cn[r.URL.Hostname()]
 	f.mu.Unlock()
+	var cs *tls.ConnectionState
+	if cn != "" {
+		cs = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: cn}}}}
+	}
 	from := quorum.NodeID("b")
 	if r.URL.Hostname() == "witness.test" {
 		from = WitnessID
@@ -82,7 +100,7 @@ func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, errors.New("connection refused")
 	}
 	if !strings.HasSuffix(r.URL.Path, "/vote") {
-		return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody, Header: http.Header{}, Request: r}, nil
+		return &http.Response{StatusCode: http.StatusNoContent, Body: http.NoBody, Header: http.Header{}, Request: r, TLS: cs}, nil
 	}
 	b, _ := io.ReadAll(r.Body)
 	var req quorum.Request
@@ -90,6 +108,14 @@ func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	campaign := req.Term != 0 && !req.Renewal
+	if !campaign {
+		f.mu.Lock()
+		if f.answered == nil {
+			f.answered = map[string]int{}
+		}
+		f.answered[r.URL.Hostname()]++
+		f.mu.Unlock()
+	}
 	rep := quorum.Reply{From: from, To: req.From, Nonce: req.Nonce, ID: req.ID, Term: req.Term, Incarnation: 5, Promised: req.Term}
 	switch way {
 	case wayGrant:
@@ -105,9 +131,11 @@ func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 		rep.Marked = true
 	case wayRefuse:
 		rep.Promised = req.Term + 5
+	case wayRefuseLow:
+		rep.Promised = 0
 	}
 	out, _ := rep.MarshalBinary()
-	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(out)), Header: http.Header{}, Request: r}, nil
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(out)), Header: http.Header{}, Request: r, TLS: cs}, nil
 }
 
 // lelector is controller a with the fake voters, its writer running, and
@@ -198,10 +226,18 @@ func heldWrite() (write func(*os.File, []byte) (int, error), release func()) {
 // disk where none was measured, and never this controller's own disk
 // when its own grant would not have made a majority.
 func TestLeaderlessCause(t *testing.T) {
-	notSlow := func(t *testing.T, cause string) {
+	noDisk := func(t *testing.T, cause string) {
 		t.Helper()
 		if strings.Contains(cause, "disk") || strings.Contains(cause, "own voter") {
 			t.Fatalf("cause %q blames a disk", cause)
+		}
+	}
+	// notSlow: nor a voter's write.
+	notSlow := func(t *testing.T, cause string) {
+		t.Helper()
+		noDisk(t, cause)
+		if strings.Contains(cause, "has not confirmed its write") {
+			t.Fatalf("cause %q blames a voter's write", cause)
 		}
 	}
 	t.Run("cut", func(t *testing.T) {
@@ -235,8 +271,23 @@ func TestLeaderlessCause(t *testing.T) {
 			w, ok := l.e.word("b")
 			return ok && w.Granted
 		})
-		l.clk.add(l.o.Lease) // its own write still held, past the budget
-		got := l.cause(t, "this controller's own voter has not confirmed its write: its state disk is slow")
+		// Its own write still held, past the budget; and past the
+		// unheard campaign's back-off (two leases from its last re-ask),
+		// at the look that asks again: b's word, its grant of the first
+		// campaign, is still current. b is cut from here, so that grant
+		// stays its latest word.
+		l.voters.mu.Lock()
+		l.voters.way["peer.test"] = wayCut
+		l.voters.mu.Unlock()
+		l.clk.add(3 * l.o.Lease)
+		l.e.look()
+		got := ""
+		if ll := l.e.Status().Leaderless; ll != nil {
+			got = ll.Cause
+		}
+		if !strings.Contains(got, "this controller's own voter has not confirmed its write: its state disk is slow") {
+			t.Fatalf("cause %q", got)
+		}
 		if !strings.Contains(got, "voter w does not answer") {
 			t.Fatalf("cause %q", got)
 		}
@@ -255,12 +306,42 @@ func TestLeaderlessCause(t *testing.T) {
 		if !strings.Contains(got, "voter b does not answer") {
 			t.Fatalf("cause %q", got)
 		}
-		notSlow(t, got)
+		noDisk(t, got)
+	})
+	t.Run("witness under an uncounted certificate", func(t *testing.T) {
+		// Answers under another incarnation's certificate may come from
+		// another copy: they prove nothing of the counted witness's write.
+		l := newLelector(t, wayCut, wayHeld, true, nil)
+		l.e.call.tls = true
+		l.voters.mu.Lock()
+		l.voters.cn = map[string]string{"witness.test": "witness@9"}
+		l.voters.mu.Unlock()
+		l.pastHold(5)
+		l.e.look()
+		// Its probe answered (and that answer handled) before the cause
+		// is read.
+		waitFor(t, time.Second, func() bool { return l.voters.probes("witness.test") > 0 })
+		time.Sleep(50 * time.Millisecond)
+		notSlow(t, l.cause(t, "voter w does not answer"))
 	})
 	t.Run("refused", func(t *testing.T) {
 		l := newLelector(t, wayRefuse, wayRefuse, true, nil)
 		l.pastHold(5)
 		got := l.cause(t, "voter b refused this controller's campaign")
+		if !strings.Contains(got, "it had promised term") {
+			t.Fatalf("cause %q does not name the promise", got)
+		}
+		notSlow(t, got)
+	})
+	t.Run("refused naming no promise", func(t *testing.T) {
+		// A voter in its restart wait (or uncommissioned) refuses with a
+		// promise below the term: that promise is no reason.
+		l := newLelector(t, wayRefuseLow, wayRefuseLow, true, nil)
+		l.pastHold(5)
+		got := l.cause(t, "voter b refused this controller's campaign")
+		if strings.Contains(got, "promised") {
+			t.Fatalf("cause %q names a promise that refused nothing", got)
+		}
 		notSlow(t, got)
 	})
 	t.Run("duplicate mark", func(t *testing.T) {
@@ -387,6 +468,15 @@ func TestWriteTimedFromItsOldestAsk(t *testing.T) {
 	gate <- struct{}{} // seq 3 lands at 300 ms, asked (as seq 2) at 100 ms
 	if r := <-got; r.seq != 3 || r.took != 200*time.Millisecond {
 		t.Fatalf("second write %+v, want seq 3 in 200ms (from seq 2's ask, its queue included)", r)
+	}
+	// A re-ask's write of seq 3 again, queued while seq 3 was in flight,
+	// releases nothing new: not timed (its time would count the first
+	// write's twice).
+	w.ask(&quorum.Persist{Seq: 3})
+	clk.add(100 * time.Millisecond)
+	gate <- struct{}{}
+	if r := <-got; r.seq != 3 || r.took >= 0 {
+		t.Fatalf("rewrite %+v, want seq 3 untimed", r)
 	}
 }
 

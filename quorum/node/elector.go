@@ -1170,8 +1170,7 @@ func (e *Elector) persisted(seq uint64, err error, took time.Duration) {
 	}
 	for range late {
 		if warn, n := e.writes.lateGrant(now); warn {
-			e.log.Warn(fmt.Sprintf("redundancy: this controller's voter granted %d vote(s) only after the asker had stopped waiting: its state write (%v) outlasted the vote's wait, "+
-				"so that campaign is lost", n, took.Round(time.Millisecond)), "file", e.o.StatePath, "lease", e.o.Lease)
+			e.log.Warn(lateGrantMsg("redundancy: this controller's voter", n, took, e.o.Lease), "file", e.o.StatePath, "lease", e.o.Lease)
 		}
 	}
 	switch {
@@ -1217,12 +1216,15 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 	go func() {
 		body, hdr, cn, err := e.call.callCert(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
 		var se *statusError
-		if err == nil || (errors.As(err, &se) && se.code == http.StatusConflict) {
+		unbound := to == e.o.Witness && e.call.tls && !witnessOpOK(cn, e.adopted.Load())
+		if (err == nil || (errors.As(err, &se) && se.code == http.StatusConflict)) && (!unbound || mut("answered_unbound")) {
 			// It is reachable and its voter runs, whatever it said: a
 			// campaign it leaves unanswered waits on its write (#1436).
+			// Not a witness under a certificate this controller does
+			// not count: that one may be another copy.
 			e.answered(to)
 		}
-		if to == e.o.Witness && e.call.tls && !witnessOpOK(cn, e.adopted.Load()) && !mut("witness_refusals_unbound") {
+		if unbound && !mut("witness_refusals_unbound") {
 			e.unboundWitnessReply(to, cn, body, err)
 			return
 		}

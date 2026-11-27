@@ -21,6 +21,21 @@ import (
 // no-leader report is logged again.
 const noteEvery = time.Minute
 
+// wordFresh is how many leases a voter's campaign word stays current for
+// the cause.
+const wordFresh = 4
+
+// refusedMsg words a refusal: the promise it named only when that is
+// what refused it (a term at or above the one asked). A voter in its
+// restart wait, uncommissioned, or holding another's relayed promise
+// refuses too, and its word names no promise.
+func refusedMsg(who string, w quorum.Word) string {
+	if w.Promised >= w.Term {
+		return fmt.Sprintf("%s refused this controller's campaign for term %d: it had promised term %d", who, w.Term, w.Promised)
+	}
+	return fmt.Sprintf("%s refused this controller's campaign for term %d", who, w.Term)
+}
+
 // leaderlessAfter is how many leases with no leader seen make a report:
 // a takeover wins in about one, and a slow election in two or three.
 const leaderlessAfter = 4
@@ -69,6 +84,9 @@ type writeNote struct {
 // slow at lease, and no warning went out in the last noteEvery. n and
 // worst are the slow writes since the last warning and the slowest.
 func (w *writeNote) took(now quorum.Instant, d, lease time.Duration) (warn bool, n int, worst time.Duration) {
+	if d < 0 {
+		return false, 0, 0 // a rewrite of what is on disk: served no ask
+	}
 	w.last = d
 	w.max = max(w.max, d)
 	if !writeIsSlow(d, lease) {
@@ -101,6 +119,17 @@ func slowWriteMsg(who string, n int, worst, lease time.Duration) string {
 	return fmt.Sprintf("%s: %d voter state write(s) took up to %v from the ask to on disk; a %v lease needs them well under %v, "+
 		"or the pair can be left with no leader (it fails safe: never two). Check the state directory's disk",
 		who, n, worst.Round(time.Millisecond), lease, writeBudget(lease).Round(time.Millisecond))
+}
+
+// lateGrantMsg words a late-grant warning. The asker did not count that
+// vote; its campaign may still have won on the other two, so the warning
+// says what a write this slow costs only once it does.
+func lateGrantMsg(who string, n int, took, lease time.Duration) string {
+	msg := fmt.Sprintf("%s granted %d vote(s) only after the asker had stopped waiting (a vote waits %v): the asker did not count them", who, n, lease/8)
+	if took >= 0 {
+		msg += fmt.Sprintf("; the state write took %v", took.Round(time.Millisecond))
+	}
+	return msg + fmt.Sprintf(". A campaign is lost once a voter's writes pass %v at this lease", writeBudget(lease).Round(time.Millisecond))
 }
 
 // lateGrants counts, per asker, the grants a write released that reached
@@ -172,7 +201,7 @@ func (e *Elector) noteLeaderless(now quorum.Instant, healthy bool, ls LogState, 
 	}
 	e.llLogged, e.llLogAt = true, now
 	e.log.Error("redundancy: this controller has seen no leader for "+now.Sub(since).Round(time.Millisecond).String()+
-		": the pair runs no outputs and raises no alarms until one leads (it fails safe: never two). Cause: "+cause,
+		" (its own voter has promised none, and the peer's renewals don't reach it). If none leads, the pair runs no outputs and raises no alarms until one does (it fails safe: never two). Cause: "+cause,
 		"lease", e.o.Lease)
 }
 
@@ -195,7 +224,13 @@ func (e *Elector) leaderlessCause(now quorum.Instant, healthy bool, ls LogState,
 			return "a vote is refused: " + msg, true
 		}
 	}
-	recent := 2 * e.o.Lease
+	// A word stays current across one back-off: an unheard campaign waits
+	// two leases from its last re-ask (three quarters of a lease in)
+	// before the next asks again.
+	recent := wordFresh * e.o.Lease
+	if mut("words_stale_at_backoff") {
+		recent = 2 * e.o.Lease
+	}
 	var why []string
 	granted := 0
 	for _, v := range []quorum.NodeID{e.o.Peer, e.o.Witness} {
@@ -206,7 +241,7 @@ func (e *Elector) leaderlessCause(now quorum.Instant, healthy bool, ls LogState,
 		case ok && now.Sub(w.At) < recent && !w.Counted:
 			why = append(why, fmt.Sprintf("voter %s's answer is not counted: %s", v, w.Why))
 		case ok && now.Sub(w.At) < recent:
-			why = append(why, fmt.Sprintf("voter %s refused this controller's campaign for term %d: it had promised term %d", v, w.Term, w.Promised))
+			why = append(why, refusedMsg("voter "+string(v), w))
 		case e.answeredWithin(v, now, recent) || mut("cause_cut_as_slow"):
 			why = append(why, fmt.Sprintf("voter %s has not confirmed its write (slow or failing); see its log", v))
 		default:
@@ -225,7 +260,7 @@ func (e *Elector) leaderlessCause(now quorum.Instant, healthy bool, ls LogState,
 			why = append(why, fmt.Sprintf("this controller's own voter has not confirmed its write: its state disk is slow (%v; a %v lease needs under %v)",
 				waited.Round(time.Millisecond), e.o.Lease, budget.Round(time.Millisecond)))
 		case ok && now.Sub(own.At) < recent && !own.Granted:
-			why = append(why, fmt.Sprintf("this controller's own voter refused its campaign for term %d: it had promised term %d", own.Term, own.Promised))
+			why = append(why, refusedMsg("this controller's own voter", own))
 		}
 	}
 	if len(why) == 0 {
@@ -278,11 +313,12 @@ func (e *Elector) answered(v quorum.NodeID) {
 	e.mu.Unlock()
 }
 
-// answeredWithin reports whether voter v answered any call in the last d,
-// or, the peer, called this controller's voter. Under mu.
+// answeredWithin reports whether voter v answered any call of this
+// controller's in the last d: its calls in, the peer's, prove nothing of
+// the link out. Under mu.
 func (e *Elector) answeredWithin(v quorum.NodeID, now quorum.Instant, d time.Duration) bool {
 	if at, ok := e.answers[v]; ok && now.Sub(at) < d {
 		return true
 	}
-	return v == e.o.Peer && e.peerHeard && now.Sub(e.peerAt) < d
+	return false
 }

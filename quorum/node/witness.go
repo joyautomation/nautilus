@@ -421,8 +421,7 @@ func (p *witnessPair) persisted(seq uint64, err error, took time.Duration) {
 		}
 		for range lateGrants(missed, hit) {
 			if warn, n := p.writes.lateGrant(now); warn {
-				p.log.Warn(fmt.Sprintf("witness: granted %d vote(s) of this pair only after the asker had stopped waiting: the state write (%v) outlasted the vote's wait, "+
-					"so that campaign is lost", n, took.Round(time.Millisecond)), "lease", lease)
+				p.log.Warn(lateGrantMsg("witness: this pair's voter", n, took, lease), "lease", lease)
 			}
 		}
 	}

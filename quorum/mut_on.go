@@ -682,6 +682,9 @@ var Mutations = []string{
 	"driver_drops_unseen",               // node: a campaign reply the driver drops (an unadopted witness incarnation, a fenced state) leaves the no-leader cause saying the voter is silent (#1436)
 	"probe_error_as_info",               // node: the start-up write probe logs a disk too slow for the lease as info, not an error (#1436)
 	"witness_write_by_own_lease",        // node: the witness judges a pair's write times by its own --lease, not the pair's (#1436)
+	"rewrite_timed",                     // node: a write of a Seq already on disk (a re-ask's, queued behind the first) is timed, counting the first write's time twice (#1436, Fable)
+	"words_stale_at_backoff",            // node: a voter's campaign word goes stale after two leases, so the no-leader cause flips at the look that ends an unheard campaign's back-off (#1436, Fable)
+	"answered_unbound",                  // node: a witness answer under a certificate this controller does not count proves the witness reachable, so the no-leader cause blames its write (#1436, Fable)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

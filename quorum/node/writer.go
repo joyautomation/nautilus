@@ -13,7 +13,8 @@ import (
 // each write, ok or failed, to done: the grants and Adopts the write holds
 // leave only from there. took is how long the oldest ask the write
 // served waited for it, its queue behind a write in flight included: what
-// a grant held behind it waited (#1436).
+// a grant held behind it waited (#1436); below 0 for a write of a Seq
+// already on disk, which serves no ask.
 type writer struct {
 	save func(quorum.VoterState) error
 	done func(seq uint64, err error, took time.Duration)
@@ -28,7 +29,11 @@ type writer struct {
 	// is.
 	busyAt quorum.Instant
 	busy   bool
-	kick   chan struct{}
+	// written is the highest Seq written successfully: a later write of
+	// it or below (a re-ask's, queued while the first was in flight)
+	// releases nothing new, and is not timed (took < 0).
+	written uint64
+	kick    chan struct{}
 }
 
 func newWriter(save func(quorum.VoterState) error, done func(uint64, error, time.Duration), now func() quorum.Instant) *writer {
@@ -78,10 +83,19 @@ func (w *writer) run(ctx context.Context) {
 			_ = w.save(p.State)
 			continue
 		}
+		w.mu.Lock()
+		again := p.Seq <= w.written && !mut("rewrite_timed")
+		w.mu.Unlock()
 		err := w.save(p.State)
 		took := w.now().Sub(at)
+		if again {
+			took = -1
+		}
 		w.mu.Lock()
 		w.busy = false
+		if err == nil && p.Seq > w.written {
+			w.written = p.Seq
+		}
 		w.mu.Unlock()
 		w.done(p.Seq, err, took)
 	}
