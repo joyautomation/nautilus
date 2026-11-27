@@ -12,6 +12,8 @@ VERSION : 0.1
       eno1 : BOOL;
       eno2 : BOOL;
       Gr : Array[0..143] of REAL;
+      GrB : Array[0..143] of DWORD;
+      LitB : LWORD;
       rA16 : INT;
       rA32 : DINT;
       rA64 : LINT;
@@ -22,7 +24,10 @@ VERSION : 0.1
       rLim : REAL;
       Scans : DINT;
       Sp : Array[0..48] of LREAL;
+      SpB : Array[0..48] of LWORD;
       Sq : Array[0..1] of LREAL;
+      SqB : Array[0..6] of LWORD;
+      SvB : Array[0..6] of LWORD;
       X : REAL;
    END_VAR
 

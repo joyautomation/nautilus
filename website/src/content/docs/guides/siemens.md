@@ -489,6 +489,15 @@ assignment's target and every `=>` binding keep their values. `ENO` is
 `EN`: it is never TIA's own ENO, which turns FALSE on CPU-side errors
 nautilus does not have.
 
+## ATAN2
+
+TIA has no ATAN2, so the writer adds a function of its own,
+`naut_ATAN2`, that computes exactly what nautilus computes (Go's
+`math.Atan2`). Its zeros, infinities and NaN match bit for bit. One
+difference: with a REAL argument that a 32-bit REAL cannot hold exactly
+(0.001, 0.7071), the result can differ in its last bit, because nautilus
+keeps a REAL at 64 bits and the CPU at 32.
+
 ## FOR loops
 
 Every FOR runs as nautilus's does: the variable takes each value in

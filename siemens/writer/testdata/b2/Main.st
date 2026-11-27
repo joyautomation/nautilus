@@ -13,6 +13,10 @@ VAR_EXTERNAL
     Sp : ARRAY[0..48] OF LREAL;                     (* ATAN2 at the special values *)
     Gr : ARRAY[0..143] OF REAL;                     (* ATAN2 on a REAL grid *)
     Sq : ARRAY[0..1] OF LREAL;                      (* ATAN2 whose quotient overflows, underflows *)
+    SpB : ARRAY[0..48] OF LWORD;                    (* the bit patterns, for the bench *)
+    GrB : ARRAY[0..143] OF DWORD;
+    SqB, SvB : ARRAY[0..6] OF LWORD;
+    LitB : LWORD;                                   (* a 16-digit LREAL literal's bits *)
     Scans : DINT;
 END_VAR
 VAR
@@ -20,7 +24,7 @@ VAR
     sv : ARRAY[0..6] OF LREAL;
     gv : ARRAY[0..11] OF REAL;
     i, j : INT;
-    inf, nz, ly, lx : LREAL;
+    inf, nz, ly, lx, lp : LREAL;
 END_VAR
 (* integer ABS: 64 bits, wrapped by the store *)
 rA16 := ABS(A16);
@@ -56,5 +60,12 @@ ly := 1.0E300; lx := 1.0E-300;
 Sq[0] := ATAN2(ly, lx);
 ly := -1.0E-300; lx := 1.0E300;
 Sq[1] := ATAN2(ly, lx);
+FOR i := 0 TO 48 DO SpB[i] := LREAL_TO_LWORD(Sp[i]); END_FOR;
+FOR i := 0 TO 143 DO GrB[i] := REAL_TO_DWORD(Gr[i]); END_FOR;
+FOR i := 0 TO 6 DO SvB[i] := LREAL_TO_LWORD(sv[i]); END_FOR;
+SqB[0] := LREAL_TO_LWORD(Sq[0]);
+SqB[1] := LREAL_TO_LWORD(Sq[1]);
+lp := 3.141592653589793;
+LitB := LREAL_TO_LWORD(lp);
 Scans := Scans + 1;
 END_PROGRAM

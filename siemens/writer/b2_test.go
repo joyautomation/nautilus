@@ -85,7 +85,7 @@ func TestB2Golden(t *testing.T) {
 	for _, g := range []struct{ names, typ string }{
 		{"A16 rA16 rAbs5 rAbs128 cv", "INT"}, {"A32 rA32 rAbs32k Bumps Scans", "DINT"}, {"A64 rA64 rAbs2g", "LINT"},
 		{"En Cu eno1 eno2", "BOOL"}, {"X rLim", "REAL"},
-		{"Sp", "ARRAY[0..48] OF LREAL"}, {"Gr", "ARRAY[0..143] OF REAL"}, {"Sq", "ARRAY[0..1] OF LREAL"},
+		{"Sp", "ARRAY[0..48] OF LREAL"}, {"Gr", "ARRAY[0..143] OF REAL"}, {"Sq", "ARRAY[0..1] OF LREAL"}, {"SpB", "ARRAY[0..48] OF LWORD"}, {"GrB", "ARRAY[0..143] OF DWORD"}, {"SqB SvB", "ARRAY[0..6] OF LWORD"}, {"LitB", "LWORD"},
 	} {
 		for _, n := range strings.Fields(g.names) {
 			globals = append(globals, Global{Name: n, Type: g.typ})

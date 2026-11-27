@@ -48,36 +48,39 @@ func (pw *progWriter) atan2(argExprs []st.Expression, args []string, line int) s
 }
 
 // atan2Source is the SCL of the ATAN2 helper (Go's math.Atan2).
+//
+// Every float64 constant is written as its bit pattern
+// (LWORD_TO_LREAL(16#…)): TIA keeps 15 significant digits of an LReal
+// literal (measured on the bench, #1305 B2), short of float64's 17, and
+// would round π. Infinity is read from the exponent bits, never compared
+// with a literal.
 func atan2Source(prefix, fn string) []byte {
 	name := quote(prefix + fn)
 	r := "#" + prefix + fn
-	const (
-		pi   = "3.141592653589793"
-		pi2  = "1.5707963267948966"
-		pi4  = "0.7853981633974483"
-		pi34 = "2.356194490192345"
-	)
+	c := func(bits string) string { return "LWORD_TO_LREAL(16#" + bits + ")" }
+	pi, pi2, pi4, pi34 := c("400921FB54442D18"), c("3FF921FB54442D18"), c("3FE921FB54442D18"), c("4002D97C7F3321D2")
+	const expo = "16#7FF0000000000000"
 	// sign(v, ref, in): v with ref's sign (ref is non-zero here), its
 	// lines indented by in after the first.
 	sign := func(v, ref, in string) string {
 		return fmt.Sprintf("IF %s < 0.0 THEN\n%s\t%s := -%s;\n%sELSE\n%s\t%s := %s;\n%sEND_IF;", ref, in, r, v, in, in, r, v, in)
 	}
+	inf := func(w string) string { return "(" + w + " AND " + expo + ") = " + expo }
 	var b strings.Builder
 	fmt.Fprintf(&b, "FUNCTION %s : LReal\n", name)
 	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\nVERSION : 0.1\n")
 	b.WriteString("   VAR_INPUT \n      Y : LReal;\n      X : LReal;\n   END_VAR\n")
-	b.WriteString("   VAR_TEMP \n      q : LReal;\n      w : LWord;\n   END_VAR\n\nBEGIN\n")
-	b.WriteString("\t// Go's math.Atan2, case by case.\n")
+	b.WriteString("   VAR_TEMP \n      q : LReal;\n      wy : LWord;\n      wx : LWord;\n   END_VAR\n\nBEGIN\n")
+	b.WriteString("\t// Go's math.Atan2, case by case, on the bit patterns.\n")
+	b.WriteString("\t#wy := LREAL_TO_LWORD(#Y);\n\t#wx := LREAL_TO_LWORD(#X);\n")
 	fmt.Fprintf(&b, "\tIF #Y <> #Y OR #X <> #X THEN\n\t\t%s := #Y + #X; // NaN\n", r)
 	b.WriteString("\tELSIF #Y = 0.0 THEN\n")
-	b.WriteString("\t\t#w := LREAL_TO_LWORD(#X);\n")
-	fmt.Fprintf(&b, "\t\tIF #X >= 0.0 AND NOT #w.%%X63 THEN\n\t\t\t%s := #Y; // ±0, Y's sign\n", r)
-	b.WriteString("\t\tELSE\n\t\t\t#w := LREAL_TO_LWORD(#Y);\n")
-	fmt.Fprintf(&b, "\t\t\tIF #w.%%X63 THEN\n\t\t\t\t%s := -%s;\n\t\t\tELSE\n\t\t\t\t%s := %s;\n\t\t\tEND_IF;\n\t\tEND_IF;\n", r, pi, r, pi)
+	fmt.Fprintf(&b, "\t\tIF #X >= 0.0 AND NOT #wx.%%X63 THEN\n\t\t\t%s := #Y; // ±0, Y's sign\n", r)
+	fmt.Fprintf(&b, "\t\tELSIF #wy.%%X63 THEN\n\t\t\t%s := -%s;\n\t\tELSE\n\t\t\t%s := %s;\n\t\tEND_IF;\n", r, pi, r, pi)
 	fmt.Fprintf(&b, "\tELSIF #X = 0.0 THEN\n\t\t%s\n", sign(pi2, "#Y", "\t\t"))
-	fmt.Fprintf(&b, "\tELSIF #X > 1.7976931348623157E+308 THEN // +inf\n\t\tIF ABS(#Y) > 1.7976931348623157E+308 THEN\n\t\t\t%s\n\t\tELSIF #Y < 0.0 THEN\n\t\t\t%s := LWORD_TO_LREAL(16#8000000000000000); // -0\n\t\tELSE\n\t\t\t%s := 0.0;\n\t\tEND_IF;\n", sign(pi4, "#Y", "\t\t\t"), r, r)
-	fmt.Fprintf(&b, "\tELSIF #X < -1.7976931348623157E+308 THEN // -inf\n\t\tIF ABS(#Y) > 1.7976931348623157E+308 THEN\n\t\t\t%s\n\t\tELSE\n\t\t\t%s\n\t\tEND_IF;\n", sign(pi34, "#Y", "\t\t\t"), sign(pi, "#Y", "\t\t\t"))
-	fmt.Fprintf(&b, "\tELSIF ABS(#Y) > 1.7976931348623157E+308 THEN\n\t\t%s\n", sign(pi2, "#Y", "\t\t"))
+	fmt.Fprintf(&b, "\tELSIF %s AND NOT #wx.%%X63 THEN // +inf\n\t\tIF %s THEN\n\t\t\t%s\n\t\tELSIF #Y < 0.0 THEN\n\t\t\t%s := LWORD_TO_LREAL(16#8000000000000000); // -0\n\t\tELSE\n\t\t\t%s := 0.0;\n\t\tEND_IF;\n", inf("#wx"), inf("#wy"), sign(pi4, "#Y", "\t\t\t"), r, r)
+	fmt.Fprintf(&b, "\tELSIF %s THEN // -inf\n\t\tIF %s THEN\n\t\t\t%s\n\t\tELSE\n\t\t\t%s\n\t\tEND_IF;\n", inf("#wx"), inf("#wy"), sign(pi34, "#Y", "\t\t\t"), sign(pi, "#Y", "\t\t\t"))
+	fmt.Fprintf(&b, "\tELSIF %s THEN\n\t\t%s\n", inf("#wy"), sign(pi2, "#Y", "\t\t"))
 	b.WriteString("\tELSE\n\t\t#q := ATAN(#Y / #X);\n")
 	fmt.Fprintf(&b, "\t\tIF #X < 0.0 THEN\n\t\t\tIF #q <= 0.0 THEN\n\t\t\t\t%s := #q + %s;\n\t\t\tELSE\n\t\t\t\t%s := #q - %s;\n\t\t\tEND_IF;\n\t\tELSE\n\t\t\t%s := #q;\n\t\tEND_IF;\n", r, pi, r, pi, r)
 	b.WriteString("\tEND_IF;\nEND_FUNCTION\n")

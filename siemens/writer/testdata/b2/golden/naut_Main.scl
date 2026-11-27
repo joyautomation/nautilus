@@ -11,6 +11,7 @@ VERSION : 0.1
       nz : LREAL;
       ly : LREAL;
       lx : LREAL;
+      lp : LREAL;
       naut_fault : "naut_Fault";
    END_VAR
    VAR_TEMP 
@@ -20,6 +21,9 @@ VERSION : 0.1
       naut_for_v3 : INT;
       naut_for_v4 : INT;
       naut_ix2 : LINT;
+      naut_for_v5 : INT;
+      naut_for_v6 : INT;
+      naut_for_v7 : INT;
    END_VAR
 
 BEGIN
@@ -60,7 +64,7 @@ BEGIN
 			#naut_ix1 := INT_TO_LINT(#i) * 7 + INT_TO_LINT(#j);
 			IF #naut_ix1 < 0 OR #naut_ix1 > 48 THEN
 				#naut_fault.faulted := TRUE;
-				#naut_fault.line := 44;
+				#naut_fault.line := 48;
 				#naut_fault.block := 'Main';
 				RETURN;
 			END_IF;
@@ -86,7 +90,7 @@ BEGIN
 			#naut_ix2 := INT_TO_LINT(#i) * 12 + INT_TO_LINT(#j);
 			IF #naut_ix2 < 0 OR #naut_ix2 > 143 THEN
 				#naut_fault.faulted := TRUE;
-				#naut_fault.line := 52;
+				#naut_fault.line := 56;
 				#naut_fault.block := 'Main';
 				RETURN;
 			END_IF;
@@ -99,5 +103,21 @@ BEGIN
 	#ly := -1.0E-300;
 	#lx := 1.0E300;
 	"naut_Tags".Sq[1] := "naut_ATAN2"(Y := #ly, X := #lx);
+	FOR #naut_for_v5 := 0 TO 48 DO
+		#i := #naut_for_v5;
+		"naut_Tags".SpB[#i] := LREAL_TO_LWORD("naut_Tags".Sp[#i]);
+	END_FOR;
+	FOR #naut_for_v6 := 0 TO 143 DO
+		#i := #naut_for_v6;
+		"naut_Tags".GrB[#i] := REAL_TO_DWORD("naut_Tags".Gr[#i]);
+	END_FOR;
+	FOR #naut_for_v7 := 0 TO 6 DO
+		#i := #naut_for_v7;
+		"naut_Tags".SvB[#i] := LREAL_TO_LWORD(#sv[#i]);
+	END_FOR;
+	"naut_Tags".SqB[0] := LREAL_TO_LWORD("naut_Tags".Sq[0]);
+	"naut_Tags".SqB[1] := LREAL_TO_LWORD("naut_Tags".Sq[1]);
+	#lp := 3.141592653589793;
+	"naut_Tags".LitB := LREAL_TO_LWORD(#lp);
 	"naut_Tags".Scans := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".Scans) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 END_FUNCTION_BLOCK
