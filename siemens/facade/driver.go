@@ -285,8 +285,9 @@ type Driver struct {
 	BackoffMin, BackoffMax time.Duration
 	now                    func() time.Time
 	// onGone, when set, is called when a read says a bound symbol no
-	// longer exists (a download changed the program): the facade then
-	// browses the CPU again.
+	// longer exists, or reads a value its bound type cannot hold (a
+	// download changed the program): the facade then browses the CPU
+	// again.
 	onGone func()
 
 	mu        sync.Mutex
@@ -378,6 +379,9 @@ func (d *Driver) PollOnce(ctx context.Context) {
 		if err != nil {
 			d.failing[name] = true
 			d.lastErr = fmt.Sprintf("read %s: %v", d.bs[i].Symbol, err)
+			if d.onGone != nil { // retyped under us, most likely
+				d.onGone()
+			}
 			continue
 		}
 		delete(d.failing, name)

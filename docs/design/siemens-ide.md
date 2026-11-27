@@ -2583,7 +2583,12 @@ children browse discovery uses; a `var`-mode browse has not run on a CPU)
 and fails closed: gone, unreadable or unbindable is refused naming the fix,
 retyped is checked and sent as the CPU's type now. TIME reads as ms (a
 number, or an IEC literal); TIME writes are refused until the bench
-measures the JSON the CPU takes.
+measures the JSON the CPU takes. A differing browse is adopted only when a
+second browse a settle later finds the same set (a CPU mid-download can
+answer half loaded); a kick that found nothing changed holds further kicks
+off for 30 s; requests during the swap get 503 with Retry-After. Serve
+passes no users file, so there are no browser sessions to lose at a swap;
+wiring one in would need the sessions carried across sets.
 
 **The station spec sets the CPU-side config:** the web server, a web user
 with read/write rights, the protection level, and Web API visibility on

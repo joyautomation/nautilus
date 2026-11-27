@@ -74,9 +74,14 @@ type Options struct {
 	// read that finds a name gone or retyped still asks for one).
 	Rediscover time.Duration
 	// Settle is how long a re-discovery asked for by Kick waits first, so
-	// a CPU in the middle of a download is not browsed half loaded.
-	// Default 2 s.
+	// a CPU in the middle of a download is not browsed half loaded; a
+	// browse that differs from the running set is also confirmed by a
+	// second one a Settle later before the set is replaced. Default 2 s.
 	Settle time.Duration
+	// KickGap is the least time between two re-discoveries asked for by
+	// Kick when the first found nothing changed (a member listed but not
+	// readable would otherwise ask on every poll). Default 30 s.
+	KickGap time.Duration
 	// Poll is the poll period. Default 250 ms.
 	Poll   time.Duration
 	Meta   map[string]runtime.TagMeta
@@ -110,8 +115,10 @@ type Facade struct {
 	lastErr string // the last write failure
 	note    string // the last re-discovery's outcome, for the status panel
 
-	kick    chan struct{} // asks Run for a re-discovery now
-	rebinds int
+	kick      chan struct{} // asks Run for a re-discovery now
+	rebinds   int
+	swapping  bool // between stopping a set and serving its replacement
+	quietKick time.Time
 }
 
 // binder is one binding set and what serves it.
@@ -150,6 +157,9 @@ func New(ctx context.Context, o Options) (*Facade, error) {
 	}
 	if o.Settle <= 0 {
 		o.Settle = 2 * time.Second
+	}
+	if o.KickGap <= 0 {
+		o.KickGap = 30 * time.Second
 	}
 	f := &Facade{opts: o, log: o.Log, roots: o.Roots, known: o.Known, kick: make(chan struct{}, 1)}
 	bs, skipped, err := f.discover(ctx, o.Roots, o.Known)
@@ -300,20 +310,30 @@ func (f *Facade) Run(ctx context.Context) {
 	}
 	b := f.current()
 	done := runSet(b)
-	for {
+	stop := func() { b.cancel(); <-done }
+	wait := func(d time.Duration) bool { // false: ctx ended
 		select {
 		case <-ctx.Done():
-			b.cancel()
-			<-done
+			return false
+		case <-time.After(d):
+			return true
+		}
+	}
+	for {
+		kicked := false
+		select {
+		case <-ctx.Done():
+			stop()
 			return
 		case <-tick:
 		case <-f.kick:
-			select {
-			case <-ctx.Done():
-				b.cancel()
-				<-done
+			kicked = true
+			if f.since(f.quietKick) < f.opts.KickGap {
+				continue // the last kick found nothing changed: the timer covers it
+			}
+			if !wait(f.opts.Settle) {
+				stop()
 				return
-			case <-time.After(f.opts.Settle):
 			}
 			select { // the kicks that came while settling are this one
 			case <-f.kick:
@@ -321,32 +341,76 @@ func (f *Facade) Run(ctx context.Context) {
 			}
 		}
 		bs, skipped, changed := f.rediscover(ctx, b)
+		if changed {
+			// Confirm: a CPU in the middle of a download can answer one
+			// browse half loaded. Replace the set only when a second
+			// browse a Settle later finds the same new set.
+			if !wait(f.opts.Settle) {
+				stop()
+				return
+			}
+			bs2, skipped2, changed2 := f.rediscover(ctx, b)
+			if !changed2 || !sameBindings(index(bs), bs2) {
+				changed = false
+			} else {
+				bs, skipped = bs2, skipped2
+			}
+		}
 		if !changed {
+			if kicked {
+				f.mu.Lock()
+				f.quietKick = time.Now()
+				f.mu.Unlock()
+			}
 			continue
 		}
 		// Stop the running set and wait for it (its server's Run returns
 		// after the audit upkeep flushed) before the new one is built, so
-		// two servers never share the journal.
-		b.cancel()
-		<-done
+		// two servers never share the journal. Requests meanwhile are
+		// answered 503 (Handler).
+		f.mu.Lock()
+		f.swapping = true
+		f.mu.Unlock()
+		stop()
+		note := ""
 		nb, err := f.build(bs, skipped)
 		if err != nil {
-			f.setNote("re-binding failed, the last binding set is rebuilt: " + err.Error())
+			note = "re-binding failed, the last binding set is rebuilt: " + err.Error()
 			if nb, err = f.build(sortedBindings(b.bindings), b.skipped); err != nil {
 				f.setNote("re-binding failed twice, serve stops: " + err.Error())
 				return
 			}
 		}
 		added, removed := diffBindings(b.bindings, nb.bindings)
+		if note == "" {
+			note = fmt.Sprintf("the CPU's program changed: re-bound %d tags (%d new, %d gone)", len(nb.bindings), added, removed)
+		}
 		f.mu.Lock()
-		f.cur = nb
+		f.cur, f.swapping = nb, false
 		f.rebinds++
-		f.note = fmt.Sprintf("the CPU's program changed: re-bound %d tags (%d new, %d gone)", len(nb.bindings), added, removed)
+		f.note = note
 		f.mu.Unlock()
-		f.log.Info("siemens facade: re-bound", "tags", len(nb.bindings), "new", added, "gone", removed)
+		f.log.Info("siemens facade: "+note, "tags", len(nb.bindings), "new", added, "gone", removed)
 		b = nb
 		done = runSet(b)
 	}
+}
+
+func (f *Facade) since(t time.Time) time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t.IsZero() {
+		return time.Duration(1<<63 - 1)
+	}
+	return time.Since(t)
+}
+
+func index(bs []Binding) map[string]Binding {
+	m := make(map[string]Binding, len(bs))
+	for _, b := range bs {
+		m[b.Name] = b
+	}
+	return m
 }
 
 // runSet runs one binding set; done closes once all of it has stopped
@@ -386,12 +450,13 @@ func (f *Facade) rediscover(ctx context.Context, b *binder) ([]Binding, []string
 		f.setNote("re-discovery failed, the last binding set is kept: " + err.Error())
 		return nil, nil, false
 	}
-	f.mu.Lock()
-	if strings.HasPrefix(f.note, "re-") && !strings.HasPrefix(f.note, "re-bound") {
-		f.note = "" // a failure the browse just got past
+	changed := !sameBindings(b.bindings, bs)
+	if !changed {
+		f.mu.Lock()
+		f.note = "" // a failure the browse got past, or a re-binding already said
+		f.mu.Unlock()
 	}
-	f.mu.Unlock()
-	return bs, skipped, !sameBindings(b.bindings, bs)
+	return bs, skipped, changed
 }
 
 func (f *Facade) setNote(s string) {
@@ -446,7 +511,14 @@ func diffBindings(old, now map[string]Binding) (added, removed int) {
 // (an /api/stream) is ended, so the client reconnects to the new one.
 func (f *Facade) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b := f.current()
+		f.mu.Lock()
+		b, swapping := f.cur, f.swapping
+		f.mu.Unlock()
+		if swapping {
+			w.Header().Set("Retry-After", "1")
+			writeJSON(w, http.StatusServiceUnavailable, "the CPU's program changed: serve is binding it again; retry in a moment")
+			return
+		}
 		ctx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 		stop := context.AfterFunc(b.ctx, cancel)
@@ -497,9 +569,10 @@ func (e badRequest) HTTPStatus() int { return http.StatusBadRequest }
 // is checked against and sent as the CPU's type now, never the old one.
 // Either way a re-discovery is asked for.
 func (f *Facade) write(name string, value any) error {
-	b, ok := f.current().bindings[name]
+	cur := f.current()
+	b, ok := cur.bindings[name]
 	if !ok {
-		return badRequest(fmt.Sprintf("%s is not a tag of this CPU (the facade binds %d)", name, len(f.current().bindings)))
+		return badRequest(fmt.Sprintf("%s is not a tag of this CPU (the facade binds %d)", name, len(cur.bindings)))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -515,6 +588,9 @@ func (f *Facade) write(name string, value any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err != nil {
+		if webapi.Code(err) == webapi.CodeAddressDoesNotExist {
+			f.Kick() // gone between the check and the write
+		}
 		switch webapi.Code(err) {
 		case webapi.CodeAddressIsReadOnly, webapi.CodeInvalidParams, webapi.CodeAddressDoesNotExist, webapi.CodePermissionDenied:
 			// The caller asked for something the CPU will never do: a

@@ -208,9 +208,11 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 			siemensOnlineDefaults(m, &c.host, &c.user, &c.pin)
 			if len(c.roots) == 0 {
 				// No --root: bind what the writer generates for the project.
+				// Asked again before each re-discovery: a project that
+				// does not write now may once it is fixed.
+				c.reload = func() ([]facade.Root, func(string) bool, error) { return siemensServePlan(projectDir) }
 				if roots, known, err := siemensServePlan(projectDir); err == nil {
 					c.roots, c.known = roots, known
-					c.reload = func() ([]facade.Root, func(string) bool, error) { return siemensServePlan(projectDir) }
 				} else {
 					c.planNote = fmt.Sprintf("the project's programs are not bound (%v): serving its global tags only; pass --root DB=Program for a program's variables", err)
 				}

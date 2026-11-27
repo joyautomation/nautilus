@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -223,4 +224,85 @@ func TestAKickSettlesFirst(t *testing.T) {
 	if state(t, base)["Main.count"] != float64(9) {
 		t.Fatalf("Main.count = %v", state(t, base)["Main.count"])
 	}
+}
+
+// TestTheSwapWindowAnswers503: between stopping a set and serving its
+// replacement, requests are told to retry, not served by a stopped set.
+func TestTheSwapWindowAnswers503(t *testing.T) {
+	_, f, base := startWith(t, Options{Rediscover: -1})
+	f.mu.Lock()
+	f.swapping = true
+	f.mu.Unlock()
+	res, err := http.Get(base + "/api/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusServiceUnavailable || res.Header.Get("Retry-After") == "" {
+		t.Fatalf("during the swap: %d, Retry-After %q", res.StatusCode, res.Header.Get("Retry-After"))
+	}
+	f.mu.Lock()
+	f.swapping = false
+	f.mu.Unlock()
+	if st := state(t, base); st == nil {
+		t.Fatal("no state after the swap")
+	}
+}
+
+// TestKicksThatFindNothingAreRateLimited: a member listed but not readable
+// kicks on every poll; after one re-discovery found nothing changed, the
+// kicks wait KickGap.
+func TestKicksThatFindNothingAreRateLimited(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	reload := func() ([]Root, func(string) bool, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return roots, nil, nil
+	}
+	_, f, _ := startWith(t, Options{Rediscover: -1, Settle: 10 * time.Millisecond, KickGap: time.Hour, Reload: reload})
+	for i := 0; i < 25; i++ {
+		f.Kick()
+		time.Sleep(20 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("%d re-discoveries for 25 kicks that found nothing, want 1", calls)
+	}
+}
+
+// TestADifferentBrowseIsConfirmedFirst: a browse that differs (a CPU half
+// loaded mid-download) is not adopted unless a second browse a Settle
+// later finds the same set.
+func TestADifferentBrowseIsConfirmedFirst(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	reload := func() ([]Root, func(string) bool, error) { // odd: half loaded; even: whole
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		if calls%2 == 1 {
+			return []Root{{DB: "Tags"}}, nil, nil
+		}
+		return roots, nil, nil
+	}
+	_, f, _ := startWith(t, Options{Rediscover: 100 * time.Millisecond, Settle: 20 * time.Millisecond, Reload: reload})
+	time.Sleep(700 * time.Millisecond)
+	mu.Lock()
+	n := calls
+	mu.Unlock()
+	if n < 2 || f.Rebinds() != 0 {
+		t.Fatalf("reloads %d, rebinds %d: a half-loaded browse was adopted", n, f.Rebinds())
+	}
+}
+
+// TestAReadTheBoundTypeCannotHoldAsksForARediscovery: Run was a BOOL and
+// the CPU now holds an INT there: the read's decode fails and re-binds.
+func TestAReadTheBoundTypeCannotHoldAsksForARediscovery(t *testing.T) {
+	s, f, base := startWith(t, Options{Rediscover: -1, Settle: 20 * time.Millisecond})
+	waitFor(t, "first values", func() bool { return state(t, base)["Run"] != nil })
+	s.Put(`"Tags".Run`, &webapitest.Var{Datatype: "int", Value: 5})
+	waitFor(t, "Run re-bound as INT", func() bool { return state(t, base)["Run"] == float64(5) && f.Rebinds() == 1 })
 }
