@@ -299,6 +299,20 @@ quiet, under two busy loops, and under a stream over ssh, appending JSON
 lines to `/opt/plcnext/apps/nautilus/bench.jsonl` with the CPUs
 each side ran on; run it once best-effort and once after the `setcap`.
 
+## The cycle makes no log or page-fault waits (#1051)
+
+A 47 MB deploy copy once stalled the SCHED_FIFO cycle for ~675 ms: the cycle
+logged with `write()` and `syslog()`, and both can block while the flash is
+busy. Now the cycle formats each log line into a bounded lock-free ring
+(`logring.h`) and goes on; a normal-priority thread writes the ring to
+`logs/nautilus_io.log`. A full ring drops lines and the drain thread logs
+`log ring full: N records dropped so far`; the cycle never waits.
+
+The process also calls `mlockall(MCL_CURRENT|MCL_FUTURE)` after setup, with
+the stack touched first, so a page fault cannot wait on I/O. That needs
+`CAP_IPC_LOCK` (or a large enough `RLIMIT_MEMLOCK`); without it the log says
+`mlockall refused (...)` and the cycle runs unlocked, as before.
+
 ## The exchange page
 
 `nautilus_io_shm.h` is the one definition; `plcnext/shm.go` mirrors it

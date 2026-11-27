@@ -39,6 +39,7 @@
 
 #define _GNU_SOURCE
 #include "nautilus_io_shm.h"
+#include "logring.h"
 #include "rtguard.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -95,6 +96,14 @@ static const char *(*p_GetLastError)(void);
 // stdout/stderr are pointed at it too, so a C++ terminate() message from a
 // firmware library lands somewhere a person can read ─────────────────────
 static int logfd = -1;
+static void log_sink(const char *m, size_t n) {
+    if (logfd >= 0) {
+        ssize_t w = write(logfd, m, n);
+        (void)w;
+    } else {
+        syslog(LOG_INFO, "%.*s", (int)n - 1, m);
+    }
+}
 static void logln(const char *fmt, ...) {
     char buf[600];
     struct timespec ts;
@@ -108,12 +117,11 @@ static void logln(const char *fmt, ...) {
     va_end(ap);
     if (n > (int)sizeof buf - 2) n = (int)sizeof buf - 2;
     buf[n++] = '\n';
-    if (logfd >= 0) {
-        ssize_t w = write(logfd, buf, (size_t)n);
-        (void)w;
-    } else {
-        syslog(LOG_INFO, "%.*s", n - 1, buf);
-    }
+    // Once the drain thread runs, nothing here makes a system call: the
+    // cycle calls logln, and a write() or syslog() there can block it for
+    // as long as the flash or /dev/log does (#1051).
+    if (lr_started) lr_push(buf, (size_t)n);
+    else log_sink(buf, (size_t)n);
 }
 
 // idle never returns: the ACF owns this process's lifetime.
@@ -274,6 +282,8 @@ int main(int argc, char **argv) {
     snprintf(logpath, sizeof logpath, "%s/logs/nautilus_io.log", exe);
     logfd = open(logpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (logfd >= 0) { dup2(logfd, 1); dup2(logfd, 2); }
+    lr_init(logfd, log_sink);
+    if (lr_start() != 0) syslog(LOG_ERR, "log drain thread not started; logging stays synchronous");
     for (int s = 0; s < 4; s++) signal((int[]){SIGSEGV, SIGBUS, SIGABRT, SIGILL}[s], on_crash);
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
@@ -420,6 +430,17 @@ int main(int argc, char **argv) {
     }
 
     page_open((uint32_t)CYCLE_NS, LATE_US);
+
+    // Nothing in the cycle may wait on a page fault (#1051): lock what is
+    // mapped now and from here on, and touch the stack first so its pages
+    // exist. Needs CAP_IPC_LOCK or a RLIMIT_MEMLOCK big enough; without it
+    // the cycle runs unlocked and says so.
+    {
+        volatile char stack[64 * 1024];
+        for (size_t i = 0; i < sizeof stack; i += 4096) stack[i] = 0;
+        if (mlockall(MCL_CURRENT | MCL_FUTURE) == 0) logln("memory locked (mlockall)");
+        else logln("mlockall refused (%s); the cycle may take page faults (grant CAP_IPC_LOCK or raise RLIMIT_MEMLOCK)", strerror(errno));
+    }
 
     struct timespec next, now;
     clock_gettime(CLOCK_MONOTONIC, &next);
