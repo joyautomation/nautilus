@@ -39,6 +39,13 @@ func Discover(ctx context.Context, c *webapi.Client, roots []Root) ([]Binding, [
 	return bs, skipped, err
 }
 
+func scopeNote(prefix string) string {
+	if prefix == "" {
+		return ""
+	}
+	return " (program " + prefix + ")"
+}
+
 // discover is Discover, also counting the members whose browse failed: a
 // re-discovery that could not browse all of the CPU (one in the middle of
 // a download) is not a layout to adopt.
@@ -52,6 +59,16 @@ func discover(ctx context.Context, c *webapi.Client, roots []Root) ([]Binding, [
 			return nil, nil, 0, err
 		}
 		if err := walk(ctx, c, sym, r.Prefix, 0, &bs, &skipped, &failed); err != nil {
+			if webapi.Code(err) == webapi.CodeNotAStructure { // the CPU's answer for an empty DB
+				if r.Empty {
+					skipped = append(skipped, r.DB+": no members (the project declares no variable in it)")
+					continue
+				}
+				failed++
+				skipped = append(skipped, fmt.Sprintf("%s: the CPU's block has no members, but the project declares variables in it%s: the CPU runs an older download of the project; run naut siemens deploy",
+					r.DB, scopeNote(r.Prefix)))
+				continue
+			}
 			return nil, nil, 0, fmt.Errorf("browse %s: %w", sym, err)
 		}
 	}

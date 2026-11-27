@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -145,4 +146,79 @@ func TestSiemensServeBindsWhatTheWriterGenerates(t *testing.T) {
 	write("main.st", strings.Replace(servePlanMain, "    count : INT;\n", "    count : INT;\n    seen : BOOL;\n", 1))
 	s.Put(`"naut_Main_DB".seen`, &webapitest.Var{Datatype: "bool", Value: true})
 	waitUntil("Main.seen after the re-discovery", func(m map[string]any) bool { return m["Main.seen"] == true })
+}
+
+const emptyMain = `PROGRAM Main
+VAR_EXTERNAL
+    Level : REAL;
+END_VAR
+Level := Level + 1.0;
+END_PROGRAM
+`
+
+// TestSiemensServeStartsOnAProgramWithoutStatics: the program declares no
+// variable, so its instance DB on the CPU is empty and answers a browse
+// "not a structure" (as the bench S7-1500 does): serve starts on the tags.
+// With statics in the project but an empty DB on the CPU, serve still
+// starts, binds nothing from it, and says to deploy.
+func TestSiemensServeStartsOnAProgramWithoutStatics(t *testing.T) {
+	for _, c := range []struct {
+		name, main, want string
+	}{
+		{"no statics", emptyMain, "naut_Main_DB: no members"},
+		{"statics, older download", servePlanMain, "older download of the project; run naut siemens deploy"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, body := range map[string]string{"nautilus.yaml": servePlanManifest, "main.st": c.main} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := webapitest.New()
+			s.Users["naut"] = webapitest.User{Password: "pw", Permissions: []string{"read_value"}}
+			s.Vars[`"naut_Tags"`] = &webapitest.Var{Datatype: "struct"}
+			s.Vars[`"naut_Tags".Level`] = &webapitest.Var{Datatype: "real", Value: 2.0}
+			s.Vars[`"naut_Main_DB"`] = &webapitest.Var{Datatype: "struct"} // no members
+			url, pin := s.Start(t)
+			cfg, err := resolveSiemensServe(url, "naut", pin, dir, nil, 10*time.Millisecond, "127.0.0.1:0", pw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cl, err := webapi.New(url, webapi.Options{User: "naut", Password: "pw", CertSHA256: pin})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			ready := make(chan string, 1)
+			done := make(chan int, 1)
+			var stderr strings.Builder
+			var mu sync.Mutex
+			go func() { done <- serveSiemens(ctx, cfg, cl, io.Discard, lockedWriter{&mu, &stderr}, ready) }()
+			select {
+			case <-ready:
+			case code := <-done:
+				t.Fatalf("serve exited %d: %s", code, stderr.String())
+			}
+			cancel()
+			<-done
+			mu.Lock()
+			out := stderr.String()
+			mu.Unlock()
+			if !strings.Contains(out, c.want) {
+				t.Fatalf("stderr %q, want %q", out, c.want)
+			}
+		})
+	}
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

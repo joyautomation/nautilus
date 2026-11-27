@@ -2597,6 +2597,14 @@ and the auditor's backlog across sets before `Options.Audit` is set for
 serve). If a re-binding fails and so does rebuilding the last set, Run
 returns an error and serve exits 1.
 
+**An empty DB answers 202.** The bench S7-1500 answers a children browse
+of an instance DB with no members (a program without statics) with "not
+a structure" (202). A root's 202 is an empty block only when the writer
+declares nothing in it (`Output.Declares`, `Root.Empty`); otherwise it is a
+mismatch (the CPU runs an older download): nothing is bound from it, a
+note says to deploy, and a re-discovery counts it as a partial browse. A
+DB that does not exist (200) stays an error.
+
 **Serve's frame and meta (#789 A1b).** For a project, serve streams what
 `naut run` streams for it. The manifest tags are runtime tags. The
 bindings below a program's root are polled but are not runtime tags: they

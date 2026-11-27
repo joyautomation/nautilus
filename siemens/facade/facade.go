@@ -49,6 +49,14 @@ type Root struct {
 	// Prefix is the nautilus scope its members appear under: "" for the
 	// global tags DB, "Main" for the instance DB of program Main.
 	Prefix string
+	// Empty says the project declares no variable in this block (a
+	// program without statics). An S7-1500 answers a browse of an empty
+	// DB "not a structure" (202): for an Empty root that is the block as
+	// expected, with nothing to bind. For any other root it means the
+	// CPU's block is not the project's (an older download): nothing is
+	// bound from it, a note names the fix, and a re-discovery that meets
+	// it keeps the running set.
+	Empty bool
 }
 
 // Options configure a facade over one CPU.

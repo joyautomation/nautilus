@@ -276,7 +276,11 @@ func siemensServePlan(dir string) (facade.Plan, error) {
 		prog.Order = append(prog.Order, in.Tasks[(i+1)%len(in.Tasks)].Program)
 	}
 	known := func(name string) bool { _, ok := out.Symbol(name); return ok }
-	return facade.Plan{Roots: facade.RootsFromWriter(out.Roots), Known: known, Program: prog}, nil
+	roots := facade.RootsFromWriter(out.Roots)
+	for i := range roots {
+		roots[i].Empty = !out.Declares(roots[i].Prefix)
+	}
+	return facade.Plan{Roots: roots, Known: known, Program: prog}, nil
 }
 
 // siemensOnlineDefaults fills what the flags left empty from the project's

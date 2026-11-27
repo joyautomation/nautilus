@@ -157,6 +157,14 @@ type Output struct {
 	names map[string]map[string]*shape
 }
 
+// Declares reports whether the writer declared any name the Web API can
+// read under scope ("" the manifest tags, else a program's statics): a
+// program without statics gets an instance DB with no members, which an
+// S7-1500 answers a browse of with "not a structure".
+func (o Output) Declares(scope string) bool {
+	return len(o.names[strings.ToLower(scope)]) > 0
+}
+
 // Symbol maps a nautilus tag path to the Web API symbol of the same value:
 // a manifest tag "Level" to `"naut_Tags".Level`, a program variable
 // "Main.count" to `"naut_Main_DB".count` (with the default block prefix).
