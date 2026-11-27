@@ -702,6 +702,10 @@ type Alarms struct {
 	// always nil off `naut run` (a test never pages anyone).
 	Escalation *escalate.Dispatcher
 
+	// Pair is the pair member's no-leader alarm (#1436, alarms_pair.go):
+	// its own engine and dispatcher, nil off a pair or off `naut run`.
+	Pair *PairAlarms
+
 	cancel  func()
 	closers []io.Closer
 }
@@ -719,6 +723,10 @@ func (a *Alarms) Close() error {
 		a.Escalation.Close()
 	}
 	var errs []error
+	if a.Pair != nil {
+		errs = append(errs, a.Pair.close())
+		a.Pair = nil
+	}
 	if a.Engine != nil {
 		errs = append(errs, a.Engine.Close())
 	}
@@ -830,8 +838,10 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 	out := &Alarms{Defs: defs, ShelveTimes: p.Alarms.ShelveDurations()}
 
 	journal := alarm.Journal(alarm.NewRing(p.Alarms.Journal.Keep))
+	var sink alarm.Journal
 	if durable {
-		sink, closer, err := p.alarmSink()
+		var closer io.Closer
+		sink, closer, err = p.alarmSink()
 		if err != nil {
 			return nil, err
 		}
@@ -848,6 +858,7 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		}
 	}
 
+	manifestNotify := slices.Clone(notify)
 	if durable {
 		notify = append(notify, p.AlarmNotifiers...)
 	}
@@ -878,8 +889,9 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		return nil, err
 	}
 	out.Engine = eng
+	var chans map[string]escalate.Channel
 	if esc != nil {
-		chans := map[string]escalate.Channel{"log": escalate.LogChannel{Log: log}}
+		chans = map[string]escalate.Channel{"log": escalate.LogChannel{Log: log}}
 		if kinds := p.Alarms.Channels.Kinds(); len(kinds) > 0 {
 			if p.AlarmDirectory == nil {
 				out.Close()
@@ -922,6 +934,16 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		}
 		disp.Store(d)
 		out.Escalation = d
+	}
+	if durable && p.PairAlarm != nil {
+		// Its own engine, never the scan's: a pair with no leader scans
+		// nothing. The same journal sink, notifiers and channels.
+		side, err := p.pairAlarms(sink, manifestNotify, esc, chans, log)
+		if err != nil {
+			out.Close()
+			return nil, err
+		}
+		out.Pair = side
 	}
 	// Evaluate after each main scan, not on a ticker: the store is
 	// consistent there, and a wall-clock ticker inside the engine would

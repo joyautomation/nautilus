@@ -399,7 +399,10 @@ redundancy:
       leader) makes it the witness, the quickest to start (`TestRollingUpgradeAcrossAWireVersion`;
       every order measured by `TestMeasureRollingUpgrade`). No release has shipped the vote
       protocol yet; from the first that does, a version change must also read the previous
-      version's frames, so a rolling upgrade keeps a leader (naut-lead's release rule).
+      version's frames, so a rolling upgrade keeps a leader (naut-lead's release rule). The
+      no-leader alarm (#1436) depends on it too: a standby that refuses the leader's frames
+      sees no leader and pages `nautilus.pair-leaderless`. Until the rule holds, a rolling
+      upgrade across a version pages. `quorum.TestWireVersionPinned` trips on a version bump.
     - **What it costs:** only refusals. A promise to another node never ends early, and the
       restart wait covers a voter that forgot what it heard. A takeover can lose one refused
       campaign at the witness (§4.5, `R`).
@@ -2305,6 +2308,28 @@ same driver contract as the simulator.
     The refuser shows it too because, while a pair is upgraded across a change of the default
     lease (standby, then leader, witness last), the refused side runs the old release, which
     shows nothing. A longer witness lease is safe; it only slows a takeover.
+  - **The no-leader alarm** (#1436, `quorum/node/leaderlessalarm.go`, `cmd/naut/pairleaderless.go`).
+    A pair with no leader scans nothing, so the alarm engine (evaluated after each scan) raises
+    and pages nothing. One alarm is the exception: `nautilus.pair-leaderless` (critical, class
+    system, in a project with alarms), on an engine of its own (`project.PairAlarm`) evaluated on
+    a 1 s wall-clock timer, never the scan, on both members whatever their role. It shares the
+    main engine's journal sink, `alarms.notify` notifiers and escalation channels; its
+    dispatcher's gate is "this member raises it now" and its term is the no-leader spell, so a
+    page queued in one spell never leaves in the next. Not acknowledged (nobody can act on the
+    plant): its pages carry no ack link or reply code, it walks every escalation level, and it
+    ends when a leader is seen. Raised from the member's no-leader report (four leases):
+    - **Once:** the member whose name sorts first raises it; the second raises it unless its
+      peer's verified hello answer (field `leaderless`, bound by InfoMAC, absent from older
+      builds) said within `cfgStale` that the first raises it and its last send went (a
+      channel attempt's outcome, not the dispatcher's failures-in-a-row, which reset each
+      spell). A failed or unverified hello withdraws the word. The second waits
+      `4·helloRetry` for the word, asking hellos at once. Once raised it is latched until a
+      leader is seen. A split, a down or spare first, an older first, a first whose sends fail:
+      the second pages too. Twice, never zero.
+    - **Not raised:** by an uncommissioned member, a spare, or one cut off from a peer that
+      leads (the peer unanswered for four leases and the witness's fresh refusal naming a
+      promise it holds; a duel has that refusal too, but there the peer answers). Raised for a
+      fenced state and a refused lease or version.
   - The default lease is 1 s for the pair and the witness alike (it was 2 s): measured on
     loopback and in a 30-minute soak on two ARM controllers (#710; table in the guide). At 1 s
     a stalled leader's write gate closes after about 0.67 s (up to 0.92 s by where the stall

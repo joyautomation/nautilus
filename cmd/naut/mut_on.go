@@ -82,6 +82,7 @@ func init() {
 //   - stream_persist_error_hidden: a standby whose retain file takes no image still says in sync (review);
 //   - lease_condition_dropped: a voter's lease refusal raises no condition (#710 1 s lease);
 //   - witness_lease_no_alarm: the witness refusing the pair's lease raises no system alarm;
+//   - pair_alarm_none: a pair member builds no no-leader alarm, so a pair with no leader pages nobody (#1436);
 //   - lease_check_unwarned: naut check says nothing of a pair lease under 1 s;
 //   - stream_format_ignored: the leader sends its newest image format whatever the standby reads (#710 S2a);
 //   - hot_build_unchecked: a takeover goes hot on an image of another build (#710 S2b);

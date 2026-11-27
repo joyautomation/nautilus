@@ -275,7 +275,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 	}
 	m.setupFailback(rt, proj.Redundancy)
 	var eng *alarm.Engine
-	alarms, err := startAlarms(proj, rt)
+	alarms, err := startPairAlarms(proj, rt, m)
 	if err != nil {
 		t.Fatal(err)
 	}

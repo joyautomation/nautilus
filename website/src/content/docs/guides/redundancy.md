@@ -629,7 +629,8 @@ ends.
   leader for four leases logs an error that names why, voter by voter:
   it does not answer, it refused, its answer is not counted (and why),
   or it answers but has not confirmed its write. A slow disk is named
-  only where it was measured.
+  only where it was measured. In a project with an `alarms:` section it
+  also raises the system alarm `nautilus.pair-leaderless` (below).
 - **A controller that can send but not hear** (a one-way link fault):
   it keeps asking for a vote it never hears answered, for three quarters
   of a lease, and each ask holds the voters to it for a lease. So the
@@ -1191,6 +1192,30 @@ With no leader, no controller drives outputs. The drivers stop asserting
 them, so each device's communication watchdog sees the silence and puts
 that device in its own safe state, as for a hung scan (above). An output
 on a device with no communication watchdog keeps its last value.
+
+**The no-leader alarm.** With no leader neither controller scans, so the
+alarm engine evaluates none of the project's alarms and pages nobody.
+One alarm is the exception: `nautilus.pair-leaderless` (critical, class
+`system`), in a project with an `alarms:` section. A controller raises
+it four leases after it last saw a leader, and it pages through the
+escalation policy that matches it.
+
+- **One controller pages it:** the one whose name sorts first (`a`).
+  The other pages too unless `a`'s last hello said that `a` raises it
+  and its last page went. So `b` pages when `a` is down, cut off from
+  it, a spare, on a release without this alarm, or failing to send. A
+  cut between the two pages twice; nothing leaves it unpaged.
+- **Nobody acknowledges it:** nobody can act on the plant through a pair
+  with no leader. It walks every level of the policy until a leader is
+  seen, then ends. Its pages carry no acknowledgement link or code.
+- **Not raised** by a controller that is not commissioned (a pair being
+  set up), by a spare, or by a controller cut off from a peer that leads
+  (the peer does not answer it, and the witness refuses it for the
+  peer's promise).
+- **A rolling upgrade** keeps it quiet while the two releases read each
+  other's vote frames. Across a vote protocol version that does not (no
+  release has shipped the vote protocol yet), the upgraded standby sees
+  no leader and pages.
 
 **The copy makes itself a spare.** Once both other members have marked
 the name, each tells it which process it holds as that member: the one

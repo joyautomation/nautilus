@@ -72,7 +72,11 @@ const (
 type fakeVoters struct {
 	mu  sync.Mutex
 	way map[string]voterWay // by host
-	cn  map[string]string   // the certificate each host answers under (peer TLS), by host
+	// peer is the name the peer's host answers as ("" is b).
+	peer quorum.NodeID
+	// hello, when set, answers the peer's /hello.
+	hello http.Handler
+	cn    map[string]string // the certificate each host answers under (peer TLS), by host
 	// answered counts the requests other than campaigns each host
 	// answered (probes).
 	answered map[string]int
@@ -93,6 +97,14 @@ func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 		cs = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: cn}}}}
 	}
 	from := quorum.NodeID("b")
+	if f.peer != "" {
+		from = f.peer
+	}
+	if f.hello != nil && strings.HasSuffix(r.URL.Path, "/hello") {
+		rec := httptest.NewRecorder()
+		f.hello.ServeHTTP(rec, r)
+		return rec.Result(), nil
+	}
 	if r.URL.Hostname() == "witness.test" {
 		from = WitnessID
 	}
@@ -152,13 +164,23 @@ type lelector struct {
 // write as its state write (nil: the file's own).
 func newLelector(t *testing.T, peer, witness voterWay, commissioned bool, write func(*os.File, []byte) (int, error)) *lelector {
 	t.Helper()
-	o := testOptions(t, "a", "b")
+	return newLelectorAs(t, "a", "b", peer, witness, commissioned, write, nil)
+}
+
+// newLelectorAs is newLelector as self, with peer as its peer, and opt
+// (when set) changing its options before it is built.
+func newLelectorAs(t *testing.T, self, peerName quorum.NodeID, peer, witness voterWay, commissioned bool, write func(*os.File, []byte) (int, error), opt func(*Options)) *lelector {
+	t.Helper()
+	o := testOptions(t, self, peerName)
 	o.PeerAddr, o.WitnessAddr = "peer.test:1", "witness.test:1"
 	clk := newFakeClock()
 	logs := &logBuf{}
-	fv := &fakeVoters{way: map[string]voterWay{"peer.test": peer, "witness.test": witness}}
+	fv := &fakeVoters{way: map[string]voterWay{"peer.test": peer, "witness.test": witness}, peer: peerName}
 	o.clock, o.write, o.client = clk.now, write, &http.Client{Transport: fv}
 	o.Log = slog.New(slog.NewTextHandler(logs, nil))
+	if opt != nil {
+		opt(&o)
+	}
 	if commissioned {
 		if err := (&State{Path: o.StatePath}).Save(quorum.VoterState{Incarnation: 5, Gen: 1, Lease: o.Lease}); err != nil {
 			t.Fatal(err)

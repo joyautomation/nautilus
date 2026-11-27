@@ -91,6 +91,12 @@ type Options struct {
 	// peer's (#708, report only): EventUsersDiffer, EventTLSDiffers.
 	// Nil: neither part.
 	Credentials func() Credentials
+	// LeaderlessWord, when set, says whether this controller's no-leader
+	// alarm reaches people: its sends are not failing (#1436). Read when
+	// answering a hello while it raises the alarm, so the peer need not
+	// page it twice (leaderlessalarm.go). Nil: this controller raises no
+	// such alarm (no alarms: section), and its hello says nothing.
+	LeaderlessWord func() bool
 	// Box is the fingerprint of the box this controller runs on
 	// (BoxFingerprint), stamped in the state file. A file written on
 	// another box is treated as lost (box.go, #1029). "": no check.
@@ -525,10 +531,20 @@ type Elector struct {
 	llLogAt  quorum.Instant
 	drops    map[quorum.NodeID]quorum.Word
 	answers  map[quorum.NodeID]quorum.Instant
-	ctx      context.Context // Run's: sends end with it
-	events   chan Event
-	decided  chan struct{}
-	once     sync.Once
+	// The no-leader alarm (leaderlessalarm.go): llRaise and llEpisode are
+	// read lock-free (LeaderlessAlarm); llRaising latches it for the
+	// spell that began at llStart; peerRaises, peerRaiseAt: the peer's
+	// word at its last hello answer.
+	llRaise     atomic.Bool
+	llEpisode   atomic.Uint64
+	llRaising   bool
+	llStart     quorum.Instant
+	peerRaises  bool
+	peerRaiseAt quorum.Instant
+	ctx         context.Context // Run's: sends end with it
+	events      chan Event
+	decided     chan struct{}
+	once        sync.Once
 }
 
 // gateState is what the write gate is judged on, published after every
@@ -1950,6 +1966,7 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		e.heard(pi)
 	}
 	self := e.selfInfo()
+	self.Raises = e.raisesWord()
 	if r.URL.Query().Get("log") == "1" {
 		self.Log = e.selfLog() // outside mu
 	}
@@ -1964,7 +1981,7 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		cs = credUnreadable
 	}
 	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.Peer, e.o.Self, e.o.ClientToken),
-		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps, Log: self.Log, API: self.API,
+		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps, Log: self.Log, API: self.API, Raises: self.Raises,
 		InfoMAC: infoMAC(e.o.Token, c, e.o.Peer, e.o.Self, self),
 		Users:   us, UsersMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "users", us, cr.Users),
 		TLS: credOK, TLSMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "tls", credOK, cr.TLS),
@@ -2085,16 +2102,19 @@ func (e *Elector) checkToken(ctx context.Context) bool {
 	body, err := e.call.call(ctx, max(e.o.Lease, time.Second), http.MethodGet, e.peer+Prefix+e.o.Cluster+"/hello?"+q.Encode(), nil)
 	if err != nil {
 		e.credentialsUnknown() // the check can't run: no stale banner
+		e.heardRaise(false)
 		return false
 	}
 	var h helloAnswer
 	if json.Unmarshal(body, &h) != nil {
 		e.credentialsUnknown()
+		e.heardRaise(false)
 		return false
 	}
 	if h.Node != string(e.o.Peer) {
 		e.log.Error("redundancy: the peer's address answers as another node", "addr", e.o.PeerAddr, "want", e.o.Peer, "got", h.Node)
 		e.credentialsUnknown()
+		e.heardRaise(false)
 		return false
 	}
 	pi, verified := e.answerVerified(c, h)
@@ -2102,6 +2122,7 @@ func (e *Elector) checkToken(ctx context.Context) bool {
 		e.heard(pi)
 		e.heardAPI(pi.API)
 	}
+	e.heardRaise(verified && pi.Raises == "1")
 	e.checkCredentials(c, h, verified)
 	got := TokenDiffers
 	if sameMAC(h.MAC, tokenMAC(e.o.Token, c, e.o.Self, e.o.Peer, e.o.ClientToken)) {
@@ -2201,7 +2222,7 @@ func (e *Elector) answerVerified(c string, h helloAnswer) (peerInfo, bool) {
 	if err != nil || n == 0 {
 		return peerInfo{}, false
 	}
-	pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps, Log: h.Log, API: h.API}
+	pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps, Log: h.Log, API: h.API, Raises: h.Raises}
 	return pi, sameMAC(h.InfoMAC, infoMAC(e.o.Token, c, e.o.Self, e.o.Peer, pi))
 }
 

@@ -52,6 +52,9 @@ type peerInfo struct {
 	// API is the answerer's tag API address (Options.SelfAPI), "" from a
 	// build before it: answers only.
 	API string
+	// Raises is the answerer's no-leader alarm word (raisesWord), "" from
+	// a build before it or while it raises none: answers only.
+	Raises string
 }
 
 func (e *Elector) selfInfo() peerInfo {
@@ -91,6 +94,11 @@ func infoMAC(peerToken, challenge string, asker, answerer quorum.NodeID, pi peer
 	if pi.API != "" && !mut("peer_api_unbound") {
 		// Likewise: a build before it sends none.
 		parts = append(parts, "api", pi.API)
+	}
+	if pi.Raises != "" && !mut("leaderless_word_unbound") {
+		// Likewise: a build before it sends none, and a forged word would
+		// silence the second controller's page.
+		parts = append(parts, "leaderless", pi.Raises)
 	}
 	for _, part := range parts {
 		m.Write([]byte(part))

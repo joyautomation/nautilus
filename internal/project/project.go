@@ -1350,7 +1350,10 @@ type Project struct {
 	// alarms.notify: ones: what a controller composes in (the cameras'
 	// snapshot on alarm, #724).
 	AlarmNotifiers []alarm.Notifier
-	checkout       any // the sheet, see CheckoutSheet
+	// PairAlarm, set by `naut run` on a pair member, is the no-leader
+	// alarm it raises on an engine of its own (#1436, alarms_pair.go).
+	PairAlarm *PairAlarm
+	checkout  any // the sheet, see CheckoutSheet
 
 	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP

@@ -172,6 +172,10 @@ type helloAnswer struct {
 	// API is the answerer's tag API address (peerInfo.API), bound by
 	// InfoMAC when sent. A build before it sends none.
 	API string `json:"api,omitempty"`
+	// Raises is "1" while the answerer raises the no-leader alarm and its
+	// sends work (raisesWord, #1436), bound by InfoMAC when sent. A build
+	// before it sends none: no word, so the asker pages too.
+	Raises string `json:"leaderless,omitempty"`
 	// The answerer's credentials (Credentials), each part as its state
 	// and its MAC (credMAC). A build before #708's check sends none.
 	Users    string `json:"users,omitempty"`

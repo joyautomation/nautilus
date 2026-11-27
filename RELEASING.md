@@ -113,6 +113,12 @@ can predate the extension's release PR and so name the wrong version. For an
 offline install, take the VSIX from the latest `vscode-v*` release (stable).
 In the CLI release notes, name the extension versions that go with it.
 
+Before the tag, if `quorum.releasedWire` (`quorum/wirepin_test.go`) is not
+`quorum.WireVersion`, set it to that version in the release commit: the
+release then ships the vote protocol, and every later version must read its
+frames, so a redundant pair's rolling upgrade keeps a leader and pages
+nobody (design, "Wire"; #1436).
+
 ## Guard rails
 
 The extension's channel logic lives in two scripts that every workflow
