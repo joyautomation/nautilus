@@ -28,8 +28,6 @@ func init() {
 		// A SET is a command: dropped while the gate is closed, never
 		// replayed (hw/base.go WriteOutputs rule 2).
 		gate: dropAndRebaseline,
-		// The liveness gate naut run installs does not reach hw.Base.
-		expect: map[string]string{"C5": "#938"},
 		start: func(t tb, o startOpts) *rig {
 			raw, err := os.ReadFile("../../snmp/testdata/pdu.snmpwalk")
 			if err != nil {

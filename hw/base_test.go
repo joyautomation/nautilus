@@ -985,6 +985,82 @@ func TestBaseStaleCommandsDropped(t *testing.T) {
 	}
 }
 
+// The liveness gate naut run installs in a project without `redundancy:`
+// (io.SetPlainGate, #625) reaches hw.Base (#938). A command the program
+// queued in its last scan before a hang, still waiting for a slow device,
+// must not go out while the gate is closed: a Redfish ForceOff or an SNMP
+// SET younger than StaleAfter. When the scans come back (the same term: a
+// plain gate has none) it goes out, as after any same-term reopen.
+func TestBasePlainGateHoldsAQueuedCommand(t *testing.T) {
+	w := newFakeWire()
+	cfg := Config{
+		Kind:    "test",
+		Sources: []SourceConfig{{ID: "PDU1", Interval: 10 * time.Millisecond, StaleAfter: time.Minute, RetryMin: 5 * time.Millisecond, RetryMax: 10 * time.Millisecond}},
+		Tags: []TagDecl{{Name: "PDU1_Outlet03", Type: "PDUOutlet", Source: "PDU1", Members: map[string]Binding{
+			"Index": {Const: 3}, "On": {},
+		}}},
+		Writes: []WriteDecl{{Name: "PDU1_Outlet03_Cmd", Tag: "PDU1_Outlet03", Member: "On"}},
+		Poll:   w.poll,
+		Write:  w.write,
+	}
+	b, err := NewBase(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gmu sync.Mutex
+	open := true
+	setGate := func(v bool) { gmu.Lock(); open = v; gmu.Unlock() }
+	if n := nio.SetPlainGate(b, func() bool { gmu.Lock(); defer gmu.Unlock(); return open }); n != 1 {
+		t.Fatalf("io.SetPlainGate took %d drivers; want 1: the liveness gate does not reach hw.Base", n)
+	}
+	w.set("PDU1", DefaultClass, Result{Updates: []Update{{"PDU1_Outlet03", "On", ir.BoolVal(true)}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.watch(b)
+	b.Start(ctx)
+	defer b.Stop()
+	w.waitPoll(t, "PDU1/default")
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": true}) // baseline
+	writes := func() string { w.mu.Lock(); defer w.mu.Unlock(); return strings.Join(w.writes, ",") }
+
+	// The device is down, so the command queues; then the scans hang and
+	// the gate closes; then the device answers again.
+	w.setErr("PDU1", DefaultClass, errors.New("timeout"))
+	deadline := time.Now().Add(2 * time.Second)
+	for b.Health().Sources[0].State != "error" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if st := b.Health().Sources[0].State; st != "error" {
+		t.Fatalf("source never went down: %s", st)
+	}
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": false})
+	if q := b.Health().Sources[0].QueuedWrites; q != 1 {
+		t.Fatalf("queued writes = %d, want 1", q)
+	}
+	setGate(false)
+	w.setErr("PDU1", DefaultClass, nil)
+	// Good polls with a flush between them (poll, flush, poll).
+	for len(w.polled) > 0 {
+		<-w.polled
+	}
+	for range 3 {
+		w.waitPoll(t, "PDU1/default")
+	}
+	if got := writes(); got != "" {
+		t.Fatalf("a queued command reached the device while the liveness gate was closed: %q", got)
+	}
+
+	// The scans are live again: the command, still fresh, goes out once.
+	setGate(true)
+	deadline = time.Now().Add(time.Second)
+	for writes() == "" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := writes(); got != "PDU1/PDU1_Outlet03.On=false" {
+		t.Fatalf("after the gate reopened: %q", got)
+	}
+}
+
 // A class that never answers, next to one that does, does not hide: its
 // tags go Bad after failuresToError of its own failures, while the device
 // stays online for the class that answers; a good poll brings them back.

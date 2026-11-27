@@ -582,6 +582,17 @@ func (b *Base) SetWriteGate(gate func() bool) {
 	b.gateMu.Unlock()
 }
 
+// PlainWriteGate makes Base io.PlainGated (#938): `naut run` gives it the
+// liveness gate in a project without `redundancy:` (#625), closed while
+// the scans hang. Its gate rules already fit a plain gate: closed, nothing
+// is queued or sent (a command queued before it closed waits, and goes out
+// on reopen only while younger than StaleAfter); reopened, the first value
+// is a baseline (WriteOutputs rule 2). Base treats every gate alike, so
+// this is only the marker.
+func (b *Base) PlainWriteGate() {}
+
+var _ nio.PlainGated = (*Base)(nil)
+
 // WriteSources lists the sources that take commands (sorted), for a
 // driver's WriteTimeouts.
 func (b *Base) WriteSources() []string {
