@@ -318,6 +318,23 @@ func (r *Runtime) inputsReady() bool {
 	return true
 }
 
+// tasksMayScan answers, for an additional task past its gate, whether the
+// main scan has read the inputs since the gate last opened: only the main
+// scan reads the drivers, so a task that ran first would scan the seeds
+// (#786; Fable). It applies when there is a wait for inputs at all (an
+// io.InputsReadier driver): a lone controller holds its tasks until the
+// main scan's first read, a pair's new leader until its first read as
+// leader (fresh). A task gated this way runs nothing and counts nothing.
+func (r *Runtime) tasksMayScan() bool {
+	if r.ready == nil {
+		return true
+	}
+	if r.coord != nil {
+		return r.fresh.Load()
+	}
+	return r.mainIn.Load()
+}
+
 // endWait clears a first scan's wait. Called under leadMu.
 func (r *Runtime) endWait() {
 	r.readySince = time.Time{}

@@ -373,8 +373,10 @@ type Runtime struct {
 	readySince time.Time
 	waitSince  atomic.Int64
 	// started: the first scan of an uncoordinated runtime has passed its
-	// wait for inputs (or had none to wait for). See gateEdge.
+	// wait for inputs (or had none to wait for). See gateEdge. mainIn: the
+	// main scan has read the inputs since (see tasksMayScan).
 	started atomic.Bool
+	mainIn  atomic.Bool
 	// ledTerm is the coordinator's term (Termed) at the last takeover, 0
 	// before the first or without a Termed coordinator. Under leadMu.
 	ledTerm uint64
@@ -1459,7 +1461,7 @@ func (r *Runtime) scanTask(tr *taskRun) { r.scanTaskAt(tr, time.Time{}) }
 // scanTaskAt is scanTask with the slot the scan was due at (zero when the
 // caller is not Run's scheduler), for the lateness sample.
 func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
-	if !r.gate() || !r.scanEnter() {
+	if !r.gate() || !r.tasksMayScan() || !r.scanEnter() {
 		return
 	}
 	defer r.scanExit()
@@ -1568,6 +1570,9 @@ func (r *Runtime) scanAt(due time.Time) {
 			// write at all — see Tags' "Write generations".
 			r.tags.setMany(r.inputs, in)
 		}
+	}
+	if r.coord == nil && !r.mainIn.Load() {
+		r.mainIn.Store(true) // the tasks may scan now (tasksMayScan)
 	}
 	// The read is back (or there is no driver to read): from here on the
 	// tags are this leadership's, and quality is the drivers' again, unless
