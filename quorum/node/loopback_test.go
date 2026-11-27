@@ -101,15 +101,17 @@ type cluster struct {
 	release map[quorum.NodeID]int
 	// slowWrite delays every state write, the witness's and both
 	// controllers', by this much (a slow eMMC or SD card); writes counts
-	// them. Set before the start.
+	// them. Set before the start. slowOnly, when set, slows only that
+	// member's writes (one slow voter).
 	slowWrite time.Duration
+	slowOnly  quorum.NodeID
 	writes    atomic.Int64
 }
 
-// writeFn is the state write every member starts with: the file's own,
+// writeFn is the state write member id starts with: the file's own,
 // after slowWrite.
-func (c *cluster) writeFn() func(*os.File, []byte) (int, error) {
-	if c.slowWrite == 0 {
+func (c *cluster) writeFn(id quorum.NodeID) func(*os.File, []byte) (int, error) {
+	if c.slowWrite == 0 || (c.slowOnly != "" && c.slowOnly != id) {
 		return nil
 	}
 	return func(f *os.File, b []byte) (int, error) {
@@ -347,7 +349,7 @@ func (c *cluster) clientTLS(id quorum.NodeID) TLSWrap {
 
 func (c *cluster) startWitness() {
 	c.t.Helper()
-	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: c.leaseFor(WitnessID), write: c.writeFn()})
+	w, err := NewWitness(WitnessOptions{Dir: c.wit.dir, Token: c.tok[WitnessID], Lease: c.leaseFor(WitnessID), write: c.writeFn(WitnessID)})
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -381,7 +383,7 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 	}
 	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
 		Lease: c.leaseFor(id), StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
-		SelfAPI: apiAddr(id), TLS: c.clientTLS(id), write: c.writeFn(),
+		SelfAPI: apiAddr(id), TLS: c.clientTLS(id), write: c.writeFn(id),
 		client: &http.Client{Transport: &faultRT{c: c, from: id, base: c.transportFor(id)}},
 		OnEvent: func(ev Event) {
 			c.evMu.Lock()

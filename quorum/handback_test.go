@@ -137,6 +137,20 @@ func TestHandBackGuard(t *testing.T) {
 	}
 }
 
+// An undone hand-back is written under a new Seq (#1436 PR 2, Fable): the
+// armed time's write may still land after the wait for it ended, and a
+// voter's writer writes each Seq once, so a reverted state under the same
+// Seq would never reach disk, and a restart inside the window would refuse
+// a real hand-back. handback_undo_unwritten turns it red.
+func TestUndoneHandBackIsWrittenAgain(t *testing.T) {
+	v := NewVoter("A", 2*time.Second, VoterState{Incarnation: 42, Lease: 2 * time.Second}, 0)
+	armed := v.NoteHandBack(1_700_000_000_000)
+	undo := v.UndoHandBack(0)
+	if undo == nil || undo.Seq <= armed.Seq || undo.State.HandedBackMs != 0 {
+		t.Fatalf("undo %+v after the armed write (Seq %d), want a later Seq holding no hand-back", undo, armed.Seq)
+	}
+}
+
 // The hand-back's floor: the newest earlier leadership the winning round
 // knows, the peer's or this controller's own earlier boots', and only
 // when two winning replies cover every grant above it. A now leads in 9.

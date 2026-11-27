@@ -45,25 +45,30 @@ func (e *Elector) HandBack(ctx context.Context, epoch uint64, hold time.Duration
 		p = e.v.NoteHandBack(time.Now().UnixMilli())
 	}
 	e.mu.Unlock()
-	undo := func() {
+	// undo puts the guard back, under mu; the caller asks its write
+	// once mu is released.
+	undo := func() *quorum.Persist {
 		if !mut("handback_guard_kept_on_failure") {
-			e.v.UndoHandBack(prev)
+			return e.v.UndoHandBack(prev)
 		}
+		return nil
 	}
 	if p != nil {
 		e.w.ask(p)
 		if err := e.waitDurable(ctx, p.Seq); err != nil {
 			e.mu.Lock()
-			undo()
+			fix := undo()
 			e.mu.Unlock()
+			e.w.ask(fix)
 			return err
 		}
 	}
 	e.mu.Lock()
 	now := e.now()
 	if !e.c.Leading(now) || e.c.Term() != epoch {
-		undo()
+		fix := undo()
 		e.mu.Unlock()
+		e.w.ask(fix)
 		return ErrNotLeadingEpoch
 	}
 	e.handBackUntil = now.Add(hold)

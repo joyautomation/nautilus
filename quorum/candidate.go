@@ -68,11 +68,23 @@ func (c Config) look() time.Duration { return c.Lease / 4 }
 // again (Candidate.reask): a vote's own timeout at the driver, lease/8.
 func (c Config) reaskEvery() time.Duration { return c.Lease / 8 }
 
-// reaskFor is how long after its first send a campaign is asked again:
-// three quarters of a lease. A later grant of an early ask would leave its
-// lease (from that ask's send) too short to renew, and each re-ask a voter takes keeps its
-// promise alive for a lease from there (expire backs off from the last).
-func (c Config) reaskFor() time.Duration { return c.Lease * 3 / 4 }
+// reaskFor is how long after its first send a campaign is asked again: a
+// lease less one reaskEvery (#1436). The last ask goes at three quarters
+// of a lease and its wait (reaskEvery) ends at seven eighths, the write
+// budget; an ask at seven eighths would wait until the round's own end
+// (expire, a lease from the first send), racing it, so the window stops
+// an eighth short of the round (it was three quarters, which left a
+// voter write between 3/4 and 7/8 answered to nobody). Each grant leases from the
+// send of the ask it answers (round.leaseFrom), so a grant of the last
+// ask leaves a full lease to renew in; and each re-ask a voter takes keeps
+// its promise alive for a lease from there (expire backs off from the
+// last).
+func (c Config) reaskFor() time.Duration {
+	if mut("reask_window_3q") {
+		return c.Lease * 3 / 4
+	}
+	return c.Lease - c.reaskEvery()
+}
 
 // WriteBudget is how long a voter's state write may take, from the ask
 // that needs it to the state on disk, for a campaign to win on it (#1436):
@@ -83,7 +95,11 @@ func (c Config) reaskFor() time.Duration { return c.Lease * 3 / 4 }
 // ended is answered to nobody, and the campaign is lost. Writes slower
 // than this can leave a pair with no leader (it fails safe: never two).
 // The operator's warnings and the start-up probe judge by it, so a change
-// to the re-ask window moves them with it.
+// to the re-ask window moves them with it. Seven eighths of a lease. On
+// the loopback pair a cold election (both controllers campaigning at once,
+// or one alone) and a switchover won with every voter write up to a few
+// milliseconds under it (430 ms of 437 at a 500 ms lease, 870 of 875 at
+// 1 s), and none past it.
 func (c Config) WriteBudget() time.Duration {
 	every, window := c.reaskEvery(), c.reaskFor()
 	if every <= 0 {
@@ -534,8 +550,9 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 // so an unheard campaign backs off two leases from the last (expire,
 // yield), as from the one send before: the other controller still gets
 // the lease of silence it campaigns in (design §3.1, one-way partitions).
-// Asked every lease/8 while no majority has answered, up to three
-// quarters of a lease after the first send (reaskFor); with the same
+// Asked every lease/8 while no majority has answered, before seven
+// eighths of a lease after the first send (reaskFor): the last ask at
+// three quarters, its wait ending at seven eighths; with the same
 // guards as a new campaign. nil otherwise.
 func (c *Candidate) reask(now Instant, seenFrom NodeID, seenUntil Instant, healthy bool) *Request {
 	if !c.reasks() || now < c.reaskAt || now < c.backoffUntil || now < c.holdUntil {

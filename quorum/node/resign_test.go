@@ -20,8 +20,8 @@ import (
 //
 //   - it leads within lease/4, not after the old leader's lease. A grant
 //     waits for its voter's state write, so a stalled disk delays it; the
-//     bound the design promises then is a voter's write within about
-//     3*lease/4 (redundancy-test-plan F24): the campaign's last re-ask, at
+//     bound the design promises then is a voter's write within
+//     7*lease/8 (redundancy-test-plan F24): the campaign's last re-ask, at
 //     3*lease/4, granted within a vote's wait, so it leads within
 //     7*lease/8 of its first campaign, and never past the lease. A
 //     handover past lease/4 is logged (#1120: one CI disk stall held both
@@ -140,8 +140,8 @@ func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) bool {
 				t.Fatalf("%s campaigned %v after its voter took the RESIGN, want at once (under %v)", peer, d, c.lease/16)
 			}
 			// The design's bound on a slow voter write (F24): the campaign
-			// is asked again every lease/8 until 3*lease/4 after its first
-			// send, and the last ask's grant may come a vote's wait
+			// is asked again every lease/8, the last at 3*lease/4 after its
+			// first send, and the last ask's grant may come a vote's wait
 			// (lease/8) after that, so peer leads within 7*lease/8 of its
 			// first campaign; lease/32 more for waitFor's 5 ms poll.
 			if d, max := led.Sub(v.at), c.lease*7/8+c.lease/32; d > max {

@@ -1113,7 +1113,10 @@ redundancy:
   failover included. A switchover lost this way left nobody leading until the old leader's
   resign hold ran out, and the old leader led again (CI on #1372). So while no majority has
   answered a campaign, the candidate asks **the same term** again (a new id and Seq) every
-  `lease/8`, up to `3·lease/4` after its first send. A voter that promised that term
+  `lease/8`, the last at `3·lease/4` after its first send: that ask's wait ends at `7·lease/8`,
+  an eighth before the round expires (a lease from its first send). An ask at `7·lease/8` would
+  wait to the round's own end, racing its expiry, so the asks stop there (#1436; they stopped at
+  `5·lease/8` before, leaving a write between `3·lease/4` and `7·lease/8` answered to nobody). A voter that promised that term
   to that boot grants it again with no write, at once, or once the write it already started
   lands. A voter that has since promised another, or a higher term, refuses it as it would the
   first ask arriving late. A grant's reply names the request it answers, and a voter promises
@@ -1122,8 +1125,15 @@ redundancy:
   campaign won on a late re-ask would keep too little of it: on a slow link its first renewal
   landed after the lease (found by the simulator). A voter's promise runs a lease from the latest ask it took, so an unheard campaign
   backs off from its **last** ask (below), and a reachable controller still gets a lease of
-  silence. The working condition: a voter's write, with any write queued ahead of it, must
-  finish within about `3·lease/4` of the campaign's first send (375 ms at a 500 ms lease).
+  silence. The working condition (the write budget, `quorum.Config.WriteBudget`): a voter's
+  write, with any write queued ahead of it, must finish within `7·lease/8` of the campaign's
+  first send (437 ms at a 500 ms lease, 875 ms at 1 s), less the vote's round trip. Measured
+  on the loopback pair with every voter write slowed: a cold election, both controllers
+  campaigning at once or one alone, won in every run at 430 ms (500 ms lease, 10 runs each)
+  and 870 ms (1 s, 6 each), and in none at 440 ms or 880 ms, so the duel of a cold start
+  costs nothing beyond the budget. A switchover led at once in every run at 420 ms and
+  860 ms, and in 9 of 10 at 430 ms and 4 of 5 at 870 ms. A voter writes a state once: a re-ask of a promise whose write succeeded is
+  answered from that write, and only a failed write is written again (#1436).
 - **Yield to a higher term.** A failed campaign leaves the candidate's own voter promised to
   it for a lease, and that refuses the other controller. With only the two controllers
   counted (the witness down, or at an incarnation not yet adopted, or a controller that lost

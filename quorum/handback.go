@@ -57,8 +57,16 @@ func (v *Voter) NoteHandBack(atMs int64) *Persist {
 // memory, when the hand-back did not happen after all (its write failed,
 // or the lease ended first): an armed guard would refuse the next one,
 // and the peer's question, for a hand-back that never was (Fable, S3).
-// The next write carries it to disk.
-func (v *Voter) UndoHandBack(prevMs int64) { v.st.HandedBackMs = prevMs }
+// It returns the write that carries it to disk: a new Seq, since the
+// armed one may still land (a wait that ended with its write in flight),
+// and a writer writes a Seq once (#1436 PR 2, Fable).
+func (v *Voter) UndoHandBack(prevMs int64) *Persist {
+	v.st.HandedBackMs = prevMs
+	if mut("handback_undo_unwritten") {
+		return nil
+	}
+	return v.change()
+}
 
 // Hand-back refusals (HotCheck.HandBackFloor).
 const (

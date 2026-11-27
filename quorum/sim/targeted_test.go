@@ -126,14 +126,14 @@ func TestTargetedOneWayLeaderSkewed(t *testing.T) {
 
 // A campaign asked again (#710, the lost switchover campaign) still lets
 // the reachable controller win. A can send but never hear, from its
-// start: its campaign reaches both voters and is asked again every look
-// up to three quarters of a lease, each ask keeping their promise to A a
-// lease from then. A backs off two leases from its LAST ask, not its
-// first send, so B gets a lease of silence after those promises run out
-// and leads; A sends nothing in that back-off. Every phase of B's start
-// across a lease, a dozen seeds each. A's first campaign is at 2 s (its
-// restart wait); its last ask by 3.25 s keeps the voters promised to
-// 5.25 s, and B leads by 6.25 s.
+// start: its campaign reaches both voters and is asked again every
+// lease/8 up to seven eighths of a lease, each ask keeping their promise
+// to A a lease from then. A backs off two leases from its LAST ask, not
+// its first send, so B gets a lease of silence after those promises run
+// out and leads; A sends nothing in that back-off. Every phase of B's
+// start across a lease, a dozen seeds each. A's first campaign is at 2 s
+// (its restart wait); its last ask, three quarters of a lease later by
+// 3.5 s, keeps the voters promised to 5.5 s, and B leads by 6.5 s.
 func TestTargetedDeafCandidateReasksAndStillLoses(t *testing.T) {
 	for seed := uint64(1); seed <= 12; seed++ {
 		for k := range 4 {
@@ -154,8 +154,8 @@ func TestTargetedDeafCandidateReasksAndStillLoses(t *testing.T) {
 					took = iv.From
 				}
 			}
-			if took == 0 || took > 6250*ms {
-				t.Errorf("seed %d, B at %v: B led at %v, want by 6.25 s", seed, bStart, took)
+			if took == 0 || took > 6500*ms {
+				t.Errorf("seed %d, B at %v: B led at %v, want by 6.5 s", seed, bStart, took)
 			}
 			// A's asks of its first campaign, and its silence after.
 			var first, last time.Duration = -1, -1
@@ -176,8 +176,8 @@ func TestTargetedDeafCandidateReasksAndStillLoses(t *testing.T) {
 					break
 				}
 			}
-			if last < first+lease/2 {
-				t.Errorf("seed %d, B at %v: A asked its campaign again only until %v (first %v): the case proves nothing", seed, bStart, last, first)
+			if last < first+lease*3/4 {
+				t.Errorf("seed %d, B at %v: A asked its campaign again only until %v (first %v), want three quarters of a lease on (the last ask, whose wait ends at seven eighths)", seed, bStart, last, first)
 			}
 		}
 	}

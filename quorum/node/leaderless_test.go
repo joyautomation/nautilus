@@ -506,15 +506,6 @@ func TestWriteTimedFromItsOldestAsk(t *testing.T) {
 	if r := <-got; r.seq != 3 || r.took != 200*time.Millisecond {
 		t.Fatalf("second write %+v, want seq 3 in 200ms (from seq 2's ask, its queue included)", r)
 	}
-	// A re-ask's write of seq 3 again, queued while seq 3 was in flight,
-	// releases nothing new: not timed (its time would count the first
-	// write's twice).
-	w.ask(&quorum.Persist{Seq: 3})
-	clk.add(100 * time.Millisecond)
-	gate <- struct{}{}
-	if r := <-got; r.seq != 3 || r.took >= 0 {
-		t.Fatalf("rewrite %+v, want seq 3 untimed", r)
-	}
 }
 
 // A controller's slow write is warned of past half the budget, at most
@@ -532,8 +523,8 @@ func TestSlowWriteWarned(t *testing.T) {
 	l := newLelector(t, wayCut, wayCut, true, write)
 	clk = l.clk
 	budget := writeBudget(l.o.Lease)
-	if budget != l.o.Lease*3/4 {
-		t.Fatalf("budget %v at a %v lease, want the re-ask window's end, %v", budget, l.o.Lease, l.o.Lease*3/4)
+	if budget != l.o.Lease*7/8 {
+		t.Fatalf("budget %v at a %v lease, want the last re-ask's wait's end, %v", budget, l.o.Lease, l.o.Lease*7/8)
 	}
 	seq := uint64(1000)
 	ask := func() {

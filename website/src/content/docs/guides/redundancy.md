@@ -616,9 +616,12 @@ ends.
   written its grant to disk, and a vote waits an eighth of the lease for
   the answer. A slower write still counts: the controller asks the same
   vote again every eighth of a lease, and a voter that already granted it
-  answers at once. So each voter's write, with any write waiting ahead
-  of it, must finish within three quarters of a lease (750 ms at 1 s),
-  or no controller wins a vote, after a failover or a switchover alike.
+  answers at once. The last ask goes three quarters of a lease after the
+  first and waits until seven eighths. So each voter's write, with any
+  write waiting ahead of it, must finish within seven eighths of a lease
+  (875 ms at 1 s, less the network's round trip; measured: 870 ms
+  elects, 880 ms does not), or no controller wins a vote, after a
+  failover or a switchover alike.
   That fails safe (never two leaders; the outputs stay off), and the
   logs say so. Each controller and the witness time every state write,
   from the ask to on disk, and warn when one passes half that budget. At
@@ -634,8 +637,10 @@ ends.
 - **A controller that can send but not hear** (a one-way link fault):
   it keeps asking for a vote it never hears answered, for three quarters
   of a lease, and each ask holds the voters to it for a lease. So the
-  controller that can reach both voters takes over within about 1.75
-  leases of that controller's first ask (1.75 s at 1 s), not one.
+  voters are free of it 1.75 leases after its first ask, and the
+  controller that can reach both voters takes over within about 2.25
+  leases of that first ask (2.25 s at 1 s; measured in the simulator),
+  not one.
 
 Choose 2 s for:
 
@@ -943,8 +948,8 @@ the lease (94 ms at 500 ms, 188 ms at 1 s), 100 switchovers at each
 measured a gap of 169 to 193 ms at 500 ms and 268 to 307 ms at 1 s.
 A voter's disk that stalls stretches the gap by as long as the stall:
 the standby leads once the write finishes, and a switchover is designed
-for a voter's write that finishes within about three quarters of the
-lease (375 ms at 500 ms). The acceptance target is a quarter lease for
+for a voter's write that finishes within seven eighths of the lease
+(437 ms at 500 ms). The acceptance target is a quarter lease for
 that bench program: met at a 1 s lease; at a 500 ms lease (target
 125 ms) missed by up to 1 ms on the bench program, once in 100 runs on
 a heavily loaded host, still far below a failover, which waits out the

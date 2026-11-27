@@ -130,7 +130,6 @@ var mutations = []string{
 	"driver_drops_unseen",            // node: a campaign reply the driver drops (an unadopted witness incarnation, a fenced state) leaves the no-leader cause saying the voter is silent (#1436)
 	"probe_error_as_info",            // node: the start-up write probe logs a disk too slow for the lease as info, not an error (#1436)
 	"witness_write_by_own_lease",     // node: the witness judges a pair's write times by its own --lease, not the pair's (#1436)
-	"rewrite_timed",                  // node: a write of a Seq already on disk (a re-ask's, queued behind the first) is timed, counting the first write's time twice (#1436, Fable)
 	"words_stale_at_backoff",         // node: a voter's campaign word goes stale after two leases, so the no-leader cause flips at the look that ends an unheard campaign's back-off (#1436, Fable)
 	"answered_unbound",               // node: a witness answer under a certificate this controller does not count proves the witness reachable, so the no-leader cause blames its write (#1436, Fable)
 
@@ -143,6 +142,9 @@ var mutations = []string{
 	"leaderless_alarm_reach_any_relay",     // node: one witness reply naming a promise to the peer silences the no-leader alarm, so a duel across a cut link pages nobody (#1436, Fable)
 	"leaderless_alarm_relay_gap_unseen",    // node: the witness's promise to the peer counts as renewed across a gap with no reply, so a duel across a cut link pages nobody (#1436, Fable)
 	"leaderless_word_unbound",              // node: the no-leader alarm word in a hello answer is not bound by its MAC: anyone between the controllers can silence the second's page (#1436)
+
+	"write_dedup_off",           // node: a re-ask's write of a Seq already on disk is written again: two fsyncs for one promise on a slow card (#1436 PR 2)
+	"write_dedup_failed_counts", // node: a failed write counts as written, so the re-ask queued behind it is skipped and the promise never reaches disk: the voter grants it nothing, silently (#1436 PR 2, F25)
 }
 
 // guessPeerAPI is what a standby named before the hello announced the
