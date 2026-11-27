@@ -191,12 +191,12 @@ Do this once per provider. In both, the redirect URI is `https://<the controller
 1. Entra admin centre > Identity > Applications > App registrations > New registration. Name it; supported account types: *this organizational directory only* (single tenant); Redirect URI: platform **Web**, the URI above. Register.
 2. Copy *Application (client) ID* and *Directory (tenant) ID* from the Overview page.
 3. Certificates & secrets > New client secret. Copy the **Value** column (not *Secret ID*) at once: Entra shows it only until you leave the page.
-4. The default `User.Read` permission is enough. Leave the implicit grant boxes unticked.
-5. `issuer: https://login.microsoftonline.com/<tenant id>/v2.0`, `client-id:` the application id. The default username claim, `preferred_username`, is the person's sign-in address. Grant by `groups:` (object ids) or, for a first test, by `users:`.
+4. The default `User.Read` permission is enough (`openid`, `profile` and `email` are sign-in scopes, not API permissions). Leave the implicit grant boxes unticked.
+5. `issuer: https://login.microsoftonline.com/<tenant id>/v2.0`, `client-id:` the application id. The default username claim, `preferred_username`, is the person's sign-in address. For a first test grant by `users:`. To grant by `groups:` (object ids), add the claim first: Token configuration > Add groups claim > Security groups (ID token), ideally *Groups assigned to the application*, since Entra leaves the claim out when a person is in too many groups and the sign-in is then refused.
 
 **Google** (Google Cloud console)
 
-1. Create a project. APIs & Services > OAuth consent screen (Google Auth Platform): choose **Internal** for a Google Workspace organization (only its people can sign in, and no Google verification is needed); otherwise External with yourself under Test users.
+1. Create a project. APIs & Services > OAuth consent screen (called Google Auth Platform in newer consoles): choose **Internal** for a Google Workspace organization (only its people can sign in, and no Google verification is needed); otherwise External, with yourself under Test users (an External app left in Testing is limited to those users).
 2. Credentials > Create credentials > OAuth client ID > **Web application**; under Authorized redirect URIs add the URI above; leave the JavaScript origins empty.
 3. Copy the client ID and the client secret when the dialog shows them.
 4. `issuer: https://accounts.google.com`, `client-id:` the id. Google sends no `preferred_username` and no groups: set `username-claim: email` and grant by `users:` (the address).
