@@ -222,10 +222,14 @@ func TestANodeStartedAgainGoesOnFromItsLastBdSeq(t *testing.T) {
 	w := watchWire(t, broker)
 	n := newRedundantNode(t, broker)
 	for range 2 {
+		// The count is taken before Start: the birth can reach the watcher
+		// before Start returns, and a count taken after it would wait for
+		// one more than will ever come.
+		want := w.count("NBIRTH") + 1
 		if err := n.Start(t.Context()); err != nil {
 			t.Fatal(err)
 		}
-		w.waitCount(t, "NBIRTH", w.count("NBIRTH")+1)
+		w.waitCount(t, "NBIRTH", want)
 		n.Stop()
 	}
 	var bds []int64
@@ -386,10 +390,20 @@ type brokerOrder struct {
 	kinds []string
 }
 
-func (o *brokerOrder) ID() string           { return "broker-order" }
-func (o *brokerOrder) Provides(b byte) bool { return b == mqttsrv.OnPublished }
+func (o *brokerOrder) ID() string { return "broker-order" }
 
-func (o *brokerOrder) OnPublished(_ *mqttsrv.Client, pk packets.Packet) {
+// Provides OnPublish, not OnPublished: that one runs after the message was
+// handed to its subscribers, so an NDEATH's hook could land after the NBIRTH
+// the node published in answer to it. OnPublish runs on intake, before
+// delivery, and a reaction cannot precede what it reacts to.
+func (o *brokerOrder) Provides(b byte) bool { return b == mqttsrv.OnPublish }
+
+func (o *brokerOrder) OnPublish(_ *mqttsrv.Client, pk packets.Packet) (packets.Packet, error) {
+	o.note(pk)
+	return pk, nil
+}
+
+func (o *brokerOrder) note(pk packets.Packet) {
 	var kind string
 	switch pk.TopicName {
 	case "spBv1.0/Plant/NBIRTH/Edge1":

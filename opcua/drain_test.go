@@ -37,9 +37,7 @@ func TestOPCUAEachChunkIsCountedForTheDrain(t *testing.T) {
 				}, nil
 			})
 	})
-	d := startDriver(t, ts.url, manifest(2))
-	d.SetWriteGate(func() bool { return true })
-	d.SetSendGate(func() (bool, time.Duration, uint64) { return true, time.Second, 1 })
+	d := startPaired(t, ts.url, manifest(2), func() (bool, time.Duration, uint64) { return true, time.Second, 1 })
 	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Speed"]; return ok })
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 5.0})
 	waitFor(t, "the write", func() bool { mu.Lock(); defer mu.Unlock(); return len(during) > 0 })

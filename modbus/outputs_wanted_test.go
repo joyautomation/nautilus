@@ -142,6 +142,16 @@ func TestRegainingTheGateSendsEveryOutputAgain(t *testing.T) {
 			}
 			startDriver(t, d)
 			waitFor(t, "connect", func() bool { return d.Health().Sources[0].State == "connected" })
+			// The start-up baseline decides each output against what the device
+			// answered (#1123), on a push after that answer: a scan before the
+			// first read has nothing to decide against, and this test scans
+			// only twice, so it would wait for ever on a slow runner.
+			waitFor(t, "the first read of both blocks", func() bool {
+				v, _ := d.ReadInputs()
+				_, sp := v["SP"]
+				_, ka := v["KA"]
+				return sp && ka
+			})
 			var coord runtime.Coordinator
 			if tc.takeover {
 				coord = leaderFunc(open.Load)
