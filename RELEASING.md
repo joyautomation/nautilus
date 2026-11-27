@@ -119,6 +119,17 @@ release then ships the vote protocol, and every later version must read its
 frames, so a redundant pair's rolling upgrade keeps a leader and pages
 nobody (design, "Wire"; #1436).
 
+#1013: under the Kubernetes Lease a live I/O apply is refused at validate
+(`leaseModeRefusesKeep` in `internal/project/iokeep.go`), because a
+replica on v0.22.0 or older drops what a live apply keeps, and a
+Lease-mode replica cannot ask the others. In the first release after
+v0.22.0, leave it as it is and write that release's version here
+(first release that keeps a live apply: _not yet released_). In the
+release after that one, set it `false` in the release commit, change
+`TestIOKeptRefusesLeaseMode` to expect the apply to validate, and remove
+this paragraph and the guide's Lease-mode line (`guides/http-api.md`,
+"Not while a pair runs mixed versions").
+
 ## Guard rails
 
 The extension's channel logic lives in two scripts that every workflow

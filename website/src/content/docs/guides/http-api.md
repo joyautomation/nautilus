@@ -1322,11 +1322,19 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
     manifest again. The apply answers `kept: false`. An apply on a
     project with `redundancy:` and no `retain:` block is refused (check
     `kept`).
-  - **Not while a pair runs mixed versions.** A controller built before
-    this ignores what is kept: if it takes over, it runs the manifest's
-    addresses and its next save clears what was kept. During a rolling
-    upgrade of a redundant pair, make no live I/O apply until both
-    controllers run the new build.
+  - **Not while a pair runs mixed versions.** A controller on v0.22.0 or
+    older ignores what is kept: if it takes over, it runs the manifest's
+    addresses and its next save clears what was kept. A pair (`peers:`)
+    checks: each controller says at its peer hello that it keeps a live
+    apply, and until the other has said so an apply is refused (check
+    `kept`). Finish the upgrade, then apply.
+  - **Not under the Kubernetes Lease, for now.** Its replicas have no
+    hello, so a replica cannot tell whether the others keep a live apply.
+    An apply on a project with `redundancy:` and no `peers:` is refused
+    (check `kept`): deploy the change instead. This lifts in a later
+    release, once no replica a rolling upgrade can meet runs v0.22.0 or
+    older. Upgrading from v0.22.0 straight past that release, deploy any
+    I/O change until every replica runs the new build.
 
   While what runs differs from the manifest, `config` on every frame
   says so (and `config.notKept` says if it would not survive a restart),

@@ -124,7 +124,8 @@ type keepOpts struct {
 	store     retain.Store // nil: no retain: block
 	coord     *keepCoord   // nil: standalone
 	noFollow  bool
-	redundant bool // the manifest has redundancy: (implied by coord)
+	redundant bool // the manifest has redundancy: (implied by coord), a pair's
+	leaseMode bool // redundancy: without peers:, the Kubernetes Lease (#1013)
 	prep      func(*IOConfig)
 	hold      bool // Options.HoldOutputsOnSwap
 }
@@ -133,6 +134,15 @@ type keepOpts struct {
 // store, the IOConfig registered with the runtime before its first scan,
 // Keep = SaveRetained, and with a coordinator the drivers' write gate and a
 // standby following the store.
+// rigRedundancy is the rig's redundancy: section: a pair's (peers:), or
+// with leaseMode the Kubernetes Lease's (no peers:).
+func rigRedundancy(o keepOpts) *RedundancyConfig {
+	if o.leaseMode {
+		return &RedundancyConfig{}
+	}
+	return &RedundancyConfig{Peers: map[string]string{"a": "127.0.0.1:7001", "b": "127.0.0.1:7002"}}
+}
+
 func startKeepRig(t *testing.T, files fstest.MapFS, o keepOpts) *keepRig {
 	t.Helper()
 	p, err := Load(files, "")
@@ -146,13 +156,13 @@ func startKeepRig(t *testing.T, files fstest.MapFS, o keepOpts) *keepRig {
 	var gate func() bool
 	if o.coord != nil {
 		p.Runtime.Coordinator = o.coord
-		p.Redundancy = &RedundancyConfig{}
+		p.Redundancy = rigRedundancy(o)
 		gate = o.coord.IsLeader
 		if g, ok := p.Runtime.Driver.(interface{ SetWriteGate(func() bool) }); ok {
 			g.SetWriteGate(o.coord.IsLeader)
 		}
-	} else if o.redundant {
-		p.Redundancy = &RedundancyConfig{}
+	} else if o.redundant || o.leaseMode {
+		p.Redundancy = rigRedundancy(o)
 	}
 	rt, err := runtime.New(p.Runtime)
 	if err != nil {
@@ -1270,5 +1280,38 @@ func TestIOKeptRefusesAMixedVersionPair(t *testing.T) {
 	peer = ""
 	if v := stage(); !v.Valid {
 		t.Fatalf("both builds keep it: failed %v", failed(v))
+	}
+}
+
+// #1013, the Kubernetes Lease mode: its replicas exchange no hello, so
+// this build cannot see whether every replica keeps a live I/O apply. One
+// on v0.22.0 or older does not: if it took over it would run the
+// manifest's addresses and its next save would clear what was kept. So a
+// live apply in Lease mode is refused at validate (kept), naming why and
+// what to do, while a pair whose peer said keeps-live-io still validates.
+//
+// Pinned (RELEASING.md, "#1013"): the refusal stays through the first
+// release that keeps a live apply, and is lifted only in the release after
+// it, when no replica a rolling upgrade can pair it with predates it.
+func TestIOKeptRefusesLeaseMode(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	stage := func(r *keepRig) *IOValidation {
+		c := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", "")), "upload", "tester")
+		return r.io.Validate(c)
+	}
+	lease := startKeepRig(t, files, keepOpts{store: &memStore{}, leaseMode: true, prep: func(io *IOConfig) {
+		io.KeepStore = "configmap"
+	}})
+	v := stage(lease)
+	if v.Valid || fmt.Sprint(failed(v)) != "[kept]" || !strings.Contains(fmt.Sprint(v), "Kubernetes Lease") || !strings.Contains(fmt.Sprint(v), "deploy the change") {
+		t.Fatalf("a live apply in Lease mode: failed %v; want kept, naming the Lease mode and to deploy instead (lift this only per RELEASING.md, #1013)\n%+v", failed(v), v)
+	}
+	pair := startKeepRig(t, files, keepOpts{store: &memStore{}, redundant: true, prep: func(io *IOConfig) {
+		io.KeepStore = "configmap"
+		io.PeersKeepIO = func() string { return "" }
+	}})
+	if v := stage(pair); !v.Valid {
+		t.Fatalf("a pair whose peer keeps a live apply: failed %v", failed(v))
 	}
 }

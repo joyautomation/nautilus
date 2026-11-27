@@ -150,6 +150,20 @@ func copyUnits(m map[string]ioUnit) map[string]ioUnit {
 	return out
 }
 
+// leaseModeRefusesKeep refuses a live I/O apply under the Kubernetes Lease
+// (#1013). A pair learns at its peer hello whether the other controller
+// keeps a live apply across a takeover (PeersKeepIO); a Lease-mode
+// replica has no hello, so it cannot tell. The first release that keeps a
+// live apply (#1010) can be paired in a rolling upgrade with v0.22.0,
+// which does not: taking over, that replica would run the manifest's
+// addresses and its next save would clear what was kept. So this stays
+// true through that release and is set false only in the release after
+// it (RELEASING.md, "#1013"; TestIOKeptRefusesLeaseMode pins it).
+const leaseModeRefusesKeep = true
+
+// leaseModeKeepRefusal is the kept check's reason in Lease mode.
+const leaseModeKeepRefusal = "this project runs under the Kubernetes Lease, whose replicas cannot tell each other that they keep a live I/O apply across a takeover; a replica on v0.22.0 or older does not, and would come up on the manifest's addresses (#1013): deploy the change instead"
+
 // keptProblems refuses a candidate the store cannot keep where it must.
 func (io *IOConfig) keptProblems(c *IOCandidate) []string {
 	var out []string
@@ -160,6 +174,9 @@ func (io *IOConfig) keptProblems(c *IOCandidate) []string {
 		out = append(out, io.unreadableNow()+"; a standby would come up on the old addresses: deploy the change instead")
 	case io.p.Redundancy != nil && io.KeepStore == "file":
 		out = append(out, "this redundant project's retain store is a file, which only this replica reads: a standby would come up on the old addresses; deploy the change instead")
+	}
+	if io.p.Redundancy != nil && !io.p.Redundancy.Pair() && leaseModeRefusesKeep {
+		out = append(out, leaseModeKeepRefusal)
 	}
 	if io.p.Redundancy != nil && io.PeersKeepIO != nil {
 		if why := io.PeersKeepIO(); why != "" {
