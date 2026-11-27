@@ -292,9 +292,22 @@ With `auth:`, an OPC UA client writes only as someone the block names. Both ways
   naut opcua trust 9f86d081884c7d65 --as scada:operator@receiving
   ```
 
-  `--as <name>:<role>[@<area>,...]` writes the `opcua-certificates` entry into `nautilus.yaml` and changes nothing else in the file. Before it moves the certificate, it checks the name, role and area. It refuses a project with no `auth:` block (run `naut auth init` first) and a name or certificate already mapped. The client can connect at once, read-only; restart `naut run` for the grant. On a box `naut deploy` set up there is no `nautilus.yaml` beside the store: `--as` prints the lines to add in the project's checkout, then deploy it.
+  `--as <name>:<role>[@<area>,...]` writes the `opcua-certificates` entry into `nautilus.yaml` and changes nothing else in the file. Before it moves the certificate, it checks the name, role and area. It refuses a project with no `auth:` block (run `naut auth init` first) and a name or certificate already mapped. The client can connect at once (it reads as anonymous until the grant is loaded); restart `naut run` for the grant. On a box `naut deploy` set up there is no `nautilus.yaml` beside the store: `--as` prints the lines to add in the project's checkout, then deploy it.
 
-A trusted certificate the block does not map is **read-only**: its client signs in with a user name to write. `opcua.anonymous-writes` can't be used with `auth:` (the load refuses it). Either way, the tag must also be open in `opcua.writable`. Without `auth:`, a trusted certificate writes what `opcua.writable` opens, as before.
+A trusted certificate the block does not map **writes nothing**: its client signs in with a user name to write. It reads as anonymous (below). `opcua.anonymous-writes` can't be used with `auth:` (the load refuses it). Either way, the tag must also be open in `opcua.writable`. Without `auth:`, a trusted certificate writes what `opcua.writable` opens, as before.
+
+### OPC UA reads
+
+An OPC UA session reads, browses and subscribes under the same rule as the HTTP API: it needs `read`, and `read` covers the whole controller (an area does not limit it). Who the session is:
+
+- **A user** (UserName token) reads as that user; **a mapped certificate** reads as its `auth.opcua-certificates` name.
+- **Anyone else** (the None endpoint, a certificate the block does not map) reads as anonymous: what `auth.anonymous` grants. With `anonymous: viewer` that is everything, as before `auth:` existed. With `anonymous: none` (the default) it is nothing.
+
+A session without `read` is refused `Bad_UserAccessDenied` on a Read of the project's nodes (every attribute, a node's name included), on a Call of one of their methods, and on each item it tries to monitor. Browse and BrowseNext refuse them, and the project's folder is not listed under Objects; TranslateBrowsePaths finds nothing. The server's own nodes (its status, its namespace array) stay readable: they carry no tag data, though they do show the project's name.
+
+It is checked at every request, and a subscription is checked again at every sweep: a user removed, disabled or given a new password, a role without `read`, or a certificate no longer trusted or expired stops reading at once. A subscription that loses `read` tells each item `Bad_UserAccessDenied` once, then sends nothing, and sends the current value again if `read` comes back. A certificate that is no longer valid is never read as anonymous, as an invalid token never is on the HTTP API.
+
+**Adding `auth:` to a project with an OPC UA server and `anonymous: none` stops its anonymous clients reading.** `naut check` and `naut run` say so. To let them read, set `anonymous: viewer`, or have the client sign in with a UserName token, or map its certificate under `auth.opcua-certificates`. Reads are not journalled, as on the HTTP API.
 
 ## Sparkplug
 
@@ -345,7 +358,6 @@ Every command write is journalled, written or refused: action `tag.write`, sourc
 
 - **A pair's controllers trust each other's journal names.** A change passed between them through the operator-intent log carries who made it. A peer that holds the cluster token is trusted to say so truthfully, just as it is trusted with the change itself.
 - **A Sparkplug command is not authenticated.** Its principal, `sparkplug:<host>`, is a label: anyone who can publish to the broker has `sparkplug:`'s grants (see [Sparkplug](#sparkplug)). The broker's own access control decides who may publish.
-- **OPC UA reads are not gated by `auth:` yet.** Reading, browsing and subscribing stay open to every session, anonymous ones included. OPC UA writes are covered (see [OPC UA](#opc-ua)). `naut run` prints a warning saying so whenever `auth:` is set.
 - **`naut historian`'s own port is not covered.** It answers its archive by `localhost`, an IP address or an allowed name, or with `NAUTILUS_TOKEN`, as before, with no roles. Reads through the controller's `/api/history` need `read`; keep the historian's port off networks that shouldn't read the archive.
 - **A standby answers some reads from its own users file.** `/api/cluster` and `/api/history` are answered by the standby itself, so a token revoked or a user disabled only on the leader can still read them there until the users file is copied to the standby.
 - **Sessions live on the leader.** On a redundant pair a failover signs browser users out (see [A redundant pair](#a-redundant-pair)).

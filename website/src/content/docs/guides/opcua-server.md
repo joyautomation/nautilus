@@ -504,8 +504,12 @@ connecting, and the user says who is at it.
   with a user name. `opcua.anonymous-writes` can't be used with `auth:`.
   Without `auth:`, a trusted certificate writes what `opcua.writable`
   opens, as before.
-- **Reads are not gated by `auth:` yet.** Every session, anonymous ones on
-  None included, reads, browses and subscribes as before.
+- **Reads need `read` under `auth:`.** A session with no user and no mapped
+  certificate, the None endpoint's included, reads what `auth.anonymous`
+  grants: nothing by default, everything with `anonymous: viewer`. A user
+  or a mapped certificate reads as itself. It covers Read, Browse,
+  TranslateBrowsePaths, Call and subscriptions, and is checked again at
+  every request and every sweep. See [OPC UA reads](/guides/auth/#opc-ua-reads).
 
 A session belongs to the channel that created it. Its authentication token is
 a random 32-byte value, and a request that presents it on any other

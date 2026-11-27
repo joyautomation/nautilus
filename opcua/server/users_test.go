@@ -35,6 +35,8 @@ type fakeIdentity struct {
 	certs     map[string]string   // thumbprint or subject to a certificate's name
 	gate      chan struct{}       // when set, each SignIn waits for it to close
 	revoked   atomic.Bool
+	noRead    sync.Map    // principal string to true: the auth: block gives it no read (#1131)
+	anonNone  atomic.Bool // auth.anonymous: none: an anonymous session reads nothing
 
 	mu      sync.Mutex
 	signIns []string // "name from"
@@ -84,6 +86,12 @@ func (f *fakeIdentity) OPCUACert(thumbprint, subject string) (string, bool) {
 }
 
 func (f *fakeIdentity) May(p auth.Principal, perm, target string) bool {
+	if perm == "read" {
+		if _, no := f.noRead.Load(p.String()); no {
+			return false
+		}
+		return !(p.Kind == auth.KindAnonymous && f.anonNone.Load())
+	}
 	if perm != "write" {
 		return false
 	}
@@ -446,12 +454,14 @@ func TestRevokedUserStopsWriting(t *testing.T) {
 	if v := stored(t, f.rt, "Speed"); v != 1.0 {
 		t.Errorf("Speed = %v after the revoked write", v)
 	}
+	// A user who no longer holds their sign-in reads nothing either (#1131):
+	// the UserAccessLevel read is refused, not answered CurrentRead.
 	resp, err := c.Read(context.Background(), &ua.ReadRequest{NodesToRead: []*ua.ReadValueID{{NodeID: ua.NewStringNodeID(1, "Speed"), AttributeID: ua.AttributeIDUserAccessLevel}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lvl, _ := resp.Results[0].Value.Value().(uint8); lvl&uint8(ua.AccessLevelTypeCurrentWrite) != 0 {
-		t.Errorf("a revoked user's UserAccessLevel: %d", lvl)
+	if got := resp.Results[0].Status; got != ua.StatusBadUserAccessDenied {
+		t.Errorf("a revoked user's UserAccessLevel read: %v, want BadUserAccessDenied", got)
 	}
 	es := id.recorded("tag.write")
 	if last := es[len(es)-1]; last.Result != audit.ResultRefused || last.Target != "Speed" || !strings.Contains(last.Detail["reason"].(string), "no longer holds") {

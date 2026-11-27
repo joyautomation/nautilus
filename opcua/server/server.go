@@ -365,7 +365,9 @@ func (s *Server) startOn(ctx context.Context, port int) error {
 	// A map's namespaces take the indices the device uses, ahead of ours.
 	if m := s.opts.Mapped; m != nil {
 		for _, uri := range m.Namespaces {
-			srv.AddNamespace(&mappedSpace{uri: uri, ns: ns})
+			ms := &mappedSpace{uri: uri, ns: ns}
+			ns.mappedIDs = append(ns.mappedIDs, ms)
+			srv.AddNamespace(ms)
 		}
 	}
 	srv.AddNamespace(ns)
@@ -786,6 +788,22 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 	lastQual := map[string]nio.Quality{} // each monitored root's quality as last seen
 	liveRoots := map[string]struct{}{}   // the roots monitored this tick, to prune lastQual
 	requal := map[string]struct{}{}      // roots whose quality moved this tick
+	// Whether each subscription's owner may read, judged again every tick
+	// (a user removed, a certificate revoked, a role changed stops the
+	// delivery at the next sweep) and once per subscription: judging parses
+	// the channel's certificate.
+	readOf := map[*opcserver.Subscription]bool{}
+	reads := func(item *opcserver.MonitoredItem) bool {
+		if s.w == nil || s.w.id == nil {
+			return true
+		}
+		ok, seen := readOf[item.Sub]
+		if !seen {
+			ok = s.subscriberMayRead(item.Sub)
+			readOf[item.Sub] = ok
+		}
+		return ok
+	}
 	t := time.NewTicker(s.opts.Sweep)
 	defer t.Stop()
 	for {
@@ -808,6 +826,7 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 		clear(liveItems)
 		clear(liveRoots)
 		clear(requal)
+		clear(readOf)
 		mons := s.monitored()
 		// A quality change writes nothing to the store, so no generation
 		// moves with it; the default DataChangeFilter trigger is
@@ -840,8 +859,8 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 			owed := false // an item new under monitoring, back to Reporting or asked to resend is owed the current value
 			for _, w := range mon.items {
 				liveItems[w.item] = struct{}{}
-				if st := items[w.item]; w.watching() && (st == nil || st.mode != w.mode || st.resend != w.resend || st.req != w.req) {
-					owed = true
+				if st := items[w.item]; w.watching() && (st == nil || st.mode != w.mode || st.resend != w.resend || st.req != w.req || st.denied == reads(w.item)) {
+					owed = true // (a read lost or regained since the item was last told is owed too)
 				}
 			}
 			root, _ := ir.SplitAddress(s.ns.addrOf(mon.nid))
@@ -852,7 +871,7 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 			if !moved && !requalified && !retry && !owed {
 				continue
 			}
-			if s.notify(mon, last, retry, items, now) {
+			if s.notify(mon, last, retry, items, now, reads) {
 				delete(pending, mon.key)
 			} else {
 				pending[mon.key] = struct{}{}
@@ -958,6 +977,7 @@ type itemState struct {
 	req    *ua.MonitoredItemCreateRequest // the interval is req's
 	resend uint32
 	last   reading // what the item was last told, for one with an IndexRange
+	denied bool    // the item was told Bad_UserAccessDenied and nothing since (#1131)
 }
 
 // notify reads the node once and offers the reading to every item watching
@@ -971,7 +991,7 @@ type itemState struct {
 // elsewhere in the array is nothing to it. It reports false when any item
 // is still owed a value — a full channel, or an interval not yet up — so
 // the caller comes back to this node next tick.
-func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, items map[*opcserver.MonitoredItem]*itemState, now time.Time) bool {
+func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, items map[*opcserver.MonitoredItem]*itemState, now time.Time, reads func(*opcserver.MonitoredItem) bool) bool {
 	dv, cur, ok := s.current(mon)
 	if !ok {
 		return true
@@ -1009,6 +1029,30 @@ func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, 
 			// Owed the current value, changed or not (a transfer with
 			// sendInitialValues, ResendData, a new client handle).
 			st.dirty, resumed, st.resend = true, true, w.resend
+		}
+		if !reads(item) {
+			// The auth: block gives the owner no read now (#1131): an item
+			// that reports is told so once, then nothing, until the read is
+			// back. (The mode, request and resend marks above are kept
+			// current, so a resend or a Modify of a denied item is not owed
+			// again every tick.)
+			if !st.denied {
+				if st.mode != ua.MonitoringModeReporting {
+					st.denied = true // nothing is sent to it anyway
+				} else {
+					n := &ua.MonitoredItemNotification{ClientHandle: w.req.RequestedParameters.ClientHandle, Value: status(ua.StatusBadUserAccessDenied)}
+					select {
+					case item.Sub.NotifyChannel <- n:
+						st.denied, st.dirty = true, false
+					default:
+						done = false
+					}
+				}
+			}
+			continue
+		}
+		if st.denied {
+			st.denied, st.dirty, resumed = false, true, true // read is back: owed the current value
 		}
 		if !st.dirty || st.mode != ua.MonitoringModeReporting {
 			continue
@@ -1098,4 +1142,16 @@ func freePort(host string) (int, error) {
 	}
 	defer l.Close()
 	return l.Addr().(*net.TCPAddr).Port, nil
+}
+
+// subscriberMayRead reports whether the session that owns sub may read, as
+// the auth: block stands now: the sweep has no request, so it asks the
+// subscription for its owner and the owner's channel.
+func (s *Server) subscriberMayRead(sub *opcserver.Subscription) bool {
+	sess, sc := sub.Owner()
+	if sess == nil {
+		return false
+	}
+	ident, cred := sess.Identity()
+	return s.w.mayRead(s.w.standing(s.w.channel(sc), sess.ID, ident, cred))
 }

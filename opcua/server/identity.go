@@ -22,8 +22,12 @@
 // (no auth: block) a trusted certificate writes what opcua.writable opens,
 // as before (opcua-server-writes.md §7 decision 2).
 //
-// Reads, browsing and subscriptions are not gated by the auth: block yet:
-// every session reads, as before (opcua-server-writes.md §7 decision 4).
+// Reads, browsing and subscriptions need the read permission (#1131), the
+// HTTP API's rule: a user reads as themselves, a mapped certificate as its
+// name, anyone else (the None endpoint, an unmapped certificate) as
+// anonymous, which gets what auth.anonymous grants (writeAccess.mayRead).
+// The None endpoint stays (decision 4); under anonymous: none it reads
+// nothing.
 package server
 
 import (

@@ -90,7 +90,20 @@ func callMethods(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, r
 		}
 		return *standing
 	}
+	var reads *bool // the session's read standing (#1131), asked once
 	for i, m := range req.MethodsToCall {
+		if m != nil && ns.w.gatesReads() && ns.gated(m.ObjectID) {
+			// A method of the project's nodes answers about tag data, and
+			// even a refusal would say the node is there.
+			if reads == nil {
+				r := ns.w.mayRead(ns.w.who(srv, sc, req.RequestHeader))
+				reads = &r
+			}
+			if !*reads {
+				results[i] = callResult(ua.StatusBadUserAccessDenied)
+				continue
+			}
+		}
 		results[i] = callOne(srv, ns, req.RequestHeader, m, writer)
 	}
 	return &ua.CallResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
@@ -156,7 +169,7 @@ func nodeClassOf(srv *opcserver.Server, nid *ua.NodeID) (ua.NodeClass, ua.Status
 // 4 §5.12.2). References are as a Browse lists them.
 func hasMethod(srv *opcserver.Server, objectID *ua.NodeID, class ua.NodeClass, methodID *ua.NodeID) bool {
 	has := func(nid *ua.NodeID) bool {
-		res := browsePage(srv, &ua.BrowseDescription{NodeID: nid, BrowseDirection: ua.BrowseDirectionForward, ReferenceTypeID: ua.NewNumericNodeID(0, id.HasComponent), IncludeSubtypes: true, NodeClassMask: uint32(ua.NodeClassMethod), ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0)
+		res := browsePage(srv, nil, &ua.BrowseDescription{NodeID: nid, BrowseDirection: ua.BrowseDirectionForward, ReferenceTypeID: ua.NewNumericNodeID(0, id.HasComponent), IncludeSubtypes: true, NodeClassMask: uint32(ua.NodeClassMethod), ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0)
 		for _, r := range res.References {
 			if r.NodeID != nil && r.NodeID.NodeID != nil && r.NodeID.NodeID.Equal(methodID) {
 				return true
@@ -182,7 +195,7 @@ func hasMethod(srv *opcserver.Server, objectID *ua.NodeID, class ua.NodeClass, m
 
 // related is the first node a Browse of nid finds over refType in dir, or nil.
 func related(srv *opcserver.Server, nid *ua.NodeID, refType uint32, dir ua.BrowseDirection) *ua.NodeID {
-	res := browsePage(srv, &ua.BrowseDescription{NodeID: nid, BrowseDirection: dir, ReferenceTypeID: ua.NewNumericNodeID(0, refType), ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0)
+	res := browsePage(srv, nil, &ua.BrowseDescription{NodeID: nid, BrowseDirection: dir, ReferenceTypeID: ua.NewNumericNodeID(0, refType), ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0)
 	for _, r := range res.References {
 		if r.NodeID != nil && r.NodeID.NodeID != nil {
 			return r.NodeID.NodeID

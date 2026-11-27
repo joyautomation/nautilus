@@ -165,7 +165,7 @@ func TestNautRunSignsOPCUAUsersIn(t *testing.T) {
 	if got := writeBoth(mapped); got[0] != ua.StatusGood || got[1] != ua.StatusBadUserAccessDenied {
 		t.Errorf("the mapped certificate writes RCV_SP, RST_SP: %v, want Good, BadUserAccessDenied", got)
 	}
-	if !strings.Contains(stderr.String(), "OPC UA reads are not gated") || strings.Contains(stderr.String(), "Sparkplug") {
+	if !strings.Contains(stderr.String(), "OPC UA server needs `read`") || strings.Contains(stderr.String(), "Sparkplug") {
 		t.Errorf("stderr's auth: notice:\n%s", stderr.String())
 	}
 

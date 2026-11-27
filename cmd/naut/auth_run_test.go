@@ -159,7 +159,7 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if !strings.Contains(stderr.String(), "OPC UA reads are not gated") || strings.Contains(stderr.String(), "NOT GATED") {
+		if strings.Contains(stderr.String(), "OPC UA") { // no opcua: block: no OPC UA line
 			t.Errorf("stderr's auth: notice:\n%s", stderr.String())
 		}
 		ents, _ := os.ReadDir(filepath.Join(dir, "audit"))

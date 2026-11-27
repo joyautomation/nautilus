@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/binary"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 	"math"
 
 	"github.com/gopcua/opcua/id"
@@ -17,7 +18,7 @@ import (
 // gateway — showed ServerStatus three times (black-box F-29). Paging is
 // gopcua's scheme: a stateless continuation point that re-browses the node
 // and skips to an offset, so the deduplicated list is what is paged.
-func browseNodes(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
+func browseNodes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, r ua.Request) (ua.Response, error) {
 	req, ok := r.(*ua.BrowseRequest)
 	if !ok {
 		return nil, ua.StatusBadRequestTypeInvalid
@@ -28,16 +29,17 @@ func browseNodes(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 	if len(req.NodesToBrowse) > maxNodesPerBrowse {
 		return nil, ua.StatusBadTooManyOperations
 	}
+	hide := readHider(srv, ns, sc, req.RequestHeader)
 	results := make([]*ua.BrowseResult, len(req.NodesToBrowse))
 	for i, bd := range req.NodesToBrowse {
-		results[i] = browsePage(srv, bd, 0, req.RequestedMaxReferencesPerNode)
+		results[i] = browsePage(srv, hide, bd, 0, req.RequestedMaxReferencesPerNode)
 	}
 	return &ua.BrowseResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
 }
 
 // browseNextNodes continues a Browse from its continuation point, or releases
 // it (nothing to release: the point is the request itself).
-func browseNextNodes(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
+func browseNextNodes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, r ua.Request) (ua.Response, error) {
 	req, ok := r.(*ua.BrowseNextRequest)
 	if !ok {
 		return nil, ua.StatusBadRequestTypeInvalid
@@ -48,6 +50,7 @@ func browseNextNodes(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 	if len(req.ContinuationPoints) > maxNodesPerBrowse { // MaxNodesPerBrowse covers BrowseNext too
 		return nil, ua.StatusBadTooManyOperations
 	}
+	hide := readHider(srv, ns, sc, req.RequestHeader)
 	results := make([]*ua.BrowseResult, len(req.ContinuationPoints))
 	for i, cp := range req.ContinuationPoints {
 		bd, offset, max, ok := decodeContinuation(cp)
@@ -57,7 +60,7 @@ func browseNextNodes(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 		case req.ReleaseContinuationPoints:
 			results[i] = &ua.BrowseResult{StatusCode: ua.StatusGood, References: []*ua.ReferenceDescription{}}
 		default:
-			results[i] = browsePage(srv, bd, offset, max)
+			results[i] = browsePage(srv, hide, bd, offset, max)
 		}
 	}
 	return &ua.BrowseNextResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
@@ -65,13 +68,16 @@ func browseNextNodes(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 
 // browsePage is one node's distinct references from offset, at most max
 // of them when max is not 0, with a continuation point when more follow.
-func browsePage(srv *opcserver.Server, bd *ua.BrowseDescription, offset, max uint32) *ua.BrowseResult {
+func browsePage(srv *opcserver.Server, hide hider, bd *ua.BrowseDescription, offset, max uint32) *ua.BrowseResult {
 	if bd == nil || bd.NodeID == nil {
 		return &ua.BrowseResult{StatusCode: ua.StatusBadNodeIDInvalid, References: []*ua.ReferenceDescription{}}
 	}
 	space, err := srv.Namespace(int(bd.NodeID.Namespace()))
 	if err != nil {
 		return &ua.BrowseResult{StatusCode: ua.StatusBadNodeIDUnknown, References: []*ua.ReferenceDescription{}}
+	}
+	if hide != nil && hide(bd.NodeID) {
+		return &ua.BrowseResult{StatusCode: ua.StatusBadUserAccessDenied, References: []*ua.ReferenceDescription{}}
 	}
 	res := space.Browse(bd)
 	if res == nil {
@@ -81,6 +87,17 @@ func browsePage(srv *opcserver.Server, bd *ua.BrowseDescription, offset, max uin
 		return res
 	}
 	refs := distinctRefs(res.References)
+	if hide != nil {
+		// A reference to a node the session may not see (the project's
+		// folder under Objects, say) is not there for it.
+		kept := refs[:0:0]
+		for _, r := range refs {
+			if r.NodeID == nil || r.NodeID.NodeID == nil || !hide(r.NodeID.NodeID) {
+				kept = append(kept, r)
+			}
+		}
+		refs = kept
+	}
 	if int(offset) > len(refs) {
 		offset = uint32(len(refs))
 	}
@@ -184,7 +201,7 @@ const (
 // not there Bad_NodeIdUnknown, and a path that reaches nothing
 // Bad_NoMatch, each in its own result; more than maxNodesPerTranslate
 // paths is Bad_TooManyOperations for the request.
-func translateBrowsePaths(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
+func translateBrowsePaths(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, r ua.Request) (ua.Response, error) {
 	req, ok := r.(*ua.TranslateBrowsePathsToNodeIDsRequest)
 	if !ok {
 		return nil, ua.StatusBadRequestTypeInvalid
@@ -195,15 +212,16 @@ func translateBrowsePaths(srv *opcserver.Server, r ua.Request) (ua.Response, err
 	if len(req.BrowsePaths) > maxNodesPerTranslate {
 		return nil, ua.StatusBadTooManyOperations
 	}
+	hide := readHider(srv, ns, sc, req.RequestHeader)
 	results := make([]*ua.BrowsePathResult, len(req.BrowsePaths))
 	for i, p := range req.BrowsePaths {
-		results[i] = translatePath(srv, p)
+		results[i] = translatePath(srv, hide, p)
 	}
 	return &ua.TranslateBrowsePathsToNodeIDsResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
 }
 
 // translatePath walks one browse path.
-func translatePath(srv *opcserver.Server, p *ua.BrowsePath) *ua.BrowsePathResult {
+func translatePath(srv *opcserver.Server, hide hider, p *ua.BrowsePath) *ua.BrowsePathResult {
 	fail := func(code ua.StatusCode) *ua.BrowsePathResult {
 		return &ua.BrowsePathResult{StatusCode: code, Targets: []*ua.BrowsePathTarget{}}
 	}
@@ -226,7 +244,7 @@ func translatePath(srv *opcserver.Server, p *ua.BrowsePath) *ua.BrowsePathResult
 		}
 	}
 	// The starting node must be there; a Browse of it says so.
-	if res := browsePage(srv, &ua.BrowseDescription{NodeID: p.StartingNode, BrowseDirection: ua.BrowseDirectionForward, ReferenceTypeID: ua.NewNumericNodeID(0, id.HasTypeDefinition), ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0); res.StatusCode != ua.StatusGood {
+	if res := browsePage(srv, hide, &ua.BrowseDescription{NodeID: p.StartingNode, BrowseDirection: ua.BrowseDirectionForward, ReferenceTypeID: ua.NewNumericNodeID(0, id.HasTypeDefinition), ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0); res.StatusCode != ua.StatusGood {
 		return fail(res.StatusCode)
 	}
 	current := []*ua.NodeID{p.StartingNode}
@@ -244,7 +262,7 @@ func translatePath(srv *opcserver.Server, p *ua.BrowsePath) *ua.BrowsePathResult
 		var next []*ua.NodeID
 		seen := map[string]bool{}
 		for _, from := range current {
-			res := browsePage(srv, &ua.BrowseDescription{NodeID: from, BrowseDirection: dir, ReferenceTypeID: refType, IncludeSubtypes: subtypes, ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0)
+			res := browsePage(srv, hide, &ua.BrowseDescription{NodeID: from, BrowseDirection: dir, ReferenceTypeID: refType, IncludeSubtypes: subtypes, ResultMask: uint32(ua.BrowseResultMaskAll)}, 0, 0)
 			if res.StatusCode != ua.StatusGood {
 				continue
 			}
@@ -271,4 +289,19 @@ func translatePath(srv *opcserver.Server, p *ua.BrowsePath) *ua.BrowsePathResult
 		targets[i] = &ua.BrowsePathTarget{TargetID: ua.NewExpandedNodeID(nid, "", 0), RemainingPathIndex: math.MaxUint32}
 	}
 	return &ua.BrowsePathResult{StatusCode: ua.StatusGood, Targets: targets}
+}
+
+// hider says whether a node is hidden from the session asking: the
+// project's own nodes, for a session the auth: block gives no read (#1131).
+// A nil hider hides nothing.
+type hider func(nid *ua.NodeID) bool
+
+// readHider is the request's hider: nil when the session may read, else
+// one that hides every node of the project's namespaces. The session is
+// judged once per request, as Write judges it.
+func readHider(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, hdr *ua.RequestHeader) hider {
+	if ns.w.readOK(srv, sc, hdr) {
+		return nil
+	}
+	return ns.gated
 }

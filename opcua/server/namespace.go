@@ -39,11 +39,12 @@ import (
 const folderID = 1
 
 type namespace struct {
-	rt    *runtime.Runtime
-	uri   string
-	title string // the folder's browse/display name: the project
-	sweep time.Duration
-	id    uint16
+	mappedIDs []*mappedSpace // the map's namespaces, whose every node id the read gate covers (#1131)
+	rt        *runtime.Runtime
+	uri       string
+	title     string // the folder's browse/display name: the project
+	sweep     time.Duration
+	id        uint16
 
 	// stamps is the SourceTimestamp bookkeeping: the store records WHICH
 	// write generation a tag last changed at, not when, so the namespace

@@ -150,14 +150,14 @@ func registerServices(srv *opcserver.Server, ns *namespace) {
 	srv.RegisterHandler(id.WriteRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return writeAttributes(srv, ns, sc, r)
 	})
-	srv.RegisterHandler(id.BrowseRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
-		return browseNodes(srv, r)
+	srv.RegisterHandler(id.BrowseRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return browseNodes(srv, ns, sc, r)
 	})
-	srv.RegisterHandler(id.BrowseNextRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
-		return browseNextNodes(srv, r)
+	srv.RegisterHandler(id.BrowseNextRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return browseNextNodes(srv, ns, sc, r)
 	})
-	srv.RegisterHandler(id.TranslateBrowsePathsToNodeIDsRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
-		return translateBrowsePaths(srv, r)
+	srv.RegisterHandler(id.TranslateBrowsePathsToNodeIDsRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return translateBrowsePaths(srv, ns, sc, r)
 	})
 	srv.RegisterHandler(id.CallRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return callMethods(srv, ns, sc, r)
@@ -301,7 +301,8 @@ const maxNodesPerRead = 10000
 // namespace, Bad_NodeIdUnknown for a namespace the server does not have,
 // the access attributes filled in where gopcua's nodes lack them, a tag's
 // UserAccessLevel answered for the session asking (a writer's channel sees
-// CurrentWrite where the node has it), and an IndexRange applied to the
+// CurrentWrite where the node has it), and, under an auth: block, Read of
+// the project's nodes refused to a session with no read (#1131), and an IndexRange applied to the
 // value. The request came through the session gate, so sc is the
 // session's own channel.
 func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, r ua.Request) (ua.Response, error) {
@@ -316,7 +317,17 @@ func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel
 		return nil, ua.StatusBadTooManyOperations
 	}
 	results := make([]*ua.DataValue, len(req.NodesToRead))
-	var writer *client // the session's write standing, when an item asks
+	var writer *client // the session's standing, when an item asks
+	standing := func() client {
+		if writer == nil {
+			// As the Write service judges it, once per request: a
+			// certificate since untrusted or expired, or a user who no
+			// longer holds their sign-in, reads CurrentRead.
+			w := ns.w.who(srv, sc, req.RequestHeader)
+			writer = &w
+		}
+		return *writer
+	}
 	for i, n := range req.NodesToRead {
 		if n == nil || n.NodeID == nil {
 			results[i] = status(ua.StatusBadNodeIDInvalid)
@@ -327,6 +338,12 @@ func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel
 			results[i] = status(ua.StatusBadNodeIDUnknown)
 			continue
 		}
+		if ns.w.gatesReads() && ns.gated(n.NodeID) && !ns.w.mayRead(standing()) {
+			// The auth: block gives this session no read (#1131): nothing of
+			// the project's, not even a node's name.
+			results[i] = status(ua.StatusBadUserAccessDenied)
+			continue
+		}
 		dv := space.Attribute(n.NodeID, n.AttributeID)
 		if dv == nil {
 			dv = status(ua.StatusBadNodeIDUnknown)
@@ -335,14 +352,7 @@ func readAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel
 			dv = accessAttribute(srv, n.NodeID, n.AttributeID, dv)
 		}
 		if n.AttributeID == ua.AttributeIDUserAccessLevel && ns.owns(n.NodeID) && dv.Status == ua.StatusGood {
-			if writer == nil {
-				// As the Write service judges it, once per request: a
-				// certificate since untrusted or expired, or a user who no
-				// longer holds their sign-in, reads CurrentRead.
-				w := ns.w.who(srv, sc, req.RequestHeader)
-				writer = &w
-			}
-			if lvl, ok := ns.userAccessLevel(n.NodeID, *writer); ok {
+			if lvl, ok := ns.userAccessLevel(n.NodeID, standing()); ok {
 				dv = value(uint8(lvl))
 			}
 		}

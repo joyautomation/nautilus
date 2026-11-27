@@ -174,6 +174,24 @@ func (ns *namespace) owns(nid *ua.NodeID) bool {
 	return ok
 }
 
+// gated reports whether the read gate covers nid: one of owns' nodes, or
+// any id at all in one of the map's namespaces, so that a refusal never
+// tells a node that exists from one that does not (#1131).
+func (ns *namespace) gated(nid *ua.NodeID) bool {
+	if ns.owns(nid) {
+		return true
+	}
+	if nid == nil {
+		return false
+	}
+	for _, m := range ns.mappedIDs {
+		if m.id == nid.Namespace() {
+			return true
+		}
+	}
+	return false
+}
+
 // addrOf is the address a node of this namespace stands for: the tag
 // address of a mapped Variable, the string id of a tag's own node.
 func (ns *namespace) addrOf(nid *ua.NodeID) string {

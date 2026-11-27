@@ -167,8 +167,15 @@ func createMonitoredItems(srv *opcserver.Server, ns *namespace, sc *uasc.SecureC
 	results := make([]*ua.MonitoredItemCreateResult, len(req.ItemsToCreate))
 	var foreign []owed // outside the project namespace: owed one value, below
 	publishing, _, _ := sub.Revised()
+	reads := ns.w.readOK(srv, sc, req.RequestHeader)
 	mi.Mu.Lock()
 	for i, item := range req.ItemsToCreate {
+		if !reads && item != nil && item.ItemToMonitor != nil && ns.gated(item.ItemToMonitor.NodeID) {
+			// The auth: block gives this session no read (#1131): the item is
+			// refused, and not booked, so nothing is ever sent for it.
+			results[i] = &ua.MonitoredItemCreateResult{StatusCode: ua.StatusBadUserAccessDenied, FilterResult: ua.NewExtensionObject(nil)}
+			continue
+		}
 		if code := monitorable(srv, ns, item); code != ua.StatusGood {
 			results[i] = &ua.MonitoredItemCreateResult{StatusCode: code, FilterResult: ua.NewExtensionObject(nil)}
 			continue
@@ -497,7 +504,15 @@ func transferSubscriptions(srv *opcserver.Server, ns *namespace, sc *uasc.Secure
 		return nil, ua.StatusBadNothingToDo
 	}
 	results := make([]*ua.TransferResult, len(req.SubscriptionIDs))
+	// A session that may not read takes nothing over: the subscription
+	// could hold queued values of the project's nodes, for one tick, from
+	// an owner who could read (#1131).
+	reads := ns.w.readOK(srv, sc, req.RequestHeader)
 	for i, id := range req.SubscriptionIDs {
+		if !reads {
+			results[i] = &ua.TransferResult{StatusCode: ua.StatusBadUserAccessDenied, AvailableSequenceNumbers: []uint32{}}
+			continue
+		}
 		sub, code := subs.Transfer(sc, req.RequestHeader, id)
 		if code == ua.StatusGood && req.SendInitialValues {
 			resendValues(srv, ns, sub)
