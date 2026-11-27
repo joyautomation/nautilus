@@ -331,3 +331,34 @@ func TestLogixServePlaneRefusesADownloadInRunUpFront(t *testing.T) {
 		return 0
 	})
 }
+
+// #1410: a download whose request is already gone still closes the
+// held online session (on its own bounded time), not leaves the agent
+// holding the project online for its reaper.
+func TestLogixServePlaneDownloadClosesTheSessionPastACancelledRequest(t *testing.T) {
+	t.Setenv("NAUTILUS_LOGIXD_URL", "")
+	f, url, stop := newFakeLogixd(t)
+	defer stop()
+	f.controllerL5X = emptyLine
+	f.mode = "Program"
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(fillManifest(url, "    comm-path: AB_ETH-1\\10.0.0.5\\Backplane\\0\n")), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "Fill.ld"), []byte(fillLadder), 0o644)
+	p, err := loadLogixProject(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	captureStderr(t, func() int {
+		plane, release := logixProgramPlane(dir, p, logixd.New(url, ""))
+		defer release()
+		_, _ = plane.Deploy(context.Background(), fillLadder, func(string) {}) // opens a session
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		f.seen = nil
+		_, _ = plane.Download(ctx, fillLadder, facade.DownloadOptions{}, func(string) {})
+		if indexOf(f.seen, "DELETE /v1/sessions/") < 0 {
+			t.Errorf("the held session was not closed for a cancelled request: %v", f.seen)
+		}
+		return 0
+	})
+}

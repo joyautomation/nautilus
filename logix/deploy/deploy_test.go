@@ -53,6 +53,9 @@ type fakeAgent struct {
 	// answer, but the controller took the rungs all the same) or "fatal"
 	// (operation_not_performed: the channel broke after the rungs went).
 	importFails string
+	// gone makes the agent answer not_found (the session was reaped) to
+	// this many calls on a session route ending in the key (#1410).
+	gone map[string]int
 }
 
 func newFakeAgent(t *testing.T, running []byte) (*fakeAgent, *logixd.Client) {
@@ -70,6 +73,22 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		f.hook(r)
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodDelete && strings.HasPrefix(r.URL.Path, "/v1/sessions/") {
+		f.callsMu.Lock()
+		hit := false
+		for suffix, n := range f.gone {
+			if n > 0 && strings.HasSuffix(r.URL.Path, suffix) {
+				f.gone[suffix] = n - 1
+				hit = true
+			}
+		}
+		f.callsMu.Unlock()
+		if hit {
+			w.WriteHeader(404)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": map[string]any{"kind": "not_found", "message": "no session S1"}})
+			return
+		}
+	}
 	ok := func(data any) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": data, "events": []any{}})
 	}

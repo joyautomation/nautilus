@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/logix/logixd"
 	"github.com/joyautomation/nautilus/logix/writer"
 )
 
@@ -436,5 +437,58 @@ func TestModeUnreadAfterTheWriteWarns(t *testing.T) {
 	rep, err := s.Edit(context.Background(), strings.Replace(src, "/StopPB ( RunCmd )", "/StopPB /HiLevelAlm ( RunCmd )", 1))
 	if err != nil || !rep.Verified || rep.ModeWarning == "" {
 		t.Errorf("online edit: err=%v report=%+v; want ok with a mode warning", err, rep)
+	}
+}
+
+// #1410: a session the agent reaped (not_found on a session route) is
+// reopened once, at the mode read before the import or at the import
+// itself (the agent's word that nothing was imported).
+func TestSessionEditReopensAReapedSession(t *testing.T) {
+	for _, route := range []string{"/mode", "/import-rungs"} {
+		t.Run(route, func(t *testing.T) {
+			src := demoSource(t)
+			same, _, _ := writer.Write(src, writer.Options{Controller: "DemoLine"})
+			f, c := newFakeAgent(t, same)
+			s, err := Connect(context.Background(), Options{Client: c, Target: target()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close(context.Background())
+			f.gone = map[string]int{route: 1}
+			uploads := called(f, "/upload-to-new")
+			edited := strings.Replace(src, "/StopPB ( RunCmd )", "/StopPB /HiLevelAlm ( RunCmd )", 1)
+			rep, err := s.Edit(context.Background(), edited)
+			if err != nil || !rep.Verified {
+				t.Fatalf("edit after the reap: err=%v report=%+v", err, rep)
+			}
+			if got := called(f, "/upload-to-new"); got != uploads+1 {
+				t.Errorf("uploads = %d, want one reopen (%d)", got, uploads+1)
+			}
+			if len(f.imports) != 1 {
+				t.Errorf("%d import(s), want 1", len(f.imports))
+			}
+		})
+	}
+}
+
+// A second not_found after the reopen is not retried again.
+func TestSessionEditReapedTwiceDoesNotLoop(t *testing.T) {
+	src := demoSource(t)
+	same, _, _ := writer.Write(src, writer.Options{Controller: "DemoLine"})
+	f, c := newFakeAgent(t, same)
+	s, err := Connect(context.Background(), Options{Client: c, Target: target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+	f.gone = map[string]int{"/mode": 1000, "/import-rungs": 1000}
+	uploads := called(f, "/upload-to-new")
+	edited := strings.Replace(src, "/StopPB ( RunCmd )", "/StopPB /HiLevelAlm ( RunCmd )", 1)
+	_, err = s.Edit(context.Background(), edited)
+	if logixd.Kind(err) != "not_found" {
+		t.Fatalf("err = %v; want the not_found surfaced", err)
+	}
+	if got := called(f, "/upload-to-new"); got != uploads+1 {
+		t.Errorf("uploads = %d, want exactly one reopen", got-uploads)
 	}
 }
