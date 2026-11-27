@@ -346,7 +346,7 @@ func TestOPCUATrustAsRefusesBeforeMoving(t *testing.T) {
 func TestOPCUATrustAsAnAlreadyTrustedCertificate(t *testing.T) {
 	dir, tps := opcuaTrustProject(t, "auth:\n  users: {}\n")
 	code, out, _ := nautTrust(tps[0])
-	if code != 0 || !strings.Contains(out, "read-only until mapped") || !strings.Contains(out, "--as <name>:<role>") {
+	if code != 0 || !strings.Contains(out, "does not write until mapped") || !strings.Contains(out, "--as <name>:<role>") {
 		t.Errorf("plain trust under auth: %d\n%s", code, out)
 	}
 	code, out, errs := nautTrust(tps[0], "--as", "scada:operator")
@@ -360,7 +360,7 @@ func TestOPCUATrustAsAnAlreadyTrustedCertificate(t *testing.T) {
 	// Without auth:, plain trust says nothing of mapping.
 	dir2, tps2 := opcuaTrustProject(t, "")
 	_ = dir2
-	if _, out, _ := nautTrust(tps2[0]); strings.Contains(out, "read-only") {
+	if _, out, _ := nautTrust(tps2[0]); strings.Contains(out, "does not write until mapped") {
 		t.Errorf("plain trust without auth: talks of mapping:\n%s", out)
 	}
 }

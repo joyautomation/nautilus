@@ -1558,7 +1558,7 @@ func embeddedManifest(fsys fs.FS) string {
 // nobody runs a controller believing a block protects it before it does.
 // It decides every read and write through the HTTP API, every OPC UA
 // write (a user's, or a certificate's it maps, #708 PR 8a) and every
-// Sparkplug command write (#708 PR 8b). Not covered yet: OPC UA reads.
+// Sparkplug command write (#708 PR 8b), and every OPC UA read (#1131).
 // A project whose sparkplug.writable opens tags while the block grants
 // Sparkplug nothing is told that every command write is now refused, and
 // how to allow them.
@@ -1566,7 +1566,7 @@ func authNotice(proj *project.Project) string {
 	if proj.Auth == nil {
 		return ""
 	}
-	msg := authSurfacesNotice
+	msg := opcuaAnonymousReadsNotice(proj)
 	if sparkplugGrantMissing(proj) {
 		msg += authSparkplugNotice
 	}
@@ -1610,7 +1610,20 @@ func opcuaIdentity(proj *project.Project, srv *server.Server) opcuaserver.Identi
 const authFacadeNotice = "auth: this serve has no browser sign-in: every request needs a token (Authorization: Bearer …),\n" +
 	"      reads included, unless the auth: block sets anonymous: viewer.\n"
 
-const authSurfacesNotice = "auth: OPC UA reads are not gated by the auth: block yet (#1131): a client that reaches the OPC UA server reads without a role.\n"
+// opcuaAnonymousReadsNotice is the line for a project with an auth: block
+// and an OPC UA server whose auth.anonymous grants no read (the default,
+// none): an OPC UA client with no user and no mapped certificate, the None
+// endpoint's included, reads and browses nothing (#1131). A SCADA client
+// that read anonymously before the block was added stops reading, so the
+// line names the three ways to bring it back. "" when the project is not
+// that, or anonymous may read.
+func opcuaAnonymousReadsNotice(proj *project.Project) string {
+	if proj.Auth == nil || proj.OPCUA == nil || proj.Auth.Holds(auth.Anonymous, auth.Read) {
+		return ""
+	}
+	return "auth: the OPC UA server needs `read` like the HTTP API: with auth.anonymous: none, a client with no user and no mapped certificate (the None endpoint's too) reads and browses nothing.\n" +
+		"      To let it, set `anonymous: viewer` under auth:, or have it sign in with a UserName token, or map its certificate under auth.opcua-certificates; then restart naut run.\n"
+}
 
 // authSparkplugNotice is the line for a project whose sparkplug.writable
 // opens tags while its auth: block grants Sparkplug commands nothing.

@@ -765,3 +765,41 @@ claims:
       and was run by hand against a throwaway store. The store path
       /var/lib/nautilus/pki and the need for sudo on a deployed box were
       observed by the independent tester (run 2026-11-19-021, F-08).
+  - id: OPC-032
+    claim: >-
+      Under an auth: block a session reads, browses and calls on the
+      project's nodes only when it holds read: a user as that user, a mapped
+      certificate as its name, anyone else (the None endpoint, an unmapped
+      certificate) as anonymous, which gets what auth.anonymous grants. A
+      refused Read is Bad_UserAccessDenied for every attribute, Browse and
+      BrowseNext refuse the project's nodes and the project's folder is not
+      listed under Objects, TranslateBrowsePaths finds nothing, and a Call on
+      the project's objects is refused. The server's own nodes stay readable.
+      A user who no longer holds their sign-in, or a certificate no longer
+      trusted or expired, reads nothing, even under anonymous: viewer.
+    source: "#sessions"
+    tests:
+      - go ./opcua/server TestReadNeedsReadUnderAuth
+      - go ./opcua/server TestRevokedSessionStopsReading
+      - go ./opcua/server TestExpiredCertificateStopsReadingUnderAuth
+      - go ./opcua/server TestBrowseHidesTheProjectFromASessionWithNoRead
+      - go ./opcua/server TestBrowseNextRechecksTheSession
+      - go ./opcua/server TestCallOnProjectNodesNeedsRead
+  - id: OPC-033
+    claim: >-
+      Under an auth: block an item on the project's nodes is refused
+      Bad_UserAccessDenied to a session with no read, and a subscription
+      whose owner loses read (removed, disabled, role changed) is judged
+      again at each sweep: each item is told Bad_UserAccessDenied once, then
+      nothing is sent, and the current value is sent again when read
+      returns. naut check and naut run warn when auth: with an OPC UA server
+      and anonymous: none leaves anonymous clients reading nothing.
+    source: "#sessions"
+    tests:
+      - go ./opcua/server TestSubscriptionsFollowRead
+      - go ./cmd/naut TestCheckWarnsWhenOPCUAClientsLoseAnonymousReads
+      - go ./cmd/naut TestAuthNotice
+    partial: true
+    note: >-
+      The warning is tested on the manifest; a read refusal is not journalled
+      (as on the HTTP API) and that is not asserted.

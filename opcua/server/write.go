@@ -197,19 +197,30 @@ func (w *writeAccess) anonymousChannel(sc *uasc.SecureChannel) bool {
 // also checks the certificate again, once per request: still in the trust
 // list, and within its validity period now (the channel opened when it
 // was). A certificate that fails is revoked: the session writes nothing,
-// and reads UserAccessLevel CurrentRead. One that cannot be parsed is no
+// and reads UserAccessLevel CurrentRead (under an auth: block it reads
+// nothing: mayRead). One that cannot be parsed is no
 // writer's.
 func (w *writeAccess) who(srv *opcserver.Server, sc *uasc.SecureChannel, hdr *ua.RequestHeader) client {
 	c := w.channel(sc)
 	if hdr != nil && srv != nil {
 		if sess := srv.Session(hdr); sess != nil {
-			if sess.ID != nil {
-				c.session = sess.ID.String()
-			}
-			if ident, cred := sess.Identity(); strings.HasPrefix(ident, userPrefix) {
-				c.user, c.cred = strings.TrimPrefix(ident, userPrefix), cred
-			}
+			ident, cred := sess.Identity()
+			return w.standing(c, sess.ID, ident, cred)
 		}
+	}
+	return w.standing(c, nil, "", "")
+}
+
+// standing is who's second half: c is what the channel says, and the
+// session's id, identity ("user:<name>" or "anonymous") and credential
+// say who is on it. The sweep that publishes a subscription calls it with
+// the subscription's owner, with no request in hand.
+func (w *writeAccess) standing(c client, sid *ua.NodeID, ident, cred string) client {
+	if sid != nil {
+		c.session = sid.String()
+	}
+	if strings.HasPrefix(ident, userPrefix) {
+		c.user, c.cred = strings.TrimPrefix(ident, userPrefix), cred
 	}
 	switch {
 	case c.user != "":
@@ -279,6 +290,46 @@ func (w *writeAccess) mayWrite(c client, addr string) bool {
 		return w.id != nil && w.id.May(auth.OPCUACert(c.cert), auth.Write, addr)
 	}
 	return w.id == nil
+}
+
+// gatesReads reports whether the auth: block decides reads at all: without
+// an Identity every session reads, and nothing below needs the session.
+func (w *writeAccess) gatesReads() bool { return w != nil && w.id != nil }
+
+// readOK is the request's read standing: true without an auth: block (the
+// session is not even looked at), else mayRead of who the request's session
+// is.
+func (w *writeAccess) readOK(srv *opcserver.Server, sc *uasc.SecureChannel, hdr *ua.RequestHeader) bool {
+	return !w.gatesReads() || w.mayRead(w.who(srv, sc, hdr))
+}
+
+// mayRead reports whether c may read tag data as far as the auth: block
+// goes (#1131): the same rule as the HTTP API's read gate. read is a
+// whole-controller permission (areas do not limit it), so a session reads
+// all of the tags or none. Who it acts as: its user, else the certificate
+// the block maps, else anonymous, which gets what auth.anonymous grants
+// (a trusted certificate the block does not map is anonymous here, as it
+// is read-only for writes). A user who no longer holds their sign-in, or a
+// certificate that is no longer trusted or has expired, reads nothing:
+// fails closed, as the HTTP API's invalid credential is never taken as
+// anonymous. Without an auth: block (no Identity) every session reads.
+func (w *writeAccess) mayRead(c client) bool {
+	if w == nil || w.id == nil {
+		return true
+	}
+	if c.revoked {
+		return false
+	}
+	switch {
+	case c.user != "":
+		// standing has already set revoked for a user who no longer holds
+		// their sign-in (users sign in on writers' channels only), so c.revoked
+		// above is what checks Holds.
+		return w.id.May(auth.User(c.user), auth.Read, auth.All)
+	case c.cert != "":
+		return w.id.May(auth.OPCUACert(c.cert), auth.Read, auth.All)
+	}
+	return w.id.May(auth.Anonymous, auth.Read, auth.All)
 }
 
 // leafCert is the first certificate of a DER chain, nil when it does not

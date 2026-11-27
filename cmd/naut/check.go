@@ -725,6 +725,13 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		}
 	}
 
+	// auth: + an OPC UA server + anonymous: none: clients with no user or
+	// mapped certificate read nothing (#1131).
+	if msg := strings.TrimSpace(opcuaAnonymousReadsNotice(proj)); msg != "" {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, strings.Join(strings.Fields(strings.TrimPrefix(msg, "auth: ")), " "))
+	}
+
 	// opcua.writable against the tags it is meant to open: a pattern that
 	// opens nothing, or only inputs (never writable), is a list that does
 	// not say what its author thinks; an output a program writes is open to

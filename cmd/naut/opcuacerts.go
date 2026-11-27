@@ -168,7 +168,7 @@ func opcuaTrustMain(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "trusted %s\n  %s\n  %s\nThe client can connect now; the server reads the trust list on every connection.\n", c.Thumbprint, printable(c.ApplicationURI), printable(c.Subject))
 		if m, err := project.ReadManifest(os.DirFS("."), *manifest); err == nil && m.Auth != nil {
-			fmt.Fprintf(stdout, "Under auth: it is read-only until mapped: naut opcua trust %s --as <name>:<role> lets it write (or its client signs in with a user name).\n", c.Thumbprint)
+			fmt.Fprintf(stdout, "Under auth: it reads as anonymous (anonymous: none reads nothing) and does not write until mapped: naut opcua trust %s --as <name>:<role> lets it write (or its client signs in with a user name).\n", c.Thumbprint)
 		}
 		return 0
 	}
@@ -214,7 +214,7 @@ func opcuaTrustMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s is trusted already\n", c.Thumbprint)
 	}
 	fmt.Fprintf(stdout, "%s: auth.opcua-certificates.%s = %s (thumbprint %s)\n", e.path, g.name, g.yaml(), c.Thumbprint)
-	fmt.Fprintln(stdout, "The client can connect now, read-only. Its writes, as opcua-cert:"+g.name+", need the grant loaded:")
+	fmt.Fprintln(stdout, "The client can connect now. Its reads and writes, as opcua-cert:"+g.name+", need the grant loaded:")
 	fmt.Fprintln(stdout, restartNote)
 	return 0
 }

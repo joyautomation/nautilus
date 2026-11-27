@@ -26,21 +26,28 @@ func TestAuthNotice(t *testing.T) {
 	if msg := authNotice(load("")); msg != "" {
 		t.Errorf("no auth: block: %q", msg)
 	}
-	msg := authNotice(load("auth:\n  token-role: operator\n"))
-	if strings.Contains(msg, "NOT GATED") || strings.Contains(msg, "Sparkplug") ||
-		!strings.Contains(msg, "OPC UA reads are not gated") || strings.Contains(msg, "OPC UA server and") {
-		t.Errorf("auth: block: %q", msg)
+	// No OPC UA server: nothing to say about OPC UA reads.
+	if msg := authNotice(load("auth:\n  token-role: operator\n")); msg != "" {
+		t.Errorf("auth: block, no OPC UA server: %q", msg)
 	}
-	// The notice points at the issue that is still open (#708 is closed).
-	if !strings.Contains(msg, "(#1131)") || strings.Contains(msg, "#708") {
-		t.Errorf("notice should name #1131, not #708: %q", msg)
+	// An OPC UA server with anonymous: none (the default): clients with no
+	// user or certificate read nothing now (#1131), and the line names the
+	// three ways back. anonymous: viewer keeps today's reads: no line.
+	const ua = "opcua:\n  endpoint: opc.tcp://127.0.0.1:0\n"
+	msg := authNotice(load(ua + "auth:\n  token-role: operator\n"))
+	if !strings.Contains(msg, "OPC UA server needs `read`") || !strings.Contains(msg, "anonymous: viewer") ||
+		!strings.Contains(msg, "UserName") || !strings.Contains(msg, "auth.opcua-certificates") || strings.Contains(msg, "Sparkplug") {
+		t.Errorf("auth: block with an OPC UA server: %q", msg)
+	}
+	if msg := authNotice(load(ua + "auth:\n  anonymous: viewer\n")); msg != "" {
+		t.Errorf("anonymous: viewer: %q", msg)
 	}
 	// sparkplug.writable open and no auth.sparkplug: every command write
 	// is now refused, and the notice says how to allow them.
 	const sp = "sparkplug:\n  group-id: g\n  writable: [\"*\"]\n"
 	msg = authNotice(load(sp + "auth:\n  token-role: operator\n"))
 	if !strings.Contains(msg, "every Sparkplug command write is refused") || !strings.Contains(msg, "sparkplug: operator") ||
-		!strings.Contains(msg, "restart naut run") || !strings.Contains(msg, "OPC UA reads are not gated") {
+		!strings.Contains(msg, "restart naut run") {
 		t.Errorf("writable, no grant: %q", msg)
 	}
 	// A grant whose roles cannot write (viewer) allows no write either:
