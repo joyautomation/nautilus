@@ -39,6 +39,7 @@
 
 #define _GNU_SOURCE
 #include "nautilus_io_shm.h"
+#include "logring.h"
 #include "rtguard.h"
 #include <dlfcn.h>
 #include <errno.h>
@@ -95,25 +96,36 @@ static const char *(*p_GetLastError)(void);
 // stdout/stderr are pointed at it too, so a C++ terminate() message from a
 // firmware library lands somewhere a person can read ─────────────────────
 static int logfd = -1;
+static long tz_off;                 // seconds east of UTC, set once in main
+static volatile sig_atomic_t lr_live; // logln goes through the ring only once the cycle is about to run
+static void log_sink(const char *m, size_t n) {
+    if (logfd >= 0) {
+        ssize_t w = write(logfd, m, n);
+        (void)w;
+    } else {
+        syslog(LOG_INFO, "%.*s", (int)n - 1, m);
+    }
+}
 static void logln(const char *fmt, ...) {
     char buf[600];
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
-    struct tm tm;
-    localtime_r(&ts.tv_sec, &tm);
-    int n = snprintf(buf, sizeof buf, "%02d:%02d:%02d.%03ld ", tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec / 1000000);
+    // Time of day from a UTC offset read once at start: localtime_r takes
+    // glibc's process-wide tz lock, which another thread may hold across a
+    // stat of /etc/localtime (the cycle logs; a wait there is a stall).
+    long tod = (long)(((ts.tv_sec + tz_off) % 86400 + 86400) % 86400);
+    int n = snprintf(buf, sizeof buf, "%02ld:%02ld:%02ld.%03ld ", tod / 3600, tod / 60 % 60, tod % 60, ts.tv_nsec / 1000000);
     va_list ap;
     va_start(ap, fmt);
     n += vsnprintf(buf + n, sizeof buf - (size_t)n - 1, fmt, ap);
     va_end(ap);
     if (n > (int)sizeof buf - 2) n = (int)sizeof buf - 2;
     buf[n++] = '\n';
-    if (logfd >= 0) {
-        ssize_t w = write(logfd, buf, (size_t)n);
-        (void)w;
-    } else {
-        syslog(LOG_INFO, "%.*s", n - 1, buf);
-    }
+    // Once the drain thread runs, nothing here makes a system call: the
+    // cycle calls logln, and a write() or syslog() there can block it for
+    // as long as the flash or /dev/log does (#1051).
+    if (lr_live) lr_push(buf, (size_t)n);
+    else log_sink(buf, (size_t)n);
 }
 
 // idle never returns: the ACF owns this process's lifetime.
@@ -261,6 +273,12 @@ static void hex8(char *dst, const unsigned char *b) {
     snprintf(dst, 24, "%02x %02x %02x %02x %02x %02x %02x %02x", b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]);
 }
 
+// Touch the stack well below main's frame, where the cycle's callees run.
+__attribute__((noinline)) static void prefault_stack(void) {
+    volatile char stack[64 * 1024];
+    for (size_t i = 0; i < sizeof stack; i += 4096) stack[i] = 0;
+}
+
 int main(int argc, char **argv) {
     openlog("nautilus_io", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
     // Resolve paths against the binary's directory: the ACF starts us with a
@@ -274,6 +292,14 @@ int main(int argc, char **argv) {
     snprintf(logpath, sizeof logpath, "%s/logs/nautilus_io.log", exe);
     logfd = open(logpath, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (logfd >= 0) { dup2(logfd, 1); dup2(logfd, 2); }
+    {
+        time_t t0s = time(NULL);
+        struct tm tz;
+        localtime_r(&t0s, &tz);
+        tz_off = tz.tm_gmtoff;
+    }
+    lr_init(logfd, log_sink);
+    if (lr_start() != 0) syslog(LOG_ERR, "log drain thread not started; logging stays synchronous");
     for (int s = 0; s < 4; s++) signal((int[]){SIGSEGV, SIGBUS, SIGABRT, SIGILL}[s], on_crash);
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
@@ -375,6 +401,25 @@ int main(int argc, char **argv) {
         }
     }
 
+    // Nothing in the cycle may wait on a page fault (#1051). Locked BEFORE
+    // the priority and the pin are taken: populating the address space is
+    // CPU work, and at FIFO 80 under the 200 ms RLIMIT_RTTIME it would trip
+    // the guard. MCL_CURRENT only: MCL_FUTURE would also commit every later
+    // mmap and thread stack of the firmware's threads in this process. A
+    // refusal (no CAP_IPC_LOCK) is a warning; the cycle runs unlocked.
+    prefault_stack();
+    if (mlockall(MCL_CURRENT) == 0) {
+        long lck = -1;
+        FILE *sf = fopen("/proc/self/status", "r");
+        char ln[128];
+        while (sf && fgets(ln, sizeof ln, sf))
+            if (sscanf(ln, "VmLck: %ld kB", &lck) == 1) break;
+        if (sf) fclose(sf);
+        logln("memory locked (mlockall, %ld kB locked)", lck);
+    } else {
+        logln("WARN mlockall refused (%s); the cycle may take page faults (grant CAP_IPC_LOCK, README)", strerror(errno));
+    }
+
     // Real-time cycle: pinned priority, absolute schedule, lateness kept.
     // The priority is 80 (over the firmware's interrupt threads at 50, a tie
     // with eth0's that made the cycle's lateness a coin toss under network
@@ -420,6 +465,10 @@ int main(int argc, char **argv) {
     }
 
     page_open((uint32_t)CYCLE_NS, LATE_US);
+
+    // The page, mapped just now, is locked on its own (mlockall ran before).
+    if (pg && mlock(pg, NIO_SHM_SIZE) != 0) logln("mlock of the exchange page refused (%s)", strerror(errno));
+    lr_live = 1; // from here the cycle's logging makes no system call
 
     struct timespec next, now;
     clock_gettime(CLOCK_MONOTONIC, &next);

@@ -197,7 +197,7 @@ capability, and `admin`'s sudo on a PLCnext is an allowlist without
 root login. So, once per binary, typed by the controller's owner:
 
 ```sh
-ssh -t admin@<plc> 'sudo passwd root && su -c "setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/io/nautilus_io; setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/naut; getcap /opt/plcnext/apps/nautilus/io/nautilus_io /opt/plcnext/apps/nautilus/naut"; sudo passwd -l root'
+ssh -t admin@<plc> 'sudo passwd root && su -c "setcap cap_sys_nice,cap_ipc_lock+ep /opt/plcnext/apps/nautilus/io/nautilus_io; setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/naut; getcap /opt/plcnext/apps/nautilus/io/nautilus_io /opt/plcnext/apps/nautilus/naut"; sudo passwd -l root'
 ```
 
 sets a root password, uses it once, and locks root again. A capability
@@ -298,6 +298,20 @@ from the page and naut's `/api/state`: the shim's lateness histogram
 quiet, under two busy loops, and under a stream over ssh, appending JSON
 lines to `/opt/plcnext/apps/nautilus/bench.jsonl` with the CPUs
 each side ran on; run it once best-effort and once after the `setcap`.
+
+## The cycle makes no log or page-fault waits (#1051)
+
+A 47 MB deploy copy once stalled the SCHED_FIFO cycle for ~675 ms: the cycle
+logged with `write()` and `syslog()`, and both can block while the flash is
+busy. Now the cycle formats each log line into a bounded lock-free ring
+(`logring.h`) and goes on; a normal-priority thread writes the ring to
+`logs/nautilus_io.log`. A full ring drops lines and the drain thread logs
+`log ring full: N records dropped so far`; the cycle never waits.
+
+The process also calls `mlockall(MCL_CURRENT)` before it takes SCHED_FIFO (not MCL_FUTURE: that would commit the firmware threads' later mappings too), with
+the stack touched first, so a page fault cannot wait on I/O. That needs
+`CAP_IPC_LOCK` (the `setcap` above grants it to the shim beside `cap_sys_nice`); without it the log says
+`mlockall refused (...)` as a warning and the cycle runs unlocked, as before; never fatal.
 
 ## The exchange page
 

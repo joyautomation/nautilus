@@ -299,6 +299,13 @@ capability to `naut-launch` instead, which ships beside the shim: it
 hands it on to whichever release it starts, and only it needs the
 step again, when it is itself replaced (see Start on boot).
 
+The shim's recipe also grants it `cap_ipc_lock`, so it can `mlockall` its memory
+before the cycle and a page fault cannot wait on the flash. Without that
+capability the shim logs `mlockall refused` as a warning and runs as before.
+A large write on the controller (a deploy copy) can only stall the cycle through
+the page-fault path then, not through logging: the cycle never writes the log
+itself.
+
 Shim lateness on the bench unit, 3-minute windows, naut at a 50 ms scan
 on CPU 0, late meaning more than 200 µs past the shim's 1 ms deadline,
 "worst" the worst 10 000-cycle window:
