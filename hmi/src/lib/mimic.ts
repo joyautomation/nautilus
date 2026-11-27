@@ -7,7 +7,7 @@
 // on a page, for the parts of an HMI that are genuinely spatial.
 
 import { builtinParts } from './drawings.js';
-import type { StatusKind } from './types.js';
+import type { Quality, StatusKind } from './types.js';
 import { tagAt } from './tags.js';
 import { routePipes, type Rect, type RouteEnd, type RouteJob } from './route.js';
 
@@ -1422,4 +1422,19 @@ export function autoRoutes(
 		jobs.push({ id: p.id, from, to, via });
 	}
 	return routePipes({ width: doc.canvas.width, height: doc.canvas.height, obstacles, fixed, jobs });
+}
+
+/** Every tag a label reads: its bound value and the `when` of each state
+ * (#1056: a label's quality is the worst of these). */
+export function labelRefs(l: MimicLabel): string[] {
+	const refs: string[] = [];
+	// a label with a bind draws the value, never its states (Mimic.svelte)
+	if (l.bind) refs.push(l.bind);
+	else for (const s of l.state ?? []) if (s.when) refs.push(s.when);
+	return refs;
+}
+
+/** Every tag an equipment reads through its `bind`. */
+export function equipmentRefs(eq: MimicEquipment): string[] {
+	return Object.values(eq.bind ?? {});
 }

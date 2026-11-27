@@ -100,7 +100,10 @@ export {
 	valueStatus,
 	isWritable,
 	formatValue,
-	formatAge
+	formatAge,
+	tagQuality,
+	worstStatus,
+	driversDown
 } from './quality.js';
 export type { ValueStatus, StatusMeta, StatusInput, FormatOptions, FormattedValue } from './quality.js';
 export { default as DriverStatusCard } from './components/DriverStatusCard.svelte';

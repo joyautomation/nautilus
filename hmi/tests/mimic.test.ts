@@ -16,6 +16,8 @@ import {
 	resolveRuntimePorts,
 	PORT_STUB,
 	labelState,
+	labelRefs,
+	equipmentRefs,
 	resolveBindings,
 	unresolvedBindings,
 	unresolvedMessage,
@@ -454,5 +456,23 @@ describe('unresolvedMessage', () => {
 		expect(m.includes('not subscribed or readable')).toBe(true);
 		expect(m.startsWith('1 binding ')).toBe(true);
 		expect(unresolvedMessage(['A', 'B']).startsWith('2 bindings')).toBe(true);
+	});
+});
+
+describe('labelRefs / equipmentRefs — what a chip reads (#1056)', () => {
+	it('a label reads its bound tag and the when of each state', () => {
+		expect(labelRefs({ x: 0, y: 0, bind: 'Level' })).toEqual(['Level']);
+		expect(
+			labelRefs({ x: 0, y: 0, state: [{ when: 'P_Fault', text: 'Fault' }, { text: 'OK' }] })
+		).toEqual(['P_Fault']);
+		expect(labelRefs({ x: 0, y: 0, text: 'plain' })).toEqual([]);
+		// a bind wins over state (the label draws the value), so only it counts
+		expect(labelRefs({ x: 0, y: 0, bind: 'Level', state: [{ when: 'P_Fault', text: 'F' }] })).toEqual(['Level']);
+	});
+	it('equipment reads what its bind names, a negated one included', () => {
+		expect(
+			equipmentRefs({ id: 'P1', component: 'Pump', x: 0, y: 0, bind: { running: 'P1_Run', fault: '!P1_Ok' } })
+		).toEqual(['P1_Run', '!P1_Ok']);
+		expect(equipmentRefs({ id: 'T', component: 'Tank', x: 0, y: 0 })).toEqual([]);
 	});
 });

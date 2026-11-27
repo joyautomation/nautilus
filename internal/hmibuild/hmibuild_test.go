@@ -595,6 +595,39 @@ func TestLayoutNavWrapsOnAPhone(t *testing.T) {
 	}
 }
 
+// #1056: a dead field device must not hide behind the browser's own link.
+// The shell says the link in words that claim nothing about the plant, says
+// the devices that are down in a pill of their own, and the mimic page hands
+// the frame's per-tag quality to <Mimic> and warns above the drawing.
+func TestShellSeparatesTheControllerLinkFromTheField(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "p.mimic.json", `{"name":"P","equipment":[]}`)
+	a, err := defaultApp(dir, "t", nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout := a.virtual["nx:default/layout.svelte"].text
+	for _, want := range []string{"driversDown(rt.frame?.drivers)", "devices down", "Controller linked", "Controller offline"} {
+		if !strings.Contains(layout, want) {
+			t.Errorf("the layout lacks %q", want)
+		}
+	}
+	if strings.Contains(layout, "'Connected'") {
+		t.Error("the browser-link pill still says Connected, which reads as a healthy plant")
+	}
+	var page string
+	for name, v := range a.virtual {
+		if strings.HasPrefix(name, "nx:default/") && strings.Contains(v.text, "<Mimic ") {
+			page = v.text
+		}
+	}
+	for _, want := range []string{"<Mimic {doc} {tags} {quality}", "rt.frame?.quality", "driversDown(rt.frame?.drivers)", `role="alert"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the mimic page lacks %q", want)
+		}
+	}
+}
+
 // Areas with no equipment that makes a page do not make an HMI with no pages.
 func TestAreasAloneAreNothingToBuild(t *testing.T) {
 	if _, err := Build(Options{Project: t.TempDir(), Title: "t", Areas: []json.RawMessage{json.RawMessage(`{"id":"A","label":"A","assets":[]}`)}}); err == nil {
