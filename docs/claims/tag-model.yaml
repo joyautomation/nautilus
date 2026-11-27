@@ -688,3 +688,20 @@ claims:
       - go ./runtime TestTypedOutputZeroIsNotPushedUntilWritten
       - go ./runtime TestTypedOutputZeroIsNotPushedOnTakeover
       - go ./runtime TestTypedInputStillFaultsUntilDelivered
+  - id: TAG-058
+    claim: >-
+      The first scan at start waits for the field drivers' first delivery
+      (or first failed attempt) up to 2 s: nothing runs or is sent before
+      it, FIRST_SCAN() is TRUE on that scan with the delivered inputs, the
+      wait is no elapsed time to a timer or dt, and past 2 s the scan
+      starts with a warning naming the drivers.
+    source: "#the-first-scan-waits-for-the-inputs"
+    tests:
+      - go ./runtime TestFirstScanWaitsForInputs
+      - go ./runtime TestFirstScanHoldIsInvisibleToTheProgram
+      - go ./runtime TestFirstScanWaitGivesUpWithAWarning
+      - go ./runtime TestFirstScanDoesNotWaitForADriverThatCannotSay
+      - go ./runtime TestFirstScanTaskWaitsForTheMainRead
+      - go ./runtime TestFirstScanWaitFollowsTheClock
+      - go ./optommp TestInputsReadyAfterAFailedFirstAttempt
+      - go ./server TestStateShowsTheInputsWait

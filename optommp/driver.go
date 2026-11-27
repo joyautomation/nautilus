@@ -228,8 +228,12 @@ type Driver struct {
 	// sawShut: the write gate has been seen closed, so this driver began
 	// (or became) a standby, which has no baseline: its takeover commands
 	// every output (#606).
-	sawShut        atomic.Bool
-	holdOut        bool           // after a watchdog standby's takeover: no command until fresh inputs are read
+	sawShut atomic.Bool
+	holdOut bool // after a watchdog standby's takeover: no command until fresh inputs are read
+	// attempted: the unit has delivered a read, or a connection or session
+	// to it has failed, since the driver was built: its first attempt is
+	// over (InputsReady, #786). Never cleared.
+	attempted      atomic.Bool
 	freshIn        bool           // a leader's delivery since holdOut was set
 	slotFault      map[int]string // slot → why its tags are Bad
 	absent         []byte         // channel-present mask as last read (nil: unknown)
@@ -572,17 +576,22 @@ func (d *Driver) OutputsWanted() bool {
 	return d.wanted.Load() && d.wanted.Swap(false)
 }
 
-// InputsReady is the driver's io.InputsReadier: false from the gate's
-// reopen on a standby that held no session (watchdogStandbyNote) until a
-// leader's scan of the unit has delivered, so the runtime holds its
-// takeover (frame reset, logic, every driver's outputs) until the inputs
-// are live. It looks at the gate, which is how the driver sees the reopen
-// and wakes its wait to connect. Always true without `watchdog:`: a
-// polling standby's inputs are live. While the gate is closed it is true
-// too: the driver does not connect then, so waiting would gain nothing.
+// InputsReady is the driver's io.InputsReadier. At start it is false
+// until the unit's first attempt is over: a delivered read, or a
+// connection or session that failed (#786); the runtime holds its first
+// scan until then. After that it is false only from the gate's reopen on
+// a standby that held no session (watchdogStandbyNote) until a leader's
+// scan of the unit has delivered, so the runtime holds its takeover
+// (frame reset, logic, every driver's outputs) until the inputs are live.
+// It looks at the gate, which is how the driver sees the reopen and wakes
+// its wait to connect. While the gate is closed it is true: the driver
+// does not connect then (with `watchdog:`), so waiting would gain nothing.
 func (d *Driver) InputsReady() bool {
 	if !d.gateOpen() {
 		return true
+	}
+	if !d.attempted.Load() {
+		return false
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -678,6 +687,9 @@ func (d *Driver) run(ctx context.Context) {
 			continue
 		}
 		d.setOnline(false)
+		if err != nil {
+			d.attempted.Store(true) // a first attempt that failed is over too
+		}
 		if polled {
 			backoff = d.retryMin
 			lastLogged = ""
@@ -737,7 +749,7 @@ var errStandby = errors.New("optommp: standing by without a session (watchdog)")
 // first scan of the unit, so it reports them not ready (InputsReady) and
 // the runtime holds its takeover, frame reset, logic and every driver's
 // outputs, until a scan of the unit has been delivered (up to
-// runtime.Options.TakeoverInputsWait). As a backstop, for a takeover that
+// runtime.Options.InputsWait). As a backstop, for a takeover that
 // gave up waiting, WriteOutputs accepts no command until the runtime has
 // read a delivery made after the gate opened. That read asks for every
 // output (OutputsWanted), so the push of the same scan, computed from
@@ -1236,6 +1248,7 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 		d.in[b.Name] = v
 		d.quality[b.Name] = q
 	}
+	d.attempted.Store(true)
 	if checkOut && d.holdOut {
 		d.freshIn = true // a leader's delivery: the hold ends once it is read
 	}

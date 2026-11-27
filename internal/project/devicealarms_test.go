@@ -121,6 +121,10 @@ func TestOfflineDeviceSuppressesItsAlarmsAndRaisesOne(t *testing.T) {
 		return out
 	}
 	step := func() { rt.Scan() }
+	// The drive's driver is never started here: let the first scan's wait
+	// for its inputs (#786) run out on the test's clock first.
+	rt.Scan()
+	clk.t = clk.t.Add(3 * time.Second)
 
 	rt.Tags().Set("CONV__Online", true)
 	if err := rt.Tags().SetPath("CONV.Tripped", true); err != nil {

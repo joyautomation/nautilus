@@ -64,6 +64,9 @@ type Driver struct {
 	// snapshot fills tag by tag during a poll, so before this a reader can
 	// see some of the first poll's tags and not the rest.
 	primed bool
+	// settled: the first connect attempt is over, whichever way it went
+	// (InputsReady). Sticky, never cleared.
+	settled atomic.Bool
 	// leafModeN is len(leafMode), kept under mu for Health: the map itself
 	// belongs to the run goroutine, and Health is called from others (a
 	// Sparkplug device's health check, every tick).
@@ -942,7 +945,17 @@ func (d *Driver) OutputsWanted() bool {
 	return d.wanted.Load() && d.wanted.Swap(false)
 }
 
+// InputsReady is the driver's io.InputsReadier. Its one source is the
+// controller connection: ready once the first connection's priming poll of
+// every scan class is over, or the first connect attempt failed, or the
+// first connection broke before it primed. A driver with no inputs is ready
+// at once. Sticky: a later disconnect does not take it back. An atomic load.
+func (d *Driver) InputsReady() bool {
+	return d.settled.Load() || len(d.inputs) == 0
+}
+
 var (
+	_ nio.InputsReadier                      = (*Driver)(nil)
 	_ nio.OutputsRequester                   = (*Driver)(nil)
 	_ interface{ SetWriteGate(func() bool) } = (*Driver)(nil)
 	_ nio.SendGated                          = (*Driver)(nil)
@@ -967,6 +980,7 @@ func (d *Driver) run(ctx context.Context) {
 		sess, err := d.connect(ctx)
 		if err != nil {
 			d.setErr(err)
+			d.settled.Store(true) // a failed first attempt counts (InputsReady)
 			d.log.Warn("eip: connect failed", "host", d.host, "error", err, "retryIn", backoff)
 			if !d.backoffWait(ctx, backoff) {
 				return
@@ -989,6 +1003,7 @@ func (d *Driver) run(ctx context.Context) {
 		d.log.Info("eip: connected", "host", d.host, "slot", d.slot, "tags", len(d.inputs))
 
 		d.serve(ctx, sess)
+		d.settled.Store(true) // a connection that broke before it primed counts too (InputsReady)
 
 		_ = sess.ctrl.Close()
 		d.mu.Lock()
@@ -1133,6 +1148,7 @@ func (d *Driver) serve(ctx context.Context, sess *session) {
 	d.mu.Lock()
 	d.primed = true
 	d.mu.Unlock()
+	d.settled.Store(true)
 	d.decideAtPoll()
 	for {
 		// At least once a second, so the write gate is looked at (see

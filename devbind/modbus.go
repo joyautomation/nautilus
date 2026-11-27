@@ -133,3 +133,6 @@ func (w *ModbusDriver) Quality() map[string]nio.Quality { return w.st.quality(w.
 func (w *ModbusDriver) Connections() []nio.Connection {
 	return w.st.connections(w.Driver.Connections())
 }
+
+// The wrapper embeds the driver, so its InputsReady (#786) is the driver's.
+var _ nio.InputsReadier = (*ModbusDriver)(nil)

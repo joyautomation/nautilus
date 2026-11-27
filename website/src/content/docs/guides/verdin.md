@@ -267,10 +267,11 @@ boot.
 - An output with an `init:` value is written on the first scan. A typed
   output without one starts at its type's zero but is not written to its
   driver until something writes it: the logic, or an operator.
-- With no redundancy, the first scan does not wait for a driver's inputs
-  to be live; it runs on what the drivers hold. (A redundant pair's
-  takeover does wait, bounded; see the
-  [redundancy guide](/guides/redundancy/).)
+- The first scan waits until each field driver has read its devices (or
+  failed its first attempt), up to 2 s, so it runs on live inputs, not
+  on `init:` values ([the tag model](/guides/tag-model/#the-first-scan-waits-for-the-inputs)).
+  A redundant pair's takeover uses the same wait; see the
+  [redundancy guide](/guides/redundancy/).
 - Under the `Type=notify` unit, systemd counts the service as started
   when its first scan has completed.
 

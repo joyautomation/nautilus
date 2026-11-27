@@ -255,6 +255,12 @@ type Driver struct {
 	// nodeCfg indexes manifest nodes by edge_node_id.
 	nodeCfg map[string]Node
 
+	// in is InputsReady's bookkeeping (inputsready.go); birthWait is how
+	// long a node asked to rebirth may stay silent before it counts as
+	// failed (a test shortens it).
+	in        inputsState
+	birthWait time.Duration
+
 	// ── ADDED BY B3 (driver.go, mqtt.go); built in New, read-only after ──
 
 	// groups is the resolved subscription group list: Config.GroupIDs if set,

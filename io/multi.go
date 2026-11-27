@@ -434,8 +434,9 @@ func (m *Multi) BeginScan() {
 	}
 }
 
-// InputsReady is true when every child that can say so is ready: a
-// takeover runs on the whole delivery, so it waits for the slowest child.
+// InputsReady is true when every child that can say so is ready: a first
+// scan (a start or a takeover) runs on the whole delivery, so it waits
+// for the slowest child.
 // Every such child is asked (each may look at its write gate). A set with
 // no such child is always ready.
 func (m *Multi) InputsReady() bool {
@@ -448,6 +449,20 @@ func (m *Multi) InputsReady() bool {
 		}
 	}
 	return ready
+}
+
+// InputsPending names the children whose inputs have not arrived, in set
+// order (io.InputsPending).
+func (m *Multi) InputsPending() []string {
+	m.set.RLock()
+	defer m.set.RUnlock()
+	var out []string
+	for _, c := range m.children {
+		if r, ok := c.Driver.(InputsReadier); ok && !r.InputsReady() {
+			out = append(out, c.Name)
+		}
+	}
+	return out
 }
 
 // Start fans out to every child with its own loop to launch (eip's poll
@@ -566,6 +581,7 @@ var (
 	_ QualityReporter  = (*Multi)(nil)
 	_ OutputsRequester = (*Multi)(nil)
 	_ InputsReadier    = (*Multi)(nil)
+	_ InputsPending    = (*Multi)(nil)
 
 	_ interface{ SetWriteGate(func() bool) } = (*Multi)(nil)
 	_ SendGated                              = (*Multi)(nil)

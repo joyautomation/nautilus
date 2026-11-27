@@ -229,6 +229,7 @@ func (d *Driver) run(ctx context.Context) {
 		cli, lost, err := d.connect(ctx)
 		if err != nil {
 			d.setErr(err)
+			d.firstAttemptFailed() // the broker did not take us: nothing to wait for (InputsReady)
 			if ctx.Err() == nil && !d.isStopping() {
 				// No session, so the host can reach none of its nodes. This
 				// is the one place a host learns it is cut off when it left
@@ -423,6 +424,9 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 	d.lastErr = nil
 	d.sessionTS = ts
 	d.sessionPrimary = primary
+	if d.in.firstConn.IsZero() {
+		d.in.firstConn = time.Now()
+	}
 	d.mu.Unlock()
 
 	d.log.Info("host: connected", "broker", d.cfg.BrokerURL, "hostID", d.cfg.HostID,
@@ -733,6 +737,7 @@ func (d *Driver) publishRebirth(group, edge string) error {
 		d.log.Warn("host: rebirth request failed", "group", group, "node", edge, "error", err)
 		return err
 	}
+	d.noteAsked(edge)
 	d.log.Info("host: requested rebirth", "group", group, "node", edge)
 	return nil
 }

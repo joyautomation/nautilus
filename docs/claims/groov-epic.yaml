@@ -503,7 +503,7 @@ claims:
   - id: EPIC-036
     claim: >-
       The takeover's wait for live inputs is bounded (2 s by default,
-      runtime.Options.TakeoverInputsWait): past it the takeover runs on
+      runtime.Options.InputsWait): past it the takeover runs on
       the inputs the drivers hold, and the groov EPIC driver still sends
       no command until the runtime has read a scan of the unit.
     source: "#redundancy"

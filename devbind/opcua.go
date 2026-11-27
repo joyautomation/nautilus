@@ -217,3 +217,6 @@ func (w *OPCUADriver) WriteOutputs(vals nio.Values) error {
 func (w *OPCUADriver) Warnings() []string {
 	return append(w.Driver.Warnings(), w.warnings...)
 }
+
+// The wrapper embeds the driver, so its InputsReady (#786) is the driver's.
+var _ nio.InputsReadier = (*OPCUADriver)(nil)

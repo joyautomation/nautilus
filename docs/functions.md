@@ -576,7 +576,8 @@ clamp to the string instead of faulting.
 `FIRST_SCAN()` is how a program seeds state from the world once: a ladder
 function contact `FIRST_SCAN() { next := Clock.SECOND }`, or
 `IF FIRST_SCAN() THEN … END_IF;` in ST. Each task's program has its own
-first scan. On a Logix controller it is the status flag `S:FS`.
+first scan. At start it waits for the field drivers' first delivery (up
+to 2 s), so it reads live inputs, not their `init:` values. On a Logix controller it is the status flag `S:FS`.
 
 ### Redundancy
 

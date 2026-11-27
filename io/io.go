@@ -71,25 +71,41 @@ type OutputsRequester interface {
 }
 
 // InputsReadier is an optional refinement a Driver may also implement:
-// say whether its inputs are live enough for a redundancy takeover to run
-// on them.
+// say whether its inputs have arrived, so the runtime's first scan runs on
+// them and not on seeds or nothing.
 //
-// On the first scan as leader the runtime resets every program frame so
-// warm-start logic runs against live field values (runtime.takeover). A
-// driver that held no session while its replica stood by (the groov EPIC
-// standby with a watchdog set, #626) has nothing live at that moment:
-// what it holds is what the standby last saw, or nothing. InputsReady is
-// false until it has delivered a read made since the takeover began; the
-// runtime holds the takeover (no frame reset, no logic, no outputs) while
-// it is false, up to a bound, and its scan loop keeps ticking meanwhile.
+// A first scan is the one at start (#786) and the first on every takeover
+// of a redundant pair (#626): the runtime holds it (no logic, no outputs;
+// on a takeover, no frame reset) while InputsReady is false, up to a bound
+// (runtime.Options.InputsWait), and its scan loop keeps ticking meanwhile.
+// Past the bound it scans anyway, with a warning.
 //
-// The runtime asks on every scan of a pending takeover, so it must be
+// The meaning, for a driver that talks to sources (units, nodes, servers):
+// every source has delivered its first read since the process started, or
+// failed its first attempt. A failed attempt counts, so one dead device
+// does not cost the whole wait on every start and every takeover; its
+// inputs read NotConnected (QualityReporter) until they arrive. The answer
+// is sticky: once true it stays true for the life of the driver, so a
+// standby whose driver polled all along takes over at once. A driver that
+// held no session while its replica stood by (the groov EPIC standby with
+// a watchdog set, #626) may answer false again from its gate's reopen
+// until it has delivered a read made since.
+//
+// The runtime asks on every tick of a held first scan, so it must be
 // cheap and never block. It may look at the driver's write gate (a look
-// is how a driver sees the gate open). The runtime uses it when the
-// driver provides it — implementing it is never required.
+// is how a driver sees the gate open). The runtime uses it when the driver
+// provides it; a driver that does not (Memory, a simulation) is ready at
+// once.
 type InputsReadier interface {
 	Driver
 	InputsReady() bool
+}
+
+// InputsPending is an optional refinement for a set of drivers: name the
+// members whose inputs have not arrived (InputsReadier), for the runtime's
+// status and log while a first scan waits.
+type InputsPending interface {
+	InputsPending() []string
 }
 
 // Memory is a trivial in-process driver: outputs written are readable as

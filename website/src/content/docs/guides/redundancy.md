@@ -240,7 +240,7 @@ never computes.
   waits for live inputs: the driver reports them not ready until its
   first read of the device, and the runtime holds the takeover (frame
   reset, logic and every driver's outputs) until then, at most 2 s
-  (`runtime.Options.TakeoverInputsWait`), its scan loop still ticking.
+  (`runtime.Options.InputsWait`, 2 s), its scan loop still ticking.
   One hiccup in the dial can use up that wait: a first connect that
   fails waits about 1 s for its retry, and a lost SYN costs as much in
   the kernel. Past the wait the logic and every other driver's outputs

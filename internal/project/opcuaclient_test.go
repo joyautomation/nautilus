@@ -117,9 +117,13 @@ func TestOPCUAClientServerDownReadsInitOrZero(t *testing.T) {
 		nio.Driver
 		Start(context.Context)
 		Stop()
+		InputsReady() bool
 	})
 	drv.Start(context.Background())
 	t.Cleanup(drv.Stop)
+	// The first scan waits for the driver's first attempt (#786): the
+	// refused connect ends it, and the start goes on with the server down.
+	waitFor(t, "the first connect attempt to fail", drv.InputsReady)
 	for range 3 {
 		rt.Scan()
 	}

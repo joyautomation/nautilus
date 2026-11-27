@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
@@ -337,6 +338,10 @@ type Driver struct {
 	since     time.Time
 	backoff   time.Duration
 	nextTry   time.Time
+
+	// settled: the first poll is over, merged or failed (InputsReady).
+	// Sticky, never cleared.
+	settled atomic.Bool
 }
 
 // NewDriver builds a driver over the bindings; Run starts it.
@@ -379,6 +384,7 @@ func (d *Driver) PollOnce(ctx context.Context) {
 		syms[i] = b.Symbol
 	}
 	rs, err := d.c.ReadMany(ctx, syms)
+	defer d.settled.Store(true) // after the merge below, once the lock is released (InputsReady)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err != nil {
@@ -499,7 +505,17 @@ func (d *Driver) Quality() map[string]nio.Quality {
 	return out
 }
 
-var _ nio.QualityReporter = (*Driver)(nil)
+// InputsReady is the driver's io.InputsReadier. Its one source is the CPU's
+// Web API: ready once the first poll of the bound symbols is over, merged
+// or failed (the CPU unreachable, the login refused). A driver with no
+// bindings is ready at once. Sticky: a later failed poll does not take it
+// back. An atomic load.
+func (d *Driver) InputsReady() bool { return d.settled.Load() || len(d.bs) == 0 }
+
+var (
+	_ nio.QualityReporter = (*Driver)(nil)
+	_ nio.InputsReadier   = (*Driver)(nil)
+)
 
 // Health is the driver's state for the status panel.
 type Health struct {

@@ -93,10 +93,16 @@ type Options struct {
 	// driver's baseline, so it starts from the current commands. A single
 	// switch while the choice is open (#706, James's decision 1).
 	HoldOutputsOnSwap bool
-	// TakeoverInputsWait bounds how long a redundancy takeover waits for a
-	// driver that is an io.InputsReadier to report live inputs before it
-	// runs on what the driver holds (0: DefaultTakeoverInputsWait). Only
-	// with a Coordinator.
+	// InputsWait bounds how long the first scan waits for a driver that
+	// is an io.InputsReadier to report its inputs delivered, before it
+	// runs on what the driver holds, with a warning (0: DefaultInputsWait).
+	// The first scan is the one at start and the first after every
+	// takeover: one wait, one setting (#786, #626).
+	InputsWait time.Duration
+	// TakeoverInputsWait is the earlier name of InputsWait, kept for
+	// callers that set it: used when InputsWait is zero.
+	//
+	// Deprecated: set InputsWait.
 	TakeoverInputsWait time.Duration
 	// LateThreshold is how far past its target a scan may START before it
 	// counts as late in Lateness (see ScanStats.Lateness). It applies to
@@ -358,12 +364,19 @@ type Runtime struct {
 	// carried is the tags a state image carries (imagetags.go), fixed in New.
 	carried *carrySet
 	// ready is the driver as an io.InputsReadier (nil when it is not one),
-	// readyWait how long a takeover waits for it, and readySince when the
-	// pending takeover began waiting (zero when none is). See inputsReady.
-	// readySince is guarded by leadMu.
+	// readyWait how long a first scan waits for it, and readySince when the
+	// pending wait began (zero when none is). See inputsReady. readySince
+	// is guarded by leadMu; waitSince mirrors it (Unix ns, 0: no wait) for
+	// Stats, which does not take leadMu.
 	ready      nio.InputsReadier
 	readyWait  time.Duration
 	readySince time.Time
+	waitSince  atomic.Int64
+	// started: the first scan of an uncoordinated runtime has passed its
+	// wait for inputs (or had none to wait for). See gateEdge. mainIn: the
+	// main scan has read the inputs since (see tasksMayScan).
+	started atomic.Bool
+	mainIn  atomic.Bool
 	// ledTerm is the coordinator's term (Termed) at the last takeover, 0
 	// before the first or without a Termed coordinator. Under leadMu.
 	ledTerm uint64
@@ -455,12 +468,15 @@ const (
 // read inputs → execute logic → write outputs; the phase timings show where
 // the scan budget actually goes (usually I/O on the wire, not logic).
 type ScanStats struct {
-	Count    uint64  `json:"count"`
-	TargetMs float64 `json:"targetMs"` // configured scan interval
-	LastMs   float64 `json:"lastMs"`   // last full scan execution time
-	MinMs    float64 `json:"minMs"`
-	MaxMs    float64 `json:"maxMs"`
-	AvgMs    float64 `json:"avgMs"` // exponentially weighted average
+	// InputsWait is set while the first scan (at start, or after a
+	// takeover) waits for the drivers' inputs (#786): nothing scans meanwhile.
+	InputsWait *InputsWait `json:"inputsWait,omitempty"`
+	Count      uint64      `json:"count"`
+	TargetMs   float64     `json:"targetMs"` // configured scan interval
+	LastMs     float64     `json:"lastMs"`   // last full scan execution time
+	MinMs      float64     `json:"minMs"`
+	MaxMs      float64     `json:"maxMs"`
+	AvgMs      float64     `json:"avgMs"` // exponentially weighted average
 
 	// Last-scan phase breakdown. Logic executes in microseconds; I/O is
 	// milliseconds — different units so both stay readable.
@@ -727,10 +743,14 @@ func New(o Options) (*Runtime, error) {
 	if rd, ok := o.Driver.(nio.InputsReadier); ok {
 		r.ready = rd
 	}
-	r.readyWait = o.TakeoverInputsWait
+	r.readyWait = o.InputsWait
 	if r.readyWait <= 0 {
-		r.readyWait = DefaultTakeoverInputsWait
+		r.readyWait = o.TakeoverInputsWait
 	}
+	if r.readyWait <= 0 {
+		r.readyWait = DefaultInputsWait
+	}
+	r.started.Store(r.ready == nil)
 	r.live.loops = append(r.live.loops, &loopLive{name: MainTaskName, period: o.Scan})
 	for _, tr := range tasks {
 		r.live.loops = append(r.live.loops, &loopLive{name: tr.name, period: tr.scan})
@@ -1441,7 +1461,7 @@ func (r *Runtime) scanTask(tr *taskRun) { r.scanTaskAt(tr, time.Time{}) }
 // scanTaskAt is scanTask with the slot the scan was due at (zero when the
 // caller is not Run's scheduler), for the lateness sample.
 func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
-	if !r.gate() || !r.scanEnter() {
+	if !r.gate() || !r.tasksMayScan() || !r.scanEnter() {
 		return
 	}
 	defer r.scanExit()
@@ -1496,6 +1516,10 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 // (tests, a custom scheduler, or a redundancy standby stepping in sync).
 // A standby replica returns immediately — suppression by not scanning at
 // all, so a stale replica can never write an output.
+//
+// The first scan (at start, and the first after a takeover) waits for the
+// drivers' inputs (Options.InputsWait): until they arrive, Scan returns
+// at once having run, sent and counted nothing.
 func (r *Runtime) Scan() { r.scanAt(time.Time{}) }
 
 // scanAt is Scan with the slot the scan was due at (zero when the caller
@@ -1550,6 +1574,9 @@ func (r *Runtime) scanAt(due time.Time) {
 			// write at all — see Tags' "Write generations".
 			r.tags.setMany(r.inputs, in)
 		}
+	}
+	if r.coord == nil && !r.mainIn.Load() {
+		r.mainIn.Store(true) // the tasks may scan now (tasksMayScan)
 	}
 	// The read is back (or there is no driver to read): from here on the
 	// tags are this leadership's, and quality is the drivers' again, unless
@@ -1755,6 +1782,9 @@ func (r *Runtime) Stats() ScanStats {
 	}
 	s.Lateness = r.late.snapshot()
 	r.mu.Unlock()
+	if ns := r.waitSince.Load(); ns != 0 {
+		s.InputsWait = &InputsWait{Since: time.Unix(0, ns), WaitingFor: r.inputsPending()}
+	}
 	for _, tr := range r.tasks {
 		tr.mu.Lock()
 		ts := tr.stats

@@ -10,6 +10,10 @@ import "time"
 //  2. the millisecond base that IEC timers count from, reached through
 //     ir.Host.NowMs — TON, TOF, TP, and every user block built on them.
 //
+// The first scan's wait for the drivers' inputs (Options.InputsWait) is
+// measured on it too, so a harness on a virtual clock is not held for
+// wall-clock seconds by a driver that never answers.
+//
 // In production Options.Clock is nil and the runtime reads the wall clock
 // directly, at no extra cost. A test supplies a virtual clock instead, so a
 // 10 s on-delay elapses in microseconds and two runs of the same test are

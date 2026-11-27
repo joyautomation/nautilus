@@ -203,14 +203,16 @@ type Driver struct {
 	live     *Session
 	answered bool // a read succeeded on this session (resets backoff)
 	primed   bool // every scan class has been read once on this session
-	state    string
-	sinceMs  int64
-	lastErr  error
-	retries  uint64
-	rttMs    float64
-	server   serverInfo
-	pending  map[string]any
-	written  map[string]any
+	// settled: the first session attempt is over (InputsReady). Sticky.
+	settled atomic.Bool
+	state   string
+	sinceMs int64
+	lastErr error
+	retries uint64
+	rttMs   float64
+	server  serverInfo
+	pending map[string]any
+	written map[string]any
 
 	gateMu    sync.Mutex
 	writeGate func() bool
@@ -1058,6 +1060,7 @@ func (d *Driver) run(ctx context.Context) {
 			d.retries++
 			d.mu.Unlock()
 			d.setState("error", err)
+			d.settled.Store(true) // a failed first attempt counts (InputsReady)
 			d.log.Warn("opcua-client: connect failed", "driver", d.name, "endpoint", d.endpoint, "error", err, "retryIn", backoff)
 			select {
 			case <-ctx.Done():
@@ -1077,6 +1080,7 @@ func (d *Driver) run(ctx context.Context) {
 		} else {
 			d.serve(ctx, sess)
 		}
+		d.settled.Store(true) // a session that broke before it primed counts too (InputsReady)
 
 		// Offline first: Close can take its timeout, and the values must
 		// not read Good meanwhile.
@@ -1234,6 +1238,7 @@ func (d *Driver) serve(ctx context.Context, sess *Session) {
 	d.mu.Lock()
 	d.primed = true
 	d.mu.Unlock()
+	d.settled.Store(true)
 	for {
 		if ctx.Err() != nil {
 			return
@@ -1632,8 +1637,20 @@ func (d *Driver) setState(state string, err error) {
 	d.mu.Unlock()
 }
 
+// InputsReady is the driver's io.InputsReadier. Its one source is the
+// server session: ready once the first session's priming read of every scan
+// class has delivered (poll mode and subscribe mode alike: subscribe primes
+// with the same batched read before it subscribes), or the first connect
+// attempt failed, or the first session broke before it primed. A driver with
+// no bindings is ready at once. Sticky: a later session loss does not take
+// it back. An atomic load.
+func (d *Driver) InputsReady() bool {
+	return d.settled.Load() || len(d.bindings) == 0
+}
+
 // Interface conformance.
 var (
+	_ nio.InputsReadier    = (*Driver)(nil)
 	_ nio.Driver           = (*Driver)(nil)
 	_ nio.BatchReader      = (*Driver)(nil)
 	_ nio.QualityReporter  = (*Driver)(nil)

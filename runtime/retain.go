@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/retain"
 )
@@ -108,6 +110,18 @@ func (r *Runtime) gate() bool {
 // answer: the main scan sets fresh only if no edge came after its own gate.
 func (r *Runtime) gateEdge() (bool, uint64) {
 	if r.coord == nil && r.retainStore == nil {
+		if r.started.Load() {
+			return true, 0
+		}
+		// The first scan of a lone controller waits for its drivers'
+		// inputs (#786), as a takeover does: no logic, no outputs, and no
+		// scan is counted, timed or clocked until it runs.
+		r.leadMu.Lock()
+		defer r.leadMu.Unlock()
+		if !r.started.Load() && !r.inputsReady() {
+			return false, 0
+		}
+		r.started.Store(true)
 		return true, 0
 	}
 	if r.edgeWait.Load() && !mutRuntime("edge_wait_blocks_others") {
@@ -126,7 +140,7 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 	// nothing below runs until they are, or the wait is over. A steady
 	// leader never asks.
 	if !lead {
-		r.readySince = time.Time{}
+		r.endWait()
 		r.ioReset()
 		r.resetIntentSync()
 		r.flushReset()
@@ -245,41 +259,102 @@ func (r *Runtime) unfresh() {
 	r.edges++
 }
 
-// DefaultTakeoverInputsWait is how long a takeover waits for live inputs
-// when Options.TakeoverInputsWait is zero.
-const DefaultTakeoverInputsWait = 2 * time.Second
+// DefaultInputsWait is how long a first scan waits for the drivers'
+// inputs when Options.InputsWait is zero.
+const DefaultInputsWait = 2 * time.Second
 
-// inputsReady answers, on a pending takeover, whether the driver's inputs
-// are live enough to run it on (io.InputsReadier): the takeover resets
-// every frame so warm-start logic runs against live field values, and a
-// driver that held no session while standing by has none yet (#626).
-// While it is false, gate reports "do not scan": no frame reset, no logic,
-// no outputs, but the scan loop goes on ticking, so the replica's scans
-// stay live for the lease. After takeoverWait it gives up and the takeover
-// runs on what the driver holds, with a warning. Called under leadMu.
+// DefaultTakeoverInputsWait is the earlier name of DefaultInputsWait.
+//
+// Deprecated: use DefaultInputsWait.
+const DefaultTakeoverInputsWait = DefaultInputsWait
+
+// InputsWait is a first scan's wait for the drivers' inputs, as Stats
+// reports it while it lasts.
+type InputsWait struct {
+	// Since is when the wait began.
+	Since time.Time `json:"since"`
+	// WaitingFor names the drivers whose inputs have not arrived.
+	WaitingFor []string `json:"waitingFor,omitempty"`
+}
+
+// inputsReady answers, before a first scan, whether the driver's inputs
+// have arrived (io.InputsReadier). A first scan is the one at start (#786)
+// and the first of every takeover: the takeover resets every frame so
+// warm-start logic runs against live field values, and a driver that held
+// no session while standing by has none yet (#626); at start nothing has
+// been read at all. While it is false, gate reports "do not scan": no
+// frame reset, no logic, no outputs, but the scan loop goes on ticking, so
+// the replica's scans stay live for the lease. After readyWait it gives up
+// and the scan runs on what the driver holds, with a warning naming the
+// drivers still waiting; their inputs read NotConnected until they arrive.
+// Called under leadMu.
 func (r *Runtime) inputsReady() bool {
-	if r.coord == nil || r.ready == nil {
+	if r.ready == nil {
 		return true
 	}
-	now := time.Now()
+	now := r.now(time.Now()) // a virtual Clock bounds the wait too (clock.go)
+	what := "takeover"
+	if r.coord == nil {
+		what = "first scan"
+	}
 	if r.ready.InputsReady() {
 		if !r.readySince.IsZero() {
-			slog.Info("runtime: inputs live; taking over", "waited", now.Sub(r.readySince).Round(time.Millisecond))
+			slog.Info("runtime: inputs live; starting the "+what, "waited", now.Sub(r.readySince).Round(time.Millisecond))
 		}
-		r.readySince = time.Time{}
+		r.endWait()
 		return true
 	}
 	if r.readySince.IsZero() {
 		r.readySince = now
-		slog.Info("runtime: leading; holding the takeover until the drivers' inputs are live", "up_to", r.readyWait)
+		r.waitSince.Store(now.UnixNano())
+		slog.Info("runtime: holding the "+what+" until the drivers' inputs are live", "up_to", r.readyWait, "waiting_for", strings.Join(r.inputsPending(), ", "))
 		return false
 	}
 	if now.Sub(r.readySince) < r.readyWait {
 		return false
 	}
-	slog.Warn("runtime: inputs still not live; taking over on the inputs the drivers hold", "waited", now.Sub(r.readySince).Round(time.Millisecond))
-	r.readySince = time.Time{}
+	slog.Warn("runtime: inputs still not live; starting the "+what+" on the inputs the drivers hold", "waited", now.Sub(r.readySince).Round(time.Millisecond), "waiting_for", strings.Join(r.inputsPending(), ", "))
+	r.endWait()
 	return true
+}
+
+// tasksMayScan answers, for an additional task past its gate, whether the
+// main scan has read the inputs since the gate last opened: only the main
+// scan reads the drivers, so a task that ran first would scan the seeds
+// (#786; Fable). It applies when there is a wait for inputs at all (an
+// io.InputsReadier driver): a lone controller holds its tasks until the
+// main scan's first read, a pair's new leader until its first read as
+// leader (fresh). A task gated this way runs nothing and counts nothing.
+func (r *Runtime) tasksMayScan() bool {
+	if r.ready == nil {
+		return true
+	}
+	if r.coord != nil {
+		return r.fresh.Load()
+	}
+	return r.mainIn.Load()
+}
+
+// endWait clears a first scan's wait. Called under leadMu.
+func (r *Runtime) endWait() {
+	r.readySince = time.Time{}
+	r.waitSince.Store(0)
+}
+
+// inputsPending names the drivers whose inputs have not arrived: a set's
+// children by name (io.InputsPending), a lone driver by its package.
+func (r *Runtime) inputsPending() []string {
+	if p, ok := r.driver.(nio.InputsPending); ok {
+		return p.InputsPending()
+	}
+	if r.ready != nil && !r.ready.InputsReady() {
+		name := strings.TrimPrefix(fmt.Sprintf("%T", r.driver), "*")
+		if i := strings.IndexByte(name, '.'); i > 0 {
+			name = name[:i]
+		}
+		return []string{name}
+	}
+	return nil
 }
 
 // takeover runs once per acquisition of leadership (including process start,

@@ -220,6 +220,32 @@ Run := SkidRun AND Skid__Online;
 Once a real value arrives it replaces the seed. After a disconnect a tag
 holds its last value (quality `stale`), as it always has.
 
+### The first scan waits for the inputs
+
+A controller does not run its programs on nothing. At start, the first
+scan waits until every field driver has had its first try at its
+devices: each device has delivered a read, or failed its first attempt.
+While it waits, nothing scans: no program, no task, no output, no alarm.
+`FIRST_SCAN()` is then TRUE on that first real scan, which reads the
+delivered inputs, not their `init:` values. Timers start there, and the
+first scan's `dt` is one normal cycle, not the wait.
+
+The wait is usually short: a device that refuses the connection ends it
+when that first attempt fails. It is bounded at **2 seconds**, which a
+device that does not answer at all (a connect that times out) costs in
+full: past that the scan starts on what the drivers hold, the log says
+`inputs still not live` with the drivers still waited for, and those
+inputs read `notConnected` until they arrive. The rules in the table
+above still apply to their tags.
+
+`memory` and `replay` deliver at once, so a project without field
+hardware starts on its first tick, as before. While the wait lasts,
+`GET /api/state` and the `/api/stream` frames show it under `scan.inputsWait`, with `since` and
+`waitingFor` (the drivers by name). A redundant pair's takeover uses the
+same wait and the same bound
+([Redundancy](/guides/redundancy/)): a standby that polled all along takes over without
+waiting.
+
 ## Tags in scope: the rules
 
 - **A driver binding and its tag are spelled the same.** Programs read tag
