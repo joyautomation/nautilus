@@ -121,6 +121,7 @@ static void *lr_thread(void *arg) {
 static int lr_start(void) {
     pthread_attr_t a;
     pthread_attr_init(&a);
+    pthread_attr_setstacksize(&a, 64 * 1024);
     pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED);
     struct sched_param sp = {0};
     pthread_attr_setschedpolicy(&a, SCHED_OTHER);

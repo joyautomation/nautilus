@@ -308,7 +308,7 @@ busy. Now the cycle formats each log line into a bounded lock-free ring
 `logs/nautilus_io.log`. A full ring drops lines and the drain thread logs
 `log ring full: N records dropped so far`; the cycle never waits.
 
-The process also calls `mlockall(MCL_CURRENT|MCL_FUTURE)` after setup, with
+The process also calls `mlockall(MCL_CURRENT)` before it takes SCHED_FIFO (not MCL_FUTURE: that would commit the firmware threads' later mappings too), with
 the stack touched first, so a page fault cannot wait on I/O. That needs
 `CAP_IPC_LOCK` (the `setcap` above grants it to the shim beside `cap_sys_nice`); without it the log says
 `mlockall refused (...)` as a warning and the cycle runs unlocked, as before; never fatal.

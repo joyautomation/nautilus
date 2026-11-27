@@ -6,6 +6,7 @@
 //           the ring; the cycle must finish with lateness unchanged, and
 //           drop records (the sink never drains)
 //   deliver <file>  100 numbered lines through the ring to a plain file
+//   multi <file>    4 producer threads, 500 lines each, through the ring
 //   direct  the same cycle, logging with a plain write() to the sink: the
 //           control, which must hang
 #define _GNU_SOURCE
@@ -14,6 +15,16 @@
 #include <stdio.h>
 #include <string.h>
 
+static void *producer(void *arg) {
+    long k = (long)arg;
+    for (int i = 0; i < 500; i++) {
+        char b[64];
+        int n = snprintf(b, sizeof b, "t%ld %d %0*d\n", k, i, 20, i * 7);
+        while (!lr_push(b, (size_t)n)) usleep(200);
+    }
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "";
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -21,12 +32,23 @@ int main(int argc, char **argv) {
         int fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
         lr_init(fd, NULL);
         if (fd < 0 || lr_start() != 0) return 2;
-        for (int i = 0; i < 100; i++) {
-            char b[32];
-            int n = snprintf(b, sizeof b, "line %d\n", i);
-            while (!lr_push(b, (size_t)n)) usleep(1000); // the ring holds 256; never full here, but be exact
+        // 2000 lines through 256 slots: every slot is reused many times.
+        for (int i = 0; i < 2000; i++) {
+            char b[64];
+            int n = snprintf(b, sizeof b, "line %d %0*d\n", i, 20, i * 7);
+            while (!lr_push(b, (size_t)n)) usleep(1000);
         }
-        usleep(300000);
+        usleep(500000);
+        return 0;
+    }
+    if (strcmp(mode, "multi") == 0 && argc > 2) {
+        int fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        lr_init(fd, NULL);
+        if (fd < 0 || lr_start() != 0) return 2;
+        pthread_t th[4];
+        for (long k = 0; k < 4; k++) pthread_create(&th[k], NULL, producer, (void *)k);
+        for (int k = 0; k < 4; k++) pthread_join(th[k], NULL);
+        usleep(500000);
         return 0;
     }
     int p[2];
