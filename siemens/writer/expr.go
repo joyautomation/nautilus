@@ -548,8 +548,8 @@ func (pw *progWriter) intValueArgs(name string, args []st.Expression) bool {
 		args = args[1:]
 	}
 	for _, a := range args {
-		if t := pw.typ(a); t != tWide && !isInt(t) && t != tAnyInt {
-			return false
+		if t := pw.typ(a); t != tWide && (!isInt(t) || t == "ULINT") && t != tAnyInt {
+			return false // ULINT: refused at 64 bits everywhere else too
 		}
 	}
 	return len(args) > 0
@@ -567,6 +567,17 @@ func (pw *progWriter) wideConversion(name string, arg st.Expression, line int) (
 		}
 		if !elementary[to] {
 			return "", false
+		}
+		if to == "BOOL" { // nautilus: the 64-bit value is not zero
+			wide := pw.wide
+			pw.wide = true
+			v := pw.expr(arg, 0)
+			pw.wide = wide
+			return "(" + v + ") <> 0", true
+		}
+		if to == "TIME" || to == "LTIME" || strings.HasPrefix(to, "DATE") || to == "TOD" || to == "DT" || strings.HasPrefix(to, "TIME_OF") {
+			pw.gap("siemens/time", line, gapTime, name+" of integer arithmetic", "nautilus's TIME is 64-bit milliseconds, TIA's 32-bit")
+			return "", true
 		}
 		wide := pw.wide
 		pw.wide = true

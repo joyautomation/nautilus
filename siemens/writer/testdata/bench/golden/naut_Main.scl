@@ -18,6 +18,7 @@ VERSION : 0.1
    END_VAR
    VAR_TEMP 
       i : INT;
+      naut_for_v1 : INT;
    END_VAR
 
 BEGIN
@@ -49,7 +50,8 @@ BEGIN
 			#state := 0;
 	END_CASE;
 	#avg := 0.0;
-	FOR #i := 1 TO 4 DO
+	FOR #naut_for_v1 := 1 TO 4 DO
+		#i := #naut_for_v1;
 		#avg := #avg + INT_TO_REAL(#i) / 4.0;
 	END_FOR;
 	"naut_Tags".Level := LIMIT(MN := 0.0, IN := "naut_Tags".Level * 1.5 - (#avg + 2.0), MX := 100.0);

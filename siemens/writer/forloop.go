@@ -29,7 +29,7 @@ import (
 //	WHILE #r DO
 //	    <guard: #c outside the variable's type faults the scan>
 //	    #i := LINT_TO_<T>(#c);
-//	    #r := (#e - #c) - <step> >= 0;     (no overflow: decided first)
+//	    #r := #c <= LINT#<max - step> AND #c + <step> <= #e;
 //	    IF #r THEN #c := #c + <step>; END_IF;
 //	    <body>
 //	END_WHILE;
@@ -41,10 +41,10 @@ import (
 // #1305 B1), a difference the guide names. An integer arithmetic step
 // stays refused.
 
-// forPlain reports whether TIA's own FOR runs this loop exactly as
-// nautilus does and surely ends: a constant non-zero step, and a start and
-// an end whose every possible value keeps the variable, and the variable
-// stepped past the end, inside its type.
+// forPlain reports whether TIA's own FOR, run over a temp of the
+// variable's type (forPlainLoop), surely ends and runs exactly as nautilus
+// does: a constant non-zero step, and a constant start and end that keep
+// the temp, stepped past the end, inside the type.
 func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 	t := pw.typ(&st.IdentExpr{Name: s.Variable})
 	if !isInt(t) {
@@ -58,18 +58,17 @@ func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 		}
 		step = k
 	}
-	lo, hi, ok := pw.boundRange(s.Start, t)
-	if !ok || !inRange(lo, t) || !inRange(hi, t) {
+	// Constant bounds only: TIA's FOR is not proved to read a variable
+	// end once, as nautilus does.
+	start, ok := pw.fold(s.Start)
+	if !ok || !inRange(start, t) {
 		return false
 	}
-	lo, hi, ok = pw.boundRange(s.End, t)
-	if !ok {
+	end, ok := pw.fold(s.End)
+	if !ok || addOverflows(end, step) {
 		return false
 	}
-	if step > 0 {
-		return !addOverflows(hi, step) && inRange(hi+step, t) && inRange(lo, t)
-	}
-	return !addOverflows(lo, step) && inRange(lo+step, t) && inRange(hi, t)
+	return inRange(end, t) && inRange(end+step, t)
 }
 
 // boundRange is the values a FOR bound can take: the value of a constant,
@@ -93,6 +92,16 @@ func (pw *progWriter) boundRange(e st.Expression, t string) (lo, hi int64, ok bo
 func (pw *progWriter) boundInType(e st.Expression, t string) bool {
 	lo, hi, ok := pw.boundRange(e, t)
 	return ok && inRange(lo, t) && inRange(hi, t)
+}
+
+// forTemp declares a temp of a FOR loop: a hoisted temp with its own
+// numbering, so the loops do not renumber the index and call temps.
+func (pw *progWriter) forTemp(prefix, typ string) string {
+	n := pw.hoistN
+	pw.hoistN = pw.forN
+	name := pw.hoistTemp(prefix, typ)
+	pw.forN, pw.hoistN = pw.hoistN, n
+	return name
 }
 
 // typeRange is the least and greatest value of integer type t (ULINT's
@@ -148,9 +157,9 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 			return
 		}
 	}
-	c := "#" + pw.hoistTemp("naut_for_c", "LINT")
-	e := "#" + pw.hoistTemp("naut_for_e", "LINT")
-	r := "#" + pw.hoistTemp("naut_for_r", "BOOL")
+	c := "#" + pw.forTemp("naut_for_c", "LINT")
+	e := "#" + pw.forTemp("naut_for_e", "LINT")
+	r := "#" + pw.forTemp("naut_for_r", "BOOL")
 	pw.emit(b, at, "%s%s := %s;\n", in, c, pw.lintOf(s.Start))
 	pw.emit(b, at, "%s%s := %s;\n", in, e, pw.lintOf(s.End))
 	var first, next string
@@ -163,27 +172,31 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 	case constStep && step == 0:
 		pw.faultIf(b, in, at, "TRUE") // nautilus: "FOR step is zero"
 		return
+	// The next pass runs when c + step stays on the near side of the end;
+	// c + step is only compared once it cannot overflow, so the test is
+	// exact for every LINT, and the counter never wraps round.
 	case constStep && step > 0:
 		first = fmt.Sprintf("%s <= %s", c, e)
-		next = fmt.Sprintf("(%s - %s) - %d >= 0", e, c, step)
-		stepAdd = strconv.FormatInt(step, 10)
+		next = fmt.Sprintf("%s <= LINT#%d AND %s + %d <= %s", c, int64(1<<63-1)-step, c, step, e)
+		stepAdd = " + " + strconv.FormatInt(step, 10)
 	case constStep:
 		first = fmt.Sprintf("%s >= %s", c, e)
-		next = fmt.Sprintf("(%s - %s) - %d >= 0", c, e, -step) // step < 0: (c - e) + step >= 0
-		stepAdd = strconv.FormatInt(step, 10)
+		next = fmt.Sprintf("%s >= LINT#%d AND %s - %d >= %s", c, int64(-1<<63)-step, c, -step, e)
+		stepAdd = " - " + strconv.FormatInt(-step, 10)
 	default:
-		k := "#" + pw.hoistTemp("naut_for_s", "LINT")
+		k := "#" + pw.forTemp("naut_for_s", "LINT")
 		pw.emit(b, at, "%s%s := %s;\n", in, k, pw.lintOf(s.Step))
 		pw.faultIf(b, in, at, k+" = 0") // nautilus: "FOR step is zero"
 		first = fmt.Sprintf("(%s > 0 AND %s <= %s) OR (%s < 0 AND %s >= %s)", k, c, e, k, c, e)
-		next = fmt.Sprintf("(%s > 0 AND (%s - %s) - %s >= 0) OR (%s < 0 AND (%s - %s) + %s >= 0)", k, e, c, k, k, c, e, k)
-		stepAdd = k
+		next = fmt.Sprintf("(%s > 0 AND %s <= LINT#9223372036854775807 - %s AND %s + %s <= %s) OR (%s < 0 AND %s >= LINT#-9223372036854775807 - 1 - %s AND %s + %s >= %s)",
+			k, c, k, c, k, e, k, c, k, c, k, e)
+		stepAdd = " + " + k
 	}
 	pw.emit(b, at, "%s%s := %s;\n", in, r, first)
 	pw.emit(b, at, "%sWHILE %s DO\n", in, r)
 	if t != "LINT" && (!pw.boundInType(s.Start, t) || !pw.boundInType(s.End, t)) {
 		lo, hi := typeRange(t)
-		pw.faultIf(b, in+"\t", at, fmt.Sprintf("%s < %d OR %s > %d", c, lo, c, hi))
+		pw.faultIf(b, in+"\t", at, fmt.Sprintf("%s < LINT#%d OR %s > LINT#%d", c, lo, c, hi))
 	}
 	if t == "LINT" {
 		pw.emit(b, at, "%s\t%s := %s;\n", in, v, c)
@@ -191,7 +204,7 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 		pw.emit(b, at, "%s\t%s := LINT_TO_%s(%s);\n", in, v, t, c)
 	}
 	pw.emit(b, at, "%s\t%s := %s;\n", in, r, next)
-	pw.emit(b, at, "%s\tIF %s THEN\n%s\t\t%s := %s + %s;\n%s\tEND_IF;\n", in, r, in, c, c, stepAdd, in)
+	pw.emit(b, at, "%s\tIF %s THEN\n%s\t\t%s := %s%s;\n%s\tEND_IF;\n", in, r, in, c, c, stepAdd, in)
 	k := strings.ToLower(s.Variable)
 	prev, had := pw.forRange[k]
 	delete(pw.forRange, k)

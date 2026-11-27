@@ -321,8 +321,10 @@ The rules:
   argument of another standard function, a CASE selector, a REAL target,
   a FOR step), integer arithmetic is refused.
 - **FOR** is TIA's own FOR only where it provably ends on the CPU
-  (constant bounds and step, end + step inside the variable's type); any
-  other FOR is a LINT counter loop (`naut_for_c/e/r`, siemens/writer
+  (constant start, end and step, end + step inside the variable's type),
+  run over a temp of the variable's type (`naut_for_v`) whose value the
+  variable takes first thing in the body, so body writes do not steer it
+  and the exit value is nautilus's; any other FOR is a LINT counter loop (`naut_for_c/e/r`, siemens/writer
   forloop.go) that decides whether to continue before it steps, so it
   cannot wrap round, and keeps nautilus's semantics (lang/ir vm.go: bounds
   evaluated once, the counter decides the next pass, the exit value is the

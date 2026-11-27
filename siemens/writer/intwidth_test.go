@@ -50,6 +50,23 @@ tm := INT_TO_TIME(i + 1);`)
 	)
 }
 
+// TestConversionsToBoolAndTime: TO_BOOL of integer arithmetic is "not
+// zero" at 64 bits (nautilus); TO_TIME of it stays refused (#1304: TIA's
+// TIME is 32-bit).
+func TestConversionsToBoolAndTime(t *testing.T) {
+	scl, diags := writeP(t, "n : INT; b : BOOL;", "b := TO_BOOL(n + 1);")
+	if diags != nil {
+		t.Fatal(diags)
+	}
+	wantLines(t, scl, "#b := (INT_TO_LINT(#n) + 1) <> 0;")
+	if _, diags := writeP(t, "n : INT; tm : TIME;", "tm := TO_TIME(n + 1);"); !hasDiag(diags, "TO_TIME of integer arithmetic") {
+		t.Fatalf("TO_TIME of integer arithmetic: %v", diags)
+	}
+	if _, diags := writeP(t, "u : ULINT; n : INT; l : LINT;", "l := MAX(u, n + 1);"); !hasDiag(diags, "integer arithmetic") {
+		t.Fatalf("MAX of a ULINT and integer arithmetic: %v", diags)
+	}
+}
+
 // TestSelPassesIntegerArithmeticThrough: an LD inline assignment
 // (`ld_N := ld_N + 1` behind a contact) is SEL(…, ADD(…)): nautilus
 // returns the 64-bit value and the store wraps it.
@@ -99,15 +116,21 @@ func TestForLoops(t *testing.T) {
 		return scl
 	}
 	plain("i : INT; x : INT;", "FOR i := 1 TO 10 DO x := x + 1; END_FOR;")
-	plain("i : DINT; n : INT; x : DINT;", "FOR i := 1 TO n DO x := i; END_FOR;") // n ≤ 32767: i + 1 fits DINT
+	// TIA's FOR runs on a temp; the variable takes each value first thing
+	// in the body, so a body that writes it does not change the loop.
+	scl0, _ := writeP(t, "i : INT; x : INT;", "FOR i := 0 TO 10 DO i := 0; x := x + 1; END_FOR;")
+	wantLines(t, scl0, "FOR #naut_for_v1 := 0 TO 10 DO", "#i := #naut_for_v1;\n\t\t#i := 0;")
 	plain("i : INT; x : INT;", "FOR i := 10 TO 1 BY -2 DO x := i; END_FOR;")
 
 	// The end is the type's last value: TIA's FOR could wrap round.
 	counter("i : INT; x : INT;", "FOR i := 0 TO 32767 DO x := i; END_FOR;",
 		"#naut_for_c1 := 0;", "#naut_for_e2 := 32767;", "#naut_for_r3 := #naut_for_c1 <= #naut_for_e2;",
 		"#i := LINT_TO_INT(#naut_for_c1);",
-		"#naut_for_r3 := (#naut_for_e2 - #naut_for_c1) - 1 >= 0;",
+		"#naut_for_r3 := #naut_for_c1 <= LINT#9223372036854775806 AND #naut_for_c1 + 1 <= #naut_for_e2;",
 		"#naut_for_c1 := #naut_for_c1 + 1;")
+	// A variable end, even of a narrower type: TIA's FOR is not proved to
+	// read it once.
+	counter("i : DINT; n : INT; x : DINT;", "FOR i := 1 TO n DO x := i; END_FOR;", "#naut_for_e2 := INT_TO_LINT(#n);")
 	// A variable end of the variable's own type can be its last value.
 	scl := counter("i, n : INT; x : INT;", "FOR i := 1 TO n DO x := i; END_FOR;", "#naut_for_e2 := INT_TO_LINT(#n);")
 	if strings.Contains(scl, "#naut_fault") {
@@ -116,18 +139,19 @@ func TestForLoops(t *testing.T) {
 	// plclab: an end that is integer arithmetic, at 64 bits, guarded.
 	counter("i, n, x : DINT;", "FOR i := 0 TO n - 1 DO x := i; END_FOR;",
 		"#naut_for_e2 := DINT_TO_LINT(#n) - 1;",
-		"IF #naut_for_c1 < -2147483648 OR #naut_for_c1 > 2147483647 THEN",
+		"IF #naut_for_c1 < LINT#-2147483648 OR #naut_for_c1 > LINT#2147483647 THEN",
 		"#naut_fault.faulted := TRUE;",
 		"#i := LINT_TO_DINT(#naut_for_c1);")
 	// Descending, and a variable step (zero faults, as in nautilus).
 	counter("i : INT; x : INT;", "FOR i := 0 TO -32768 BY -1 DO x := i; END_FOR;",
 		"#naut_for_r3 := #naut_for_c1 >= #naut_for_e2;",
-		"#naut_for_r3 := (#naut_for_c1 - #naut_for_e2) - 1 >= 0;",
-		"#naut_for_c1 := #naut_for_c1 + -1;")
+		"#naut_for_r3 := #naut_for_c1 >= LINT#-9223372036854775807 AND #naut_for_c1 - 1 >= #naut_for_e2;",
+		"#naut_for_c1 := #naut_for_c1 - 1;")
 	counter("i, s : INT; x : INT;", "FOR i := 1 TO 10 BY s DO x := i; END_FOR;",
 		"#naut_for_s4 := INT_TO_LINT(#s);",
 		"IF #naut_for_s4 = 0 THEN",
-		"#naut_for_r3 := (#naut_for_s4 > 0 AND #naut_for_c1 <= #naut_for_e2) OR (#naut_for_s4 < 0 AND #naut_for_c1 >= #naut_for_e2);")
+		"#naut_for_r3 := (#naut_for_s4 > 0 AND #naut_for_c1 <= #naut_for_e2) OR (#naut_for_s4 < 0 AND #naut_for_c1 >= #naut_for_e2);",
+		"(#naut_for_s4 > 0 AND #naut_for_c1 <= LINT#9223372036854775807 - #naut_for_s4 AND #naut_for_c1 + #naut_for_s4 <= #naut_for_e2) OR (#naut_for_s4 < 0 AND #naut_for_c1 >= LINT#-9223372036854775807 - 1 - #naut_for_s4 AND #naut_for_c1 + #naut_for_s4 >= #naut_for_e2)")
 	// A LINT variable is the counter's own type: no conversion, no guard.
 	counter("i, n, x : LINT;", "FOR i := 1 TO n DO x := i; END_FOR;", "#i := #naut_for_c1;")
 
@@ -148,7 +172,7 @@ func TestIntWidthGolden(t *testing.T) {
 	for _, g := range []struct{ names, typ string }{
 		{"D1 D2", "DINT"}, {"N M S Z", "INT"}, {"DoFault DoZero", "BOOL"},
 		{"rToInt rDintToInt rSel rMax rLimit", "INT"}, {"rToLint", "LINT"}, {"rToReal", "REAL"},
-		{"itTop itBelow itDown itVarEnd itVarStep itPlclab", "DINT"}, {"exTop exBelow exDown exVarEnd", "INT"}, {"exPlclab Scans", "DINT"},
+		{"itTop itBelow itDown itVarEnd itVarStep itPlclab", "DINT"}, {"exTop exBelow exDown exVarEnd", "INT"}, {"exPlclab Scans itPlain", "DINT"}, {"exPlain", "INT"},
 	} {
 		for _, n := range strings.Fields(g.names) {
 			globals = append(globals, Global{Name: n, Type: g.typ})

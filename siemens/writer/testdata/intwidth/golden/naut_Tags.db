@@ -8,11 +8,13 @@ VERSION : 0.1
       DoZero : BOOL;
       exBelow : INT;
       exDown : INT;
+      exPlain : INT;
       exPlclab : DINT;
       exTop : INT;
       exVarEnd : INT;
       itBelow : DINT;
       itDown : DINT;
+      itPlain : DINT;
       itPlclab : DINT;
       itTop : DINT;
       itVarEnd : DINT;

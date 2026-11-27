@@ -77,6 +77,7 @@ type progWriter struct {
 	forRange   map[string]forBounds
 	hoistN     int
 	hoistDecls []string
+	forN       int // the FOR loops' temps' numbering (forTemp)
 	faults     bool
 	// fcFault is where a FUNCTION that can fault, being printed, hands
 	// its fault (lift sets it).
@@ -637,7 +638,15 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		if s.Step != nil {
 			step = " BY " + pw.forBound(s.Step, s.Variable)
 		}
-		pw.emit(b, at, "%sFOR %s := %s TO %s%s DO\n", in, pw.ident(s.Variable, s.Pos.Line), pw.forBound(s.Start, s.Variable), pw.forBound(s.End, s.Variable), step)
+		// TIA's FOR runs on a temp of the variable's type, and the variable
+		// takes each value first thing in the body: nautilus's counter, not
+		// the variable, decides the next pass (a body that writes the
+		// variable does not change the loop), and after the loop the
+		// variable holds the last value run, or is unchanged when no pass
+		// ran (lang/ir vm.go).
+		tv := "#" + pw.forTemp("naut_for_v", pw.typ(&st.IdentExpr{Name: s.Variable}))
+		pw.emit(b, at, "%sFOR %s := %s TO %s%s DO\n", in, tv, pw.forBound(s.Start, s.Variable), pw.forBound(s.End, s.Variable), step)
+		pw.emit(b, at, "%s\t%s := %s;\n", in, pw.ident(s.Variable, s.Pos.Line), tv)
 		// The loop variable's values, proved for the body's indices.
 		k := strings.ToLower(s.Variable)
 		prev, had := pw.forRange[k]

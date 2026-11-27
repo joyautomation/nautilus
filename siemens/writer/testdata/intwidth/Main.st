@@ -12,6 +12,8 @@ VAR_EXTERNAL
     itTop, itBelow, itDown, itVarEnd, itVarStep, itPlclab : DINT;
     exTop, exBelow, exDown, exVarEnd : INT;
     exPlclab : DINT;
+    itPlain : DINT;
+    exPlain : INT;
     Scans : DINT;
 END_VAR
 VAR
@@ -52,6 +54,10 @@ FOR k := 1 TO 10 BY S DO itVarStep := itVarStep + 1; END_FOR;
 itPlclab := 0;
 FOR j := 0 TO nb - 1 DO itPlclab := itPlclab + 1; END_FOR;
 exPlclab := j;
+(* a constant FOR, TIA's own, whose body writes its variable: 4 passes *)
+itPlain := 0;
+FOR k := 1 TO 4 DO itPlain := itPlain + 1; k := 0; END_FOR;
+exPlain := k;
 Scans := Scans + 1;
 (* the guards, only when asked: a step of zero (nautilus faults too) and an
    end past INT's range (nautilus stores 32768.., #1427; the CPU faults) *)

@@ -76,7 +76,7 @@ func TestArrayChecksInOrder(t *testing.T) {
 	order(`#inst.k := "naut_Tags".sel;`, "#naut_ix8 := #j;", "#inst.x := \"naut_Tags\".tbl[#naut_ix8];", "#inst();", "IF #inst.naut_fault.faulted THEN\n\t\t#naut_fault := #inst.naut_fault;", "#naut_ix9 := #i;", "#outs[#naut_ix9] := #inst.y;")
 	order("#o(k := #j);", "IF #o.naut_fault.faulted THEN", "#y := #o.y;")
 	// No check where the index is proved: a literal, a FOR variable.
-	order("FOR #i := 1 TO #N DO\n\t\t#a[#i] := #i;", "#a[2] := 7;", "#b[#naut_ix1, #naut_ix2] := #b[-2, 0];")
+	order("FOR #naut_for_v1 := 1 TO #N DO\n\t\t#i := #naut_for_v1;\n\t\t#a[#i] := #i;", "#a[2] := 7;", "#b[#naut_ix1, #naut_ix2] := #b[-2, 0];")
 	outer := fileOf(t, out, "naut_Outer.scl")
 	if !strings.Contains(outer, "#g(k := #k, x := 2.0);\n\tIF #g.naut_fault.faulted THEN\n\t\t#naut_fault := #g.naut_fault;\n\t\tRETURN;\n\tEND_IF;\n\t#y := #g.y;") {
 		t.Errorf("a nested FB's fault must end its caller before its output is stored:\n%s", outer)
@@ -134,7 +134,7 @@ func TestForVariableProvedOnlyWhenUnwritten(t *testing.T) {
 		if err != nil || len(diags) > 0 {
 			t.Fatal(name, err, diags)
 		}
-		if name == "negative start" && !strings.Contains(fileOf(t, out, "naut_P.scl"), "FOR #i := -2 TO 2 DO") {
+		if name == "negative start" && !strings.Contains(fileOf(t, out, "naut_P.scl"), "FOR #naut_for_v1 := -2 TO 2 DO") {
 			t.Errorf("a constant FOR bound is one literal:\n%s", fileOf(t, out, "naut_P.scl"))
 		}
 		if got := strings.Contains(fileOf(t, out, "naut_P.scl"), "naut_ix"); got != c.checked {

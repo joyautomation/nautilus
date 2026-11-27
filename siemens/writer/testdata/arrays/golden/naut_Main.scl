@@ -19,6 +19,7 @@ VERSION : 0.1
       naut_fault : "naut_Fault";
    END_VAR
    VAR_TEMP 
+      naut_for_v1 : INT;
       naut_ix1 : LINT;
       naut_ix2 : LINT;
       naut_ix3 : LINT;
@@ -42,7 +43,8 @@ VERSION : 0.1
 
 BEGIN
 	#naut_fault.faulted := FALSE;
-	FOR #i := 1 TO #N DO
+	FOR #naut_for_v1 := 1 TO #N DO
+		#i := #naut_for_v1;
 		#a[#i] := #i;
 		#sum := LINT_TO_DINT((((DINT_TO_LINT(#sum) + DINT_TO_LINT(#a[#i])) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	END_FOR;
