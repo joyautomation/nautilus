@@ -101,9 +101,19 @@ func TestAHelloWithNoAnswerIsRetriedSoon(t *testing.T) {
 	c.noHello[sb] = false
 	c.mu.Unlock()
 	c.waitFor("the standby to learn the leader's API", leases(8), func() bool {
+		if raceOn && c.leader() == sb {
+			return true // skipped below
+		}
 		s := c.status(sb)
 		return s.Leader == string(who) && s.LeaderAddr == apiAddr(who)
 	})
+	if raceOn && c.leader() == sb {
+		// Under -race on a loaded runner the leader, resting on the
+		// witness alone while the standby restarts, can lapse, and the
+		// restarted standby then leads itself (#1120: CI on #1393): no
+		// standby is left whose hello the test is about.
+		t.Skipf("the restarted standby %s leads (#1120): the hello's premise is gone", sb)
+	}
 }
 
 // A standby whose hellos have long gone unanswered, its retries backed off
