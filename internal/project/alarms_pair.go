@@ -37,24 +37,35 @@ var PairAlarmEvery = time.Second
 type PairAlarms struct {
 	Engine     *alarm.Engine
 	Escalation *escalate.Dispatcher
-	// lastFailed: the last attempt to send one of its pages failed.
-	lastFailed atomic.Bool
-	stop       chan struct{}
-	done       sync.WaitGroup
+	// failed: per channel kind that reaches people (not log), whether
+	// the last attempt to send one of its pages failed.
+	failed map[string]*atomic.Bool
+	stop   chan struct{}
+	done   sync.WaitGroup
 }
 
-// Failing reports whether its pages are failing: the last attempt to
-// send one failed. Not the dispatcher's AnyFailing alone, which counts
-// failures in a row within one episode and forgets them at the next: this
-// alarm pages about once a spell, so a member whose every page fails
-// would never read as failing, and its hello would keep its peer from
-// paging (#1436). False with no page tried yet, and without a
-// dispatcher.
+// Failing reports whether its pages are failing: the last attempt on any
+// channel kind that reaches people failed. Kept per kind, so a log send
+// beside a refused SMS does not hide it. Not the dispatcher's AnyFailing
+// alone, which counts failures in a row within one episode and forgets
+// them at the next: this alarm pages about once a spell, so a member
+// whose every page fails would never read as failing, and its hello would
+// keep its peer from paging (#1436). False with no page tried yet, and
+// without a dispatcher.
 func (a *PairAlarms) Failing() bool {
-	return a != nil && a.Escalation != nil && (a.lastFailed.Load() || a.Escalation.AnyFailing())
+	if a == nil || a.Escalation == nil {
+		return false
+	}
+	for _, f := range a.failed {
+		if f.Load() {
+			return true
+		}
+	}
+	return a.Escalation.AnyFailing()
 }
 
-// pairChannel is a channel whose every attempt's outcome sets lastFailed.
+// pairChannel is a channel whose every attempt's outcome sets its kind's
+// failed flag.
 type pairChannel struct {
 	ch     escalate.Channel
 	failed *atomic.Bool
@@ -101,11 +112,16 @@ func (p *Project) pairAlarms(sink alarm.Journal, notify []alarm.Notifier, esc *e
 	if err != nil {
 		return nil, err
 	}
-	out := &PairAlarms{Engine: eng, stop: make(chan struct{})}
+	out := &PairAlarms{Engine: eng, stop: make(chan struct{}), failed: map[string]*atomic.Bool{}}
 	if esc != nil {
 		wrapped := make(map[string]escalate.Channel, len(chans))
 		for k, ch := range chans {
-			wrapped[k] = pairChannel{ch: ch, failed: &out.lastFailed}
+			if k == "log" {
+				wrapped[k] = ch // reaches nobody: its success proves nothing
+				continue
+			}
+			out.failed[k] = &atomic.Bool{}
+			wrapped[k] = pairChannel{ch: ch, failed: out.failed[k]}
 		}
 		o := escalate.Options{Config: esc, Engine: eng, Log: log, Channels: wrapped, Gate: pa.Active, Term: pa.Episode}
 		d, err := escalate.New(o)

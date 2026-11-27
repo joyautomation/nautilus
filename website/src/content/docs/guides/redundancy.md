@@ -1202,7 +1202,7 @@ escalation policy that matches it.
 
 - **One controller pages it:** the one whose name sorts first (`a`).
   The other pages too unless `a`'s last hello said that `a` raises it
-  and its last page went. So `b` pages when `a` is down, cut off from
+  and its last page went out on every channel that reaches people. So `b` pages when `a` is down, cut off from
   it, a spare, on a release without this alarm, or failing to send. A
   cut between the two pages twice; nothing leaves it unpaged.
 - **Nobody acknowledges it:** nobody can act on the plant through a pair
@@ -1210,8 +1210,8 @@ escalation policy that matches it.
   seen, then ends. Its pages carry no acknowledgement link or code.
 - **Not raised** by a controller that is not commissioned (a pair being
   set up), by a spare, or by a controller cut off from a peer that leads
-  (the peer does not answer it, and the witness refuses it for the
-  peer's promise).
+  (the witness says, for three leases running, that it keeps renewing
+  the peer's lease).
 - **A rolling upgrade** keeps it quiet while the two releases read each
   other's vote frames. Across a vote protocol version that does not (no
   release has shipped the vote protocol yet), the upgraded standby sees

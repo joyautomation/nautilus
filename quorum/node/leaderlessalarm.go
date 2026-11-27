@@ -25,8 +25,8 @@ import (
 //
 // Not raised: by a controller that is not commissioned (a pair being set
 // up), by a spare, or by a controller cut off from a peer that leads (the
-// peer has not answered it, and the witness refuses it for a promise
-// of its own: the peer's). Raised for a fenced state or a refused lease
+// witness's promise to the peer has run, renewed without a gap, for a
+// few leases). Raised for a fenced state or a refused lease
 // or version: those pairs can't lead either. A rolling upgrade across a
 // vote protocol version relies on the release rule (design §2: a version
 // reads its predecessor's frames); until that holds, the new standby
@@ -82,19 +82,40 @@ func (e *Elector) peerRaisesNow(now quorum.Instant) bool {
 	return now.Sub(e.peerRaiseAt) < e.cfgStale() || mut("leaderless_alarm_stale_word")
 }
 
-// leaderOutOfReach reports whether the peer most likely leads beyond
-// this controller's reach: it has not answered this controller for a
-// while, and the witness refuses this controller's campaigns for a
-// promise it holds (a term at or above the one asked), which only the
-// peer can hold. A duel has the witness's refusal too, but there the
-// peer answers. Under mu.
+// peerLeadAfter is how long the witness's promise to the peer must have
+// run without a gap before this controller takes it that the peer leads:
+// a leader's renewals keep it running, while a campaign that does not
+// win holds it about a lease and three quarters at most (its re-asks),
+// then lets it lapse for its back-off.
+const peerLeadAfter = 3
+
+// noteWitnessRelay records the running promise a witness reply carries
+// (its Relay, on probes and campaign replies alike). Under mu.
+func (e *Elector) noteWitnessRelay(now quorum.Instant, p quorum.Relay) {
+	if p.To != e.o.Peer || p.Left <= 0 {
+		e.witPeer = false
+		return
+	}
+	if !e.witPeer || (now > e.witPeerUntil && !mut("leaderless_alarm_relay_gap_unseen")) {
+		e.witPeerFrom = now // a new promise, not one renewed without a gap
+	}
+	e.witPeer, e.witPeerUntil = true, max(e.witPeerUntil, now.Add(min(p.Left, e.o.Lease)))
+}
+
+// leaderOutOfReach reports whether the peer leads beyond this
+// controller's reach: the witness's promise to the peer has run without
+// a gap for peerLeadAfter leases and runs now. Only renewals do that, so
+// the peer holds the lease (this controller misses its renewals: a cut
+// link, or a one-way one). A duel never does, so neither side of one is
+// silenced. Under mu.
 func (e *Elector) leaderOutOfReach(now quorum.Instant) bool {
-	recent := wordFresh * e.o.Lease
-	if e.answeredWithin(e.o.Peer, now, recent) && !mut("leaderless_alarm_reach_ignores_peer") {
+	if !e.witPeer || now >= e.witPeerUntil {
 		return false
 	}
-	w, ok := e.word(e.o.Witness)
-	return ok && now.Sub(w.At) < recent && w.Counted && !w.Granted && w.Promised >= w.Term
+	if mut("leaderless_alarm_reach_any_relay") {
+		return true
+	}
+	return now.Sub(e.witPeerFrom) >= peerLeadAfter*e.o.Lease
 }
 
 // noteRaise moves the alarm at a look with a no-leader report standing;

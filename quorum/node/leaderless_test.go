@@ -66,6 +66,7 @@ const (
 	wayMarked                    // refuses everything, marking the asker a duplicate
 	wayRefuse                    // refuses every campaign: promised a higher term elsewhere
 	wayRefuseLow                 // refuses every campaign, its promise below the term (a restart wait)
+	wayPeerLeads                 // as a voter renewing the peer: refuses every campaign with its promise below the term, and relays its running promise to the peer on every reply
 )
 
 // fakeVoters answers a's vote calls for b and the witness.
@@ -76,7 +77,9 @@ type fakeVoters struct {
 	peer quorum.NodeID
 	// hello, when set, answers the peer's /hello.
 	hello http.Handler
-	cn    map[string]string // the certificate each host answers under (peer TLS), by host
+	// relayLeft is what a wayPeerLeads voter says its promise has left.
+	relayLeft time.Duration
+	cn        map[string]string // the certificate each host answers under (peer TLS), by host
 	// answered counts the requests other than campaigns each host
 	// answered (probes).
 	answered map[string]int
@@ -86,6 +89,13 @@ func (f *fakeVoters) probes(host string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.answered[host]
+}
+
+func (f *fakeVoters) peerName() quorum.NodeID {
+	if f.peer != "" {
+		return f.peer
+	}
+	return "b"
 }
 
 func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -145,6 +155,11 @@ func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 		rep.Promised = req.Term + 5
 	case wayRefuseLow:
 		rep.Promised = 0
+	case wayPeerLeads:
+		if req.Term > 0 {
+			rep.Promised = req.Term - 1
+		}
+		rep.Promise = quorum.Relay{To: f.peerName(), Nonce: 1, Left: f.relayLeft}
 	}
 	out, _ := rep.MarshalBinary()
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(out)), Header: http.Header{}, Request: r, TLS: cs}, nil

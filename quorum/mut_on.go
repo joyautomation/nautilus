@@ -692,7 +692,8 @@ var Mutations = []string{
 	"leaderless_alarm_no_grace",            // node: the second-named controller raises the no-leader alarm at once, before the first's word can come: paged twice (#1436)
 	"leaderless_alarm_unlatched",           // node: a controller drops the no-leader alarm when the first's word comes back, so a flapping link pages again at each hand-off (#1436)
 	"leaderless_alarm_uncommissioned",      // node: an uncommissioned controller (a pair being set up) raises the no-leader alarm (#1436)
-	"leaderless_alarm_reach_ignores_peer",  // node: the witness's refusal alone silences the no-leader alarm, so a duel (the #1436 slow-write case) pages nobody (#1436)
+	"leaderless_alarm_reach_any_relay",     // node: one witness reply naming a promise to the peer silences the no-leader alarm, so a duel across a cut link pages nobody (#1436, Fable)
+	"leaderless_alarm_relay_gap_unseen",    // node: the witness's promise to the peer counts as renewed across a gap with no reply, so a duel across a cut link pages nobody (#1436, Fable)
 	"leaderless_word_unbound",              // node: the no-leader alarm word in a hello answer is not bound by its MAC: anyone between the controllers can silence the second's page (#1436)
 	"pair_alarm_none",                      // naut: a pair member builds no no-leader alarm, so a pair with no leader pages nobody (#1436)
 }

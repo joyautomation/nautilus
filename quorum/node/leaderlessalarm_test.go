@@ -146,44 +146,75 @@ func TestLeaderlessAlarmNotWhileUncommissioned(t *testing.T) {
 	}
 }
 
-// A controller cut off from a peer that leads (no answer from the peer,
-// the witness refusing for a promise it holds) raises nothing; in a duel
-// the witness refuses too, but the peer answers, and the alarm is raised
-// (leaderless_alarm_reach_ignores_peer turns the duel red).
+// A controller cut off from a peer that leads raises nothing: the
+// witness answers its probes and campaigns as a voter renewing the peer
+// does (a refusal with its lower promise, and its running promise to the
+// peer relayed), without a gap for peerLeadAfter leases. A duel across a
+// cut link holds the witness's promise to the peer only a campaign's
+// while, with gaps, so neither side is silenced
+// (leaderless_alarm_reach_any_relay and _relay_gap_unseen turn it red).
 func TestLeaderlessAlarmNotWhenThePeerLeadsOutOfReach(t *testing.T) {
-	witnessRefused := func(l *lelector) func() bool {
-		return func() bool {
+	setWit := func(l *lelector, w voterWay) {
+		l.voters.mu.Lock()
+		l.voters.way["witness.test"], l.voters.relayLeft = w, l.o.Lease
+		l.voters.mu.Unlock()
+	}
+	// step moves the clock a quarter lease and looks until the witness's
+	// answer at the new time is in (none when it is cut).
+	step := func(t *testing.T, l *lelector, w voterWay) {
+		t.Helper()
+		setWit(l, w)
+		l.clk.add(l.o.Lease / 4)
+		if w == wayCut {
+			l.e.look()
+			return
+		}
+		waitFor(t, 2*time.Second, func() bool {
 			l.e.look()
 			l.e.mu.Lock()
 			defer l.e.mu.Unlock()
-			w, ok := l.e.word(l.e.o.Witness)
-			return ok && l.e.now().Sub(w.At) < l.o.Lease && w.Counted && !w.Granted && w.Promised >= w.Term
-		}
+			return l.e.witPeer && l.e.witPeerUntil == l.e.now().Add(l.o.Lease)
+		})
 	}
-	// The witness's word comes from the campaigns before the report
-	// starts, as it does on a real clock.
-	refusedThenLeaderless := func(t *testing.T, l *lelector) {
-		l.pastHold(leaderlessAfter - 1)
-		waitFor(t, 2*time.Second, witnessRefused(l))
-		l.clk.add(l.o.Lease + l.o.Lease/8)
-		l.e.look()
-		if l.e.Status().Leaderless == nil {
-			t.Fatal("no no-leader report")
-		}
+	outOfReach := func(l *lelector) bool {
+		l.e.mu.Lock()
+		defer l.e.mu.Unlock()
+		return l.e.leaderOutOfReach(l.e.now())
 	}
-	t.Run("peer out of reach", func(t *testing.T) {
-		l := newLelector(t, wayCut, wayRefuse, true, nil)
-		refusedThenLeaderless(t, l)
-		if l.raises() {
-			t.Fatal("a raised the alarm cut off from a peer the witness says leads")
+	t.Run("the peer leads", func(t *testing.T) {
+		l := newLelector(t, wayCut, wayPeerLeads, true, nil)
+		for i := 0; l.e.Status().Leaderless == nil; i++ {
+			if i > 200 {
+				t.Fatal("no no-leader report")
+			}
+			step(t, l, wayPeerLeads)
+		}
+		for range 8 {
+			step(t, l, wayPeerLeads)
+			if r, _ := l.e.LeaderlessAlarm(); r {
+				t.Fatal("a raised the alarm cut off from a peer the witness keeps renewing")
+			}
+		}
+		if !outOfReach(l) {
+			t.Fatal("not taken as out of reach")
 		}
 	})
-	t.Run("duel", func(t *testing.T) {
-		l := newLelector(t, wayRefuse, wayRefuse, true, nil)
-		refusedThenLeaderless(t, l)
-		l.peerAnswers()
-		if !l.raises() {
-			t.Fatal("a raised nothing in a duel: the peer answers, so it does not lead out of reach")
+	t.Run("a duel across a cut link", func(t *testing.T) {
+		l := newLelector(t, wayCut, wayPeerLeads, true, nil)
+		// The peer's campaign holds the witness 1.5 leases, then its
+		// back-off: nothing from the witness for a lease and a half.
+		for i := 0; i < 120; i++ {
+			w := wayPeerLeads
+			if i%12 >= 6 {
+				w = wayCut
+			}
+			step(t, l, w)
+			if outOfReach(l) {
+				t.Fatalf("step %d: a duel's campaign promise taken as the peer leading", i)
+			}
+		}
+		if r, _ := l.e.LeaderlessAlarm(); !r || l.e.Status().Leaderless == nil {
+			t.Fatalf("a raised nothing in a duel: %+v", l.e.Status().Leaderless)
 		}
 	})
 }
@@ -220,6 +251,18 @@ func TestLeaderlessWordRidesTheHello(t *testing.T) {
 	a.llRaise.Store(true)
 	if !word() {
 		t.Fatal("a raises the alarm and its sends work, and b heard no word")
+	}
+	b.voters.mu.Lock()
+	b.voters.hello = nil // a's hello finds no answer
+	b.voters.mu.Unlock()
+	if word() {
+		t.Fatal("a hello with no answer left a's word standing")
+	}
+	b.voters.mu.Lock()
+	b.voters.hello = a.Handler()
+	b.voters.mu.Unlock()
+	if !word() {
+		t.Fatal("a's word did not come back with its hello")
 	}
 	sends = false
 	if word() {

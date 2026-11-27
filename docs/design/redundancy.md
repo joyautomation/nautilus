@@ -2320,16 +2320,23 @@ same driver contract as the simulator.
     ends when a leader is seen. Raised from the member's no-leader report (four leases):
     - **Once:** the member whose name sorts first raises it; the second raises it unless its
       peer's verified hello answer (field `leaderless`, bound by InfoMAC, absent from older
-      builds) said within `cfgStale` that the first raises it and its last send went (a
-      channel attempt's outcome, not the dispatcher's failures-in-a-row, which reset each
-      spell). A failed or unverified hello withdraws the word. The second waits
+      builds) said within `cfgStale` that the first raises it and its last send went (each
+      channel kind's last attempt, `log` aside; not the dispatcher's failures-in-a-row,
+      which reset each spell). A failed or unverified hello withdraws the word. The second waits
       `4·helloRetry` for the word, asking hellos at once. Once raised it is latched until a
       leader is seen. A split, a down or spare first, an older first, a first whose sends fail:
       the second pages too. Twice, never zero.
     - **Not raised:** by an uncommissioned member, a spare, or one cut off from a peer that
-      leads (the peer unanswered for four leases and the witness's fresh refusal naming a
-      promise it holds; a duel has that refusal too, but there the peer answers). Raised for a
-      fenced state and a refused lease or version.
+      leads: the witness's replies (probes and campaigns, every look) relay a running promise
+      to the peer, renewed without a gap for three leases. Only renewals do that; a campaign
+      that does not win holds the witness about 1.75 leases, then lets it lapse for its
+      back-off, so neither side of a duel across a cut link is silenced. Raised for a fenced
+      state and a refused lease or version.
+    - **Known costs:** a leader won and lost every few leases is a new spell and a new page
+      each time (no chatter handling). If the second-named member reaches its no-leader
+      report more than the grace before the first does (a staggered power-up with no
+      leader), both page. Notifier failures and "no policy matches" are not in the word;
+      both members share the configuration, so both are affected alike.
   - The default lease is 1 s for the pair and the witness alike (it was 2 s): measured on
     loopback and in a 30-minute soak on two ARM controllers (#710; table in the guide). At 1 s
     a stalled leader's write gate closes after about 0.67 s (up to 0.92 s by where the stall

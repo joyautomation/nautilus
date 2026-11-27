@@ -541,10 +541,15 @@ type Elector struct {
 	llStart     quorum.Instant
 	peerRaises  bool
 	peerRaiseAt quorum.Instant
-	ctx         context.Context // Run's: sends end with it
-	events      chan Event
-	decided     chan struct{}
-	once        sync.Once
+	// witPeerFrom..witPeerUntil: the witness's replies have named a
+	// running promise to the peer without a gap since witPeerFrom
+	// (witPeer: one runs now, or did at the last reply).
+	witPeer                   bool
+	witPeerFrom, witPeerUntil quorum.Instant
+	ctx                       context.Context // Run's: sends end with it
+	events                    chan Event
+	decided                   chan struct{}
+	once                      sync.Once
 }
 
 // gateState is what the write gate is judged on, published after every
@@ -1402,6 +1407,9 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 	if !mut("reply_relay_dropped") {
 		e.v.Hear(now, from, 0, r.Promise)
 		e.noteDuplicates()
+	}
+	if from == e.o.Witness {
+		e.noteWitnessRelay(now, r.Promise)
 	}
 	e.noteMark(r) // a probe's reply too: how a marked name hears it cleared
 	spareP := e.noteHeld(now, r)

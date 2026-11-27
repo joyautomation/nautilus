@@ -26,7 +26,7 @@ alarms:
     - id: system
       match: { class: system }
       levels:
-        - { after: 0s, notify: [roster:ops], via: [email] }
+        - { after: 0s, notify: [roster:ops], via: [email, log] }
 `
 
 // A pair member's no-leader alarm (#1436) is raised on an engine of its
@@ -35,7 +35,8 @@ alarms:
 // carries no ack link or reply code (nobody can acknowledge it: it ends
 // when a leader is seen), is not acknowledgeable whatever its Def says,
 // stays out of the scan's engine, and reports its sends failing so the
-// member's hello stops vouching for it.
+// member's hello stops vouching for it: per channel kind, so the log send
+// beside a refused email does not hide it.
 func TestPairAlarmPagesOnItsOwnEngine(t *testing.T) {
 	proj, rt := loadAlarms(t, alarmFS(pairAlarmManifest, nil))
 	proj.AlarmDirectory = &channeltest.Dir{Addrs: map[string]map[string]string{"alice": {"email": "a@example.com"}}}
