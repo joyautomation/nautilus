@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/optommp/optommptest"
@@ -139,6 +140,9 @@ func TestModbusDownReadsInitOrZeroWhileLocalIOStillFaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The drivers are not started yet, so the first scan's wait for their
+	// inputs (#786) can only run out: make it short.
+	p.Runtime.InputsWait = time.Millisecond
 	rt, err := runtime.New(p.Runtime)
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +163,11 @@ func TestModbusDownReadsInitOrZeroWhileLocalIOStillFaults(t *testing.T) {
 	if _, err := tags.ReadGlobal("EPIC_M0_DI03"); err == nil {
 		t.Error("the local-I/O input was seeded; it must stay absent until the EPIC delivers it")
 	}
-	// The local task reads only the EPIC input: it faults, as before.
+	// Past the wait the main scan runs (a task waits for its read), and
+	// the local task, which reads only the EPIC input, faults, as before.
+	rt.Scan()
+	time.Sleep(5 * time.Millisecond)
+	rt.Scan()
 	if err := rt.ScanTask("local"); err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +190,10 @@ func TestModbusDownReadsInitOrZeroWhileLocalIOStillFaults(t *testing.T) {
 		}
 	}
 	st := rt.Stats()
-	if st.LogicErrors != 0 {
+	// Main also reads the EPIC input, so its scans past the wait faulted
+	// until the EPIC delivered; with the EPIC in it runs on the skid's
+	// seeds, the skid still down.
+	if st.Faulting {
 		t.Fatalf("Main faulted with the skid down: %s — it must run on the seeds", st.LastError)
 	}
 	if st.Tasks[0].LogicErrors != 1 {

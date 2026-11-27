@@ -179,6 +179,9 @@ func TestStartupAwayThenGateClosesSendsNothing(t *testing.T) {
 	down.Store(true)
 	drv := gatedDriver(t, dev, g.gate, &down)
 	rt := gateRuntime(t, drv, leaderFunc(g.open.Load))
+	// The first scan waits for the unit's first attempt (#786): the
+	// processor is away, so that is its first failed connect.
+	eventually(t, "the first attempt to fail", drv.InputsReady)
 	rt.Scan() // armed baseline, processor away: waits undecided
 	drv.mu.Lock()
 	undecided, pending := len(drv.undecided), len(drv.pending)
