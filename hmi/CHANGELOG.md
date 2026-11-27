@@ -1,6 +1,6 @@
 # Changelog — @joyautomation/nautilus-hmi
 
-## 0.11.0 — 2026-11-27 (minor: additive, one type widening: `Quality` gains `'substituted'`; sign-in needs one line in your root layout, below)
+## 0.11.0 — 2026-11-27 (minor: additive, one type widening: `Quality` gains `'substituted'`; state colours change a little for contrast; sign-in needs one line in your root layout, below)
 
 ### Fixed
 
