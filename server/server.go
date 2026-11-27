@@ -497,6 +497,26 @@ type Options struct {
 	// HTTPStatus() int method, which is how a writer reports a request that
 	// was wrong rather than a device that failed.
 	TagWriter func(name string, value any) error
+
+	// Fronted, when set, stands in for the runtime's own program view on
+	// a server fronting a controller it does not run (`naut siemens
+	// serve`): that runtime runs no program, so it has no locals to stream
+	// and no declared types for /api/meta. Each field left nil falls back
+	// to the runtime's.
+	Fronted *Fronted
+}
+
+// Fronted is the program view of a controller the server fronts but does
+// not run: what naut run would stream and describe for the same project.
+type Fronted struct {
+	// Locals is the program locals as the frame's "locals" carries them:
+	// keyed by the local's bare name, an FB instance or struct as a map of
+	// its members (runtime.AllLocals's shape).
+	Locals func() map[string]any
+	// TagTypes and LocalTypes are the declared types /api/meta reports
+	// (runtime.TagTypes and runtime.LocalTypes's shape).
+	TagTypes   func() map[string]*ir.Type
+	LocalTypes func() map[string]*ir.Type
 }
 
 // DriverStatus is a field driver's or publisher's health, rendered by the
@@ -627,6 +647,7 @@ type Server struct {
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
 	tagWriter   func(name string, value any) error
+	fronted     Fronted
 	subRules    []SubstituteRule // Options.Substitutes
 	subLog      *SubstituteLog   // Options.SubstituteLog
 	alarmLog    *AlarmLog        // Options.AlarmLog
@@ -807,6 +828,9 @@ func newServer(rt *runtime.Runtime, opts ...Options) *Server {
 		s.alarms = opts[0].Alarms
 		s.shelveTimes = opts[0].AlarmShelveTimes
 		s.tagWriter = opts[0].TagWriter
+		if f := opts[0].Fronted; f != nil {
+			s.fronted = *f
+		}
 		s.subRules = opts[0].Substitutes
 		s.subLog = opts[0].SubstituteLog
 		s.alarmLog = opts[0].AlarmLog
@@ -961,7 +985,7 @@ func (s *Server) frame(pats []string) Frame {
 		TS:      now.UnixMilli(),
 		Scans:   stats.Count,
 		Tags:    filterTags(s.tagsFrame(), pats),
-		Locals:  s.rt.AllLocals(),
+		Locals:  s.allLocals(),
 		Scan:    &stats,
 		Quality: filterQuality(qualityJSON(s.rt.Quality()), pats),
 		Drivers: s.driverStatus(now),
@@ -2000,8 +2024,8 @@ type metaResponse struct {
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(metaResponse{
-		Tags:         metaTags(s.rt),
-		Locals:       metaLocals(s.rt),
+		Tags:         metaTags(s.rt, s.fronted.TagTypes),
+		Locals:       metaLocals(s.rt, s.fronted.LocalTypes),
 		Inputs:       nonNilStrings(s.rt.Inputs()),
 		Outputs:      nonNilStrings(s.rt.Outputs()),
 		ScanTargetMs: s.rt.Stats().TargetMs,

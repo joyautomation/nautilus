@@ -336,7 +336,7 @@ func (s *Server) broadcast() {
 		return alarmSum
 	}
 
-	locals := s.rt.AllLocals()
+	locals := s.allLocals()
 	var fullTags map[string]any
 	if needFull {
 		fullTags = s.tagsFrame()

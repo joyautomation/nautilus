@@ -2597,6 +2597,19 @@ and the auditor's backlog across sets before `Options.Audit` is set for
 serve). If a re-binding fails and so does rebuilding the last set, Run
 returns an error and serve exits 1.
 
+**Serve's frame and meta (#789 A1b).** For a project, serve streams what
+`naut run` streams for it. The manifest tags are runtime tags. The
+bindings below a program's root are polled but are not runtime tags: they
+reach the frame's `locals` through `server.Options.Fronted` (a server
+seam for a controller the server fronts but does not run), keyed by bare
+name with an instance or struct nested. The programs merge in
+`runtime.AllLocals` order (other tasks first, the main task last).
+`/api/meta`'s tag and local types come from the runtime `naut run` would
+build for the project (`project.Load` + `runtime.New`, not started),
+rebuilt at each reload and compared by content, so an equal program is no
+re-binding. Locals carry no quality, as under `naut run`. Without a
+project (`--root` alone) serve reports no types.
+
 **The station spec sets the CPU-side config:** the web server, a web user
 with read/write rights, the protection level, and Web API visibility on
 generated members.

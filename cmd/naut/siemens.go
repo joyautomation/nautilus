@@ -15,6 +15,7 @@ import (
 
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 	"github.com/joyautomation/nautilus/siemens/facade"
 	"github.com/joyautomation/nautilus/siemens/webapi"
@@ -154,8 +155,9 @@ type siemensServeConfig struct {
 	// known and reload are set when the roots come from the project:
 	// serve binds the names the writer generates (not its own bookkeeping
 	// members), and asks the project again before each re-discovery.
-	known  func(string) bool
-	reload func() ([]facade.Root, func(string) bool, error)
+	known   func(string) bool
+	program *facade.Program
+	reload  func() (facade.Plan, error)
 	// planNote says why the roots did not come from the project.
 	planNote string
 	// rediscover is the facade's re-discovery period (0: its default).
@@ -210,9 +212,9 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 				// No --root: bind what the writer generates for the project.
 				// Asked again before each re-discovery: a project that
 				// does not write now may once it is fixed.
-				c.reload = func() ([]facade.Root, func(string) bool, error) { return siemensServePlan(projectDir) }
-				if roots, known, err := siemensServePlan(projectDir); err == nil {
-					c.roots, c.known = roots, known
+				c.reload = func() (facade.Plan, error) { return siemensServePlan(projectDir) }
+				if p, err := siemensServePlan(projectDir); err == nil {
+					c.roots, c.known, c.program = p.Roots, p.Known, p.Program
 				} else {
 					c.planNote = fmt.Sprintf("the project's programs are not bound (%v): serving its global tags only; pass --root DB=Program for a program's variables", err)
 				}
@@ -243,21 +245,38 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 // siemensServePlan is what serve binds for the project in dir: the data
 // blocks the Siemens writer generates for it (the tags DB and each
 // program's instance DB), and, as the names to bind, the ones the writer
-// maps (Output.Symbol), so its own bookkeeping members stay out.
-func siemensServePlan(dir string) ([]facade.Root, func(string) bool, error) {
+// maps (Output.Symbol), so its own bookkeeping members stay out. Its
+// Program is naut run's view of the same project (the declared types, the
+// order the programs' locals merge in), from the runtime naut run would
+// build, not started.
+func siemensServePlan(dir string) (facade.Plan, error) {
 	in, err := siemensWriterInput(dir, "")
 	if err != nil {
-		return nil, nil, err
+		return facade.Plan{}, err
 	}
 	out, _, err := swriter.Write(in)
 	if err != nil {
-		return nil, nil, err
+		return facade.Plan{}, err
 	}
 	if len(out.Roots) == 0 {
-		return nil, nil, errors.New("the Siemens writer names no data block for it")
+		return facade.Plan{}, errors.New("the Siemens writer names no data block for it")
+	}
+	proj, err := project.Load(os.DirFS(dir), "")
+	if err != nil {
+		return facade.Plan{}, err
+	}
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		return facade.Plan{}, err
+	}
+	prog := &facade.Program{TagTypes: rt.TagTypes(), LocalTypes: rt.LocalTypes()}
+	// naut run merges the other tasks' locals first and the main task's
+	// last (runtime.AllLocals); the main task is the first.
+	for i := range in.Tasks {
+		prog.Order = append(prog.Order, in.Tasks[(i+1)%len(in.Tasks)].Program)
 	}
 	known := func(name string) bool { _, ok := out.Symbol(name); return ok }
-	return facade.RootsFromWriter(out.Roots), known, nil
+	return facade.Plan{Roots: facade.RootsFromWriter(out.Roots), Known: known, Program: prog}, nil
 }
 
 // siemensOnlineDefaults fills what the flags left empty from the project's
@@ -350,6 +369,7 @@ func siemensFacadeOptions(cfg siemensServeConfig, client *webapi.Client) facade.
 		Host:       cfg.host,
 		Roots:      cfg.roots,
 		Known:      cfg.known,
+		Program:    cfg.program,
 		Reload:     cfg.reload,
 		Rediscover: cfg.rediscover,
 		Poll:       cfg.poll,

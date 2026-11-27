@@ -294,6 +294,10 @@ type Driver struct {
 	// Defaults: one poll period (at least 1 s), and 30 s.
 	BackoffMin, BackoffMax time.Duration
 	now                    func() time.Time
+	// tags, when set, are the bindings that are runtime tags: Quality
+	// reports only those (the rest are program locals, which carry no
+	// quality in a frame).
+	tags map[string]bool
 	// onGone, when set, is called when a read says a bound symbol no
 	// longer exists, or reads a value its bound type cannot hold (a
 	// download changed the program): the facade then browses the CPU
@@ -418,6 +422,25 @@ func (d *Driver) ReadInputs() (nio.Values, error) {
 	return out, nil
 }
 
+// Current is the values that are current (Good): read, and neither failing
+// nor held from before the CPU dropped off. Program locals are served from
+// it: a frame's locals carry no quality, so a value that is not current is
+// left out rather than shown as if live.
+func (d *Driver) Current() nio.Values {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := nio.Values{}
+	if !d.connected {
+		return out
+	}
+	for k, v := range d.values {
+		if !d.failing[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // WriteOutputs has nothing to write: the CPU runs the program.
 func (d *Driver) WriteOutputs(nio.Values) error { return nil }
 
@@ -429,6 +452,9 @@ func (d *Driver) Quality() map[string]nio.Quality {
 	defer d.mu.Unlock()
 	var out map[string]nio.Quality
 	for _, b := range d.bs {
+		if d.tags != nil && !d.tags[b.Name] {
+			continue
+		}
 		_, held := d.values[b.Name]
 		var q nio.Quality
 		switch {

@@ -3,12 +3,14 @@ package facade
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/siemens/webapi"
 	"github.com/joyautomation/nautilus/siemens/webapi/webapitest"
 )
@@ -188,9 +190,9 @@ func TestKnownLeavesOutTheWritersOwnMembers(t *testing.T) {
 // again at each re-discovery (a program added since serve started).
 func TestReloadPicksUpTheProjectsNewRoots(t *testing.T) {
 	calls := 0
-	reload := func() ([]Root, func(string) bool, error) {
+	reload := func() (Plan, error) {
 		calls++
-		return roots, nil, nil
+		return Plan{Roots: roots}, nil
 	}
 	_, f, base := startWith(t, Options{Roots: []Root{{DB: "Tags"}}, Reload: reload, Rediscover: 100 * time.Millisecond})
 	if _, ok := state(t, base)["Main.count"]; ok {
@@ -271,11 +273,11 @@ func TestTheSwapWindowAnswers503(t *testing.T) {
 func TestKicksThatFindNothingAreRateLimited(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
-	reload := func() ([]Root, func(string) bool, error) {
+	reload := func() (Plan, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
-		return roots, nil, nil
+		return Plan{Roots: roots}, nil
 	}
 	_, f, _ := startWith(t, Options{Rediscover: -1, Settle: 10 * time.Millisecond, KickGap: time.Hour, Reload: reload})
 	for i := 0; i < 25; i++ {
@@ -295,14 +297,14 @@ func TestKicksThatFindNothingAreRateLimited(t *testing.T) {
 func TestADifferentBrowseIsConfirmedFirst(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
-	reload := func() ([]Root, func(string) bool, error) { // odd: half loaded; even: whole
+	reload := func() (Plan, error) { // odd: half loaded; even: whole
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
 		if calls%2 == 1 {
-			return []Root{{DB: "Tags"}}, nil, nil
+			return Plan{Roots: []Root{{DB: "Tags"}}}, nil
 		}
-		return roots, nil, nil
+		return Plan{Roots: roots}, nil
 	}
 	_, f, _ := startWith(t, Options{Rediscover: 100 * time.Millisecond, Settle: 20 * time.Millisecond, Reload: reload})
 	time.Sleep(700 * time.Millisecond)
@@ -377,4 +379,60 @@ func TestAWriteInFlightAndOneInTheSwapWindowBothFinish(t *testing.T) {
 		t.Fatalf("rebinds = %d", f.Rebinds())
 	}
 	waitFor(t, "the new set serving", func() bool { return state(t, base)["Main.extra"] == true })
+}
+
+// TestAnEqualProgramIsNoChange: the project is read again at every
+// re-discovery, so each Reload builds a new Program; an equal one does
+// not re-bind.
+func TestAnEqualProgramIsNoChange(t *testing.T) {
+	reload := func() (Plan, error) {
+		return Plan{Roots: roots, Program: &Program{
+			TagTypes:   map[string]*ir.Type{"Level": {Kind: ir.TypeReal}},
+			LocalTypes: map[string]*ir.Type{"count": {Kind: ir.TypeInt}},
+			Order:      []string{"Main"},
+		}}, nil
+	}
+	p, _ := reload()
+	_, f, _ := startWith(t, Options{Program: p.Program, Reload: reload, Rediscover: 50 * time.Millisecond, Settle: 10 * time.Millisecond})
+	time.Sleep(500 * time.Millisecond)
+	if n := f.Rebinds(); n != 0 {
+		t.Fatalf("rebinds = %d for an equal Program", n)
+	}
+}
+
+// TestALocalThatIsNotCurrentIsLeftOut: locals carry no quality in a
+// frame, so one whose read fails, or all of them while the CPU cannot be
+// reached, leave the frame (no pill) instead of showing a held value as
+// if live, and come back after a good read. The tags go Bad / Stale.
+func TestALocalThatIsNotCurrentIsLeftOut(t *testing.T) {
+	s, _, base := startWith(t, Options{Rediscover: -1, Settle: time.Hour})
+	locals := func() map[string]any {
+		res, err := http.Get(base + "/api/state")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var st struct{ Locals map[string]any }
+		if err := json.NewDecoder(res.Body).Decode(&st); err != nil {
+			t.Fatal(err)
+		}
+		return st.Locals
+	}
+	waitFor(t, "count in the locals", func() bool { return locals()["count"] == float64(4) })
+
+	// One local's read fails: it leaves; the others stay.
+	s.Put(`"Main_DB".count`, &webapitest.Var{Datatype: "struct"}) // reads answer "unsupported address"
+	waitFor(t, "count gone", func() bool { _, ok := locals()["count"]; return !ok })
+	if _, ok := locals()["dwell"]; !ok {
+		t.Fatal("dwell left too: only the failing local leaves")
+	}
+	s.Put(`"Main_DB".count`, &webapitest.Var{Datatype: "int", Value: 6})
+	waitFor(t, "count back", func() bool { return locals()["count"] == float64(6) })
+
+	// The CPU drops off: every local leaves while the tags go stale.
+	s.StopAnswering()
+	waitFor(t, "all locals gone, tags stale", func() bool {
+		_, q := stateQ(t, base)
+		return len(locals()) == 0 && q["Level"] == "stale"
+	})
 }

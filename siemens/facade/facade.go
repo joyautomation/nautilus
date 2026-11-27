@@ -36,6 +36,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 	"github.com/joyautomation/nautilus/siemens/webapi"
@@ -64,10 +65,15 @@ type Options struct {
 	// word (the writer's own bookkeeping, such as a timer's "<t>_last"
 	// static). Nil binds everything the browse finds.
 	Known func(name string) bool
-	// Reload, when set, is asked for the roots and Known again before
-	// every re-discovery, so a project edited since serve started binds
-	// its new names. An error keeps the last ones.
-	Reload func() ([]Root, func(string) bool, error)
+	// Program, when set, is what naut run shows for the project the CPU
+	// runs: the declared types /api/meta reports, and the order the
+	// programs' locals merge in. Nil serves no types (a CPU served by
+	// --root alone).
+	Program *Program
+	// Reload, when set, is asked for the roots, Known and Program again
+	// before every re-discovery, so a project edited since serve started
+	// binds its new names. An error keeps the last ones.
+	Reload func() (Plan, error)
 	// Rediscover is how often the CPU is browsed again, so a download
 	// that changed the program's data layout is picked up without a
 	// restart. Default 15 s; negative turns the timer off (a write or a
@@ -87,6 +93,42 @@ type Options struct {
 	Meta   map[string]runtime.TagMeta
 	Server server.Options // its TagWriter and Drivers are replaced
 	Log    *slog.Logger
+}
+
+// Program is naut run's view of the project the CPU runs (Options.Program).
+type Program struct {
+	// TagTypes and LocalTypes are naut run's runtime.TagTypes and
+	// runtime.LocalTypes for the project.
+	TagTypes, LocalTypes map[string]*ir.Type
+	// Order is the programs (the Root prefixes) in the order naut run
+	// merges their locals: the other tasks' first, the main task's last,
+	// so a name two programs share shows the main program's value.
+	Order []string
+}
+
+// key fingerprints p, so a reload that built an equal Program is no change.
+func (p *Program) key() string {
+	if p == nil {
+		return ""
+	}
+	var parts []string
+	for _, m := range []map[string]*ir.Type{p.TagTypes, p.LocalTypes} {
+		names := make([]string, 0, len(m))
+		for n, t := range m {
+			names = append(names, n+"="+t.String())
+		}
+		sort.Strings(names)
+		parts = append(parts, strings.Join(names, ","))
+	}
+	return strings.Join(append(parts, strings.Join(p.Order, ",")), "|")
+}
+
+// Plan is what Reload answers: the roots to browse, the names to keep,
+// and the program view.
+type Plan struct {
+	Roots   []Root
+	Known   func(string) bool
+	Program *Program
 }
 
 // Binding is one nautilus tag bound to a CPU symbol.
@@ -112,6 +154,7 @@ type Facade struct {
 	cur     *binder
 	roots   []Root
 	known   func(string) bool
+	program *Program
 	lastErr string // the last write failure
 	note    string // the last re-discovery's outcome, for the status panel
 
@@ -126,13 +169,19 @@ type Facade struct {
 // binder is one binding set and what serves it.
 type binder struct {
 	bindings map[string]Binding
-	skipped  []string
-	drv      *Driver
-	rt       *runtime.Runtime
-	srv      *server.Server
-	handler  http.Handler
-	ctx      context.Context // ends when the set is replaced
-	cancel   context.CancelFunc
+	// locals are the bindings below a program's root (Root.Prefix): naut
+	// run streams them as the frame's locals, not as tags, so they are
+	// polled but not runtime tags. scopes is the merge order.
+	locals  []Binding
+	scopes  []string
+	program *Program
+	skipped []string
+	drv     *Driver
+	rt      *runtime.Runtime
+	srv     *server.Server
+	handler http.Handler
+	ctx     context.Context // ends when the set is replaced
+	cancel  context.CancelFunc
 }
 
 // emptyProgram is the runtime's program: the CPU runs the logic.
@@ -163,7 +212,7 @@ func New(ctx context.Context, o Options) (*Facade, error) {
 	if o.KickGap <= 0 {
 		o.KickGap = 30 * time.Second
 	}
-	f := &Facade{opts: o, log: o.Log, roots: o.Roots, known: o.Known, kick: make(chan struct{}, 1)}
+	f := &Facade{opts: o, log: o.Log, roots: o.Roots, known: o.Known, program: o.Program, kick: make(chan struct{}, 1)}
 	bs, skipped, err := f.discover(ctx, o.Roots, o.Known, false)
 	if err != nil {
 		return nil, err
@@ -204,14 +253,26 @@ func (f *Facade) discover(ctx context.Context, roots []Root, known func(string) 
 
 // build makes the driver, runtime and server over one binding set.
 func (f *Facade) build(bs []Binding, skipped []string) (*binder, error) {
-	b := &binder{bindings: map[string]Binding{}, skipped: skipped}
+	f.mu.Lock()
+	roots, prog := f.roots, f.program
+	f.mu.Unlock()
+	b := &binder{bindings: map[string]Binding{}, skipped: skipped, program: prog}
+	b.scopes = scopeOrder(roots, prog)
 	names := make([]string, 0, len(bs))
 	for _, x := range bs {
 		b.bindings[x.Name] = x
+		if scopeOf(x.Name, b.scopes) != "" {
+			b.locals = append(b.locals, x)
+			continue
+		}
 		names = append(names, x.Name)
 	}
 	b.drv = NewDriver(f.opts.Client, bs, f.opts.Poll)
 	b.drv.onGone = f.Kick
+	b.drv.tags = map[string]bool{}
+	for _, n := range names {
+		b.drv.tags[n] = true
+	}
 	rt, err := runtime.New(runtime.Options{Program: emptyProgram, Driver: b.drv, Inputs: names, Meta: f.opts.Meta})
 	if err != nil {
 		return nil, err
@@ -220,6 +281,12 @@ func (f *Facade) build(bs []Binding, skipped []string) (*binder, error) {
 	sopts := f.opts.Server
 	sopts.TagWriter = f.write
 	sopts.Drivers = f.driverStatus
+	fr := &server.Fronted{Locals: b.localsFrame}
+	if prog != nil {
+		fr.TagTypes = func() map[string]*ir.Type { return prog.TagTypes }
+		fr.LocalTypes = func() map[string]*ir.Type { return prog.LocalTypes }
+	}
+	sopts.Fronted = fr
 	b.srv = server.New(rt, sopts)
 	mux := http.NewServeMux()
 	mux.Handle("/", b.srv.Handler())
@@ -444,15 +511,15 @@ func runSet(b *binder) <-chan struct{} {
 // download, say) keeps the running set.
 func (f *Facade) rediscover(ctx context.Context, b *binder) ([]Binding, []string, bool) {
 	f.mu.Lock()
-	roots, known := f.roots, f.known
+	roots, known, prog := f.roots, f.known, f.program
 	f.mu.Unlock()
 	if f.opts.Reload != nil {
-		if r, k, err := f.opts.Reload(); err != nil {
+		if p, err := f.opts.Reload(); err != nil {
 			f.setNote("re-discovery kept the last binding plan: " + err.Error())
 		} else {
-			roots, known = r, k
+			roots, known, prog = p.Roots, p.Known, p.Program
 			f.mu.Lock()
-			f.roots, f.known = r, k
+			f.roots, f.known, f.program = roots, known, prog
 			f.mu.Unlock()
 		}
 	}
@@ -463,7 +530,7 @@ func (f *Facade) rediscover(ctx context.Context, b *binder) ([]Binding, []string
 		f.setNote("re-discovery failed, the last binding set is kept: " + err.Error())
 		return nil, nil, false
 	}
-	changed := !sameBindings(b.bindings, bs)
+	changed := !sameBindings(b.bindings, bs) || prog.key() != b.program.key()
 	if !changed {
 		f.mu.Lock()
 		f.note = "" // a failure the browse got past, or a re-binding already said
@@ -493,6 +560,74 @@ func sameBindings(held map[string]Binding, bs []Binding) bool {
 		}
 	}
 	return true
+}
+
+// scopeOrder is the program scopes (the roots' prefixes) in naut run's
+// merge order: prog.Order when it names them, the roots' order otherwise.
+func scopeOrder(roots []Root, prog *Program) []string {
+	var out []string
+	seen := map[string]bool{}
+	if prog != nil {
+		for _, p := range prog.Order {
+			for _, r := range roots {
+				if r.Prefix != "" && strings.EqualFold(r.Prefix, p) && !seen[r.Prefix] {
+					out = append(out, r.Prefix)
+					seen[r.Prefix] = true
+				}
+			}
+		}
+	}
+	for _, r := range roots {
+		if r.Prefix != "" && !seen[r.Prefix] {
+			out = append(out, r.Prefix)
+			seen[r.Prefix] = true
+		}
+	}
+	return out
+}
+
+// scopeOf is the program scope name sits below, or "" for a tag.
+func scopeOf(name string, scopes []string) string {
+	for _, sc := range scopes {
+		if len(name) > len(sc) && name[len(sc)] == '.' && strings.EqualFold(name[:len(sc)], sc) {
+			return sc
+		}
+	}
+	return ""
+}
+
+// localsFrame is the program locals as naut run streams them: by bare
+// name, an instance or struct as a map of its members, the programs merged
+// in scope order (a later program's value wins a shared name). Only
+// current values: a frame's locals carry no quality, so a local whose read
+// failed, or every local while the CPU cannot be reached, is left out
+// until a good read brings it back.
+func (b *binder) localsFrame() map[string]any {
+	vals := b.drv.Current() // not current: left out, not shown as live
+	out := map[string]any{}
+	for _, sc := range b.scopes {
+		for _, x := range b.locals {
+			if scopeOf(x.Name, []string{sc}) == "" {
+				continue
+			}
+			v, ok := vals[x.Name]
+			if !ok {
+				continue
+			}
+			parts := strings.Split(x.Name[len(sc)+1:], ".")
+			m := out
+			for _, p := range parts[:len(parts)-1] {
+				next, ok := m[p].(map[string]any)
+				if !ok {
+					next = map[string]any{}
+					m[p] = next
+				}
+				m = next
+			}
+			m[parts[len(parts)-1]] = v
+		}
+	}
+	return out
 }
 
 func sortedBindings(m map[string]Binding) []Binding {
