@@ -2603,7 +2603,14 @@ a structure" (202). A root's 202 is an empty block only when the writer
 declares nothing in it (`Output.Declares`, `Root.Empty`); otherwise it is a
 mismatch (the CPU runs an older download): nothing is bound from it, a
 note says to deploy, and a re-discovery counts it as a partial browse. A
-DB that does not exist (200) stays an error.
+DB that does not exist (200) stays an error. A member listed as a
+structure with no children (an FB instance or struct with no members)
+that answers 202 is empty too, not a failed browse. Re-discovery is
+gated on the CPU's mode (`Plc.ReadOperatingMode`): it waits while the
+CPU is not in RUN, because a layout-changing download stops the CPU and
+loads the blocks one by one (on the bench a re-discovery mid-download
+bound a half-loaded layout and corrected it 30 s later); a mode that
+cannot be read leaves it ungated.
 
 **Serve's frame and meta (#789 A1b).** For a project, serve streams what
 `naut run` streams for it. The manifest tags are runtime tags. The

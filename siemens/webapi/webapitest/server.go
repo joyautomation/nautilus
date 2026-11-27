@@ -115,6 +115,7 @@ type Server struct {
 	loginAttempts int
 	writeError    int // when set, every PlcProgram.Write answers this code
 	browseError   int // when set, every PlcProgram.Browse answers this code
+	browseErrorOf map[string]int // a PlcProgram.Browse of these symbols answers the code
 	holdWrite     *writeHold
 }
 
@@ -225,6 +226,29 @@ func (s *Server) FailBrowse(code int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.browseError = code
+}
+
+// FailBrowseOf makes a PlcProgram.Browse of sym answer the CPU error code
+// while every other browse works; 0 clears it.
+func (s *Server) FailBrowseOf(sym string, code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.browseErrorOf == nil {
+		s.browseErrorOf = map[string]int{}
+	}
+	if code == 0 {
+		delete(s.browseErrorOf, sym)
+		return
+	}
+	s.browseErrorOf[sym] = code
+}
+
+// SetMode sets the CPU's operating mode ("run" or "stop") while the
+// server runs, as a download that stops the CPU would.
+func (s *Server) SetMode(mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Mode = mode
 }
 
 // LoginAttempts counts every Api.Login, successful or not.
@@ -535,6 +559,9 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 		if s.browseError != 0 {
 			return fail(s.browseError, "browse failed")
 		}
+		if code := s.browseErrorOf[p.Var]; code != 0 {
+			return fail(code, "browse failed")
+		}
 		return s.browse(resp, p.Var, p.Mode)
 	case "DiagnosticBuffer.Browse":
 		if !can("read_diagnostics") {
@@ -627,7 +654,7 @@ func (s *Server) browse(resp rpcResp, v, mode string) rpcResp {
 			name = sym[i+1:]
 		}
 		return map[string]any{"name": strings.Trim(name, `"`), "datatype": x.Datatype,
-			"has_children": x.Datatype == "struct", "read_only": x.ReadOnly}
+			"has_children": x.Datatype == "struct" && s.hasChildren(sym), "read_only": x.ReadOnly}
 	}
 	if mode == "var" {
 		x, found := s.Vars[v]
@@ -673,6 +700,18 @@ func (s *Server) browse(resp rpcResp, v, mode string) rpcResp {
 	}
 	resp.Result = out
 	return resp
+}
+
+// hasChildren reports whether any variable sits directly below sym: an
+// empty structure is listed without children, as the CPU lists an empty
+// FB instance (assumed: the bench answered 202 for an empty DB's browse).
+func (s *Server) hasChildren(sym string) bool {
+	for other := range s.Vars {
+		if i := strings.LastIndex(other, "."); i >= 0 && other[:i] == sym {
+			return true
+		}
+	}
+	return false
 }
 
 var intRange = map[string][2]float64{

@@ -53,15 +53,32 @@ func TestAHalfBrowsedCPUIsNotAdopted(t *testing.T) {
 	s, f, base := startWith(t, Options{Rediscover: 100 * time.Millisecond, Settle: 10 * time.Millisecond})
 	waitFor(t, "first values", func() bool { return state(t, base)["Main.count"] != nil })
 	s.Put(`"Main_DB".count`, nil)
-	// Listed as a structure, but its browse fails (the fake answers "not a
-	// structure" for a datatype spelled other than "struct").
-	s.Put(`"Main_DB".half`, &webapitest.Var{Datatype: "STRUCT"})
+	// A structure with members whose browse fails (busy mid-download).
+	s.Put(`"Main_DB".half`, &webapitest.Var{Datatype: "struct"})
+	s.Put(`"Main_DB".half.x`, &webapitest.Var{Datatype: "bool", Value: true})
+	s.FailBrowseOf(`"Main_DB".half`, webapi.CodeSystemIsBusy)
 	time.Sleep(600 * time.Millisecond)
 	if n := f.Rebinds(); n != 0 {
 		t.Fatalf("rebinds = %d: a half-browsed CPU was adopted", n)
 	}
-	s.Put(`"Main_DB".half`, nil)
+	s.FailBrowseOf(`"Main_DB".half`, 0)
 	waitFor(t, "re-bound once the browse is whole", func() bool { return f.Rebinds() == 1 })
+}
+
+// TestAnEmptyInstanceIsNotAPartialBrowse: a member listed as a structure
+// with no children (an FB instance with no members) answers "not a
+// structure" when browsed, as an empty DB does: it binds nothing and does
+// not make every re-discovery partial, so a layout change is still
+// adopted.
+func TestAnEmptyInstanceIsNotAPartialBrowse(t *testing.T) {
+	s, f, base := startWith(t, Options{Rediscover: 100 * time.Millisecond, Settle: 10 * time.Millisecond})
+	waitFor(t, "first values", func() bool { return state(t, base)["Main.count"] != nil })
+	s.Put(`"Main_DB".blank`, &webapitest.Var{Datatype: "struct"}) // no members: has_children false
+	s.Put(`"Main_DB".seen`, &webapitest.Var{Datatype: "bool", Value: true})
+	waitFor(t, "Main.seen re-bound past the empty instance", func() bool { return state(t, base)["Main.seen"] == true })
+	if n := f.Rebinds(); n != 1 {
+		t.Fatalf("rebinds = %d", n)
+	}
 }
 
 // TestAWriteToANameGoneOrNoLongerBindableIsRefused: refused before
@@ -506,5 +523,30 @@ func TestAMissingRootIsStillAnError(t *testing.T) {
 	}
 	if _, err := New(context.Background(), Options{Client: c, Roots: []Root{{DB: "Main_DB", Prefix: "Main", Empty: true}}}); err == nil {
 		t.Fatal("nothing bound at all must stay an error")
+	}
+}
+
+// TestReDiscoveryWaitsForRun: a download stops the CPU and loads the new
+// layout piece by piece. While the CPU is in STOP the running set is kept
+// (a live screen does not lose and regain tags mid-download); once it runs
+// again, the new layout is bound, once.
+func TestReDiscoveryWaitsForRun(t *testing.T) {
+	s, f, base := startWith(t, Options{Rediscover: 100 * time.Millisecond, Settle: 10 * time.Millisecond})
+	waitFor(t, "first values", func() bool { return state(t, base)["Main.count"] != nil })
+	s.SetMode("stop")
+	s.Put(`"Main_DB".count`, nil) // half loaded: a local gone, its replacement not yet there
+	time.Sleep(700 * time.Millisecond)
+	if n := f.Rebinds(); n != 0 {
+		t.Fatalf("rebinds = %d while the CPU was in STOP", n)
+	}
+	s.Put(`"Main_DB".seen`, &webapitest.Var{Datatype: "bool", Value: true})
+	s.SetMode("run")
+	waitFor(t, "the new layout bound after RUN", func() bool {
+		st := state(t, base)
+		_, gone := st["Main.count"]
+		return st["Main.seen"] == true && !gone
+	})
+	if n := f.Rebinds(); n != 1 {
+		t.Fatalf("rebinds = %d, want one after RUN", n)
 	}
 }
