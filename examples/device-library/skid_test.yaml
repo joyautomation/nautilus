@@ -1,0 +1,33 @@
+# The transfer sequence against the project's virtual devices: the drive and
+# the relay board are the profiles' own simulators, answering the derived
+# Modbus bindings in process, in virtual time. No plant model is needed.
+devices: true
+tests:
+  - name: opens the valve, starts the pump and runs at half speed
+    steps:
+      - given: { StartReq: true }
+        until: 10s
+        expect: { Step: 3, VALVE_Relay1: true, PUMP_ControlWord: 1151 }   # 16#047F OPERATING
+      - advance: 1s
+        expect: { PUMP.Actual1: 10000 }
+        alarms: { active: [] }
+
+  - name: stopping stops the pump and then closes the valve
+    steps:
+      - given: { StartReq: true }
+        until: 10s
+        expect: { Step: 3 }
+      - given: { StartReq: false }
+        until: 10s
+        expect: { Step: 0, PUMP.Actual1: 0, VALVE_Relay1: false }
+
+  - name: a drive trip stops the transfer and closes the valve
+    steps:
+      - given: { StartReq: true }
+        until: 10s
+        expect: { Step: 3 }
+      - plant: { PUMP_Trip: true }
+        advance: 500ms
+        expect: { Step: 9, VALVE_Relay1: false, PUMP_ControlWord: 1142 }   # 16#0476
+        # the profile's own alarm (PUMP.Tripped), nothing written in this project
+        alarms: { unacked: 1, priority: { high: 1 } }

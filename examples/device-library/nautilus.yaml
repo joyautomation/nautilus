@@ -1,0 +1,17 @@
+# A transfer skid declared by device profile: a pump on an ABB drive and a
+# relay board for its valves. There are no driver manifests to write: each
+# `devices:` row names a profile copied into profiles/ (naut devices add),
+# and nautilus derives the struct tag, the command tags, the Modbus bindings,
+# the alarms and the virtual device from that copy.
+name: device-library
+tasks:
+  - { program: skid.st, scan: 100ms }
+devices:
+  - { name: PUMP,  profile: abb-acs355-fmbt21,     endpoint: 192.0.2.11, desc: "Transfer pump drive" }
+  - { name: VALVE, profile: waveshare-relay-16ch,  endpoint: 192.0.2.12, desc: "Valve relay board", points: ["Relay1", "Relay2"] }
+tags:
+  - { name: StartReq, role: setpoint, type: BOOL, init: false, desc: "Operator: start the transfer" }
+  - { name: StopReq,  role: setpoint, type: BOOL, init: false, desc: "Operator: stop the transfer" }
+  - { name: Step,     role: state,    type: INT,  init: 0, desc: "0 idle, 1 valve opening, 2 pump starting, 3 running, 9 fault" }
+alarms:
+  defaults: { ack-required: true, auto-clear: true }

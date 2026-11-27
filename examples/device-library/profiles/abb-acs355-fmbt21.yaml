@@ -1,0 +1,40 @@
+profile: abb-acs355-fmbt21
+title: ABB ACS355 with FMBT-21, Modbus/TCP, ABB Drives profile Classic
+maker: ABB
+model: ACS355 + FMBT-21
+version: 1
+docs:
+  - id: fena
+    title: "FENA-01/-11/-21 Ethernet adapter module user's manual: Modbus/TCP, ABB Drives profile (the Classic and Enhanced register maps FMBT-21 and RETA-01 present)"
+    code: 3AUA0000093568 Rev E
+    url: https://library.e.abb.com/public/d6a31af1808043ba8ef53980031041ea/EN_FENA01_11_21_UM_E_A4.pdf
+  - id: measured
+    title: "A deployed controller's program writes 400001-400002 and reads 400004-400006 and parameter 01.04 at 400104 (motor current, tenths of an ampere) on an ACS355 with FMBT-21 in the Classic layout; validated in the field 2026-10."
+protocol: modbus
+modbus:
+  port: 502
+  unit-id: 1
+points:
+  - { name: ControlWord, type: WORD, table: holding, address: 0, writable: true, desc: "ABB Drives profile control word", doc: "fena pp. 91-93, register (4)00001 p. 103" }
+  - { name: Reference1,  type: INT,  table: holding, address: 1, writable: true, desc: "Reference 1, +-20000 = +-100 % speed scaling", doc: "fena pp. 96-97, register (4)00002 p. 103" }
+  - { name: Reference2,  type: INT,  table: holding, address: 2, writable: true, desc: "Reference 2, +-10000 = +-100 %", doc: "fena p. 97, register (4)00003 p. 103" }
+  - { name: StatusWord,  type: WORD, table: holding, address: 3, desc: "ABB Drives profile status word", doc: "fena pp. 93-94, register (4)00004 p. 103" }
+  - { name: Actual1,     type: INT,  table: holding, address: 4, desc: "Actual 1, speed, +-20000 = +-100 %", doc: "fena p. 97, register (4)00005 p. 103" }
+  - { name: Actual2,     type: INT,  table: holding, address: 5, desc: "Actual 2 (drive-parameter dependent; 0 here)", doc: "fena register (4)00006 p. 103" }
+  - { name: Current,     type: REAL, table: holding, address: 103, format: uint16, scale: 0.1, unit: A,
+      desc: "Parameter 01.04, motor current", doc: "measured 40104; parameter address (4)00000 + 100 x group + index, fena p. 103" }
+# Computed from a polled point, never polled themselves (an alarm names one).
+derived:
+  - { name: Tripped, from: StatusWord, bit: 3, desc: "The drive has tripped (ABB Drives profile status word bit 3)", doc: "fena pp. 93-94" }
+
+# Raised by default while the device answers; a project's own alarms: win.
+alarms:
+  - { point: Tripped, name: "{desc} tripped", priority: high, class: drive }
+
+simulator: { block: ABB_DRIVES_SIM, source: abb-drives.st }
+notes: |
+  Parameters other than the motor current are not mapped; reading one answers
+  exception 02 here, while a real drive answers. The status word's ALARM,
+  ABOVE_LIMIT and FBA_ERROR bits stay 0, Actual 2 reads 0, and the drive is
+  always in remote. Hooks for a process model: Trip, RunEnableLost, RampS,
+  NominalAmps, Load in; Running, SpeedPct out.

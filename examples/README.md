@@ -152,6 +152,10 @@ to see what the VS Code extension does against a real project.
   IO-Link master over OPC UA, simulated from built-in profiles and answering
   the project's own bindings, so `naut test` catches a wrong register, node
   id or scale. `naut devices up` serves them on real sockets.
+- **[`device-library/`](device-library/)** — the same idea with no manifests
+  at all: a drive and a relay board declared by **profile** under `devices:`,
+  their struct tags, command tags, bindings, alarms and virtual devices
+  derived from the profiles vendored in `profiles/`.
 
 Each project runs the same way:
 
@@ -202,6 +206,7 @@ is four projects, not one — `naut run sites/well-1`, `sites/well-2`,
 | HMI: a 3D scene over flat tags (`bind`, no struct), its kinds as glTF data, beside the 2D mimic of the same station | lift-station | `lift-station.scene.json`, `hmi/models/build.py`, `hmi/src/routes/3d/` |
 | OPC UA server: a simulator writing inputs anonymously, element node ids (`Inputs[17]`) | plclab | `nautilus.yaml` `opcua:`, `plclab.st` |
 | Virtual devices: a sequence test against simulated field devices, `plant:` steps, `naut devices up` | bin-fill | `virtual-devices.yaml`, `devices/plant.st`, `fill_test.yaml` |
+| Field devices by profile: `devices:` rows, vendored `profiles/`, derived tags, bindings and alarms, `naut devices update` | device-library | `nautilus.yaml`, `profiles/`, `skid_test.yaml` |
 | The SDK path: a custom `io.Driver`, no manifest | go-sdk | `plant.go` |
 | A plant simulation of IT hardware: a `replay` driver, fault inputs as tags, `naut snmp serve --from` | it-cluster | `lib/switch.st`, `replay_manifest.yaml` |
 
