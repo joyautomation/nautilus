@@ -17,9 +17,7 @@ import (
 // (go test -tags quorumtest -run Pause ./opcua/)
 func TestOPCUAPauseBeforeSendTheTimerResets(t *testing.T) {
 	ts := startServer(t, freePort(t))
-	d := startDriver(t, ts.url, manifest(2))
-	d.SetWriteGate(func() bool { return true })
-	d.SetSendGate(func() (bool, time.Duration, uint64) { return true, 300 * time.Millisecond, 1 })
+	d := startPaired(t, ts.url, manifest(2), func() (bool, time.Duration, uint64) { return true, 300 * time.Millisecond, 1 })
 	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Speed"]; return ok })
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
 	fence.Pause(fence.RightBeforeSend, 600*time.Millisecond)

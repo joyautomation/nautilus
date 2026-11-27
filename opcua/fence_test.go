@@ -26,9 +26,7 @@ func TestOPCUAFencedWriteResetsItsSession(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	ts := silentWriteServer(t, &silent, release)
-	d := startDriver(t, ts.url, manifest(2))
-	d.SetWriteGate(func() bool { return true })
-	d.SetSendGate(func() (bool, time.Duration, uint64) { return true, 300 * time.Millisecond, 1 })
+	d := startPaired(t, ts.url, manifest(2), func() (bool, time.Duration, uint64) { return true, 300 * time.Millisecond, 1 })
 	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Speed"]; return ok })
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
 
@@ -80,11 +78,9 @@ func TestOPCUAQueuedWriteDoesNotSurviveATermMove(t *testing.T) {
 // none of it; the next push, under the new term, goes out.
 func TestOPCUAFlushRacingAReopenSendsNothing(t *testing.T) {
 	ts := startServer(t, freePort(t))
-	d := startDriver(t, ts.url, manifest(2))
 	var term atomic.Uint64
 	term.Store(5)
-	d.SetWriteGate(func() bool { return true })
-	d.SetSendGate(func() (bool, time.Duration, uint64) { return true, time.Second, term.Load() })
+	d := startPaired(t, ts.url, manifest(2), func() (bool, time.Duration, uint64) { return true, time.Second, term.Load() })
 	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Speed"]; return ok })
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
 	var once sync.Once
@@ -112,11 +108,9 @@ func TestOPCUAFailedChunkNotRequeuedAfterAReopen(t *testing.T) {
 	release := make(chan struct{})
 	t.Cleanup(func() { close(release) })
 	ts := silentWriteServer(t, &silent, release)
-	d := startDriver(t, ts.url, manifest(2))
 	var term atomic.Uint64
 	term.Store(5)
-	d.SetWriteGate(func() bool { return true })
-	d.SetSendGate(func() (bool, time.Duration, uint64) { return true, 300 * time.Millisecond, term.Load() })
+	d := startPaired(t, ts.url, manifest(2), func() (bool, time.Duration, uint64) { return true, 300 * time.Millisecond, term.Load() })
 	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Speed"]; return ok })
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
 	var once sync.Once

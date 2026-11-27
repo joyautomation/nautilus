@@ -186,6 +186,25 @@ func startDriver(t *testing.T, url string, m Manifest, opts ...Option) *Driver {
 	return d
 }
 
+// startPaired is startDriver for a driver on a pair: both gates are in
+// place before the first session is dialled. A session dialled before
+// SetSendGate has no socket to reset (it is dialled fenced only when the
+// driver is paired), so a fenced write could never reset it; on a slow
+// runner the driver's first dial beat a SetSendGate called after Start.
+func startPaired(t *testing.T, url string, m Manifest, send nio.SendGate) *Driver {
+	t.Helper()
+	d, err := New(url, m, fastOpts()...)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	d.SetWriteGate(func() bool { return true })
+	d.SetSendGate(send)
+	ctx, cancel := context.WithCancel(context.Background())
+	d.Start(ctx)
+	t.Cleanup(func() { cancel(); d.Stop() })
+	return d
+}
+
 func read(t *testing.T, d *Driver) nio.Values {
 	t.Helper()
 	v, err := d.ReadInputs()
