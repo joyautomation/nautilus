@@ -201,6 +201,34 @@ func TestKeyCheckHasNoFalsePositives(t *testing.T) {
 	}
 }
 
+// `<<` is YAML's merge key, not a tag: `given: { <<: *inputs, X: 1 }` is
+// valid and `naut test` runs it (#751). It must not squiggle.
+func TestMergeKeyIsNotATag(t *testing.T) {
+	s := &Server{docs: map[string]*document{}}
+	uri, text := exampleURI(t, "heated-tank_test.yaml")
+	merged := strings.Replace(text, "given: { LevelPct: 35.0 }", "given: &lv { LevelPct: 35.0 }", 1)
+	merged = strings.Replace(merged, "expect: { TempLowAlm: true }", "expect: { <<: *lv, TempLowAlm: true }", 1)
+	if merged == text || !strings.Contains(merged, "<<: *lv") || !strings.Contains(merged, "&lv") {
+		t.Fatal("the lines this test edits are gone")
+	}
+	td, diags := s.analyzeTest(uri, merged)
+	for _, d := range diags {
+		t.Errorf("diagnostic on a valid suite: %+v", d)
+	}
+	var found bool
+	for _, k := range td.keys {
+		if k.text == "<<" {
+			t.Errorf("merge key scanned as a tag name")
+		}
+		if k.text == "TempLowAlm" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the suite was not scanned at all (YAML error?)")
+	}
+}
+
 // A syntax error inside an expression is reported too — and against the
 // expression, not the YAML.
 func TestSyntaxErrorInAnExpression(t *testing.T) {

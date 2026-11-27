@@ -125,6 +125,10 @@ func scanSuite(text string) (exprs, keys []span) {
 	}
 	addKeys := func(m *yaml.Node) {
 		for i := 0; i+1 < len(m.Content); i += 2 {
+			// `<<` is YAML's merge key, not a tag name (#751).
+			if k := m.Content[i]; k.Kind == yaml.ScalarNode && k.Tag == "!!merge" {
+				continue
+			}
 			if s, ok := spanOf(m.Content[i]); ok {
 				keys = append(keys, s)
 			}
