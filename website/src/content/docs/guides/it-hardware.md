@@ -144,11 +144,13 @@ an outlet command cannot switch the outlet off at boot. With or without
 `redundancy:`, a hung scan closes the gate (about 5 to 8 s into the
 hang): a command still queued for a slow device waits, and goes out when
 the scans complete again, unless it is older than `stale-after` by then.
-A command value handed over while the gate is closed (another task
-still scanning) is not sent, and the next value after the gate reopens
-is a baseline, so a reset or power action is never sent twice; the
-device and the tag can then disagree until the program changes the
-command again. Automatic power
+A command the program changes while the gate is closed (another task
+still scanning, or the moment between the scans resuming and the gate
+reopening) is not sent. The device row says so, and a warning names the
+tag and the source, at most once a minute per source. The next value
+after the gate reopens is a baseline, so a reset or power action is
+never sent twice; the device and the tag can then disagree until the
+program changes the command again. Automatic power
 actions from control logic are deliberately out of scope: a controller
 that can power-cycle the node it runs on is a loop, and fencing belongs to
 the cluster's own tooling.
