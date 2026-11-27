@@ -99,8 +99,11 @@ func (f *fakeVoters) peerName() quorum.NodeID {
 }
 
 func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
+	// Everything a test changes while looks run is read under mu, in one
+	// go: relayLeft too, which setWit sets between looks (a race on it
+	// failed TestLeaderlessAlarmNotWhenThePeerLeadsOutOfReach under -race).
 	f.mu.Lock()
-	way, cn := f.way[r.URL.Hostname()], f.cn[r.URL.Hostname()]
+	way, cn, left := f.way[r.URL.Hostname()], f.cn[r.URL.Hostname()], f.relayLeft
 	f.mu.Unlock()
 	var cs *tls.ConnectionState
 	if cn != "" {
@@ -159,7 +162,7 @@ func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 		if req.Term > 0 {
 			rep.Promised = req.Term - 1
 		}
-		rep.Promise = quorum.Relay{To: f.peerName(), Nonce: 1, Left: f.relayLeft}
+		rep.Promise = quorum.Relay{To: f.peerName(), Nonce: 1, Left: left}
 	}
 	out, _ := rep.MarshalBinary()
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(out)), Header: http.Header{}, Request: r, TLS: cs}, nil
