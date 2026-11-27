@@ -114,6 +114,10 @@ type Driver struct {
 	pushed    bool        // under mu: the runtime has handed us an output
 	awaitPush bool        // under mu: reopened, write nothing until it does again
 
+	// settled: the first session attempt is over, whichever way it went
+	// (InputsReady). Sticky, never cleared.
+	settled atomic.Bool
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -157,6 +161,18 @@ func (d *Driver) Start(ctx context.Context) {
 	go d.run(ctx)
 }
 
+// InputsReady is the driver's io.InputsReadier. Its one source is the
+// controller's input image: ready once the first poll of it is over (read
+// and decoded, or failed on the wire, or the quality it came back with was
+// not Good), or the first session failed before it could poll (dial, bus
+// handshake, shm open). A manifest that reaches no input bytes is ready at
+// once. Sticky: a later session loss does not take it back. An atomic load.
+func (d *Driver) InputsReady() bool {
+	return d.settled.Load() || d.inLen == 0
+}
+
+var _ nio.InputsReadier = (*Driver)(nil)
+
 // Stop ends the loop and waits for it.
 func (d *Driver) Stop() {
 	if d.cancel != nil {
@@ -170,6 +186,7 @@ func (d *Driver) run(ctx context.Context) {
 	backoff := defaultRetryMin
 	for {
 		err := d.session(ctx)
+		d.settled.Store(true) // a failed first attempt counts (InputsReady)
 		if d.connected.Load() {
 			backoff = defaultRetryMin // a session that ran retries promptly, whatever came before it
 		}
@@ -263,7 +280,9 @@ func (d *Driver) session(ctx context.Context) error {
 				d.log.Info("plcnext: write gate open: bus conducted", "bus_running", st.Running, "modules", st.Modules)
 			}
 		}
-		if err := d.poll(ctx, im, conduct); err != nil {
+		err := d.poll(ctx, im, conduct)
+		d.settled.Store(true) // the first image read is over, answered or not (InputsReady)
+		if err != nil {
 			return err
 		}
 		select {

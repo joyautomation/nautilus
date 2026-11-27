@@ -140,6 +140,7 @@ func (d *Driver) serveSubscribed(ctx context.Context, sess *Session) {
 			return
 		}
 	}
+	d.settled.Store(true) // every class has delivered its priming read (InputsReady)
 	ss, err := d.subscribe(ctx, sess)
 	if err != nil {
 		if ctx.Err() != nil {

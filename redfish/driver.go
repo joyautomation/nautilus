@@ -295,6 +295,12 @@ func (d *Driver) Stop() {
 // ReadInputs returns the latest snapshot (never blocks on a BMC).
 func (d *Driver) ReadInputs() (nio.Values, error) { return d.base.ReadInputs() }
 
+// InputsReady is hw.Base's: every enabled device has had its first poll
+// round, answered or failed (io.InputsReadier, #786).
+func (d *Driver) InputsReady() bool { return d.base.InputsReady() }
+
+var _ nio.InputsReadier = (*Driver)(nil)
+
 // ReadInputsInto refills dst with the latest snapshot.
 func (d *Driver) ReadInputsInto(dst nio.Values) error { return d.base.ReadInputsInto(dst) }
 

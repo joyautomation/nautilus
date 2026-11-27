@@ -210,6 +210,7 @@ func (d *Driver) applyNBirthLocked(ns *nodeState, p sparkplug.Payload) {
 	ns.rebirthAsked = false
 	ns.aliasMiss = false
 	ns.setOnline(true)
+	d.noteBirthLocked(ns.edge)
 	ns.seq = p.Seq
 	ns.seqPrimed = true
 	ns.birthMs = birthTimestamp(p)
@@ -242,6 +243,7 @@ func (d *Driver) applyDBirthLocked(ns *nodeState, device string, p sparkplug.Pay
 	d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, device: device})
 	dev := ns.device(device)
 	dev.setOnline(true)
+	d.noteDeviceBirthLocked(ns.edge, device)
 	dev.birthMs = birthTimestamp(p)
 	d.registerAliasesLocked(ns, device, p.Metrics)
 	dev.metrics = d.applyMetricsLocked(ns, device, p.Metrics)

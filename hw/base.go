@@ -184,6 +184,8 @@ type Base struct {
 	classes  map[string][]string
 
 	polls, errs, writesN atomic.Uint64
+	// inputsOK is InputsReady's sticky answer.
+	inputsOK atomic.Bool
 
 	gateMu    sync.Mutex
 	writeGate func() bool
@@ -270,6 +272,10 @@ type Source struct {
 	gated      map[string]ir.Value
 	gateWarnAt time.Time
 	kick       chan struct{}
+
+	// settled: the source's first poll round is over, answered or failed
+	// (InputsReady's per-source fact). Never cleared.
+	settled atomic.Bool
 }
 
 // gateWarnEvery bounds the dropped-at-a-closed-gate warning to one log
@@ -672,6 +678,30 @@ func (b *Base) Start(ctx context.Context) {
 	}
 }
 
+// InputsReady is the io.InputsReadier of every driver built on Base. A
+// source is one polled device (a Redfish BMC, an SNMP agent, a Prometheus
+// endpoint): it has settled once its first round of polls, every scan
+// class once, is over and merged, or the device failed that round (a
+// source that has never answered goes to the error state on the first
+// failure). True when every enabled source has settled (a source parked by
+// its enable tag is not waited for), or there are none; sticky, so a later
+// outage does not take it back. A driver wrapping Base forwards it.
+func (b *Base) InputsReady() bool {
+	if b.inputsOK.Load() {
+		return true
+	}
+	for _, s := range b.sources {
+		if s.settled.Load() || !s.isEnabled() {
+			continue
+		}
+		return false
+	}
+	b.inputsOK.Store(true)
+	return true
+}
+
+var _ nio.InputsReadier = (*Base)(nil)
+
 // Stop ends every loop and waits for them.
 func (b *Base) Stop() {
 	if b.cancel == nil {
@@ -1035,6 +1065,7 @@ func (b *Base) run(ctx context.Context, s *Source) {
 			s.answered = false
 			s.mu.Unlock()
 			s.setState("error", err, b.now())
+			s.settled.Store(true) // down at its first round counts (InputsReady)
 			b.log.Warn(b.kind+": source down", "source", s.cfg.ID, "addr", s.cfg.Addr, "error", err, "retryIn", backoff)
 			b.applied(s.cfg.ID, failed)
 			select {
@@ -1049,6 +1080,7 @@ func (b *Base) run(ctx context.Context, s *Source) {
 			prime, broke = true, true
 			continue
 		}
+		s.settled.Store(true) // every class has had its first poll, merged (InputsReady)
 		b.flushWrites(ctx, s)
 
 		wake := time.Hour

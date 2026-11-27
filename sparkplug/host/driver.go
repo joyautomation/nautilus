@@ -146,6 +146,7 @@ func New(m Manifest, cfg Config, opts ...Option) (*Driver, error) {
 		return nil, err
 	}
 	d.groups = resolveGroups(cfg, m)
+	d.buildInputSources()
 	d.initValues()
 	// The state machine asks for rebirths from inside paho's ordered message
 	// goroutine, under d.mu — hand it a non-blocking enqueue, never the wire.

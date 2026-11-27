@@ -240,9 +240,12 @@ type Driver struct {
 	scanAware atomic.Bool
 
 	started atomic.Bool
-	reads   atomic.Uint64 // successful block reads
-	writes  atomic.Uint64 // successful device writes
-	errs    atomic.Uint64 // transport errors + exceptions + refused writes
+	// inputsOK is InputsReady's sticky answer: once every source had its
+	// first attempt, true for the life of the driver.
+	inputsOK atomic.Bool
+	reads    atomic.Uint64 // successful block reads
+	writes   atomic.Uint64 // successful device writes
+	errs     atomic.Uint64 // transport errors + exceptions + refused writes
 
 	cancel context.CancelFunc
 	runCtx context.Context // Start's, which every source loop's derives from
@@ -346,6 +349,11 @@ type source struct {
 
 	// kick wakes the loop: a queued write, an enable flip, a stop.
 	kick chan struct{}
+
+	// settled: the source's first attempt is over, whichever way it went
+	// (a dial that failed, or the first round of reads on a connection,
+	// answered or not). InputsReady's per-source fact; never cleared.
+	settled atomic.Bool
 }
 
 // stuckWrite is one tag's command that did not run. Until retryAt the
@@ -1326,6 +1334,7 @@ func (d *Driver) run(ctx context.Context, s *source) {
 			s.retries++
 			s.mu.Unlock()
 			s.setState("error", err)
+			s.settled.Store(true) // a failed first attempt counts (InputsReady)
 			d.log.Warn("modbus: connect failed", "source", s.cfg.ID, "addr", s.cfg.Addr(), "error", err, "retryIn", backoff)
 			select {
 			case <-ctx.Done():
@@ -1512,6 +1521,7 @@ func (d *Driver) resume(ctx context.Context, s *source, c conn) bool {
 // prime is serve's on-connect step: re-assert, flush, read every block.
 // False when the connection broke.
 func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
+	defer s.settled.Store(true) // the first round is over, read or broken (InputsReady)
 	// A look at the gate first (see SetWriteGate): one that reopened since
 	// the last look forgets written before it is re-asserted, and a closed
 	// gate re-asserts nothing (a standby's reconnect queues nothing to drop).
@@ -2379,8 +2389,34 @@ func (s *source) liveLocked() bool {
 	return true
 }
 
+// InputsReady is the driver's io.InputsReadier. A source is one configured
+// device endpoint (host, port and unit, one __Online companion): it has
+// settled once its first connect attempt failed, or its first round of
+// reads on a connection is over (answered, an exception, or a broken link;
+// a write-only source settles at connect). True when every source that
+// connects (not parked by its enable tag, not held) has settled, or there
+// are none; sticky for the life of the driver, so a later outage, or a
+// source swapped in by ReplaceSource, does not take it back. A cheap
+// atomic load once true, a short read-lock walk before.
+func (d *Driver) InputsReady() bool {
+	if d.inputsOK.Load() {
+		return true
+	}
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
+	for _, s := range d.sources {
+		if s.held || s.settled.Load() || !s.isEnabled() {
+			continue
+		}
+		return false
+	}
+	d.inputsOK.Store(true)
+	return true
+}
+
 // Interface conformance: the optional io refinements the driver implements.
 var (
+	_ nio.InputsReadier    = (*Driver)(nil)
 	_ nio.BatchReader      = (*Driver)(nil)
 	_ nio.QualityReporter  = (*Driver)(nil)
 	_ nio.OutputsRequester = (*Driver)(nil)

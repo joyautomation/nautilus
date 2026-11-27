@@ -75,6 +75,13 @@ type DeviceDriver struct {
 	gateShut atomic.Bool
 	wanted   atomic.Bool
 
+	// InputsReady's state: runSince is when the device first listened
+	// (under mu), controllerWait how long it waits for a controller before
+	// counting that as a failed first attempt, inReady the sticky answer.
+	runSince       time.Time
+	controllerWait time.Duration
+	inReady        atomic.Bool
+
 	cancel context.CancelFunc
 	done   chan struct{}
 }
@@ -144,7 +151,7 @@ func NewDevice(m DeviceManifest, opts ...DeviceOption) (*DeviceDriver, error) {
 		m: m, log: slog.New(slog.DiscardHandler), open: OpenInterface,
 		outBind: map[string]Binding{}, retry: [2]time.Duration{time.Second, 30 * time.Second},
 		img: map[device.Addr][]byte{}, last: map[string]any{}, q: map[string]nio.Quality{},
-		state: "starting", since: time.Now(),
+		state: "starting", since: time.Now(), controllerWait: defaultControllerWait,
 	}
 	for _, o := range opts {
 		o(d)
@@ -388,10 +395,58 @@ func (d *DeviceDriver) setState(state, lastErr string) {
 	if state != d.state {
 		d.state, d.since = state, time.Now()
 	}
+	if state == "running" && d.runSince.IsZero() {
+		d.runSince = time.Now()
+	}
 	if lastErr != "" {
 		d.lastErr = lastErr
 	}
 }
+
+// defaultControllerWait is how long a device that listens for its PLC may
+// hear nothing before InputsReady counts that as a failed first attempt:
+// the runtime's own bound on a held first scan is 2 s, and a PLC that has
+// not connected by then will not for a while longer.
+const defaultControllerWait = time.Second
+
+// InputsReady is the driver's io.InputsReadier. A device has one source:
+// the PLC's connection (an AR), which the PLC opens, never the driver. It
+// has delivered when the AR exchanges fresh cyclic data. It has failed when
+// the interface could not be opened or the device stopped with an error
+// (the status row says why), or when the device has listened for
+// controllerWait (one second) and no controller has connected: that
+// first wait is the "attempt", and a PLC that arrives later reads
+// NotConnected until its data does. A standby replica holds no socket and
+// answers for nothing, so it counts as ready (its takeover is not held for
+// a PLC that cannot reach it until it leads). True at once with no PLC-
+// to-nautilus tags. Sticky: a later AR loss does not take it back. The
+// check before it is true is one device snapshot per call, which the
+// runtime makes once per tick of a held first scan.
+func (d *DeviceDriver) InputsReady() bool {
+	if d.inReady.Load() || len(d.inBind) == 0 {
+		return true
+	}
+	d.mu.Lock()
+	state, dev, since := d.state, d.dev, d.runSince
+	d.mu.Unlock()
+	ready := false
+	switch {
+	case state == "error" || state == "standby":
+		ready = true
+	case dev != nil:
+		if snap := dev.Snapshot(); snap.State == device.StateData && snap.Fresh {
+			ready = true
+		} else if !since.IsZero() && time.Since(since) >= d.controllerWait {
+			ready = true
+		}
+	}
+	if ready {
+		d.inReady.Store(true)
+	}
+	return ready
+}
+
+var _ nio.InputsReadier = (*DeviceDriver)(nil)
 
 // ReadInputs is io.Driver's read.
 func (d *DeviceDriver) ReadInputs() (nio.Values, error) {
