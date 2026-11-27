@@ -40,8 +40,13 @@ func newHelloRig(t *testing.T) *helloRig {
 	cluster, token := node.NewClusterID(), testPeerToken
 	wctx, wstop := context.WithCancel(context.Background())
 	wready, wdone := make(chan string, 1), make(chan int, 1)
+	// The witness's state directory is made before its stop is
+	// registered: cleanups run last-in first-out, so it is removed only
+	// once the witness has stopped. Made inside the goroutine, its removal
+	// usually ran first, while the witness could still write (#1120).
+	wdir := t.TempDir()
 	go func() {
-		wdone <- witnessMain(wctx, []string{"--listen", "127.0.0.1:0", "--state", t.TempDir(), "--lease", "500ms"},
+		wdone <- witnessMain(wctx, []string{"--listen", "127.0.0.1:0", "--state", wdir, "--lease", "500ms"},
 			pairEnv(map[string]string{"NAUTILUS_PEER_TOKEN": token}), io.Discard, io.Discard, wready)
 	}()
 	t.Cleanup(func() { wstop(); <-wdone })

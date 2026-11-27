@@ -18,7 +18,14 @@ import (
 //   - the standby campaigns at once when its voter takes the RESIGN, not
 //     at its next look;
 //
-//   - it leads within lease/4, not after the old leader's lease;
+//   - it leads within lease/4, not after the old leader's lease. A grant
+//     waits for its voter's state write, so a stalled disk delays it; the
+//     bound the design promises then is a voter's write within about
+//     3*lease/4 (redundancy-test-plan F24): the campaign's last re-ask, at
+//     3*lease/4, granted within a vote's wait, so it leads within
+//     7*lease/8 of its first campaign, and never past the lease. A
+//     handover past lease/4 is logged (#1120: one CI disk stall held both
+//     voters' writes ~360 ms and b led at 372 ms);
 //
 //   - a switchover back is not held up by the new standby's own resign
 //     hold.
@@ -37,10 +44,16 @@ func TestLoopbackAResignHandsTheLeadOverAtOnce(t *testing.T) {
 	peer := c.other(who)
 	c.waitFor(string(peer)+" to see the leader", c.leases(4), func() bool { return c.status(peer).Leader == string(who) })
 	time.Sleep(c.leases(1)) // the standby's voter has granted renewals of this leadership
+	heard := 0              // switchovers whose witness answered the first campaign
 	for i := 0; i < 4; i++ {
-		switchOnce(t, c, who, peer)
+		if switchOnce(t, c, who, peer) {
+			heard++
+		}
 		who, peer = peer, who
 		time.Sleep(c.lease / 2) // the new leader's renewals reach both voters
+	}
+	if heard == 0 {
+		t.Fatal("in no switchover did the witness answer the standby's first campaign")
 	}
 	time.Sleep(c.leases(1))
 	if c.leader() != who {
@@ -48,7 +61,10 @@ func TestLoopbackAResignHandsTheLeadOverAtOnce(t *testing.T) {
 	}
 }
 
-func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) {
+// switchOnce switches the lead from who to peer, and reports whether the
+// witness answered peer's first campaign (granted: a refusal fails). An
+// ask that timed out says nothing: peer leads on its own voter's grant.
+func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) bool {
 	t.Helper()
 	c.mu.Lock()
 	mark := len(c.votes)
@@ -77,8 +93,12 @@ func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) {
 		t.Fatalf("the resigned leader %s's gate is open", who)
 	}
 	c.waitFor(string(peer)+" to lead", c.leases(4), func() bool { return c.elector(peer).IsLeader() })
-	if took := time.Since(start); took > c.lease/4 {
-		t.Fatalf("%s led %v after %s resigned, want under lease/4 = %v\n%s", peer, took, who, c.lease/4, c.voteTrail(peer, c.leases(1)))
+	led := time.Now()
+	switch took := led.Sub(start); {
+	case took > c.lease:
+		t.Fatalf("%s led %v after %s resigned, past the lease %v: no faster than a failover\n%s", peer, took, who, c.lease, c.voteTrail(peer, c.leases(1)))
+	case took > c.lease/4:
+		t.Logf("%s led %v after %s resigned, past lease/4 = %v: a voter's write was slow (F24)\n%s", peer, took, who, c.lease/4, c.voteTrail(peer, c.leases(1)))
 	}
 
 	c.mu.Lock()
@@ -112,16 +132,6 @@ func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) {
 	}
 	for i, v := range votes[toPeer:] {
 		if v.from == peer && v.to == "w" && v.req.Term != 0 && !v.req.Renewal && !v.req.Resign {
-			at := mark + toPeer + i
-			c.waitFor("the campaign's answer", c.leases(1), func() bool {
-				c.mu.Lock()
-				defer c.mu.Unlock()
-				v = c.votes[at]
-				return v.done
-			})
-			if v.verdict != "granted" {
-				t.Fatalf("the witness refused %s's first campaign after the RESIGN: %s", peer, v.verdict)
-			}
 			// At once: within lease/16 of its voter taking the RESIGN,
 			// where the look grid is lease/4 (so the look-grid mutant passes
 			// this at most a quarter of the time, each of four switches).
@@ -129,10 +139,59 @@ func switchOnce(t *testing.T, c *cluster, who, peer quorum.NodeID) {
 			if d := v.at.Sub(p.at.Add(p.took)); d > c.lease/16 {
 				t.Fatalf("%s campaigned %v after its voter took the RESIGN, want at once (under %v)", peer, d, c.lease/16)
 			}
-			return
+			// The design's bound on a slow voter write (F24): the campaign
+			// is asked again every lease/8 until 3*lease/4 after its first
+			// send, and the last ask's grant may come a vote's wait
+			// (lease/8) after that, so peer leads within 7*lease/8 of its
+			// first campaign; lease/32 more for waitFor's 5 ms poll.
+			if d, max := led.Sub(v.at), c.lease*7/8+c.lease/32; d > max {
+				t.Fatalf("%s led %v after its first campaign, want under 7*lease/8 (+poll) = %v (F24)\n%s", peer, d, max, c.voteTrail(peer, c.leases(1)))
+			}
+			return witnessGranted(t, c, peer, mark+toPeer+i, v.req.Term)
 		}
 	}
 	t.Fatalf("%s sent the witness no campaign after the RESIGN", peer)
+	return false
+}
+
+// witnessGranted waits for the answers to peer's campaign for term at the
+// witness, from c.votes[at] on: the first ask and each re-ask of the same
+// term. A refusal fails; granted is true. An ask that failed at the
+// transport (a vote's deadline, lease/8) is no answer: a stalled witness
+// (#1120: 63 ms without an answer under -race, while the peer's grant took
+// 2 ms) says nothing of the RESIGN's order, and peer leads on its own
+// voter's grant without asking again, so false.
+func witnessGranted(t *testing.T, c *cluster, peer quorum.NodeID, at int, term uint64) bool {
+	t.Helper()
+	var asks []sentVote
+	c.waitFor("the campaign's answers", c.leases(1), func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		asks = asks[:0]
+		for _, v := range c.votes[at:] {
+			if v.from == peer && v.to == "w" && v.req.Term == term && !v.req.Renewal && !v.req.Resign {
+				if !v.done {
+					return false
+				}
+				asks = append(asks, v)
+			}
+		}
+		return true
+	})
+	granted := false
+	for _, v := range asks {
+		switch {
+		case v.err != nil:
+		case v.verdict == "granted":
+			granted = true
+		default:
+			t.Fatalf("the witness refused %s's campaign after the RESIGN: %s", peer, v.verdict)
+		}
+	}
+	if !granted {
+		t.Logf("the witness answered none of %s's %d campaign asks in time (a stalled witness): no verdict this switchover", peer, len(asks))
+	}
+	return granted
 }
 
 // A drain that does not finish sends no RESIGN (#710 d1b): the resigner

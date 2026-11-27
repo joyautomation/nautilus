@@ -42,8 +42,16 @@ type cluster struct {
 	t     *testing.T
 	pair  string
 	mu    sync.Mutex
-	cut   map[[2]quorum.NodeID]bool // [from, to]
-	mute  map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
+	// keyIO counts the peer TLS calls in flight that may write a box key
+	// or a pin file into keys: handshakes (both ends) and Bind's check.
+	// shutdown refuses new ones and waits out the rest, so nothing writes
+	// into a TempDir while it is removed (#1120: a dial still running after
+	// its controller was killed made b's key during the cleanup).
+	keyIO     sync.WaitGroup
+	keyIOMu   sync.Mutex
+	keyIOShut bool
+	cut       map[[2]quorum.NodeID]bool // [from, to]
+	mute      map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
 	// noAdopt: every Adopt to or from it is lost (the rest goes through).
 	noAdopt map[quorum.NodeID]bool
 	// noHello: its hellos to the peer are lost (the rest goes through).
@@ -217,7 +225,54 @@ func (c *cluster) listen(id quorum.NodeID) net.Listener {
 	if plain {
 		return ln
 	}
-	return tls.NewListener(ln, c.peerTLS(id).Server())
+	return tls.NewListener(ln, c.serverTLS(id))
+}
+
+// enterKeyIO starts a peer TLS call that may write into keys; false once
+// shutdown has begun. Each true is ended by c.keyIO.Done.
+func (c *cluster) enterKeyIO() bool {
+	c.keyIOMu.Lock()
+	defer c.keyIOMu.Unlock()
+	if c.keyIOShut {
+		return false
+	}
+	c.keyIO.Add(1)
+	return true
+}
+
+var errClusterShut = errors.New("the test cluster is shut down")
+
+// serverTLS is id's peer listener configuration, its certificate (which
+// may make the box key) and its check counted in keyIO.
+func (c *cluster) serverTLS(id quorum.NodeID) *tls.Config {
+	cfg := c.peerTLS(id).Server()
+	forClient := cfg.GetConfigForClient
+	cfg.GetConfigForClient = func(h *tls.ClientHelloInfo) (*tls.Config, error) {
+		cc, err := forClient(h)
+		if err != nil || cc == nil {
+			return cc, err
+		}
+		if getCert := cc.GetCertificate; getCert != nil {
+			cc.GetCertificate = func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				if !c.enterKeyIO() {
+					return nil, errClusterShut
+				}
+				defer c.keyIO.Done()
+				return getCert(h)
+			}
+		}
+		if verify := cc.VerifyConnection; verify != nil {
+			cc.VerifyConnection = func(cs tls.ConnectionState) error {
+				if !c.enterKeyIO() {
+					return errClusterShut
+				}
+				defer c.keyIO.Done()
+				return verify(cs)
+			}
+		}
+		return cc, nil
+	}
+	return cfg
 }
 
 // handler is h as id's peer listener serves it: behind peer TLS's
@@ -229,7 +284,21 @@ func (c *cluster) handler(id quorum.NodeID, h http.Handler) http.Handler {
 	if plain {
 		return h
 	}
-	return bindPeer(c.peerTLS(id), h)
+	// Bind's check pins a name at its first request: counted in keyIO,
+	// the handler behind it not (a vote may wait up to a lease).
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !c.enterKeyIO() {
+			http.Error(w, errClusterShut.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		var once sync.Once
+		done := func() { once.Do(c.keyIO.Done) }
+		defer done()
+		bindPeer(c.peerTLS(id), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			done()
+			h.ServeHTTP(w, r)
+		})).ServeHTTP(w, r)
+	})
 }
 
 // peerTLS is id's peer TLS under its peer token: its box key and pins kept
@@ -261,10 +330,19 @@ func (c *cluster) clientTLS(id quorum.NodeID) TLSWrap {
 	if plain {
 		return nil
 	}
-	return wrapAs(c.peerTLS(id), func(addr string) (quorum.NodeID, bool) {
+	wrap := wrapAs(c.peerTLS(id), func(addr string) (quorum.NodeID, bool) {
 		to, ok := c.byHP[addr]
 		return to, ok
 	})
+	// The handshake and its pin check, counted in keyIO.
+	return func(ctx context.Context, raw net.Conn, addr string) (net.Conn, error) {
+		if !c.enterKeyIO() {
+			raw.Close()
+			return nil, errClusterShut
+		}
+		defer c.keyIO.Done()
+		return wrap(ctx, raw, addr)
+	}
 }
 
 func (c *cluster) startWitness() {
@@ -571,6 +649,16 @@ func (c *cluster) shutdown() {
 		c.kill(id)
 	}
 	c.stopWitness()
+	c.keyIOMu.Lock()
+	c.keyIOShut = true
+	c.keyIOMu.Unlock()
+	waited := make(chan struct{})
+	go func() { c.keyIO.Wait(); close(waited) }()
+	select {
+	case <-waited:
+	case <-time.After(10 * time.Second):
+		c.t.Errorf("peer TLS calls still in flight 10 s after the cluster shut down (a handshake to a listener left open?)")
+	}
 }
 
 // leases is n leases, the unit every deadline here is in.

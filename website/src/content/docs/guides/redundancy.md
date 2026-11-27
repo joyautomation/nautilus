@@ -928,7 +928,11 @@ and 126 ms at worst (113 ms at 1 s); a device that hangs on a write
 adds a few milliseconds. On a slow disk the election waits for the
 standby to ask again: with every voter write slowed past an eighth of
 the lease (94 ms at 500 ms, 188 ms at 1 s), 100 switchovers at each
-measured a gap of 169 to 193 ms at 500 ms and 268 to 307 ms at 1 s. The acceptance target is a quarter lease for
+measured a gap of 169 to 193 ms at 500 ms and 268 to 307 ms at 1 s.
+A voter's disk that stalls stretches the gap by as long as the stall:
+the standby leads once the write finishes, and a switchover is designed
+for a voter's write that finishes within about three quarters of the
+lease (375 ms at 500 ms). The acceptance target is a quarter lease for
 that bench program: met at a 1 s lease; at a 500 ms lease (target
 125 ms) missed by up to 1 ms on the bench program, once in 100 runs on
 a heavily loaded host, still far below a failover, which waits out the
