@@ -48,6 +48,8 @@ func TestForExitValueAndOutOfRangePass(t *testing.T) {
 		// to wrap round and never end) and the exit value wraps.
 		{"LINT to its last value", "FOR l := 9223372036854775806 TO 9223372036854775807 DO n := n + 1; END_FOR; x := l;", 2, math.MinInt64, ""},
 		{"LINT down to its first value", "FOR l := -9223372036854775807 TO lmin BY -1 DO n := n + 1; END_FOR; x := l;", 2, math.MaxInt64, ""},
+		{"LINT step past its last value", "FOR l := 9223372036854775806 TO 9223372036854775807 BY 5 DO n := n + 1; END_FOR; x := l;", 1, math.MinInt64 + 3, ""},
+		{"EXIT of a nested FOR", "FOR u := 1 TO 3 DO FOR i := 1 TO 10 DO IF i = 2 THEN EXIT; END_IF; END_FOR; n := n + i; END_FOR; x := u;", 6, 4, ""},
 		{"step zero faults", "FOR i := 1 TO 3 BY z DO n := n + 1; END_FOR;", 0, 0, "FOR step is zero"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,5 +98,25 @@ END_PROGRAM`)
 	scan(t, p, f, h)
 	if got := h.vals["x"].I; got != 3 {
 		t.Fatalf("after RETURN in pass 3, i = %d, want 3", got)
+	}
+}
+
+// A faulting pass stores nothing: the variable keeps the previous pass's
+// value (a program's VAR keeps it to the next scan).
+func TestForFaultKeepsThePreviousPass(t *testing.T) {
+	p, f := runFrame(t, `PROGRAM P
+VAR_GLOBAL x : LINT; END_VAR
+VAR i : INT; top : INT := 32767; END_VAR
+x := i;
+FOR i := 32766 TO top + 5 DO END_FOR;
+END_PROGRAM`)
+	h := newFakeHost()
+	h.vals["x"] = ir.IntVal(0)
+	if err := ir.Run(p, f, h); err == nil {
+		t.Fatal("want the out-of-range pass to fault")
+	}
+	_ = ir.Run(p, f, h)
+	if got := h.vals["x"].I; got != 32767 {
+		t.Fatalf("after the fault, i = %d, want 32767 (the last pass that ran)", got)
 	}
 }

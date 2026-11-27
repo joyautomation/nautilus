@@ -352,15 +352,15 @@ The rules:
   only those and another task's byte of the same word survives (bench:
   two tasks, 80 bracketed samples).
 - **FOR** is TIA's own FOR only where it provably ends on the CPU
-  (constant start, end and step that run at least one pass, end + step
+  (constant start, end and step that run at least two passes, end + step
   inside the variable's type; TIA refuses to compile a constant FOR that
-  never runs, bench 11-27),
+  never runs, bench 11-27, and one from a value to itself is not proved),
   run over a temp of the variable's type (`naut_for_v`) whose value the
   variable takes first thing in the body, so body writes do not steer it;
   after the loop the variable takes the exit value, a constant there. Any
   other FOR is a LINT counter loop (`naut_for_c/e/r`, siemens/writer
   forloop.go) that decides whether to continue before it steps, so it
-  cannot wrap round, and stores the counter, wrapped to the type, after
+  never runs a pass past the end, and stores the counter, wrapped to the type, after
   the loop. Both keep nautilus's semantics (lang/ir vm.go, #1427: bounds
   evaluated once, the counter decides the next pass, a pass outside the
   variable's type faults the scan like an index out of bounds, the exit

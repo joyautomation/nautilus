@@ -47,7 +47,7 @@ import (
 // forPlain reports whether TIA's own FOR, run over a temp of the
 // variable's type, surely ends and runs exactly as nautilus does: a
 // constant non-zero step, and a constant start and end that run at least
-// one pass and keep the temp, stepped past the end, inside the type.
+// two passes and keep the temp, stepped past the end, inside the type.
 func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 	t := pw.typ(&st.IdentExpr{Name: s.Variable})
 	if !isInt(t) {
@@ -56,7 +56,7 @@ func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 	step := int64(1)
 	if s.Step != nil {
 		k, ok := pw.fold(s.Step)
-		if !ok || k == 0 {
+		if !ok || k == 0 || k == -1<<63 {
 			return false
 		}
 		step = k
@@ -74,7 +74,8 @@ func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 	// TIA refuses to compile a constant FOR that never runs ("The high
 	// limit is not higher than the low limit", bench 11-27): the counter
 	// loop writes it.
-	if (step > 0 && start > end) || (step < 0 && start < end) {
+	// A FOR from a value to itself is not proved to compile either.
+	if (step > 0 && start >= end) || (step < 0 && start <= end) {
 		return false
 	}
 	return inRange(end, t) && inRange(end+step, t)
@@ -160,6 +161,12 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 		pw.gap("siemens/int-width", at, gapOther, "a FOR over a "+orUnknown(t), "")
 		return
 	}
+	if k, ok := pw.fold(s.Step); s.Step != nil && ok && k == -1<<63 {
+		// Its negation, and LINT#-9223372036854775808 as a literal, leave
+		// LINT.
+		pw.gap("siemens/int-width", at, gapOther, "a FOR step of LINT's least value", "")
+		return
+	}
 	if s.Step != nil && pw.typ(s.Step) == tWide {
 		if _, ok := pw.fold(s.Step); !ok {
 			pw.gap("siemens/int-width", at, gapOther, "a FOR step that is integer arithmetic", "compute the step into a variable first")
@@ -181,9 +188,12 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 	case constStep && step == 0:
 		pw.faultIf(b, in, at, "TRUE") // nautilus: "FOR step is zero"
 		return
-	// The next pass runs when c + step stays on the near side of the end;
-	// c + step is only compared once it cannot overflow, so the test is
-	// exact for every LINT, and the counter never wraps round.
+	// The next pass runs when c + step stays on the near side of the end,
+	// and c + step is not past LINT's range. SCL's AND does not short-
+	// circuit, so c + step (and, for a variable step, the bound of the
+	// side not taken) can overflow in an operand whose result is not
+	// used; the test is still exact for every LINT (bench B1, #1427).
+	// The counter itself steps in forStep.
 	case constStep && step > 0:
 		first = fmt.Sprintf("%s <= %s", c, e)
 		next = fmt.Sprintf("%s <= LINT#%d AND %s + %d <= %s", c, int64(1<<63-1)-step, c, step, e)
@@ -225,7 +235,23 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 		pw.forRange[k] = prev
 	}
 	pw.emit(b, at, "%sEND_WHILE;\n", in)
-	pw.forExit(b, in, at, x, fmt.Sprintf("%s := %s;", v, wrap(c, t)))
+	pw.forExit(b, in, at, x, fmt.Sprintf("%s := %s;", v, forWrap(c, t)))
+}
+
+// forWrap is c wrapped to integer type t, as wrap writes it, but reduced
+// MOD the width first: when no pass ran, c is the start, any LINT, and
+// wrap's c + half could leave LINT.
+func forWrap(c, t string) string {
+	w := intWidth[t]
+	if t == "LINT" {
+		return c
+	}
+	m := uint64(1) << w.bits
+	if w.signed {
+		h := m / 2
+		return fmt.Sprintf("LINT_TO_%s((%s MOD LINT#%d + LINT#%d + LINT#%d) MOD LINT#%d - LINT#%d)", t, c, m, m, h, m, h)
+	}
+	return fmt.Sprintf("LINT_TO_%s((%s MOD LINT#%d + LINT#%d) MOD LINT#%d)", t, c, m, m, m)
 }
 
 const (
@@ -235,7 +261,9 @@ const (
 
 // forStep steps the counter c to the next value nautilus's counter takes.
 // Narrower than LINT, c holds a value of the variable's type (the guard
-// saw to it) and so does the step, so c + step cannot leave LINT. A LINT
+// saw to it) and so does the step (lowering refuses a bound or step wider
+// than the variable: storeRule, lang/st lower.go), so c + step cannot
+// leave LINT. A LINT
 // counter can: past LINT's range the step wraps at 64 bits, as nautilus's
 // does, computed in an order no partial sum of which leaves LINT, so the
 // CPU's overflow handling never matters.

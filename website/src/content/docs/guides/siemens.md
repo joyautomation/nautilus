@@ -516,9 +516,10 @@ change the loop. A pass the variable's type cannot hold faults the scan,
 as an index out of bounds does. After the loop the variable holds the
 first value that failed the test, wrapped to its type (`end + step` when
 the step lands on the end, the start when no pass ran), unless EXIT left
-the loop. A FOR with constant bounds and step, whose variable stepped past
-its end stays inside its type, is written as TIA's own FOR over a temp of
-the variable's type. Any other FOR, a variable end included, runs on a
+the loop. A FOR with constant bounds and step that runs more than one
+pass, whose variable stepped past its end stays inside its type, is
+written as TIA's own FOR over a temp of the variable's type (TIA refuses
+to compile a constant FOR that never runs). Any other FOR, a variable end included, runs on a
 64-bit counter that surely ends. A step of 0 faults the scan, as in
 nautilus.
 

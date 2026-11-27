@@ -183,8 +183,10 @@ func TestForExitValue(t *testing.T) {
 	// A constant FOR that never runs: TIA refuses to compile it ("The high
 	// limit is not higher than the low limit", bench 11-27), so the counter
 	// loop writes it, and the variable takes start.
-	for _, body := range []string{"FOR i := 5 TO 1 DO x := i; END_FOR;", "FOR i := 1 TO 5 BY -1 DO x := i; END_FOR;"} {
-		scl := w("i, x : INT;", body, "\tEND_WHILE;\n\t#i := LINT_TO_INT((((#naut_for_c1) + LINT#32768)")
+	// A FOR from a value to itself is not proved to compile: also the
+	// counter loop.
+	for _, body := range []string{"FOR i := 5 TO 1 DO x := i; END_FOR;", "FOR i := 1 TO 5 BY -1 DO x := i; END_FOR;", "FOR i := 5 TO 5 DO x := i; END_FOR;", "FOR i := 5 TO 5 BY -1 DO x := i; END_FOR;"} {
+		scl := w("i, x : INT;", body, "\tEND_WHILE;\n\t#i := LINT_TO_INT((#naut_for_c1 MOD LINT#65536 + LINT#65536 + LINT#32768) MOD LINT#65536 - LINT#32768);\n")
 		if strings.Contains(scl, "FOR #") {
 			t.Errorf("%s: a constant FOR that never runs is no TIA FOR:\n%s", body, scl)
 		}
@@ -192,7 +194,7 @@ func TestForExitValue(t *testing.T) {
 	// Counter loop: the counter steps every pass and the variable takes it,
 	// wrapped (to INT's last value: the exit value is -32768).
 	w("i, x : INT;", "FOR i := 0 TO 32767 DO x := i; END_FOR;",
-		"\t#naut_for_c1 := #naut_for_c1 + 1;\n\t\t#x := #i;\n\tEND_WHILE;\n\t#i := LINT_TO_INT((((#naut_for_c1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);\n")
+		"\t#naut_for_c1 := #naut_for_c1 + 1;\n\t\t#x := #i;\n\tEND_WHILE;\n\t#i := LINT_TO_INT((#naut_for_c1 MOD LINT#65536 + LINT#65536 + LINT#32768) MOD LINT#65536 - LINT#32768);\n")
 	// EXIT sets the loop's flag; an EXIT of a loop nested in it does not.
 	scl := w("i, x : INT;", "FOR i := 1 TO 10 DO IF x > 3 THEN EXIT; END_IF; WHILE x > 0 DO EXIT; END_WHILE; END_FOR;",
 		"\t#naut_for_x1 := FALSE;\n\tFOR #naut_for_v2 := 1 TO 10 DO",
@@ -205,6 +207,29 @@ func TestForExitValue(t *testing.T) {
 	w("i, n, x : DINT;", "FOR i := 0 TO n - 1 DO x := i; IF x > 3 THEN EXIT; END_IF; END_FOR;",
 		"#naut_for_x4 := FALSE;",
 		"\tEND_WHILE;\n\tIF NOT #naut_for_x4 THEN\n\t\t#i := LINT_TO_DINT(")
+	// An EXIT under CASE or ELSIF sets the flag too; a flagged FOR inside
+	// another loop clears its flag on every entry.
+	w("i, j, x : INT;", `FOR j := 1 TO 3 DO
+FOR i := 1 TO 10 DO
+	CASE x OF 1: EXIT; END_CASE;
+	IF x = 2 THEN x := 0; ELSIF x = 3 THEN EXIT; END_IF;
+END_FOR;
+END_FOR;`,
+		"\tFOR #naut_for_v1 := 1 TO 3 DO\n\t\t#j := #naut_for_v1;\n\t\t#naut_for_x2 := FALSE;\n\t\tFOR #naut_for_v3 := 1 TO 10 DO",
+		"\t\t\t\t\t#naut_for_x2 := TRUE;\n\t\t\t\t\tEXIT;\n",
+		"\t\t\t\t#naut_for_x2 := TRUE;\n\t\t\t\tEXIT;\n",
+		"\t\tEND_FOR;\n\t\tIF NOT #naut_for_x2 THEN\n\t\t\t#i := 11;\n\t\tEND_IF;\n\tEND_FOR;\n\t#j := 4;\n")
+	// No pass with a start near LINT's top: the exit value is reduced MOD
+	// the width first, so no partial sum leaves LINT.
+	w("i, z : INT; x : INT;", "FOR i := 9223372036854775800 + z TO 0 DO x := i; END_FOR;",
+		"#i := LINT_TO_INT((#naut_for_c1 MOD LINT#65536 + LINT#65536 + LINT#32768) MOD LINT#65536 - LINT#32768);")
+	w("u, n : USINT; x : INT;", "FOR u := 0 TO n DO x := 1; END_FOR;",
+		"#u := LINT_TO_USINT((#naut_for_c1 MOD LINT#256 + LINT#256) MOD LINT#256);")
+	// A step of LINT's least value is refused: its negation and its
+	// literal leave LINT.
+	if _, diags := writeP(t, "l, x : LINT;", "FOR l := 5 TO 0 BY -9223372036854775807 - 1 DO x := l; END_FOR;"); !hasDiag(diags, "a FOR step of LINT's least value") {
+		t.Errorf("a step of LINT's least value: %v", diags)
+	}
 	// No EXIT: no flag.
 	if scl := w("i, x : INT;", "FOR i := 1 TO 10 DO x := i; END_FOR;"); strings.Contains(scl, "naut_for_x") {
 		t.Errorf("a loop with no EXIT needs no flag:\n%s", scl)

@@ -265,7 +265,8 @@ change the loop.
 - **`i` never holds a value its type cannot hold.** A pass whose value is
   outside the type faults the scan, as an index out of bounds does. That
   can happen only when a bound is integer arithmetic, computed at 64 bits:
-  `FOR i := 32766 TO n + 5` on an `INT` faults at its third pass, 32768. A
+  `FOR i := 32766 TO n + 5` on an `INT` with `n` at 32767 faults at its
+  third pass, 32768. A
   constant bound the type cannot hold is a compile error. The value after
   the loop wraps to the type, as TIA's own FOR leaves it: `FOR u := 0 TO
   255` on a `USINT` runs 256 passes and leaves 0.
