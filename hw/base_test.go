@@ -1056,6 +1056,11 @@ func TestBasePlainGateHoldsAQueuedCommand(t *testing.T) {
 	for writes() == "" && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
+	for len(w.polled) > 0 {
+		<-w.polled
+	}
+	w.waitPoll(t, "PDU1/default") // a flush later: still sent only once
+	w.waitPoll(t, "PDU1/default")
 	if got := writes(); got != "PDU1/PDU1_Outlet03.On=false" {
 		t.Fatalf("after the gate reopened: %q", got)
 	}

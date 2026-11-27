@@ -586,9 +586,10 @@ func (b *Base) SetWriteGate(gate func() bool) {
 // liveness gate in a project without `redundancy:` (#625), closed while
 // the scans hang. Its gate rules already fit a plain gate: closed, nothing
 // is queued or sent (a command queued before it closed waits, and goes out
-// on reopen only while younger than StaleAfter); reopened, the first value
-// is a baseline (WriteOutputs rule 2). Base treats every gate alike, so
-// this is only the marker.
+// on reopen only while younger than StaleAfter); a value handed over while
+// it is closed is dropped, and the next one after it reopens is a baseline
+// (WriteOutputs rule 2), so nothing goes out twice. Base treats every gate
+// alike, so this is only the marker.
 func (b *Base) PlainWriteGate() {}
 
 var _ nio.PlainGated = (*Base)(nil)

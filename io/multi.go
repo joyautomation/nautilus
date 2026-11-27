@@ -505,8 +505,10 @@ func (m *Multi) SetSendGate(gate SendGate) {
 // exactly as with no gate; closed, it sends nothing of its own (no
 // re-assert, no queued command); reopened, it forgets what it sent and
 // asks for every output (OutputsRequester), or, for event commands that
-// must never go out twice, takes the next value as a baseline (hw.Base, a
-// Redfish reset or an SNMP SET). Such a driver can take a gate
+// must never go out twice, takes the next value handed over as a baseline
+// (hw.Base, a Redfish reset or an SNMP SET; there a command queued before
+// the gate closed waits, and goes out on reopen while younger than its
+// source's stale-after). Such a driver can take a gate
 // that has nothing to do with redundancy. `naut run` gives it one in
 // every project, open while the scans are live, so a hung scan stops its
 // keep-alives (#625). A driver that reads "a gate is installed" as "I am

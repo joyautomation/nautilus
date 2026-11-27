@@ -317,7 +317,8 @@ func (d *Driver) OutputNames() []string { return d.base.OutputNames() }
 // ScanClasses maps each class to its "Tag.Member" paths.
 func (d *Driver) ScanClasses() map[string][]string { return d.base.ScanClasses() }
 
-// SetWriteGate installs the leadership gate for commands.
+// SetWriteGate installs the write gate for commands: a pair's leadership,
+// or naut run's liveness gate (PlainWriteGate).
 func (d *Driver) SetWriteGate(g func() bool) { d.base.SetWriteGate(g) }
 
 // PlainWriteGate marks the write gate as only a gate (io.PlainGated,
