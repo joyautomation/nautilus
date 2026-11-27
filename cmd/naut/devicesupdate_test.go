@@ -353,3 +353,50 @@ func TestUpdateOfAProjectAlreadyFailingMayNotAddFailures(t *testing.T) {
 		t.Fatal("a refused update changed the copy")
 	}
 }
+
+// An older source (an older naut, an older --from folder) never silently
+// downgrades a project's copy.
+func TestUpdateNeverDowngradesWithoutDiscardEdits(t *testing.T) {
+	dir := vendorDrive(t, libProgram)
+	copyPath := filepath.Join(dir, "profiles", driveID+".yaml")
+	newer := strings.Replace(slurp(t, copyPath), "version: 1", "version: 5", 1)
+	if err := os.WriteFile(copyPath, []byte(newer), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the newer copy is a release as far as the list goes, so only the
+	// version makes it a downgrade
+	files, err := readProfileFiles(driveID, func(n string) ([]byte, error) { return os.ReadFile(filepath.Join(dir, "profiles", n)) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	was := releasedProfiles
+	releasedProfiles += driveID + " 5 " + files.hash(driveID) + "\n"
+	defer func() { releasedProfiles = was }()
+	out, code := runUpdate(t, "--yes", dir)
+	if code == 0 || !strings.Contains(out, "the project's copy is newer than the source (version 5 > 1); not replaced") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if slurp(t, copyPath) != newer {
+		t.Fatal("--yes downgraded a copy")
+	}
+	if out, code = runUpdate(t, "--yes", "--discard-edits", dir); code != 0 || !strings.Contains(out, "replaced") {
+		t.Fatalf("--discard-edits: exit %d\n%s", code, out)
+	}
+}
+
+func TestCopyProjectSkipsNautState(t *testing.T) {
+	src, dst := t.TempDir(), t.TempDir()
+	for _, n := range []string{".naut/hmi/big.bin", ".git/x", "node_modules/y", "main.st"} {
+		p := filepath.Join(src, n)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte("x"), 0o644)
+	}
+	if err := copyProject(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	for n, want := range map[string]bool{".naut": false, ".git": false, "node_modules": false, "main.st": true} {
+		if _, err := os.Stat(filepath.Join(dst, n)); (err == nil) != want {
+			t.Errorf("%s copied = %v, want %v", n, err == nil, want)
+		}
+	}
+}

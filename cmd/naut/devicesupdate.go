@@ -155,6 +155,7 @@ type updateItem struct {
 	filesDiffer     bool     // some file's bytes differ (docs, notes, simulator)
 	edited          bool     // the copy matches no release of the source
 	fromFolder      bool     // the source is a --from folder, which keeps no releases
+	newer           bool     // the copy's version is higher than the source's: a downgrade
 	err             error
 }
 
@@ -266,6 +267,7 @@ func updateProfiles(dir, only, from string, yes, discard bool, w io.Writer) erro
 		}
 		u.copyVer, u.srcVer = cp.Version, sp.Version
 		u.diff = lineDiff(ct, st)
+		u.newer = u.copyVer > u.srcVer
 		u.filesDiffer = !sameFiles(u.copyF, u.srcF)
 		// Source file names are the source's to choose: only a simulator
 		// (.st) beside the profile, and never a file already in profiles/
@@ -313,7 +315,7 @@ func updateProfiles(dir, only, from string, yes, discard bool, w io.Writer) erro
 		case u.err != nil:
 			blocked = true
 		case u.upToDate():
-		case u.edited && !discard:
+		case (u.edited || u.newer) && !discard:
 			blocked = true
 		default:
 			replace = append(replace, u)
@@ -408,6 +410,9 @@ func report(w io.Writer, items []*updateItem) {
 			}
 			if !sameSimulator(u) {
 				fmt.Fprintln(w, "  the simulator file differs")
+			}
+			if u.newer {
+				fmt.Fprintf(w, "  the project's copy is newer than the source (version %d > %d); not replaced. A downgrade needs --yes --discard-edits\n", u.copyVer, u.srcVer)
 			}
 			switch {
 			case u.edited && u.fromFolder:
@@ -587,7 +592,7 @@ func copyProject(src, dst string) error {
 		}
 		rel, _ := filepath.Rel(src, p)
 		if d.IsDir() {
-			if d.Name() == ".git" || d.Name() == "node_modules" {
+			if n := d.Name(); n == ".git" || n == "node_modules" || n == ".naut" {
 				return fs.SkipDir
 			}
 			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
