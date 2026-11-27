@@ -26,12 +26,16 @@ func (pw *progWriter) atan2(argExprs []st.Expression, args []string, line int) s
 	in := make([]string, 2)
 	for i, a := range argExprs {
 		switch t := pw.typ(a); {
-		case t == "LREAL":
-			in[i] = args[i]
-		case t == "REAL" || t == tAnyReal:
+		case t == "LREAL" || t == tAnyReal:
+			in[i] = args[i] // a literal takes the LReal formal's type, all its digits
+		case t == "REAL":
 			in[i] = "REAL_TO_LREAL(" + args[i] + ")"
+		case isInt(t) && t != "ULINT":
+			in[i] = t + "_TO_LREAL(" + args[i] + ")" // nautilus: the integer as a float64
+		case t == tAnyInt:
+			in[i] = args[i] + ".0"
 		default:
-			pw.gap("siemens/function", line, gapOther, "ATAN2 of a "+orUnknown(t), "")
+			pw.gap("siemens/function", line, gapOther, "ATAN2 of an argument of type "+orUnknown(t), "")
 			return ""
 		}
 	}

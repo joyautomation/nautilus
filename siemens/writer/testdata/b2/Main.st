@@ -4,6 +4,7 @@ PROGRAM Main
 VAR_EXTERNAL
     A16 : INT;  A32 : DINT;  A64 : LINT;          (* the types' least values *)
     rA16 : INT; rA32 : DINT; rA64 : LINT; rAbs5 : INT;
+    rAbs128 : INT; rAbs32k : DINT; rAbs2g : LINT;  (* ABS of the least literals *)
     En, Cu : BOOL;
     X : REAL;
     Bumps : DINT;                                   (* counts Bump's runs *)
@@ -11,6 +12,7 @@ VAR_EXTERNAL
     cv : INT; eno2 : BOOL;
     Sp : ARRAY[0..48] OF LREAL;                     (* ATAN2 at the special values *)
     Gr : ARRAY[0..143] OF REAL;                     (* ATAN2 on a REAL grid *)
+    Sq : ARRAY[0..1] OF LREAL;                      (* ATAN2 whose quotient overflows, underflows *)
     Scans : DINT;
 END_VAR
 VAR
@@ -18,13 +20,16 @@ VAR
     sv : ARRAY[0..6] OF LREAL;
     gv : ARRAY[0..11] OF REAL;
     i, j : INT;
-    inf, nz : LREAL;
+    inf, nz, ly, lx : LREAL;
 END_VAR
 (* integer ABS: 64 bits, wrapped by the store *)
 rA16 := ABS(A16);
 rA32 := ABS(A32);
 rA64 := ABS(A64);
 rAbs5 := ABS(-5);
+rAbs128 := ABS(-128);
+rAbs32k := ABS(-32768);
+rAbs2g := ABS(-2147483648);
 (* EN/ENO: while En is FALSE the call does not run, its argument Bump is
    not evaluated, the target and the bindings keep their values *)
 rLim := LIMIT(EN := En, MN := 0.0, IN := Bump(x := X), MX := 10.0, ENO => eno1);
@@ -47,5 +52,9 @@ FOR i := 0 TO 11 DO
         Gr[i * 12 + j] := ATAN2(gv[i], gv[j]);
     END_FOR;
 END_FOR;
+ly := 1.0E300; lx := 1.0E-300;
+Sq[0] := ATAN2(ly, lx);
+ly := -1.0E-300; lx := 1.0E300;
+Sq[1] := ATAN2(ly, lx);
 Scans := Scans + 1;
 END_PROGRAM

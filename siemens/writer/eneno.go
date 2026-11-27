@@ -50,10 +50,11 @@ func (pw *progWriter) execControl(call *st.CallExpr) (rest *st.CallExpr, en, eno
 // input and ENO output (a ladder-style user block).
 func (pw *progWriter) declaresENENO(call *st.CallExpr) (en, eno bool) {
 	var p *pou
+	fc := false
 	if l, ok := pw.locals[strings.ToLower(call.Name)]; ok && call.Callee == nil {
 		p = pw.w.userFB(l.typ)
 	} else {
-		p = pw.w.userFC(call.Name)
+		p, fc = pw.w.userFC(call.Name), true
 	}
 	if p == nil {
 		return false, false
@@ -63,8 +64,8 @@ func (pw *progWriter) declaresENENO(call *st.CallExpr) (en, eno bool) {
 			switch {
 			case vb.Kind == "VAR_INPUT" && strings.EqualFold(v.Name, "EN"):
 				en = true
-			case vb.Kind == "VAR_OUTPUT" && strings.EqualFold(v.Name, "ENO"):
-				eno = true
+			case vb.Kind == "VAR_OUTPUT" && strings.EqualFold(v.Name, "ENO") && !fc:
+				eno = true // a FUNCTION's ENO is always nautilus's (lower_eneno.go)
 			}
 		}
 	}
@@ -94,25 +95,23 @@ func (pw *progWriter) gated(b *strings.Builder, s st.Statement, d int) bool {
 	if !ok {
 		return false
 	}
-	in := strings.Repeat("\t", d)
-	at := lineOr(s, 0)
-	setENO := func(v bool, depth int) {
-		if eno != nil {
-			pw.stmt(b, &st.AssignStmt{TargetExpr: eno, Value: &st.BoolLit{Value: v}, Pos: call.Pos}, depth)
-		}
+	setENO := func(v bool) st.Statement {
+		return &st.AssignStmt{TargetExpr: eno, Value: &st.BoolLit{Value: v}, Pos: call.Pos}
 	}
 	if en == nil {
 		pw.stmt(b, with(rest), d)
-		setENO(true, d)
+		if eno != nil {
+			pw.stmt(b, setENO(true), d)
+		}
 		return true
 	}
-	pw.emit(b, at, "%sIF %s THEN\n", in, pw.expr(en, 0))
-	pw.stmt(b, with(rest), d+1)
-	setENO(true, d+1)
+	// The gate is an IF, written as any IF is: what EN computes first (an
+	// index check, a FUNCTION that can fault) comes before it.
+	gate := &st.IfStmt{Condition: en, Then: []st.Statement{with(rest)}, Pos: call.Pos}
 	if eno != nil {
-		pw.emit(b, at, "%sELSE\n", in)
-		setENO(false, d+1)
+		gate.Then = append(gate.Then, setENO(true))
+		gate.Else = []st.Statement{setENO(false)}
 	}
-	pw.emit(b, at, "%sEND_IF;\n", in)
+	pw.stmt(b, gate, d)
 	return true
 }

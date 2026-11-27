@@ -9,6 +9,8 @@ VERSION : 0.1
       j : INT;
       inf : LREAL;
       nz : LREAL;
+      ly : LREAL;
+      lx : LREAL;
       naut_fault : "naut_Fault";
    END_VAR
    VAR_TEMP 
@@ -25,7 +27,10 @@ BEGIN
 	"naut_Tags".rA16 := LINT_TO_INT((((ABS(INT_TO_LINT("naut_Tags".A16))) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
 	"naut_Tags".rA32 := LINT_TO_DINT((((ABS(DINT_TO_LINT("naut_Tags".A32))) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	"naut_Tags".rA64 := ABS("naut_Tags".A64);
-	"naut_Tags".rAbs5 := LINT_TO_INT((((ABS(-5)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	"naut_Tags".rAbs5 := LINT_TO_INT((((LINT#5) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	"naut_Tags".rAbs128 := LINT_TO_INT((((LINT#128) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	"naut_Tags".rAbs32k := LINT_TO_DINT((((LINT#32768) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	"naut_Tags".rAbs2g := LINT#2147483648;
 	IF "naut_Tags".En THEN
 		"naut_Tags".rLim := LIMIT(MN := 0.0, IN := "naut_Bump"(x := "naut_Tags".X), MX := 10.0);
 		"naut_Tags".eno1 := TRUE;
@@ -55,7 +60,7 @@ BEGIN
 			#naut_ix1 := INT_TO_LINT(#i) * 7 + INT_TO_LINT(#j);
 			IF #naut_ix1 < 0 OR #naut_ix1 > 48 THEN
 				#naut_fault.faulted := TRUE;
-				#naut_fault.line := 39;
+				#naut_fault.line := 44;
 				#naut_fault.block := 'Main';
 				RETURN;
 			END_IF;
@@ -81,12 +86,18 @@ BEGIN
 			#naut_ix2 := INT_TO_LINT(#i) * 12 + INT_TO_LINT(#j);
 			IF #naut_ix2 < 0 OR #naut_ix2 > 143 THEN
 				#naut_fault.faulted := TRUE;
-				#naut_fault.line := 47;
+				#naut_fault.line := 52;
 				#naut_fault.block := 'Main';
 				RETURN;
 			END_IF;
 			"naut_Tags".Gr[#naut_ix2] := LREAL_TO_REAL("naut_ATAN2"(Y := REAL_TO_LREAL(#gv[#i]), X := REAL_TO_LREAL(#gv[#j])));
 		END_FOR;
 	END_FOR;
+	#ly := 1.0E300;
+	#lx := 1.0E-300;
+	"naut_Tags".Sq[0] := "naut_ATAN2"(Y := #ly, X := #lx);
+	#ly := -1.0E-300;
+	#lx := 1.0E300;
+	"naut_Tags".Sq[1] := "naut_ATAN2"(Y := #ly, X := #lx);
 	"naut_Tags".Scans := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".Scans) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 END_FUNCTION_BLOCK

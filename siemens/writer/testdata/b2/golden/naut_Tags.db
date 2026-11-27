@@ -15,10 +15,14 @@ VERSION : 0.1
       rA16 : INT;
       rA32 : DINT;
       rA64 : LINT;
+      rAbs128 : INT;
+      rAbs2g : LINT;
+      rAbs32k : DINT;
       rAbs5 : INT;
       rLim : REAL;
       Scans : DINT;
       Sp : Array[0..48] of LREAL;
+      Sq : Array[0..1] of LREAL;
       X : REAL;
    END_VAR
 
