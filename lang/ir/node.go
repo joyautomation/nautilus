@@ -55,11 +55,28 @@ type If struct {
 
 func (*If) stmtNode() {}
 
+// For is ST FOR (#1427, "do what most PLCs do"): the start, end and step
+// are evaluated once, at 64 bits; the counter starts at start and is
+// tested before each pass; each pass stores the counter into the loop
+// variable and runs the body, then the counter steps. A pass whose counter
+// the variable's type cannot hold faults the scan, as an index out of
+// bounds does. After the loop the variable holds the counter's exit value,
+// the first value that failed the test (end + step when the step lands on
+// end, start when no pass ran), wrapped to the type as TIA's own FOR
+// leaves it. EXIT and RETURN leave the variable as the pass left it. A
+// body that writes the variable does not steer the loop.
 type For struct {
 	Slot       int // loop variable slot (always TypeInt in phase 1)
 	Start, End Expr
 	Step       Expr // nil ⇒ 1
 	Body       []Stmt
+	// Var and Type name the loop variable for the fault message.
+	Var, Type string
+	// Ranged is set for a declared integer narrower than 64 bits, whose
+	// values are Lo..Hi; Wrap is its width (nil for a 64-bit variable).
+	Ranged bool
+	Lo, Hi int64
+	Wrap   *Wrap
 }
 
 func (*For) stmtNode() {}

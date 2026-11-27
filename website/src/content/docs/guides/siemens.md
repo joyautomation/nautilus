@@ -510,16 +510,18 @@ keeps a REAL at 64 bits and the CPU at 32.
 
 ## FOR loops
 
-Every FOR runs as nautilus's does: the variable takes each value in
-turn, a body that writes it does not change the loop, and after the loop
-it holds the last value it ran with (or is unchanged when the loop never
-ran). A FOR with constant bounds and step, whose variable stepped past its
-end stays inside its type, is written as TIA's own FOR over a temp of the
-variable's type. Any other FOR, a variable end included, runs on a 64-bit
-counter that surely ends. A step of 0 faults the scan, as in nautilus. One difference: when a
-start or end is integer arithmetic and the loop reaches a value the
-variable's type cannot hold, nautilus stores it anyway (#1427), and the
-CPU faults the scan there instead, as for an index out of bounds.
+Every FOR runs as nautilus's does ([Structured Text](/languages/structured-text/#for-loops)):
+the variable takes each value in turn, and a body that writes it does not
+change the loop. A pass the variable's type cannot hold faults the scan,
+as an index out of bounds does. After the loop the variable holds the
+first value that failed the test, wrapped to its type (`end + step` when
+the step lands on the end, the start when no pass ran), unless EXIT left
+the loop. A FOR with constant bounds and step that runs more than one
+pass, whose variable stepped past its end stays inside its type, is
+written as TIA's own FOR over a temp of the variable's type (TIA refuses
+to compile a constant FOR that never runs). Any other FOR, a variable end included, runs on a
+64-bit counter that surely ends. A step of 0 faults the scan, as in
+nautilus.
 
 ## What does not translate yet
 

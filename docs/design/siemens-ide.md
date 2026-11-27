@@ -352,16 +352,22 @@ The rules:
   only those and another task's byte of the same word survives (bench:
   two tasks, 80 bracketed samples).
 - **FOR** is TIA's own FOR only where it provably ends on the CPU
-  (constant start, end and step, end + step inside the variable's type),
+  (constant start, end and step that run at least two passes, end + step
+  inside the variable's type; TIA refuses to compile a constant FOR that
+  never runs, bench 11-27, and one from a value to itself is not proved),
   run over a temp of the variable's type (`naut_for_v`) whose value the
-  variable takes first thing in the body, so body writes do not steer it
-  and the exit value is nautilus's; any other FOR is a LINT counter loop (`naut_for_c/e/r`, siemens/writer
+  variable takes first thing in the body, so body writes do not steer it;
+  after the loop the variable takes the exit value, a constant there. Any
+  other FOR is a LINT counter loop (`naut_for_c/e/r`, siemens/writer
   forloop.go) that decides whether to continue before it steps, so it
-  cannot wrap round, and keeps nautilus's semantics (lang/ir vm.go: bounds
-  evaluated once, the counter decides the next pass, the exit value is the
-  last value run, step 0 faults). A pass outside the variable's type (a
-  bound that is integer arithmetic) faults the scan like an index out of
-  bounds (naut-lead ruling); nautilus stores the value (#1427).
+  never runs a pass past the end, and stores the counter, wrapped to the type, after
+  the loop. Both keep nautilus's semantics (lang/ir vm.go, #1427: bounds
+  evaluated once, the counter decides the next pass, a pass outside the
+  variable's type faults the scan like an index out of bounds, the exit
+  value is the first value that failed the test wrapped to the type, start
+  when no pass ran, step 0 faults). A loop its body EXITs sets a flag
+  (`naut_for_x`) so EXIT keeps the pass value. A LINT counter steps past
+  LINT's range by wrapping, in an order whose partial sums stay in LINT.
 - **What it does not translate yet is a writer gap,** never a rule for
   the person: the diagnostic reads "the Siemens writer doesn't translate X
   yet (#N)", N the issue that closes it. B #1299 (closed: structs and

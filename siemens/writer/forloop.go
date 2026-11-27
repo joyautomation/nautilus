@@ -8,21 +8,24 @@ import (
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
-// FOR loops (#1305 B1).
+// FOR loops (#1305 B1, #1427).
 //
 // nautilus runs a FOR on a 64-bit counter (lang/ir vm.go): the start, end
-// and step are evaluated once, at 64 bits; each pass stores the counter
-// into the loop variable and runs the body; the counter, not the variable,
-// decides the next pass, so a body that writes the variable does not
-// change the loop, and after it the variable holds the last value it ran
-// with (or is unchanged when the loop never ran). A step of zero faults
-// the scan.
+// and step are evaluated once, at 64 bits; the counter starts at start and
+// is tested before each pass; each pass stores the counter into the loop
+// variable and runs the body, then the counter steps. A pass whose counter
+// the variable's type cannot hold faults the scan, as an index out of
+// bounds does. The counter, not the variable, decides the next pass, so a
+// body that writes the variable does not change the loop. After the loop
+// the variable holds the counter's exit value, the first value that failed
+// the test, wrapped to its type (end + step when the step lands on end,
+// start when no pass ran); EXIT and RETURN leave it as the pass left it. A
+// step of zero faults the scan.
 //
-// TIA's FOR steps the variable itself, in its own type: a loop whose end
-// is the type's last value could wrap round and never end (a watchdog
-// trip, then STOP). The writer therefore writes a plain FOR only where the
-// loop provably ends on the CPU (forPlain), and every other loop as a
-// counter loop over LINT temps that surely ends:
+// TIA's FOR steps the variable itself, in its own type. The writer writes
+// a plain FOR only where the loop provably ends on the CPU and its exit
+// value is known (forPlain), and every other loop as a counter loop over
+// LINT temps that surely ends:
 //
 //	#c := <start>; #e := <end>;            (LINT, nautilus's 64 bits)
 //	#r := #c <= #e;
@@ -30,21 +33,21 @@ import (
 //	    <guard: #c outside the variable's type faults the scan>
 //	    #i := LINT_TO_<T>(#c);
 //	    #r := #c <= LINT#<max - step> AND #c + <step> <= #e;
-//	    IF #r THEN #c := #c + <step>; END_IF;
+//	    #c := #c + <step>;                 (wrapping at 64 bits for a LINT)
 //	    <body>
 //	END_WHILE;
+//	#i := <#c wrapped to T>;               (the exit value)
 //
 // The guard is written when a bound is integer arithmetic (it can leave
-// the variable's type): there nautilus would store a value its type cannot
-// hold into the variable, which the CPU cannot; the writer faults the scan
-// at that pass instead, as an out-of-range index does (naut-lead ruling,
-// #1305 B1), a difference the guide names. An integer arithmetic step
-// stays refused.
+// the variable's type), and faults exactly where nautilus does. A loop
+// whose body EXITs it sets a flag first (forExitFlag), so the exit value
+// is stored only when the loop ran out. An integer arithmetic step stays
+// refused.
 
 // forPlain reports whether TIA's own FOR, run over a temp of the
-// variable's type (forPlainLoop), surely ends and runs exactly as nautilus
-// does: a constant non-zero step, and a constant start and end that keep
-// the temp, stepped past the end, inside the type.
+// variable's type, surely ends and runs exactly as nautilus does: a
+// constant non-zero step, and a constant start and end that run at least
+// two passes and keep the temp, stepped past the end, inside the type.
 func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 	t := pw.typ(&st.IdentExpr{Name: s.Variable})
 	if !isInt(t) {
@@ -53,7 +56,7 @@ func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 	step := int64(1)
 	if s.Step != nil {
 		k, ok := pw.fold(s.Step)
-		if !ok || k == 0 {
+		if !ok || k == 0 || k == -1<<63 {
 			return false
 		}
 		step = k
@@ -66,6 +69,13 @@ func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 	}
 	end, ok := pw.fold(s.End)
 	if !ok || addOverflows(end, step) {
+		return false
+	}
+	// TIA refuses to compile a constant FOR that never runs ("The high
+	// limit is not higher than the low limit", bench 11-27): the counter
+	// loop writes it.
+	// A FOR from a value to itself is not proved to compile either.
+	if (step > 0 && start >= end) || (step < 0 && start <= end) {
 		return false
 	}
 	return inRange(end, t) && inRange(end+step, t)
@@ -151,6 +161,12 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 		pw.gap("siemens/int-width", at, gapOther, "a FOR over a "+orUnknown(t), "")
 		return
 	}
+	if k, ok := pw.fold(s.Step); s.Step != nil && ok && k == -1<<63 {
+		// Its negation, and LINT#-9223372036854775808 as a literal, leave
+		// LINT.
+		pw.gap("siemens/int-width", at, gapOther, "a FOR step of LINT's least value", "")
+		return
+	}
 	if s.Step != nil && pw.typ(s.Step) == tWide {
 		if _, ok := pw.fold(s.Step); !ok {
 			pw.gap("siemens/int-width", at, gapOther, "a FOR step that is integer arithmetic", "compute the step into a variable first")
@@ -172,9 +188,12 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 	case constStep && step == 0:
 		pw.faultIf(b, in, at, "TRUE") // nautilus: "FOR step is zero"
 		return
-	// The next pass runs when c + step stays on the near side of the end;
-	// c + step is only compared once it cannot overflow, so the test is
-	// exact for every LINT, and the counter never wraps round.
+	// The next pass runs when c + step stays on the near side of the end,
+	// and c + step is not past LINT's range. SCL's AND does not short-
+	// circuit, so c + step (and, for a variable step, the bound of the
+	// side not taken) can overflow in an operand whose result is not
+	// used; the test is still exact for every LINT (bench B1, #1427).
+	// The counter itself steps in forStep.
 	case constStep && step > 0:
 		first = fmt.Sprintf("%s <= %s", c, e)
 		next = fmt.Sprintf("%s <= LINT#%d AND %s + %d <= %s", c, int64(1<<63-1)-step, c, step, e)
@@ -192,6 +211,7 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 			k, c, k, c, k, e, k, c, k, c, k, e)
 		stepAdd = " + " + k
 	}
+	x := pw.forExitFlag(b, s, in, at)
 	pw.emit(b, at, "%s%s := %s;\n", in, r, first)
 	pw.emit(b, at, "%sWHILE %s DO\n", in, r)
 	if t != "LINT" && (!pw.boundInType(s.Start, t) || !pw.boundInType(s.End, t)) {
@@ -204,13 +224,139 @@ func (pw *progWriter) forCounter(b *strings.Builder, s *st.ForStmt, in string, a
 		pw.emit(b, at, "%s\t%s := LINT_TO_%s(%s);\n", in, v, t, c)
 	}
 	pw.emit(b, at, "%s\t%s := %s;\n", in, r, next)
-	pw.emit(b, at, "%s\tIF %s THEN\n%s\t\t%s := %s%s;\n%s\tEND_IF;\n", in, r, in, c, c, stepAdd, in)
+	pw.forStep(b, in+"\t", at, t, c, stepAdd, step, constStep)
 	k := strings.ToLower(s.Variable)
 	prev, had := pw.forRange[k]
 	delete(pw.forRange, k)
+	pw.loopExit = append(pw.loopExit, x)
 	pw.stmts(b, s.Body, d+1)
+	pw.loopExit = pw.loopExit[:len(pw.loopExit)-1]
 	if had {
 		pw.forRange[k] = prev
 	}
 	pw.emit(b, at, "%sEND_WHILE;\n", in)
+	pw.forExit(b, in, at, x, fmt.Sprintf("%s := %s;", v, forWrap(c, t)))
+}
+
+// forWrap is c wrapped to integer type t, as wrap writes it, but reduced
+// MOD the width first: when no pass ran, c is the start, any LINT, and
+// wrap's c + half could leave LINT.
+func forWrap(c, t string) string {
+	w := intWidth[t]
+	if t == "LINT" {
+		return c
+	}
+	m := uint64(1) << w.bits
+	if w.signed {
+		h := m / 2
+		return fmt.Sprintf("LINT_TO_%s((%s MOD LINT#%d + LINT#%d + LINT#%d) MOD LINT#%d - LINT#%d)", t, c, m, m, h, m, h)
+	}
+	return fmt.Sprintf("LINT_TO_%s((%s MOD LINT#%d + LINT#%d) MOD LINT#%d)", t, c, m, m, m)
+}
+
+const (
+	lintMax = "LINT#9223372036854775807"
+	lintMin = "(LINT#-9223372036854775807 - 1)"
+)
+
+// forStep steps the counter c to the next value nautilus's counter takes.
+// Narrower than LINT, c holds a value of the variable's type (the guard
+// saw to it) and so does the step (lowering refuses a bound or step wider
+// than the variable: storeRule, lang/st lower.go), so c + step cannot
+// leave LINT. A LINT
+// counter can: past LINT's range the step wraps at 64 bits, as nautilus's
+// does, computed in an order no partial sum of which leaves LINT, so the
+// CPU's overflow handling never matters.
+func (pw *progWriter) forStep(b *strings.Builder, in string, at int, t, c, stepAdd string, step int64, constStep bool) {
+	if t != "LINT" {
+		pw.emit(b, at, "%s%s := %s%s;\n", in, c, c, stepAdd)
+		return
+	}
+	up := func(k string) string { // c + k - 2^64, for c > max - k
+		return fmt.Sprintf("%s - %s - 1 + %s - %s - 1", c, lintMax, k, lintMax)
+	}
+	down := func(k string) string { // c + k + 2^64, for c < min - k
+		return fmt.Sprintf("%s + %s + 1 + %s + %s + 1", c, lintMax, k, lintMax)
+	}
+	switch {
+	case constStep && step > 0:
+		k := strconv.FormatInt(step, 10)
+		pw.emit(b, at, "%sIF %s <= LINT#%d THEN\n%s\t%s := %s + %s;\n%sELSE\n%s\t%s := %s;\n%sEND_IF;\n",
+			in, c, int64(1<<63-1)-step, in, c, c, k, in, in, c, up(k), in)
+	case constStep:
+		k := "(" + strconv.FormatInt(step, 10) + ")"
+		pw.emit(b, at, "%sIF %s >= LINT#%d THEN\n%s\t%s := %s%s;\n%sELSE\n%s\t%s := %s;\n%sEND_IF;\n",
+			in, c, int64(-1<<63)-step, in, c, c, stepAdd, in, in, c, down(k), in)
+	default:
+		k := strings.TrimPrefix(stepAdd, " + ")
+		pw.emit(b, at, "%sIF %s > 0 THEN\n", in, k)
+		pw.emit(b, at, "%s\tIF %s <= %s - %s THEN\n%s\t\t%s := %s + %s;\n%s\tELSE\n%s\t\t%s := %s;\n%s\tEND_IF;\n",
+			in, c, lintMax, k, in, c, c, k, in, in, c, up(k), in)
+		pw.emit(b, at, "%sELSIF %s >= %s - %s THEN\n%s\t%s := %s + %s;\n", in, c, lintMin, k, in, c, c, k)
+		pw.emit(b, at, "%sELSE\n%s\t%s := %s;\n%sEND_IF;\n", in, in, c, down(k), in)
+	}
+}
+
+// forExitFlag declares and clears the flag a FOR's EXIT sets, when its
+// body EXITs it; "" when it does not.
+func (pw *progWriter) forExitFlag(b *strings.Builder, s *st.ForStmt, in string, at int) string {
+	if !exitsLoop(s.Body) {
+		return ""
+	}
+	x := "#" + pw.forTemp("naut_for_x", "BOOL")
+	pw.emit(b, at, "%s%s := FALSE;\n", in, x)
+	return x
+}
+
+// forExit stores the exit value (set, a statement) after the loop, unless
+// its EXIT left it (flag x set).
+func (pw *progWriter) forExit(b *strings.Builder, in string, at int, x, set string) {
+	if x == "" {
+		pw.emit(b, at, "%s%s\n", in, set)
+		return
+	}
+	pw.emit(b, at, "%sIF NOT %s THEN\n%s\t%s\n%sEND_IF;\n", in, x, in, set, in)
+}
+
+// exitsLoop reports whether body has an EXIT of the loop it is the body
+// of: one outside any loop nested in it.
+func exitsLoop(body []st.Statement) bool {
+	for _, s := range body {
+		switch s := s.(type) {
+		case *st.ExitStmt:
+			return true
+		case *st.IfStmt:
+			if exitsLoop(s.Then) || exitsLoop(s.Else) {
+				return true
+			}
+			for _, e := range s.ElsIfs {
+				if exitsLoop(e.Body) {
+					return true
+				}
+			}
+		case *st.CaseStmt:
+			if exitsLoop(s.Else) {
+				return true
+			}
+			for _, c := range s.Cases {
+				if exitsLoop(c.Body) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// forPlainExit is the exit value of a loop forPlain writes: the last
+// pass's value plus the step (at least one pass runs, and the value is
+// inside the type: forPlain saw to both).
+func (pw *progWriter) forPlainExit(s *st.ForStmt) int64 {
+	start, _ := pw.fold(s.Start)
+	end, _ := pw.fold(s.End)
+	step := int64(1)
+	if s.Step != nil {
+		step, _ = pw.fold(s.Step)
+	}
+	return start + ((end-start)/step+1)*step
 }

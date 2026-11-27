@@ -176,7 +176,11 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 		if step == 0 {
 			return fmt.Errorf("FOR step is zero")
 		}
-		for i := startV.I; (step > 0 && i <= endV.I) || (step < 0 && i >= endV.I); i += step {
+		i := startV.I
+		for (step > 0 && i <= endV.I) || (step < 0 && i >= endV.I) {
+			if n.Ranged && (i < n.Lo || i > n.Hi) {
+				return fmt.Errorf("FOR %s: %d is outside %s (%d..%d)", n.Var, i, n.Type, n.Lo, n.Hi)
+			}
 			ctx.Frame.Slots[n.Slot] = IntVal(i)
 			if err := execBlock(ctx, n.Body); err != nil {
 				return err
@@ -191,7 +195,18 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 			if ctx.continueLoop {
 				ctx.continueLoop = false
 			}
+			next := i + step // wraps at 64 bits, as the exit value does
+			if (step > 0 && next < i) || (step < 0 && next > i) {
+				// Past the 64-bit range: no further pass can run.
+				i = next
+				break
+			}
+			i = next
 		}
+		if n.Wrap != nil {
+			i = n.Wrap.Apply(i)
+		}
+		ctx.Frame.Slots[n.Slot] = IntVal(i)
 		return nil
 
 	case *While:

@@ -54,6 +54,7 @@ BEGIN
 		#i := #naut_for_v1;
 		#avg := #avg + INT_TO_REAL(#i) / 4.0;
 	END_FOR;
+	#i := 5;
 	"naut_Tags".Level := LIMIT(MN := 0.0, IN := "naut_Tags".Level * 1.5 - (#avg + 2.0), MX := 100.0);
 	"naut_Tags".Running := NOT ("naut_Tags".Fault OR "naut_Tags".Reset) AND "naut_Tags".Start;
 END_FUNCTION_BLOCK
