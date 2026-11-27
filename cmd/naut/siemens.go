@@ -391,7 +391,8 @@ func serveSiemens(ctx context.Context, cfg siemensServeConfig, client *webapi.Cl
 	ln, scheme := facadeListener(ln, cfg.tls, cfg.listen, "naut siemens serve", stderr)
 	runCtx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
-	go f.Run(runCtx)
+	ran := make(chan error, 1)
+	go func() { ran <- f.Run(runCtx) }()
 	// Requests carry runCtx (derived from ctx), so stopping serve ends the
 	// open /api/stream connections (VS Code keeps one) instead of Shutdown
 	// waiting them out.
@@ -404,16 +405,24 @@ func serveSiemens(ctx context.Context, cfg siemensServeConfig, client *webapi.Cl
 	if ready != nil {
 		ready <- ln.Addr().String()
 	}
+	code := 0
 	select {
 	case err := <-served:
 		fmt.Fprintln(stderr, "naut siemens serve:", err)
 		return 1
+	case err := <-ran: // the facade cannot serve any binding set
+		if err == nil {
+			err = errors.New("the facade stopped")
+		}
+		fmt.Fprintln(stderr, "naut siemens serve:", err)
+		code = 1
 	case <-ctx.Done():
 	}
+	stopRun()
 	sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(sctx)
-	return 0
+	return code
 }
 
 func runSiemensCert(args []string) int {

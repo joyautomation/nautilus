@@ -16,17 +16,20 @@ import (
 // A download can change the CPU's data layout under a running serve. A
 // write must never go out as the type serve bound before (#789 A1).
 
-// TestAWriteGoesOutAsTheCPUsTypeNow: Level was bound as REAL; the CPU now
-// holds an LREAL. 1e39 is a valid LREAL, refused by the old REAL check:
-// it is written, and the set is re-bound with Level as LREAL.
-func TestAWriteGoesOutAsTheCPUsTypeNow(t *testing.T) {
+// TestAWriteToARetypedNameIsRefusedUntilReBound: Level was bound as REAL;
+// the CPU now holds an LREAL. The write is refused (the number may mean
+// something else now) and nothing is sent; once the set is re-bound with
+// Level as LREAL, a retry writes it: 1e39, which the old REAL check would
+// refuse.
+func TestAWriteToARetypedNameIsRefusedUntilReBound(t *testing.T) {
 	s, f, base := startWith(t, Options{Rediscover: -1, Settle: 10 * time.Millisecond})
 	s.Put(`"Tags".Level`, &webapitest.Var{Datatype: "lreal", Value: 12.5})
-	if code, body := post(t, base, "/api/tags", `{"name":"Level","value":1e39}`); code/100 != 2 {
+	code, body := post(t, base, "/api/tags", `{"name":"Level","value":40}`)
+	if code != http.StatusBadRequest || !strings.Contains(body, "is LREAL on the CPU now, not REAL") {
 		t.Fatalf("write to the retyped Level: %d %s", code, body)
 	}
-	if v := s.Value(`"Tags".Level`); v != 1e39 {
-		t.Fatalf("the CPU holds %v, want 1e39", v)
+	if v := s.Value(`"Tags".Level`); v != 12.5 {
+		t.Fatalf("the CPU holds %v: the retyped write was sent", v)
 	}
 	waitFor(t, "Level re-bound as LREAL", func() bool {
 		for _, b := range f.Bindings() {
@@ -36,14 +39,27 @@ func TestAWriteGoesOutAsTheCPUsTypeNow(t *testing.T) {
 		}
 		return false
 	})
-	// And the other way: Speed was INT, now REAL: 2.5 goes out as a REAL.
-	s.Put(`"Tags".Speed`, &webapitest.Var{Datatype: "real", Value: 3.0})
-	if code, body := post(t, base, "/api/tags", `{"name":"Speed","value":2.5}`); code/100 != 2 {
-		t.Fatalf("write to the retyped Speed: %d %s", code, body)
+	if code, body := post(t, base, "/api/tags", `{"name":"Level","value":1e39}`); code/100 != 2 || s.Value(`"Tags".Level`) != 1e39 {
+		t.Fatalf("retry after the re-binding: %d %s, CPU %v", code, body, s.Value(`"Tags".Level`))
 	}
-	if v := s.Value(`"Tags".Speed`); v != 2.5 {
-		t.Fatalf("the CPU holds Speed %v, want 2.5", v)
+}
+
+// TestAHalfBrowsedCPUIsNotAdopted: a re-discovery that cannot browse a
+// member (a CPU in the middle of a download) keeps the running set, even
+// when two browses agree.
+func TestAHalfBrowsedCPUIsNotAdopted(t *testing.T) {
+	s, f, base := startWith(t, Options{Rediscover: 100 * time.Millisecond, Settle: 10 * time.Millisecond})
+	waitFor(t, "first values", func() bool { return state(t, base)["Main.count"] != nil })
+	s.Put(`"Main_DB".count`, nil)
+	// Listed as a structure, but its browse fails (the fake answers "not a
+	// structure" for a datatype spelled other than "struct").
+	s.Put(`"Main_DB".half`, &webapitest.Var{Datatype: "STRUCT"})
+	time.Sleep(600 * time.Millisecond)
+	if n := f.Rebinds(); n != 0 {
+		t.Fatalf("rebinds = %d: a half-browsed CPU was adopted", n)
 	}
+	s.Put(`"Main_DB".half`, nil)
+	waitFor(t, "re-bound once the browse is whole", func() bool { return f.Rebinds() == 1 })
 }
 
 // TestAWriteToANameGoneOrNoLongerBindableIsRefused: refused before
@@ -68,13 +84,13 @@ func TestAWriteToANameGoneOrNoLongerBindableIsRefused(t *testing.T) {
 	}
 }
 
-// TestWithoutTheTimerTheFixIsARestart: with re-discovery off, the refusal
-// says a restart binds the CPU's program as it is now.
+// TestWithoutTheTimerTheFixIsARestart: with the timer off, the refusal
+// promises no time, and names a restart as the way out.
 func TestWithoutTheTimerTheFixIsARestart(t *testing.T) {
 	s, _, base := startWith(t, Options{Rediscover: -1, Settle: time.Hour})
 	s.Put(`"Tags".Speed`, nil)
 	if code, body := post(t, base, "/api/tags", `{"name":"Speed","value":5}`); code != http.StatusBadRequest ||
-		!strings.Contains(body, "restart naut siemens serve") || strings.Contains(body, "within") {
+		!strings.Contains(body, "or restart naut siemens serve") || strings.Contains(body, "within") {
 		t.Fatalf("%d %s", code, body)
 	}
 }

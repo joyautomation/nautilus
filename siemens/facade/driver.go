@@ -35,21 +35,30 @@ const maxDepth = 4
 // skipped with why. A root that does not exist is an error: it names the
 // tags DB or a program the project says is there.
 func Discover(ctx context.Context, c *webapi.Client, roots []Root) ([]Binding, []string, error) {
+	bs, skipped, _, err := discover(ctx, c, roots)
+	return bs, skipped, err
+}
+
+// discover is Discover, also counting the members whose browse failed: a
+// re-discovery that could not browse all of the CPU (one in the middle of
+// a download) is not a layout to adopt.
+func discover(ctx context.Context, c *webapi.Client, roots []Root) ([]Binding, []string, int, error) {
 	var bs []Binding
 	var skipped []string
+	failed := 0
 	for _, r := range roots {
 		sym, err := webapi.Symbol(r.DB)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
-		if err := walk(ctx, c, sym, r.Prefix, 0, &bs, &skipped); err != nil {
-			return nil, nil, fmt.Errorf("browse %s: %w", sym, err)
+		if err := walk(ctx, c, sym, r.Prefix, 0, &bs, &skipped, &failed); err != nil {
+			return nil, nil, 0, fmt.Errorf("browse %s: %w", sym, err)
 		}
 	}
-	return bs, skipped, nil
+	return bs, skipped, failed, nil
 }
 
-func walk(ctx context.Context, c *webapi.Client, sym, name string, depth int, bs *[]Binding, skipped *[]string) error {
+func walk(ctx context.Context, c *webapi.Client, sym, name string, depth int, bs *[]Binding, skipped *[]string, failed *int) error {
 	vs, err := c.Browse(ctx, sym, false)
 	if err != nil {
 		return err
@@ -65,7 +74,8 @@ func walk(ctx context.Context, c *webapi.Client, sym, name string, depth int, bs
 				*skipped = append(*skipped, cname+": nested deeper than the facade browses")
 				continue
 			}
-			if err := walk(ctx, c, child, cname, depth+1, bs, skipped); err != nil {
+			if err := walk(ctx, c, child, cname, depth+1, bs, skipped, failed); err != nil {
+				*failed++
 				*skipped = append(*skipped, fmt.Sprintf("%s: %v", cname, err))
 			}
 			continue

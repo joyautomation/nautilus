@@ -343,9 +343,9 @@ A download can change the program while serve runs:
   data layout changed, it re-binds: new variables appear, removed ones go,
   and VS Code reconnects by itself.
 - Before every write, serve checks the variable on the CPU. A variable
-  that is gone, or is now a type serve does not write, is refused, and the
-  message says serve catches up by itself within 15 s. A variable whose
-  type changed is written as its new type, never the old one.
+  that is gone, or whose type changed, is refused, and nothing is sent.
+  The message says serve catches up by itself within 15 s. Retry after
+  that: the value then goes out as the new type.
 
 A TIME value, such as a timer's `PT` or `ET`, reads as milliseconds, the
 way `naut run` shows it. Writing a TIME is refused for now, because the

@@ -2580,15 +2580,22 @@ servers never share the journal), builds the new one, and ends open
 `/api/stream` requests so clients reconnect. A failed or empty browse keeps
 the running set. Every write first browses the binding's parent (the
 children browse discovery uses; a `var`-mode browse has not run on a CPU)
-and fails closed: gone, unreadable or unbindable is refused naming the fix,
-retyped is checked and sent as the CPU's type now. TIME reads as ms (a
+and fails closed: gone, unreadable, unbindable or retyped is refused
+naming the fix (a retype can change what a number means, counts to
+percent, while the client still shows the old binding); the refusal asks
+for a re-discovery, and a retry after it writes the new type. TIME reads as ms (a
 number, or an IEC literal); TIME writes are refused until the bench
-measures the JSON the CPU takes. A differing browse is adopted only when a
+measures the JSON the CPU takes. A differing browse is adopted only when it reached every member and a
 second browse a settle later finds the same set (a CPU mid-download can
-answer half loaded); a kick that found nothing changed holds further kicks
+answer half loaded); writes in flight finish before a swap; a kick that found nothing changed holds further kicks
 off for 30 s; requests during the swap get 503 with Retry-After. Serve
 passes no users file, so there are no browser sessions to lose at a swap;
-wiring one in would need the sessions carried across sets.
+wiring one in would need the sessions carried across sets. Each set's
+server keeps its own in-memory audit ring, so `GET /api/audit` starts
+empty after a re-binding, as after a restart (follow-up: share the ring
+and the auditor's backlog across sets before `Options.Audit` is set for
+serve). If a re-binding fails and so does rebuilding the last set, Run
+returns an error and serve exits 1.
 
 **The station spec sets the CPU-side config:** the web server, a web user
 with read/write rights, the protection level, and Web API visibility on

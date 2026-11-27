@@ -119,6 +119,8 @@ type Facade struct {
 	rebinds   int
 	swapping  bool // between stopping a set and serving its replacement
 	quietKick time.Time
+	wmu       sync.RWMutex // writes hold it shared; a swap exclusively
+	runErr    error        // why Run gave up, if it did
 }
 
 // binder is one binding set and what serves it.
@@ -162,7 +164,7 @@ func New(ctx context.Context, o Options) (*Facade, error) {
 		o.KickGap = 30 * time.Second
 	}
 	f := &Facade{opts: o, log: o.Log, roots: o.Roots, known: o.Known, kick: make(chan struct{}, 1)}
-	bs, skipped, err := f.discover(ctx, o.Roots, o.Known)
+	bs, skipped, err := f.discover(ctx, o.Roots, o.Known, false)
 	if err != nil {
 		return nil, err
 	}
@@ -175,10 +177,15 @@ func New(ctx context.Context, o Options) (*Facade, error) {
 }
 
 // discover browses roots and keeps what known allows.
-func (f *Facade) discover(ctx context.Context, roots []Root, known func(string) bool) ([]Binding, []string, error) {
-	bs, skipped, err := Discover(ctx, f.opts.Client, roots)
+// A re-discovery passes whole: a browse that could not reach every member
+// is then an error, so a CPU answering half loaded is never adopted.
+func (f *Facade) discover(ctx context.Context, roots []Root, known func(string) bool, whole bool) ([]Binding, []string, error) {
+	bs, skipped, failed, err := discover(ctx, f.opts.Client, roots)
 	if err != nil {
 		return nil, nil, err
+	}
+	if whole && failed > 0 {
+		return nil, nil, fmt.Errorf("%d member(s) of the CPU's program could not be browsed", failed)
 	}
 	if known != nil {
 		kept := bs[:0]
@@ -301,7 +308,10 @@ func (f *Facade) Rebinds() int {
 // the CPU again every Options.Rediscover (and whenever Kick asks): when
 // the binding set it finds differs, the set is rebuilt. Open /api/stream
 // connections end at a re-binding, so a client reconnects to the new set.
-func (f *Facade) Run(ctx context.Context) {
+// It returns nil when ctx ends, and an error when it cannot serve any
+// binding set (a re-binding failed, and so did rebuilding the last set):
+// the caller must stop serving then.
+func (f *Facade) Run(ctx context.Context) error {
 	var tick <-chan time.Time
 	if f.opts.Rediscover > 0 {
 		t := time.NewTicker(f.opts.Rediscover)
@@ -324,7 +334,7 @@ func (f *Facade) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			stop()
-			return
+			return nil
 		case <-tick:
 		case <-f.kick:
 			kicked = true
@@ -333,7 +343,7 @@ func (f *Facade) Run(ctx context.Context) {
 			}
 			if !wait(f.opts.Settle) {
 				stop()
-				return
+				return nil
 			}
 			select { // the kicks that came while settling are this one
 			case <-f.kick:
@@ -347,7 +357,7 @@ func (f *Facade) Run(ctx context.Context) {
 			// browse a Settle later finds the same new set.
 			if !wait(f.opts.Settle) {
 				stop()
-				return
+				return nil
 			}
 			bs2, skipped2, changed2 := f.rediscover(ctx, b)
 			if !changed2 || !sameBindings(index(bs), bs2) {
@@ -371,6 +381,7 @@ func (f *Facade) Run(ctx context.Context) {
 		f.mu.Lock()
 		f.swapping = true
 		f.mu.Unlock()
+		f.wmu.Lock() // the writes in flight finish first
 		stop()
 		note := ""
 		nb, err := f.build(bs, skipped)
@@ -378,7 +389,8 @@ func (f *Facade) Run(ctx context.Context) {
 			note = "re-binding failed, the last binding set is rebuilt: " + err.Error()
 			if nb, err = f.build(sortedBindings(b.bindings), b.skipped); err != nil {
 				f.setNote("re-binding failed twice, serve stops: " + err.Error())
-				return
+				f.wmu.Unlock()
+				return fmt.Errorf("siemens facade: re-binding failed twice: %w", err)
 			}
 		}
 		added, removed := diffBindings(b.bindings, nb.bindings)
@@ -390,6 +402,7 @@ func (f *Facade) Run(ctx context.Context) {
 		f.rebinds++
 		f.note = note
 		f.mu.Unlock()
+		f.wmu.Unlock()
 		f.log.Info("siemens facade: "+note, "tags", len(nb.bindings), "new", added, "gone", removed)
 		b = nb
 		done = runSet(b)
@@ -444,7 +457,7 @@ func (f *Facade) rediscover(ctx context.Context, b *binder) ([]Binding, []string
 		}
 	}
 	bctx, cancel := context.WithTimeout(ctx, time.Minute)
-	bs, skipped, err := f.discover(bctx, roots, known)
+	bs, skipped, err := f.discover(bctx, roots, known, true)
 	cancel()
 	if err != nil {
 		f.setNote("re-discovery failed, the last binding set is kept: " + err.Error())
@@ -569,6 +582,10 @@ func (e badRequest) HTTPStatus() int { return http.StatusBadRequest }
 // is checked against and sent as the CPU's type now, never the old one.
 // Either way a re-discovery is asked for.
 func (f *Facade) write(name string, value any) error {
+	// A swap waits for the writes in flight (and one blocked here goes
+	// on against the new set), so none finishes against a stopped set.
+	f.wmu.RLock()
+	defer f.wmu.RUnlock()
 	cur := f.current()
 	b, ok := cur.bindings[name]
 	if !ok {
@@ -629,7 +646,12 @@ func (f *Facade) typeNow(ctx context.Context, b Binding) (string, error) {
 			f.Kick()
 			return "", badRequest(f.changedMsg(b.Name, fmt.Sprintf("is %s on the CPU now, which the facade does not write", v.Datatype)))
 		case t != b.Type:
-			f.Kick() // written as what the CPU holds now; the set is re-bound
+			// Refused, not sent as the new type: a retype can change what
+			// a number means (counts to percent), and the client still
+			// shows the old binding. The set is re-bound; a retry after it
+			// writes the new type knowingly.
+			f.Kick()
+			return "", badRequest(f.changedMsg(b.Name, fmt.Sprintf("is %s on the CPU now, not %s", t, b.Type)))
 		}
 		return t, nil
 	}
@@ -638,11 +660,12 @@ func (f *Facade) typeNow(ctx context.Context, b Binding) (string, error) {
 }
 
 // changedMsg says a bound name changed on the CPU, and how serve catches
-// up: by itself at the next re-discovery, or by a restart.
+// up: by itself (the re-discovery a refusal asks for, or the timer's), or
+// by a restart.
 func (f *Facade) changedMsg(name, what string) string {
-	fix := "restart naut siemens serve to bind the CPU's program as it is now"
+	fix := "serve tries to bind the CPU's program as it is now by itself; retry in a few seconds, or restart naut siemens serve"
 	if f.opts.Rediscover > 0 {
-		fix = fmt.Sprintf("serve binds the CPU's program as it is now by itself within %s (or restart it)", f.opts.Rediscover)
+		fix = fmt.Sprintf("serve binds the CPU's program as it is now by itself within %s; retry then (or restart it)", f.opts.Rediscover)
 	}
 	return fmt.Sprintf("%s: not written: %s: the CPU's program changed since serve bound it (a download?); %s", name, what, fix)
 }
