@@ -24,12 +24,14 @@ jobs:
   # never share a CPU with another mutant. Its baseline is its rows' tests,
   # green with no mutation. Non-zero if a mutation survived or a build broke.
   mutants:
-    name: Quorum mutants ${{ matrix.shard }}/8
+    name: Quorum mutants ${{ strategy.job-index }}/${{ strategy.job-total }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
+        # The legs; their count is strategy.job-total, and MUTANTS_LEGS in
+        # the report job below.
         shard: [0, 1, 2, 3, 4, 5, 6, 7]
     permissions:
       contents: read
@@ -37,12 +39,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.25'}
-      - name: go run ./tools/quorum-mutants -shard ${{ matrix.shard }}/8
+      - name: go run ./tools/quorum-mutants -shard ${{ strategy.job-index }}/${{ strategy.job-total }}
         timeout-minutes: 25 # leaves the log's upload time to run
         shell: bash
         run: |
           set -o pipefail
-          go run ./tools/quorum-mutants -shard ${{ matrix.shard }}/8 2>&1 | tee "$RUNNER_TEMP/mutants-${{ matrix.shard }}.log"
+          go run ./tools/quorum-mutants -shard ${{ strategy.job-index }}/${{ strategy.job-total }} 2>&1 | tee "$RUNNER_TEMP/mutants-${{ matrix.shard }}.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -122,6 +124,7 @@ jobs:
           MUTANTS_OUTCOME: ${{ needs.mutants.result }}
           SEEDS_OUTCOME: ${{ needs.seeds.result }}
           MUTANTS_LOG: ${{ runner.temp }}/mutants.log
+          MUTANTS_LEGS: '8' # the mutants matrix's length: a leg without its done row is named
           SEEDS_LOG: ${{ runner.temp }}/logs/seeds.log
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

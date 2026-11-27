@@ -9,6 +9,8 @@
 #   MUTANTS_OUTCOME, SEEDS_OUTCOME  the steps' outcomes (success, failure,
 #                                   cancelled, skipped); only success is green
 #   MUTANTS_LOG, SEEDS_LOG          the steps' output (a missing file is fine)
+#   MUTANTS_LEGS                    the mutant legs' count (#1096): a leg
+#                                   whose done row is missing is named
 #   RUN_URL, GITHUB_SHA, GITHUB_REPOSITORY
 #   GH                              the gh binary (the table test stubs it)
 set -euo pipefail
@@ -59,7 +61,13 @@ trap 'rm -f "$body"' EXIT
     # The legs' tables run together (#1096): one header, then only the
     # rows that were not caught (a caught row and a green baseline say
     # nothing), with a count of the caught.
-    rows=$(log "${MUTANTS_LOG:-}" | grep -E '^\| ' | grep -vE '^\| mutation \| result \|$|\| caught \(|\| green \|$' || true)
+    rows=$(log "${MUTANTS_LOG:-}" | grep -E '^\| ' | grep -vE '^\| mutation \| result \|$|\| caught \(|\| (green|done) \|$' || true)
+    legs=${MUTANTS_LEGS:-0}
+    for ((k = 0; k < legs; k++)); do
+      if ! log "${MUTANTS_LOG:-}" | grep -qF "| (shard $k/$legs: "; then
+        rows+=${rows:+$'\n'}"| (shard $k/$legs) | never finished: timed out, cancelled, red baseline or never started; see the run |"
+      fi
+    done
     caught=$(log "${MUTANTS_LOG:-}" | grep -cE '^\| .* \| caught \(' || true)
     if [ -n "$rows" ]; then
       echo "| mutation | result |"

@@ -61,12 +61,26 @@ cat >"$tmp/mutants-legs.log" <<'EOF'
 | (baseline: the tag on, no mutation; shard 0/2, 2 rows) | green |
 | no_rho | caught (8 tests red) |
 | no_observe | SURVIVED: still green: TestObserveLiftsTheNextCampaign |
+| (shard 0/2: 2 rows judged) | done |
 exit status 1
 | mutation | result |
 |---|---|
 | (baseline: the tag on, no mutation; shard 1/2, 2 rows) | green |
 | retry_on_grid | caught (1 tests red) |
 | any_sender | BROKEN: package p failed with no test failing (a panic or a build error) |
+| (shard 1/2: 2 rows judged) | done |
+EOF
+# Three legs: shard 1 timed out after one row, shard 2 never started.
+cat >"$tmp/mutants-short.log" <<'EOF'
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 0/3, 1 rows) | green |
+| no_rho | caught (8 tests red) |
+| (shard 0/3: 1 rows judged) | done |
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 1/3, 2 rows) | green |
+| retry_on_grid | caught (1 tests red) |
 EOF
 cat >"$tmp/mutants-broken.log" <<'EOF'
 # github.com/joyautomation/nautilus/quorum
@@ -153,12 +167,17 @@ check "mutants legs list only what was not caught" 7 failure mutants-legs.log su
   '^\| no_observe \| SURVIVED: still green: TestObserveLiftsTheNextCampaign \|$' \
   '^\| any_sender \| BROKEN: ' \
   'The other 2 mutations were caught' \
-  '!no_rho' '!retry_on_grid' '!shard 0/2' '!exit status'
+  '!no_rho' '!retry_on_grid' '!shard 0/2' '!exit status' '!\| done \|'
 if [ "$(grep -c '^| mutation | result |$' "$tmp/body" 2>/dev/null)" != 1 ]; then
   echo "FAIL mutants legs: want one table header"
   cat "$tmp/body"
   fail=1
 fi
+# A leg without its done row is named, not hidden behind the caught rows.
+MUTANTS_LEGS=3 check "a leg that never finished is named" 7 cancelled mutants-short.log success seeds-green.log \
+  '^issue comment 7 ' 'was cancelled' \
+  '^\| \(shard 1/3\) \| never finished' '^\| \(shard 2/3\) \| never finished' \
+  '!shard 0/3\)' '!no_rho' 'The other 2 mutations were caught'
 # A build break: no table, so the log's tail.
 check "mutants broken shows the log" '' failure mutants-broken.log success seeds-green.log \
   '^issue create ' 'undefined: rho'

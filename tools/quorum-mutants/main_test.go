@@ -202,3 +202,17 @@ func TestParseShard(t *testing.T) {
 		}
 	}
 }
+
+// The issue script finds a finished leg by this row (quorum-nightly-issue.sh).
+func TestDoneRowIsWhatTheReportLooksFor(t *testing.T) {
+	src, err := readFile("../../.github/scripts/quorum-nightly-issue.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := doneRow(3, 8, 85); got != "| (shard 3/8: 85 rows judged) | done |" {
+		t.Fatalf("doneRow: %q", got)
+	}
+	if !strings.Contains(src, `"| (shard $k/$legs: "`) || !strings.Contains(src, `(green|done) \|$`) {
+		t.Fatal("quorum-nightly-issue.sh no longer looks for the done row's shape")
+	}
+}

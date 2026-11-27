@@ -1511,8 +1511,13 @@ func baseline(r result) (bool, string) {
 	return true, "green"
 }
 
+// runTimeout bounds one run: a mutant that hangs a test fails that test
+// (a timeout panic, said in the row) instead of eating its nightly leg.
+// The slowest test is about 30 s; a baseline runs a leg's tests in turn.
+const runTimeout = "10m"
+
 func run(name string, args []string) []byte {
-	cmd := exec.Command("go", append([]string{"test", "-tags", "quorum_mut", "-count=1", "-json"}, args...)...)
+	cmd := exec.Command("go", append([]string{"test", "-tags", "quorum_mut", "-count=1", "-timeout", runTimeout, "-json"}, args...)...)
 	cmd.Env = append(os.Environ(), "QUORUM_MUT="+name)
 	out, _ := cmd.CombinedOutput() // a red run exits non-zero; the stream says why
 	return out
@@ -1540,7 +1545,7 @@ func main() {
 	for _, args := range baselines(rows) {
 		r := parse(run("", args))
 		if b, why := baseline(r); !b {
-			fmt.Printf("| (baseline: the tag on, no mutation) | %s |\n", why)
+			fmt.Printf("| (baseline: the tag on, no mutation; shard %d/%d) | %s |\n", k, n, why)
 			fmt.Print(r.why())
 			os.Exit(1)
 		}
@@ -1552,7 +1557,15 @@ func main() {
 		ok = ok && caught
 		fmt.Printf("| %s | %s |\n", m.name, why)
 	}
+	// The leg's last row: the nightly's report names a leg without it as
+	// one that never finished.
+	fmt.Println(doneRow(k, n, len(rows)))
 	if !ok {
 		os.Exit(1)
 	}
+}
+
+// doneRow is the table's last row, once every row of shard k/n is judged.
+func doneRow(k, n, rows int) string {
+	return fmt.Sprintf("| (shard %d/%d: %d rows judged) | done |", k, n, rows)
 }
