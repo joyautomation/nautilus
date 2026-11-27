@@ -4,6 +4,11 @@
 
 ### Added
 
+- **`<Mimic>` shows per-tag quality, and the default shell shows a dead field device** (#1056): a `quality` prop
+  (the frame's `quality` map); a label or piece of equipment reading a bad, not-connected or stale tag wears a
+  `BAD` / `STALE` badge (a tag with no entry draws as before). New exports `tagQuality`, `worstStatus`,
+  `driversDown`. The shell's browser-link pill now reads *Controller linked* / *Controller offline*, with a red
+  *N devices down* pill beside it and a banner on the mimic page when a driver is in error.
 - **A mimic's `bind` reaches a struct member, and a bind that matches no tag says so** (#717): `resolveBindings`
   resolves a dotted path (`CONV.Run`) through the frame's nested struct, after a flat key of that name, so a device
   tag's members bind like any tag. A `bind` that resolves to nothing was silent (the component kept its default);

@@ -6,8 +6,11 @@ import {
 	STATUS_META,
 	formatAge,
 	formatValue,
+	driversDown,
 	isWritable,
-	valueStatus
+	tagQuality,
+	valueStatus,
+	worstStatus
 } from '../src/lib/quality.js';
 
 describe('valueStatus — precedence', () => {
@@ -139,5 +142,50 @@ describe('formatAge', () => {
 		expect(formatAge(undefined)).toBe('');
 		expect(formatAge(NaN)).toBe('');
 		expect(formatAge(-1)).toBe('');
+	});
+});
+
+// #1056: the auto mimic pages qualify each chip and label by the tags it reads.
+describe('tagQuality — the frame quality map', () => {
+	it('a tag with no entry is good: a program variable never lights up', () => {
+		expect(tagQuality({ Dev_Level: 'notConnected' }, 'LevelPct')).toBe('good');
+		expect(tagQuality(undefined, 'Dev_Level')).toBe('good');
+	});
+	it('a dotted member answers for its root; a leading ! is not part of the name', () => {
+		expect(tagQuality({ UDT: 'stale' }, 'UDT.Member')).toBe('stale');
+		expect(tagQuality({ Run: 'notConnected' }, '!Run')).toBe('notConnected');
+	});
+});
+
+describe('worstStatus — several tags, one chip', () => {
+	const map = { A: 'stale', B: 'notConnected', C: 'substituted' } as const;
+	it('bad beats substituted beats stale beats good', () => {
+		expect(worstStatus(map, ['X'])).toBe('good');
+		expect(worstStatus(map, ['X', 'A'])).toBe('stale');
+		expect(worstStatus(map, ['A', 'C'])).toBe('substituted');
+		expect(worstStatus(map, ['A', 'B', 'C'])).toBe('bad');
+	});
+	it('notConnected reads bad; a token the kit does not know reads bad, never good', () => {
+		expect(worstStatus({ A: 'notConnected' }, ['A'])).toBe('bad');
+		expect(worstStatus({ A: 'weird' as never }, ['A'])).toBe('bad');
+	});
+	it('no refs, or no map: good', () => {
+		expect(worstStatus(map, [])).toBe('good');
+		expect(worstStatus(undefined, ['A'])).toBe('good');
+	});
+});
+
+describe('driversDown — the field pill', () => {
+	it('counts error only: not a standby/offline, not one on its way, a healthy one never', () => {
+		const ds = [
+			{ state: 'error' },
+			{ state: 'offline' },
+			{ state: 'connecting' },
+			{ state: 'waiting' },
+			{ state: 'degraded' },
+			{ state: 'connected' }
+		];
+		expect(driversDown(ds).length).toBe(1);
+		expect(driversDown(undefined).length).toBe(0);
 	});
 });

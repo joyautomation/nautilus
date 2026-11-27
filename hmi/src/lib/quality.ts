@@ -194,3 +194,45 @@ export function formatAge(ms: number | undefined): string {
 	if (s < 86400) return `${Math.floor(s / 3600)}h`;
 	return `${Math.floor(s / 86400)}d`;
 }
+
+/**
+ * One tag's quality out of a frame's `quality` map — the same lookup as
+ * `RealtimeClient.quality()` (a dotted member path answers for its root
+ * tag), usable where only the map is in hand. A leading `!` (a negated
+ * binding) is not part of the name. No map, or no entry: `good`.
+ */
+export function tagQuality(map: Record<string, Quality> | undefined, ref: string): Quality {
+	if (!map) return 'good';
+	const tag = ref.startsWith('!') ? ref.slice(1) : ref;
+	const exact = map[tag];
+	if (exact) return exact;
+	const dot = tag.indexOf('.');
+	return (dot > 0 ? map[tag.slice(0, dot)] : undefined) ?? 'good';
+}
+
+/**
+ * What to draw for something that reads SEVERAL tags (a chip, a vessel, a
+ * row): the worst status among them, by the order `bad > substituted >
+ * stale > good`. A name no tag answers for is `good`, so a screen bound to
+ * nothing draws as it always did.
+ */
+export function worstStatus(map: Record<string, Quality> | undefined, refs: readonly string[]): ValueStatus {
+	let worst: ValueStatus = 'good';
+	const rank: Record<ValueStatus, number> = { good: 0, simulated: 0, stale: 1, substituted: 2, notPublished: 3, bad: 3 };
+	for (const ref of refs) {
+		const s = valueStatus({ quality: tagQuality(map, ref) });
+		if (rank[s] > rank[worst]) worst = s;
+	}
+	return worst;
+}
+
+/**
+ * The field drivers that are DOWN: in `error`. Not `offline` (a standby, a
+ * server not yet started: nothing is wrong), not `connecting`/`waiting`
+ * (on their way), and a parked driver (`enable: false`) is not reported
+ * at all. The shell's field pill and the mimic page's banner count these
+ * (#1056); the browser-to-controller link says nothing about them.
+ */
+export function driversDown<T extends { state: string }>(drivers: readonly T[] | undefined): T[] {
+	return (drivers ?? []).filter((d) => d.state === 'error');
+}

@@ -348,7 +348,7 @@ const defaultLayout = `<script>
 	import '@joyautomation/nautilus-hmi/theme.css';
 	import '@joyautomation/nautilus-hmi/fonts.css';
 	import { onMount } from 'svelte';
-	import { theme, ConfirmDialog, AlarmBanner, FloodBanner, AckButton, StatusPill, ThemeSwitch, AccountChip, ReferralBanner, createAuth%s } from '@joyautomation/nautilus-hmi';
+	import { theme, ConfirmDialog, AlarmBanner, FloodBanner, AckButton, StatusPill, ThemeSwitch, AccountChip, ReferralBanner, driversDown, createAuth%s } from '@joyautomation/nautilus-hmi';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { rt, alarms } from 'nx:default/client';
@@ -377,6 +377,11 @@ const defaultLayout = `<script>
 	const alarmsHref = %s;
 	// a screen with needs: is listed only to a session that holds it
 	// a screen's needs: is one permission, or several joined with | (any holds it)
+	// The status row says two different things (#1056): whether this browser
+	// is hearing the controller, and whether the controller is hearing the
+	// field. A dead device must not hide behind the first.
+	const down = $derived(driversDown(rt.frame?.drivers));
+	const fieldHref = $derived(screens.find((s) => s.id === '/diagnostics')?.href);
 	const visible = $derived(screens.filter((s) => !s.needs || s.needs.split('|').some((p) => auth.holds(p))));
 </script>
 
@@ -400,7 +405,12 @@ const defaultLayout = `<script>
 				<AlarmBanner summary={alarms.summary} compact href={alarmsHref ? resolve(alarmsHref) + page.url.search : undefined} />
 				<AckButton alarms={alarms.active} ids={['*']} label="Ack all" size="md" onack={(ids, by) => alarms.ack(ids, by)} />
 			{/if}
-			<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
+			{#if down.length}
+				<svelte:element this={fieldHref ? 'a' : 'span'} class="nx-field" href={fieldHref ? resolve(fieldHref) + page.url.search : undefined} title={down.map((d) => d.name + ': ' + (d.lastError || d.message)).join('\n')}>
+					<StatusPill kind="critical" label={down.length === 1 ? '1 device down' : down.length + ' devices down'} />
+				</svelte:element>
+			{/if}
+			<span title="This screen's link to the controller. It says nothing about the field devices."><StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Controller linked' : 'Controller offline'} /></span>
 			<AccountChip />
 			<ThemeSwitch />
 		</div>
@@ -425,6 +435,7 @@ const defaultLayout = `<script>
 	nav a:hover { color: var(--ink); }
 	nav a[aria-current='page'] { color: var(--ink); background: color-mix(in srgb, var(--ink) 12%%, transparent); }
 	.nx-status { flex: 1 1 0; min-width: max-content; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+	.nx-field { text-decoration: none; color: inherit; }
 	.nx-flood { padding: 8px 16px 0; }
 	main { flex: 1; min-height: 0; overflow: auto; padding: 16px; position: relative; }
 	@media (max-width: 900px) { .nx-title span { display: none; } }
@@ -655,11 +666,13 @@ const defaultAlarms = `<script>
 `
 
 const defaultPage = `<script>
-	import { Mimic, EquipmentPanel, expandUnits, panelFor } from '@joyautomation/nautilus-hmi';
+	import { Mimic, EquipmentPanel, expandUnits, panelFor, driversDown } from '@joyautomation/nautilus-hmi';
 	import doc from %s;
 %s
 	import { rt } from 'nx:default/client';
 	const tags = $derived(rt.frame?.tags ?? {});
+	const quality = $derived(rt.frame?.quality);
+	const down = $derived(driversDown(rt.frame?.drivers));
 	const write = (name, value) => rt.writeTag(name, value);
 	// a click on equipment with a panel opens it beside the drawing
 	const full = expandUnits(doc);
@@ -669,7 +682,10 @@ const defaultPage = `<script>
 </script>
 
 <div class="nx-stage" class:nx-with-panel={open}>
-	<Mimic {doc} {tags} registry={{ %s }} {write} fit="contain" trends onequipmentclick={(eq) => (selected = eq.id)} clickable={hasPanel} {selected} />
+	{#if down.length}
+		<p class="nx-down" role="alert"><b>{down.length === 1 ? 'A field device is down' : down.length + ' field devices are down'}</b>: {down.map((d) => d.name).join(', ')}. The values below are the last known, not the plant's.</p>
+	{/if}
+	<Mimic {doc} {tags} {quality} registry={{ %s }} {write} fit="contain" trends onequipmentclick={(eq) => (selected = eq.id)} clickable={hasPanel} {selected} />
 </div>
 <EquipmentPanel {doc} {tags} {write} bind:selected />
 
@@ -677,6 +693,7 @@ const defaultPage = `<script>
 	/* the drawing as large as the page allows, moving over for the panel */
 	.nx-stage { position: absolute; inset: 0; padding: 16px; box-sizing: border-box; display: flex; flex-direction: column; }
 	.nx-stage.nx-with-panel { padding-right: 388px; }
+	.nx-down { margin: 0 0 8px; padding: 6px 12px; border: 1px solid var(--crit); border-radius: 6px; background: color-mix(in srgb, var(--crit) 12%%, var(--surface-2, transparent)); color: var(--ink); font-size: 1rem; }
 	@media (prefers-reduced-motion: no-preference) { .nx-stage { transition: padding-right 260ms cubic-bezier(0.33, 1, 0.68, 1); } }
 	@media (max-width: 900px) { .nx-stage.nx-with-panel { padding-right: 16px; } }
 </style>

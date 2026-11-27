@@ -20,12 +20,15 @@
 	import Pipe from './Pipe.svelte';
 	import StatusPill from './StatusPill.svelte';
 	import { sampleTag, tagHistory } from '../taghistory.svelte.js';
-	import { BUILTIN_PORTS, autoRoutes, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints, unresolvedBindings, unresolvedMessage } from '../mimic.js';
+	import { equipmentRefs, labelRefs, BUILTIN_PORTS, autoRoutes, brokenPipes, expandUnits, labelState, orthogonalPoints, makeGetPort, partRect, pipeCrossings, pipeTees, CROSSED_MANY, type PipeCrossing, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints, unresolvedBindings, unresolvedMessage } from '../mimic.js';
+	import { STATUS_META, worstStatus, type ValueStatus } from '../quality.js';
+	import type { Quality } from '../types.js';
 	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel, MimicLook } from '../mimic.js';
 
 	let {
 		doc: source,
 		tags = {},
+		quality,
 		registry = {},
 		onequipmentclick,
 		clickable,
@@ -40,6 +43,14 @@
 		/** Override the doc's `look` (how the equipment is drawn). */
 		look?: MimicLook;
 		tags?: Record<string, unknown>;
+		/**
+		 * The frame's per-tag quality (`frame.quality`: only the non-good
+		 * tags). A label or equipment reading a tag that is BAD (or not
+		 * connected) or STALE says so, with a badge, never a confident value
+		 * (#1056). A tag with no entry draws as it always did. Omit on a
+		 * controller that reports no quality.
+		 */
+		quality?: Record<string, Quality>;
 		/** Extra/override components addressable from equipment[].component. */
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		registry?: Record<string, Component<any>>;
@@ -192,6 +203,11 @@
 		...(eq.component === 'SetpointGroup' || (eq.component === 'Tank' && eq.props?.marks) ? { tags } : {}),
 		write: write ?? readOnly
 	});
+	/** How a label / equipment is qualified: the worst of the tags it reads. */
+	const labelQ = (l: MimicLabel): ValueStatus => worstStatus(quality, labelRefs(l));
+	const eqQ = (eq: MimicEquipment): ValueStatus => worstStatus(quality, equipmentRefs(eq));
+	const qWord = (st: ValueStatus): string => STATUS_META[st].label.toUpperCase();
+	const flagged = (st: ValueStatus): boolean => st === 'bad' || st === 'stale' || st === 'substituted';
 	const readOnly = async (): Promise<string | null> => 'This screen is read-only';
 
 	// ── pipe end anchors (MimicPipe.from/to) ─────────────────────────────────
@@ -440,6 +456,7 @@
 					<button
 						type="button"
 						class="eq clickable"
+						class:qflag={flagged(eqQ(eq))}
 						class:behind={eq.behind}
 						class:selected={eq.id === selected}
 						class:fading={fading[eq.id]}
@@ -452,19 +469,22 @@
 						onclick={() => onequipmentclick(eq)}
 					>
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
+						{#if flagged(eqQ(eq))}<span class="qbadge eqbadge {eqQ(eq)}" title={STATUS_META[eqQ(eq)].description}>{qWord(eqQ(eq))}</span>{/if}
 					</button>
 				{:else}
-					<div class="eq" class:behind={eq.behind} class:passive={!!onequipmentclick} style="left: {eq.x}px; top: {eq.y}px{customBox(eq)}" use:regEl={eq.id}>
+					<div class="eq" class:qflag={flagged(eqQ(eq))} class:behind={eq.behind} class:passive={!!onequipmentclick} style="left: {eq.x}px; top: {eq.y}px{customBox(eq)}" use:regEl={eq.id}>
 						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
+						{#if flagged(eqQ(eq))}<span class="qbadge eqbadge {eqQ(eq)}" title={STATUS_META[eqQ(eq)].description}>{qWord(eqQ(eq))}</span>{/if}
 					</div>
 				{/if}
 			{/each}
 
 			{#each doc.labels ?? [] as l, i (i)}
 				{@const st = l.state ? labelState(l, tags) : null}
+				{@const lq = labelQ(l)}
 				{@const box = `left: ${l.x}px; top: ${l.y}px${l.width ? `; width: ${l.width}px` : ''}`}
 				{#if l.as === 'row'}
-					<span class="lbl rowlbl" class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px" use:regLabel={i}
+					<span class="lbl rowlbl" class:qbad={lq === 'bad'} class:qstale={lq === 'stale' || lq === 'substituted'} class:center={l.align === 'center'} style="left: {l.x}px; top: {l.y}px" use:regLabel={i}
 						><ReadoutRow
 							name={l.text}
 							value={!l.bind ? undefined : !l.values && typeof labelRaw(l) === 'number' ? (labelRaw(l) as number) : labelValue(l)}
@@ -475,18 +495,18 @@
 							max={l.max}
 							state={st}
 							width={l.width}
-						/></span
+						/>{#if flagged(lq)}<span class="qbadge {lq}" title={STATUS_META[lq].description}>{qWord(lq)}</span>{/if}</span
 					>
 				{:else if l.bind}
-					<span class="lbl readout" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box} use:regLabel={i}
+					<span class="lbl readout" class:qbad={lq === 'bad'} class:qstale={lq === 'stale' || lq === 'substituted'} class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box} use:regLabel={i}
 						>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
 						>{#if l.unit}<span>{l.unit}</span>{/if}{#if trended(l)}<span class="spark" aria-hidden="true"
 								><Sparkline values={tagHistory(l.bind!)} height={14} yMin={l.min} yMax={l.max} color="var(--ink-2, #c3c2b7)" compact /></span
-							>{/if}</span
+							>{/if}{#if flagged(lq)}<span class="qbadge {lq}" title={STATUS_META[lq].description}>{qWord(lq)}</span>{/if}</span
 					>
 				{:else if l.state}
-					<span class="lbl state" class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box} use:regLabel={i}
-						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st}{#if l.as === 'text'}<b class="word {st.kind ?? 'off'}">{st.text}</b>{:else}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}{/if}</span
+					<span class="lbl state" class:qbad={lq === 'bad'} class:qstale={lq === 'stale' || lq === 'substituted'} class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box} use:regLabel={i}
+						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st && flagged(lq)}<span class="qbadge {lq}" title={STATUS_META[lq].description}>{qWord(lq)}</span>{:else if st}{#if l.as === 'text'}<b class="word {st.kind ?? 'off'}">{st.text}</b>{:else}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}{/if}</span
 					>
 				{:else}
 					<span class="lbl" class:center={l.align === 'center'} style={box} use:regLabel={i}>{l.text}</span>
@@ -634,6 +654,34 @@
 	/* A label set on a line breaks the line, as a line label does on a
 	   P&ID: a patch of the bore colour behind the text keeps a pipe from
 	   running through the letters, and is invisible anywhere else. */
+	/* #1056: a reading the controller cannot vouch for. The value stays (an
+	   operator needs what it last was) but loses its confidence: dimmed, and a
+	   word beside it (colour is never the only cue). No CSS filter: the canvas
+	   is scaled and a filter would rasterise it. */
+	.qbadge {
+		display: inline-block;
+		margin-left: 6px;
+		padding: 0 5px;
+		border: 1px solid var(--q);
+		border-radius: 3px;
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.05em;
+		line-height: 1.5;
+		color: var(--q);
+		background: var(--surface, transparent);
+		white-space: nowrap;
+		vertical-align: middle;
+	}
+	.qbadge.bad { --q: var(--q-bad, var(--crit)); }
+	.qbadge.stale { --q: var(--q-stale, var(--warn)); }
+	.qbadge.substituted { --q: var(--q-substituted, var(--warn)); }
+	.lbl.qbad .num,
+	.lbl.qbad :global(.nx-row .val) { color: var(--q-bad, var(--crit)); opacity: 0.6; }
+	.lbl.qstale .num,
+	.lbl.qstale :global(.nx-row .val) { color: var(--q-stale, var(--warn)); }
+	.eq.qflag { outline: 1px dashed var(--muted, #898781); outline-offset: 2px; }
+	.eqbadge { position: absolute; top: -9px; right: -4px; margin: 0; z-index: 2; }
 	.lbl {
 		position: absolute;
 		font-size: var(--font-2xs);
