@@ -318,6 +318,39 @@ and writes nothing. The project stays open, so another `show` reuses it.
 For a demo, the order is deploy, `naut siemens verify`, then
 `naut siemens show --online <block>`.
 
+### naut siemens serve
+
+```
+naut siemens serve [--project dir] [--root DB[=Program]] [--listen addr]
+```
+
+Serves the CPU's values on the nautilus runtime API, read over the CPU's
+Web API. VS Code's live values, the ladder overlay, Set Live Value and the
+dashboard then work against the CPU as they do against `naut run`. It logs
+in as the web user that `target.siemens.online.user` names, with
+`NAUTILUS_SIEMENS_PASSWORD`. Force is not available: the Web API writes
+but does not force.
+
+With a project and no `--root`, serve binds the data blocks the writer
+generates for that project: the tags DB, and each program's instance DB
+under the program's name (`Main.count`). The writer's own members, such as
+the `_last` static it keeps beside a timer, are left out. `--root` binds
+the blocks you name instead.
+
+A download can change the program while serve runs:
+
+- Every 15 s, serve reads the project and browses the CPU again. If the
+  data layout changed, it re-binds: new variables appear, removed ones go,
+  and VS Code reconnects by itself.
+- Before every write, serve checks the variable on the CPU. A variable
+  that is gone, or is now a type serve does not write, is refused, and the
+  message says serve catches up by itself within 15 s. A variable whose
+  type changed is written as its new type, never the old one.
+
+A TIME value, such as a timer's `PT` or `ET`, reads as milliseconds, the
+way `naut run` shows it. Writing a TIME is refused for now, because the
+encoding the CPU takes is not measured yet (#789).
+
 ## What translates today
 
 nautilus's own lowering runs first, so what nautilus cannot run is refused

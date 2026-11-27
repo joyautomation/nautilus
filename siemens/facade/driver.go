@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ var types = map[string]string{
 	"usint": "USINT", "uint": "UINT", "udint": "UDINT", "ulint": "ULINT",
 	"byte": "BYTE", "word": "WORD", "dword": "DWORD", "lword": "LWORD",
 	"real": "REAL", "lreal": "LREAL",
+	"time": "TIME",
 }
 
 // maxDepth bounds the browse into structs and instances.
@@ -77,7 +79,7 @@ func walk(ctx context.Context, c *webapi.Client, sym, name string, depth int, bs
 			*skipped = append(*skipped, fmt.Sprintf("%s: type %s is not bound yet", cname, v.Datatype))
 			continue
 		}
-		*bs = append(*bs, Binding{Name: cname, Symbol: child, Type: t})
+		*bs = append(*bs, Binding{Name: cname, Symbol: child, Type: t, Parent: sym, Member: v.Name})
 	}
 	return nil
 }
@@ -104,6 +106,8 @@ func decode(t string, raw json.RawMessage) (any, error) {
 		var f float64
 		err := json.Unmarshal(raw, &f)
 		return f, err
+	case t == "TIME":
+		return decodeTime(raw)
 	default: // integers and bit strings
 		var n json.Number
 		if err := json.Unmarshal(raw, &n); err != nil {
@@ -115,6 +119,82 @@ func decode(t string, raw json.RawMessage) (any, error) {
 		}
 		return i, nil
 	}
+}
+
+// decodeTime reads a TIME as the milliseconds naut run shows it as (a
+// TON's PT of T#2s is 2000). The Web API's JSON for TIME is not measured
+// on a CPU yet: a number is taken as milliseconds, and an IEC literal
+// (T#2s, T#1m_30s_5ms) is read as one.
+func decodeTime(raw json.RawMessage) (any, error) {
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err == nil {
+		if i, err := n.Int64(); err == nil {
+			return i, nil
+		}
+		if f, err := n.Float64(); err == nil && f == math.Trunc(f) {
+			return int64(f), nil
+		}
+		return nil, fmt.Errorf("TIME value %s is not a whole number of milliseconds", raw)
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err != nil {
+		return nil, fmt.Errorf("TIME value %s is neither milliseconds nor a TIME literal", raw)
+	}
+	ms, ok := timeLiteralMs(str)
+	if !ok {
+		return nil, fmt.Errorf("TIME value %q is neither milliseconds nor a TIME literal", str)
+	}
+	return ms, nil
+}
+
+// timeLiteralMs reads T#[-]1d2h3m4s5ms (any case, "_" ignored, TIME# too)
+// as milliseconds.
+func timeLiteralMs(s string) (int64, bool) {
+	u := strings.ToLower(strings.ReplaceAll(s, "_", ""))
+	switch {
+	case strings.HasPrefix(u, "time#"):
+		u = u[5:]
+	case strings.HasPrefix(u, "t#"):
+		u = u[2:]
+	default:
+		return 0, false
+	}
+	neg := strings.HasPrefix(u, "-")
+	u = strings.TrimPrefix(u, "-")
+	if u == "" {
+		return 0, false
+	}
+	unit := map[string]int64{"d": 86400000, "h": 3600000, "m": 60000, "s": 1000, "ms": 1}
+	var total int64
+	for u != "" {
+		i := 0
+		for i < len(u) && u[i] >= '0' && u[i] <= '9' {
+			i++
+		}
+		if i == 0 {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(u[:i], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		u = u[i:]
+		name := ""
+		switch {
+		case strings.HasPrefix(u, "ms"):
+			name = "ms"
+		case u != "" && strings.ContainsRune("dhms", rune(u[0])):
+			name = u[:1]
+		default:
+			return 0, false
+		}
+		u = u[len(name):]
+		total += n * unit[name]
+	}
+	if neg {
+		total = -total
+	}
+	return total, true
 }
 
 var intRange = map[string][2]float64{
@@ -134,6 +214,10 @@ func convertWrite(t string, v any) (any, error) {
 			return b, nil
 		}
 		return nil, errors.New("BOOL takes true or false")
+	case "TIME":
+		// The Web API's JSON for TIME is not pinned down on a CPU yet
+		// (#789): a write could land as a different duration.
+		return nil, errors.New("TIME is not written over the Web API yet: the encoding the CPU takes is not measured (#789)")
 	case "REAL", "LREAL":
 		f, ok := number(v)
 		if !ok {
@@ -200,6 +284,10 @@ type Driver struct {
 	// Defaults: one poll period (at least 1 s), and 30 s.
 	BackoffMin, BackoffMax time.Duration
 	now                    func() time.Time
+	// onGone, when set, is called when a read says a bound symbol no
+	// longer exists (a download changed the program): the facade then
+	// browses the CPU again.
+	onGone func()
 
 	mu        sync.Mutex
 	values    nio.Values      // last good value per tag
@@ -281,6 +369,9 @@ func (d *Driver) PollOnce(ctx context.Context) {
 		if r.Err != nil {
 			d.failing[name] = true
 			d.lastErr = fmt.Sprintf("read %s: %v", d.bs[i].Symbol, r.Err)
+			if d.onGone != nil && webapi.Code(r.Err) == webapi.CodeAddressDoesNotExist {
+				d.onGone()
+			}
 			continue // the last value is held; Quality says it is Bad
 		}
 		v, err := decode(d.bs[i].Type, r.Value)

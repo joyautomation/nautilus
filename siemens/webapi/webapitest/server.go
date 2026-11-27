@@ -113,6 +113,7 @@ type Server struct {
 
 	loginAttempts int
 	writeError    int // when set, every PlcProgram.Write answers this code
+	browseError   int // when set, every PlcProgram.Browse answers this code
 }
 
 type session struct {
@@ -197,6 +198,15 @@ func (s *Server) FailWrites(code int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.writeError = code
+}
+
+// FailBrowse makes every later PlcProgram.Browse answer the CPU error
+// code (webapi.CodeSystemIsBusy, say) while reads and writes still work;
+// 0 clears it.
+func (s *Server) FailBrowse(code int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.browseError = code
 }
 
 // LoginAttempts counts every Api.Login, successful or not.
@@ -491,6 +501,9 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 		}
 		if json.Unmarshal(q.Params, &p) != nil || (p.Mode != "children" && p.Mode != "var") {
 			return fail(-32602, "Invalid params")
+		}
+		if s.browseError != 0 {
+			return fail(s.browseError, "browse failed")
 		}
 		return s.browse(resp, p.Var, p.Mode)
 	case "DiagnosticBuffer.Browse":

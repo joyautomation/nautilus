@@ -2567,6 +2567,24 @@ A refusal for a missing right or an older firmware names the fix.
   `filters` key, the entry order, and the answer for a language the
   project does not hold.
 
+**Serve's binding set (#789 A1).** With `--project` and no `--root`,
+`naut siemens serve` binds what siemens/writer generates for the project:
+`Output.Roots` for the blocks, `Output.Symbol` as the names it keeps (so
+the writer's bookkeeping, `<prefix><timer>_last`, stays out). A download
+can change the layout under a running serve, and the runtime's tag set is
+fixed when it is built, so the facade holds a replaceable binding set
+(driver, runtime, server). Every 15 s, and 2 s after a read or write finds
+a name gone or retyped, it reads the project and browses the CPU again; a
+different set stops the running one (its audit upkeep flushes first, so two
+servers never share the journal), builds the new one, and ends open
+`/api/stream` requests so clients reconnect. A failed or empty browse keeps
+the running set. Every write first browses the binding's parent (the
+children browse discovery uses; a `var`-mode browse has not run on a CPU)
+and fails closed: gone, unreadable or unbindable is refused naming the fix,
+retyped is checked and sent as the CPU's type now. TIME reads as ms (a
+number, or an IEC literal); TIME writes are refused until the bench
+measures the JSON the CPU takes.
+
 **The station spec sets the CPU-side config:** the web server, a web user
 with read/write rights, the protection level, and Web API visibility on
 generated members.

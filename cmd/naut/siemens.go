@@ -18,6 +18,7 @@ import (
 	"github.com/joyautomation/nautilus/server"
 	"github.com/joyautomation/nautilus/siemens/facade"
 	"github.com/joyautomation/nautilus/siemens/webapi"
+	swriter "github.com/joyautomation/nautilus/siemens/writer"
 )
 
 const siemensUsage = `naut siemens — a Siemens S7-1500 as a nautilus target (experimental)
@@ -150,6 +151,16 @@ type siemensServeConfig struct {
 	poll                      time.Duration
 	listen                    string
 
+	// known and reload are set when the roots come from the project:
+	// serve binds the names the writer generates (not its own bookkeeping
+	// members), and asks the project again before each re-discovery.
+	known  func(string) bool
+	reload func() ([]facade.Root, func(string) bool, error)
+	// planNote says why the roots did not come from the project.
+	planNote string
+	// rediscover is the facade's re-discovery period (0: its default).
+	rediscover time.Duration
+
 	// auth and services are the project's auth: block and its service
 	// tokens' secrets (#708), enforced as under naut run; nil without one.
 	auth     *auth.Policy
@@ -195,6 +206,15 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 				prefix = m.Target.Siemens.Prefix()
 			}
 			siemensOnlineDefaults(m, &c.host, &c.user, &c.pin)
+			if len(c.roots) == 0 {
+				// No --root: bind what the writer generates for the project.
+				if roots, known, err := siemensServePlan(projectDir); err == nil {
+					c.roots, c.known = roots, known
+					c.reload = func() ([]facade.Root, func(string) bool, error) { return siemensServePlan(projectDir) }
+				} else {
+					c.planNote = fmt.Sprintf("the project's programs are not bound (%v): serving its global tags only; pass --root DB=Program for a program's variables", err)
+				}
+			}
 		}
 	}
 	// HTTPS: the project's server.tls, or NAUTILUS_TLS_CERT and _KEY with
@@ -216,6 +236,26 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 		c.roots = []facade.Root{{DB: prefix + "Tags"}}
 	}
 	return c, nil
+}
+
+// siemensServePlan is what serve binds for the project in dir: the data
+// blocks the Siemens writer generates for it (the tags DB and each
+// program's instance DB), and, as the names to bind, the ones the writer
+// maps (Output.Symbol), so its own bookkeeping members stay out.
+func siemensServePlan(dir string) ([]facade.Root, func(string) bool, error) {
+	in, err := siemensWriterInput(dir, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	out, _, err := swriter.Write(in)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(out.Roots) == 0 {
+		return nil, nil, errors.New("the Siemens writer names no data block for it")
+	}
+	known := func(name string) bool { _, ok := out.Symbol(name); return ok }
+	return facade.RootsFromWriter(out.Roots), known, nil
 }
 
 // siemensOnlineDefaults fills what the flags left empty from the project's
@@ -304,11 +344,14 @@ func runSiemensServe(args []string) int {
 // siemensFacadeOptions is the facade's configuration for cfg.
 func siemensFacadeOptions(cfg siemensServeConfig, client *webapi.Client) facade.Options {
 	return facade.Options{
-		Client: client,
-		Host:   cfg.host,
-		Roots:  cfg.roots,
-		Poll:   cfg.poll,
-		Server: server.Options{AuthToken: cfg.token, Auth: cfg.auth, ServiceTokens: cfg.services, TLS: cfg.tls},
+		Client:     client,
+		Host:       cfg.host,
+		Roots:      cfg.roots,
+		Known:      cfg.known,
+		Reload:     cfg.reload,
+		Rediscover: cfg.rediscover,
+		Poll:       cfg.poll,
+		Server:     server.Options{AuthToken: cfg.token, Auth: cfg.auth, ServiceTokens: cfg.services, TLS: cfg.tls},
 	}
 }
 
@@ -324,6 +367,9 @@ func serveSiemens(ctx context.Context, cfg siemensServeConfig, client *webapi.Cl
 			fmt.Fprintln(stderr, "naut siemens serve: logout:", err)
 		}
 	}()
+	if cfg.planNote != "" {
+		fmt.Fprintln(stderr, "naut siemens serve:", cfg.planNote)
+	}
 	fmt.Fprintf(stderr, "browsing %s...\n", cfg.host)
 	bctx, cancel := context.WithTimeout(ctx, time.Minute)
 	f, err := facade.New(bctx, siemensFacadeOptions(cfg, client))
