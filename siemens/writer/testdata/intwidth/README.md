@@ -14,7 +14,8 @@ writes it:
     - a variable end of the variable's own type;
     - a variable step (0 faults, as in nautilus);
     - plclab's `FOR j := 0 TO nb - 1`;
-    - an end past INT's range, which faults the scan where nautilus stores 32768… (#1427).
+    - an end past INT's range, which faults the scan at 32768, as nautilus does (#1427).
+  - After the loop the variable holds nautilus's exit value, wrapped to its type (#1427): the loops to the type's last value leave 32767 + 1 wrapped, -32768.
 
 Main.st is also the B1 bench program: every result is a tag, read from the CPU and from naut run with the same inputs.
 

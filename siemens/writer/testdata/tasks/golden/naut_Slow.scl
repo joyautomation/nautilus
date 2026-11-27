@@ -24,4 +24,5 @@ BEGIN
 		"naut_Scan_slow".tags.Status.%X7 := NOT "naut_Scan_slow".tags.Status.%X7;
 		"naut_Scan_slow".assigned.Status.%X7 := TRUE;
 	END_FOR;
+	#i := 4;
 END_FUNCTION_BLOCK

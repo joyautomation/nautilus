@@ -48,6 +48,7 @@ BEGIN
 		#a[#i] := #i;
 		#sum := LINT_TO_DINT((((DINT_TO_LINT(#sum) + DINT_TO_LINT(#a[#i])) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	END_FOR;
+	#i := 5;
 	#a[2] := 7;
 	#naut_ix1 := #i;
 	IF #naut_ix1 < -2 OR #naut_ix1 > 2 THEN

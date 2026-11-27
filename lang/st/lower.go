@@ -1364,7 +1364,12 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ir.For{Slot: sym.slot, Start: start, End: end, Step: step, Body: body}, nil
+		f := &ir.For{Slot: sym.slot, Start: start, End: end, Step: step, Body: body,
+			Var: n.Variable, Type: sym.typ.Name, Wrap: ir.NewWrap(sym.typ)}
+		if f.Wrap != nil {
+			f.Lo, f.Hi, f.Ranged = ir.IntRange(sym.typ.Name)
+		}
+		return f, nil
 
 	case *WhileStmt:
 		cond, err := l.lowerExpr(n.Condition)

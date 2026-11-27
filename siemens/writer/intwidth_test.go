@@ -91,7 +91,7 @@ m := LIMIT(0, n * 2, 100);`)
 
 // TestForLoops: a plain FOR only where it provably ends on the CPU; every
 // other loop runs on a LINT counter that surely ends, with nautilus's
-// semantics.
+// semantics (exit values: TestForExitValue).
 func TestForLoops(t *testing.T) {
 	plain := func(decl, body string) {
 		t.Helper()
@@ -158,6 +158,86 @@ func TestForLoops(t *testing.T) {
 	// A step that is integer arithmetic stays refused.
 	if _, diags := writeP(t, "i, s : INT; x : INT;", "FOR i := 1 TO 10 BY s + 1 DO x := i; END_FOR;"); !hasDiag(diags, "a FOR step that is integer arithmetic") {
 		t.Fatalf("an integer arithmetic step: %v", diags)
+	}
+}
+
+// TestForExitValue (#1427): after the loop the variable holds nautilus's
+// exit value, the first value that failed the test wrapped to its type,
+// start when no pass ran; a loop its body EXITs keeps the pass value (a
+// flag skips the store). A LINT counter steps past LINT's range by
+// wrapping, in an order that never leaves LINT.
+func TestForExitValue(t *testing.T) {
+	w := func(decl, body string, want ...string) string {
+		t.Helper()
+		scl, diags := writeP(t, decl, body)
+		if diags != nil {
+			t.Fatal(diags)
+		}
+		wantLines(t, scl, want...)
+		return scl
+	}
+	// Plain FOR: the exit value is a constant.
+	w("i, x : INT;", "FOR i := 1 TO 10 DO x := i; END_FOR;", "\tEND_FOR;\n\t#i := 11;\n")
+	w("i, x : INT;", "FOR i := 10 TO 1 BY -3 DO x := i; END_FOR;", "\tEND_FOR;\n\t#i := -2;\n")
+	w("i, x : INT;", "FOR i := 1 TO 10 BY 4 DO x := i; END_FOR;", "\tEND_FOR;\n\t#i := 13;\n")
+	w("i, x : INT;", "FOR i := 5 TO 1 DO x := i; END_FOR;", "\tEND_FOR;\n\t#i := 5;\n")
+	// Counter loop: the counter steps every pass and the variable takes it,
+	// wrapped (to INT's last value: the exit value is -32768).
+	w("i, x : INT;", "FOR i := 0 TO 32767 DO x := i; END_FOR;",
+		"\t#naut_for_c1 := #naut_for_c1 + 1;\n\t\t#x := #i;\n\tEND_WHILE;\n\t#i := LINT_TO_INT((((#naut_for_c1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);\n")
+	// EXIT sets the loop's flag; an EXIT of a loop nested in it does not.
+	scl := w("i, x : INT;", "FOR i := 1 TO 10 DO IF x > 3 THEN EXIT; END_IF; WHILE x > 0 DO EXIT; END_WHILE; END_FOR;",
+		"\t#naut_for_x1 := FALSE;\n\tFOR #naut_for_v2 := 1 TO 10 DO",
+		"\t\t\t#naut_for_x1 := TRUE;\n\t\t\tEXIT;\n",
+		"\t\tWHILE #x > 0 DO\n\t\t\tEXIT;\n",
+		"\tEND_FOR;\n\tIF NOT #naut_for_x1 THEN\n\t\t#i := 11;\n\tEND_IF;\n")
+	if strings.Count(scl, ":= TRUE;") != 1 {
+		t.Errorf("only the FOR's own EXIT sets its flag:\n%s", scl)
+	}
+	w("i, n, x : DINT;", "FOR i := 0 TO n - 1 DO x := i; IF x > 3 THEN EXIT; END_IF; END_FOR;",
+		"#naut_for_x4 := FALSE;",
+		"\tEND_WHILE;\n\tIF NOT #naut_for_x4 THEN\n\t\t#i := LINT_TO_DINT(")
+	// No EXIT: no flag.
+	if scl := w("i, x : INT;", "FOR i := 1 TO 10 DO x := i; END_FOR;"); strings.Contains(scl, "naut_for_x") {
+		t.Errorf("a loop with no EXIT needs no flag:\n%s", scl)
+	}
+	// LINT: past LINT's range the step wraps, partial sums inside LINT.
+	w("i, n, x : LINT;", "FOR i := 1 TO n BY 3 DO x := i; END_FOR;",
+		"\tIF #naut_for_c1 <= LINT#9223372036854775804 THEN\n\t\t\t#naut_for_c1 := #naut_for_c1 + 3;\n\t\tELSE\n\t\t\t#naut_for_c1 := #naut_for_c1 - LINT#9223372036854775807 - 1 + 3 - LINT#9223372036854775807 - 1;",
+		"\tEND_WHILE;\n\t#i := #naut_for_c1;\n")
+	w("i, n, x : LINT;", "FOR i := n TO 1 BY -3 DO x := i; END_FOR;",
+		"\tIF #naut_for_c1 >= LINT#-9223372036854775805 THEN\n\t\t\t#naut_for_c1 := #naut_for_c1 - 3;\n\t\tELSE\n\t\t\t#naut_for_c1 := #naut_for_c1 + LINT#9223372036854775807 + 1 + (-3) + LINT#9223372036854775807 + 1;")
+	w("i, n, s, x : LINT;", "FOR i := n TO 1 BY s DO x := i; END_FOR;",
+		"ELSE\n\t\t\t\t#naut_for_c1 := #naut_for_c1 - LINT#9223372036854775807 - 1 + #naut_for_s4 - LINT#9223372036854775807 - 1;",
+		"ELSIF #naut_for_c1 >= (LINT#-9223372036854775807 - 1) - #naut_for_s4 THEN\n\t\t\t#naut_for_c1 := #naut_for_c1 + #naut_for_s4;",
+		"ELSE\n\t\t\t#naut_for_c1 := #naut_for_c1 + LINT#9223372036854775807 + 1 + #naut_for_s4 + LINT#9223372036854775807 + 1;")
+}
+
+// The wrapping steps' arithmetic: c + k - 2^64 and c + k + 2^64, left to
+// right, never leave LINT and land on nautilus's wrapped exit value.
+func TestForLintStepWraps(t *testing.T) {
+	const max, min = int64(1<<63 - 1), int64(-1 << 63)
+	for _, k := range []int64{1, 3, 1 << 40, max} {
+		for _, c := range []int64{max, max - k + 1} {
+			// c - max - 1 + k - max - 1, each partial sum checked.
+			sums := []int64{c - max, c - max - 1, c - max - 1 + k, c - max - 1 + k - max, c - max - 1 + k - max - 1}
+			if sums[2] < 0 || sums[1] > 0 { // overflow-free bounds of the middle sums
+				t.Fatalf("c=%d k=%d: partial sums %v", c, k, sums)
+			}
+			if got, want := sums[4], c+k; got != want { // Go wraps c+k
+				t.Errorf("c=%d k=%d: %d, want %d", c, k, got, want)
+			}
+		}
+		for _, c := range []int64{min, min + k - 1} {
+			nk := -k
+			sums := []int64{c + max, c + max + 1, c + max + 1 + nk, c + max + 1 + nk + max, c + max + 1 + nk + max + 1}
+			if sums[1] < 0 || sums[2] > 0 {
+				t.Fatalf("c=%d k=%d: partial sums %v", c, nk, sums)
+			}
+			if got, want := sums[4], c+nk; got != want {
+				t.Errorf("c=%d k=%d: %d, want %d", c, nk, got, want)
+			}
+		}
 	}
 }
 

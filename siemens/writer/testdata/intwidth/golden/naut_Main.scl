@@ -54,11 +54,10 @@ BEGIN
 	WHILE #naut_for_r3 DO
 		#i := LINT_TO_INT(#naut_for_c1);
 		#naut_for_r3 := #naut_for_c1 <= LINT#9223372036854775806 AND #naut_for_c1 + 1 <= #naut_for_e2;
-		IF #naut_for_r3 THEN
-			#naut_for_c1 := #naut_for_c1 + 1;
-		END_IF;
+		#naut_for_c1 := #naut_for_c1 + 1;
 		"naut_Tags".itTop := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itTop) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	END_WHILE;
+	#i := LINT_TO_INT((((#naut_for_c1) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
 	"naut_Tags".exTop := #i;
 	"naut_Tags".itBelow := 0;
 	#i := 7;
@@ -74,11 +73,10 @@ BEGIN
 		END_IF;
 		#i := LINT_TO_INT(#naut_for_c4);
 		#naut_for_r6 := #naut_for_c4 <= LINT#9223372036854775806 AND #naut_for_c4 + 1 <= #naut_for_e5;
-		IF #naut_for_r6 THEN
-			#naut_for_c4 := #naut_for_c4 + 1;
-		END_IF;
+		#naut_for_c4 := #naut_for_c4 + 1;
 		"naut_Tags".itBelow := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itBelow) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	END_WHILE;
+	#i := LINT_TO_INT((((#naut_for_c4) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
 	"naut_Tags".exBelow := #i;
 	"naut_Tags".itDown := 0;
 	#naut_for_c7 := -32766;
@@ -87,11 +85,10 @@ BEGIN
 	WHILE #naut_for_r9 DO
 		#i := LINT_TO_INT(#naut_for_c7);
 		#naut_for_r9 := #naut_for_c7 >= LINT#-9223372036854775807 AND #naut_for_c7 - 1 >= #naut_for_e8;
-		IF #naut_for_r9 THEN
-			#naut_for_c7 := #naut_for_c7 - 1;
-		END_IF;
+		#naut_for_c7 := #naut_for_c7 - 1;
 		"naut_Tags".itDown := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itDown) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	END_WHILE;
+	#i := LINT_TO_INT((((#naut_for_c7) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
 	"naut_Tags".exDown := #i;
 	"naut_Tags".itVarEnd := 0;
 	#naut_for_c10 := 32760;
@@ -100,11 +97,10 @@ BEGIN
 	WHILE #naut_for_r12 DO
 		#k := LINT_TO_INT(#naut_for_c10);
 		#naut_for_r12 := #naut_for_c10 <= LINT#9223372036854775806 AND #naut_for_c10 + 1 <= #naut_for_e11;
-		IF #naut_for_r12 THEN
-			#naut_for_c10 := #naut_for_c10 + 1;
-		END_IF;
+		#naut_for_c10 := #naut_for_c10 + 1;
 		"naut_Tags".itVarEnd := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itVarEnd) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	END_WHILE;
+	#k := LINT_TO_INT((((#naut_for_c10) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
 	"naut_Tags".exVarEnd := #k;
 	"naut_Tags".itVarStep := 0;
 	#naut_for_c13 := 1;
@@ -120,11 +116,10 @@ BEGIN
 	WHILE #naut_for_r15 DO
 		#k := LINT_TO_INT(#naut_for_c13);
 		#naut_for_r15 := (#naut_for_s16 > 0 AND #naut_for_c13 <= LINT#9223372036854775807 - #naut_for_s16 AND #naut_for_c13 + #naut_for_s16 <= #naut_for_e14) OR (#naut_for_s16 < 0 AND #naut_for_c13 >= LINT#-9223372036854775807 - 1 - #naut_for_s16 AND #naut_for_c13 + #naut_for_s16 >= #naut_for_e14);
-		IF #naut_for_r15 THEN
-			#naut_for_c13 := #naut_for_c13 + #naut_for_s16;
-		END_IF;
+		#naut_for_c13 := #naut_for_c13 + #naut_for_s16;
 		"naut_Tags".itVarStep := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itVarStep) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	END_WHILE;
+	#k := LINT_TO_INT((((#naut_for_c13) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
 	"naut_Tags".itPlclab := 0;
 	#naut_for_c17 := 0;
 	#naut_for_e18 := DINT_TO_LINT(#nb) - 1;
@@ -138,11 +133,10 @@ BEGIN
 		END_IF;
 		#j := LINT_TO_DINT(#naut_for_c17);
 		#naut_for_r19 := #naut_for_c17 <= LINT#9223372036854775806 AND #naut_for_c17 + 1 <= #naut_for_e18;
-		IF #naut_for_r19 THEN
-			#naut_for_c17 := #naut_for_c17 + 1;
-		END_IF;
+		#naut_for_c17 := #naut_for_c17 + 1;
 		"naut_Tags".itPlclab := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itPlclab) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	END_WHILE;
+	#j := LINT_TO_DINT((((#naut_for_c17) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	"naut_Tags".exPlclab := #j;
 	"naut_Tags".itPlain := 0;
 	FOR #naut_for_v20 := 1 TO 4 DO
@@ -150,6 +144,7 @@ BEGIN
 		"naut_Tags".itPlain := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itPlain) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 		#k := 0;
 	END_FOR;
+	#k := 5;
 	"naut_Tags".exPlain := #k;
 	"naut_Tags".Scans := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".Scans) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 	IF "naut_Tags".DoZero THEN
@@ -166,11 +161,10 @@ BEGIN
 		WHILE #naut_for_r23 DO
 			#k := LINT_TO_INT(#naut_for_c21);
 			#naut_for_r23 := (#naut_for_s24 > 0 AND #naut_for_c21 <= LINT#9223372036854775807 - #naut_for_s24 AND #naut_for_c21 + #naut_for_s24 <= #naut_for_e22) OR (#naut_for_s24 < 0 AND #naut_for_c21 >= LINT#-9223372036854775807 - 1 - #naut_for_s24 AND #naut_for_c21 + #naut_for_s24 >= #naut_for_e22);
-			IF #naut_for_r23 THEN
-				#naut_for_c21 := #naut_for_c21 + #naut_for_s24;
-			END_IF;
+			#naut_for_c21 := #naut_for_c21 + #naut_for_s24;
 			"naut_Tags".itVarStep := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itVarStep) + 100) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 		END_WHILE;
+		#k := LINT_TO_INT((((#naut_for_c21) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
 	END_IF;
 	IF "naut_Tags".DoFault THEN
 		#naut_for_c25 := 32766;
@@ -185,10 +179,9 @@ BEGIN
 			END_IF;
 			#i := LINT_TO_INT(#naut_for_c25);
 			#naut_for_r27 := #naut_for_c25 <= LINT#9223372036854775806 AND #naut_for_c25 + 1 <= #naut_for_e26;
-			IF #naut_for_r27 THEN
-				#naut_for_c25 := #naut_for_c25 + 1;
-			END_IF;
+			#naut_for_c25 := #naut_for_c25 + 1;
 			"naut_Tags".itTop := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itTop) + 100) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
 		END_WHILE;
+		#i := LINT_TO_INT((((#naut_for_c25) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
 	END_IF;
 END_FUNCTION_BLOCK

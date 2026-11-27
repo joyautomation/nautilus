@@ -78,6 +78,9 @@ type progWriter struct {
 	hoistN     int
 	hoistDecls []string
 	forN       int  // the FOR loops' temps' numbering (forTemp)
+	// loopExit is the loops being written, innermost last: a FOR's flag
+	// that its EXIT sets (forloop.go), "" for a loop whose EXIT needs none.
+	loopExit []string
 	lreal      bool // printing an LREAL's operand: a long literal is its bit pattern (lreal.go)
 	faults     bool
 	// fcFault is where a FUNCTION that can fault, being printed, hands
@@ -651,12 +654,14 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		// TIA's FOR runs on a temp of the variable's type, and the variable
 		// takes each value first thing in the body: nautilus's counter, not
 		// the variable, decides the next pass (a body that writes the
-		// variable does not change the loop), and after the loop the
-		// variable holds the last value run, or is unchanged when no pass
-		// ran (lang/ir vm.go).
+		// variable does not change the loop). After the loop the variable
+		// takes the exit value, known here (forPlainExit), unless EXIT left
+		// it (lang/ir vm.go).
+		v := pw.ident(s.Variable, s.Pos.Line)
+		x := pw.forExitFlag(b, s, in, at)
 		tv := "#" + pw.forTemp("naut_for_v", pw.typ(&st.IdentExpr{Name: s.Variable}))
 		pw.emit(b, at, "%sFOR %s := %s TO %s%s DO\n", in, tv, pw.forBound(s.Start, s.Variable), pw.forBound(s.End, s.Variable), step)
-		pw.emit(b, at, "%s\t%s := %s;\n", in, pw.ident(s.Variable, s.Pos.Line), tv)
+		pw.emit(b, at, "%s\t%s := %s;\n", in, v, tv)
 		// The loop variable's values, proved for the body's indices.
 		k := strings.ToLower(s.Variable)
 		prev, had := pw.forRange[k]
@@ -664,19 +669,26 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		if r, ok := pw.forBoundsOf(orig.(*st.ForStmt)); ok {
 			pw.forRange[k] = r
 		}
+		pw.loopExit = append(pw.loopExit, x)
 		pw.stmts(b, s.Body, d+1)
+		pw.loopExit = pw.loopExit[:len(pw.loopExit)-1]
 		delete(pw.forRange, k)
 		if had {
 			pw.forRange[k] = prev
 		}
 		pw.emit(b, at, "%sEND_FOR;\n", in)
+		pw.forExit(b, in, at, x, fmt.Sprintf("%s := %d;", v, pw.forPlainExit(s)))
 	case *st.WhileStmt:
 		pw.emit(b, at, "%sWHILE %s DO\n", in, pw.expr(s.Condition, 0))
+		pw.loopExit = append(pw.loopExit, "")
 		pw.stmts(b, s.Body, d+1)
+		pw.loopExit = pw.loopExit[:len(pw.loopExit)-1]
 		pw.emit(b, at, "%sEND_WHILE;\n", in)
 	case *st.RepeatStmt:
 		pw.emit(b, at, "%sREPEAT\n", in)
+		pw.loopExit = append(pw.loopExit, "")
 		pw.stmts(b, s.Body, d+1)
+		pw.loopExit = pw.loopExit[:len(pw.loopExit)-1]
 		pw.emit(b, at, "%sUNTIL %s\n%sEND_REPEAT;\n", in, pw.expr(s.Condition, 0), in)
 	case *st.CaseStmt:
 		pw.emit(b, at, "%sCASE %s OF\n", in, pw.expr(s.Expression, 0))
@@ -733,6 +745,9 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 			pw.assigned(b, in, at, o.Target)
 		}
 	case *st.ExitStmt:
+		if n := len(pw.loopExit); n > 0 && pw.loopExit[n-1] != "" {
+			pw.emit(b, at, "%s%s := TRUE;\n", in, pw.loopExit[n-1])
+		}
 		pw.emit(b, at, "%sEXIT;\n", in)
 	case *st.ContinueStmt:
 		pw.emit(b, at, "%sCONTINUE;\n", in)

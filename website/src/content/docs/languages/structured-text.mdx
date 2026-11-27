@@ -248,6 +248,28 @@ outside the declared bounds faults the scan.
 Every built-in function and function block, `PID` included, is in the
 [language reference](/reference/functions/).
 
+### FOR loops
+
+`FOR i := start TO end BY step DO … END_FOR` evaluates `start`, `end` and
+`step` once, before the first pass (`BY` defaults to 1; a step of 0 faults
+the scan). The counter starts at `start` and is tested before every pass:
+with a positive step a pass runs while it is at most `end`, with a negative
+step while it is at least `end`. Each pass stores the counter into `i`,
+runs the body, then steps the counter, so a body that writes `i` does not
+change the loop.
+
+- **After the loop `i` holds the first value that failed the test**, as on
+  Codesys and TIA. `FOR i := 1 TO 10` leaves 11, `FOR i := 1 TO 10 BY 4` leaves 13, and a
+  loop that never runs leaves `start`. EXIT, RETURN and a fault leave `i`
+  as the pass left it.
+- **`i` never holds a value its type cannot hold.** A pass whose value is
+  outside the type faults the scan, as an index out of bounds does. That
+  can happen only when a bound is integer arithmetic, computed at 64 bits:
+  `FOR i := 32766 TO n + 5` on an `INT` faults at its third pass, 32768. A
+  constant bound the type cannot hold is a compile error. The value after
+  the loop wraps to the type, as TIA's own FOR leaves it: `FOR u := 0 TO
+  255` on a `USINT` runs 256 passes and leaves 0.
+
 ## Functions and function blocks
 
 `FUNCTION` is stateless and returns one value, assigned to the function's own

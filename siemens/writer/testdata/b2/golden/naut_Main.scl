@@ -70,7 +70,9 @@ BEGIN
 			END_IF;
 			"naut_Tags".Sp[#naut_ix1] := "naut_ATAN2"(Y := #sv[#i], X := #sv[#j]);
 		END_FOR;
+		#j := 7;
 	END_FOR;
+	#i := 7;
 	#gv[0] := 0.5;
 	#gv[1] := -0.5;
 	#gv[2] := 3.0;
@@ -96,7 +98,9 @@ BEGIN
 			END_IF;
 			"naut_Tags".Gr[#naut_ix2] := LREAL_TO_REAL("naut_ATAN2"(Y := REAL_TO_LREAL(#gv[#i]), X := REAL_TO_LREAL(#gv[#j])));
 		END_FOR;
+		#j := 12;
 	END_FOR;
+	#i := 12;
 	#ly := 1.0E300;
 	#lx := 1.0E-300;
 	"naut_Tags".Sq[0] := "naut_ATAN2"(Y := #ly, X := #lx);
@@ -107,14 +111,17 @@ BEGIN
 		#i := #naut_for_v5;
 		"naut_Tags".SpB[#i] := LREAL_TO_LWORD("naut_Tags".Sp[#i]);
 	END_FOR;
+	#i := 49;
 	FOR #naut_for_v6 := 0 TO 143 DO
 		#i := #naut_for_v6;
 		"naut_Tags".GrB[#i] := REAL_TO_DWORD("naut_Tags".Gr[#i]);
 	END_FOR;
+	#i := 144;
 	FOR #naut_for_v7 := 0 TO 6 DO
 		#i := #naut_for_v7;
 		"naut_Tags".SvB[#i] := LREAL_TO_LWORD(#sv[#i]);
 	END_FOR;
+	#i := 7;
 	"naut_Tags".SqB[0] := LREAL_TO_LWORD("naut_Tags".Sq[0]);
 	"naut_Tags".SqB[1] := LREAL_TO_LWORD("naut_Tags".Sq[1]);
 	#lp := LWORD_TO_LREAL(16#400921FB54442D18) (* 3.141592653589793 *);
