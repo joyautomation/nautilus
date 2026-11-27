@@ -351,7 +351,9 @@ A download can change the program while serve runs:
 
 - Every 15 s, serve reads the project and browses the CPU again. If the
   data layout changed, it re-binds: new variables appear, removed ones go,
-  and VS Code reconnects by itself.
+  and VS Code reconnects by itself. While the CPU is stopped (a download
+  that changes the layout stops it), serve keeps showing what it had and
+  re-binds once the CPU runs again.
 - Before every write, serve checks the variable on the CPU. A variable
   that is gone, or whose type changed, is refused, and nothing is sent.
   The message says serve catches up by itself within 15 s. Retry after

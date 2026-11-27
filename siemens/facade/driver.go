@@ -92,6 +92,13 @@ func walk(ctx context.Context, c *webapi.Client, sym, name string, depth int, bs
 				continue
 			}
 			if err := walk(ctx, c, child, cname, depth+1, bs, skipped, failed); err != nil {
+				if !v.HasChildren && webapi.Code(err) == webapi.CodeNotAStructure {
+					// Listed as a structure with no children (an FB
+					// instance or struct with no members): the CPU's
+					// answer for an empty one. Nothing to bind; not a
+					// failed browse.
+					continue
+				}
 				*failed++
 				*skipped = append(*skipped, fmt.Sprintf("%s: %v", cname, err))
 			}

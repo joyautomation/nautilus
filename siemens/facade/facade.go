@@ -532,8 +532,16 @@ func (f *Facade) rediscover(ctx context.Context, b *binder) ([]Binding, []string
 		}
 	}
 	bctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	// A download that changes the data layout stops the CPU, and a CPU
+	// in STOP can answer a browse with a half-loaded program. Wait for RUN:
+	// the next re-discovery after it browses the program as loaded. A mode
+	// that cannot be read leaves the re-discovery ungated.
+	if mode, err := f.opts.Client.OperatingMode(bctx); err == nil && mode != webapi.ModeRun {
+		f.setNote(fmt.Sprintf("re-discovery waits for the CPU to run (it is in %s: a download?)", mode))
+		return nil, nil, false
+	}
 	bs, skipped, err := f.discover(bctx, roots, known, true)
-	cancel()
 	if err != nil {
 		f.setNote("re-discovery failed, the last binding set is kept: " + err.Error())
 		return nil, nil, false
