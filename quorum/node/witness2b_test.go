@@ -36,9 +36,12 @@ func TestLoopbackAWitnessReplyCountsOnlyUnderItsIncarnation(t *testing.T) {
 	// The witness's certificate now names another incarnation than its
 	// replies carry.
 	c.witCertLie.Store(1)
-	for _, id := range []quorum.NodeID{"a", "b"} {
-		c.elector(id).CloseIdle()
-	}
+	// A restart drops every connection at the witness's end. CloseIdle
+	// alone left one that was in use at that moment (#1120, CI on #1401):
+	// it kept the old certificate, the counted one, so nothing closed it
+	// and the controllers never met the other.
+	c.stopWitness()
+	c.startWitness()
 	time.Sleep(6 * c.lease)
 	if age := heard(); age >= 0 && age < 4*c.lease {
 		t.Errorf("%s heard the witness %v ago under a certificate naming witness@%d: its reply counted", who, age, inc+1)
@@ -111,10 +114,27 @@ func TestLoopbackAnUnboundWitnessRefusalRaisesNothing(t *testing.T) {
 	c.stopWitness()
 	c.setLease(WitnessID, loopLease/2)
 	c.startWitness()
+	lie := time.Now()
 	for _, id := range []quorum.NodeID{"a", "b"} {
 		c.elector(id).CloseIdle()
 	}
-	c.steady(who, 6)
+	if raceOn {
+		// With the witness uncounted the leader rests on its peer's vote
+		// alone, and under -race on a loaded runner four renewals in a row
+		// can miss their lease/8 (#1120: CI run 45912113980, calls back 30
+		// to 110 ms past their deadline). A lapse is allowed here; what the
+		// test is for is the lease reports, checked below either way. The
+		// pair must still lead.
+		time.Sleep(leases(6))
+		c.waitLeader(leases(20))
+	} else {
+		c.steady(who, 6)
+	}
+	// The refusals the test is about reached both controllers, more than
+	// once each (a raise follows its refusal at once, long before the next).
+	c.waitFor("the witness to refuse both controllers' votes by its lease, under the uncounted certificate", leases(20), func() bool {
+		return c.leaseRefusals("a", lie) >= 2 && c.leaseRefusals("b", lie) >= 2
+	})
 	for _, id := range []quorum.NodeID{"a", "b"} {
 		c.noLeaseReports(id, from[id])
 	}
@@ -180,6 +200,20 @@ func TestAnUnboundWitnessRefusalClosesTheConnections(t *testing.T) {
 	if spy.closed != 2 {
 		t.Fatalf("a refusal a lease after the close: %d closes, want 2", spy.closed)
 	}
+}
+
+// leaseRefusals counts id's votes to the witness, sent since, that it
+// refused by its lease (a 409 "lease").
+func (c *cluster) leaseRefusals(id quorum.NodeID, since time.Time) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, v := range c.votes {
+		if v.from == id && v.to == WitnessID && v.done && !v.at.Before(since) && strings.HasPrefix(v.verdict, "409 lease") {
+			n++
+		}
+	}
+	return n
 }
 
 // closeSpy counts CloseIdleConnections.
