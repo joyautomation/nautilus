@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- **State colours hold AA contrast as text** (#927): light-theme `--good`, `--warn` and `--serious` are darker and dark-theme `--crit` is lighter, so every state token clears 4.5:1 on `--bg`, `--surface` and `--surface-2` in both themes (as the operator-screens guide says). `palette.test.ts` now fails on any state pair under the bar.
+
 ### Added
 
 - **`<Mimic>` shows per-tag quality, and the default shell shows a dead field device** (#1056): a `quality` prop

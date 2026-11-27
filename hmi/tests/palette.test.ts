@@ -8,10 +8,9 @@
 // The state tokens (--good, --warn, --serious, --crit) are measured on the
 // same grounds at both bars: 3:1 as a fill, outline or indicator, and 4.5:1
 // as text, since the kit also draws them as text (a danger button, an error
-// line). The pairs that fall short today are listed below as known (#927).
-// The list is a ratchet: a listed pair that starts to pass fails the test
-// until its entry is removed, and an unlisted pair that falls short fails
-// at once.
+// line). A pair that falls short fails at once; a pair that cannot be
+// fixed yet is listed below as known, and the list is a ratchet (a listed
+// pair that starts to pass fails until its entry is removed).
 //
 //	npm test
 import { readFileSync } from 'node:fs';
@@ -43,22 +42,10 @@ function contrast(a: string, b: string): number {
 const STATE = ['--good', '--warn', '--serious', '--crit'] as const;
 const GROUNDS = ['--surface', '--bg', '--surface-2'] as const;
 
-// State-token pairs below the bar today, as "<theme> <token> <ground>"
-// (#927). The HMI kit's owner fixes the colours; this test only measures.
-const SHORT_AS_TEXT = new Set([
-	'dark --crit --bg',
-	'dark --crit --surface',
-	'dark --crit --surface-2',
-	'light --good --bg',
-	'light --good --surface-2',
-	'light --warn --bg',
-	'light --warn --surface',
-	'light --warn --surface-2',
-	'light --serious --bg',
-	'light --serious --surface',
-	'light --serious --surface-2'
-]);
-const SHORT_AS_NONTEXT = new Set(['light --warn --surface-2']);
+// State-token pairs below the bar, as "<theme> <token> <ground>". Empty
+// since #927 darkened the light-theme tokens and lightened dark --crit.
+const SHORT_AS_TEXT = new Set<string>();
+const SHORT_AS_NONTEXT = new Set<string>();
 
 const BARS: [number, string, Set<string>][] = [
 	[3, 'a fill or outline', SHORT_AS_NONTEXT],
