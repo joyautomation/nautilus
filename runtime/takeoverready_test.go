@@ -77,20 +77,26 @@ func TestTakeoverWaitIsBounded(t *testing.T) {
 	}
 }
 
-// Without a coordinator there is no takeover to hold: a driver that is not
-// ready yet is scanned as before.
-func TestNoCoordinatorDoesNotWaitForInputs(t *testing.T) {
+// Without a coordinator there is no takeover, but there is a start: the
+// first scan waits for a driver that is not ready yet, as a takeover does
+// (#786), and scans once it is.
+func TestNoCoordinatorFirstScanWaitsForInputs(t *testing.T) {
 	drv := &readyDriver{scriptDriver: scriptDriver{in: nio.Values{"In": 1.0}}}
 	rt, err := runtime.New(runtime.Options{
 		Program: doublerProg, Driver: drv, Inputs: []string{"In"}, Outputs: []string{"Out"},
-		Seed: nio.Values{"Out": 0.0},
+		Seed: nio.Values{"Out": 0.0}, InputsWait: time.Minute,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	rt.Scan()
-	if drv.writeCount() != 1 || drv.asked.Load() != 0 {
-		t.Fatalf("writes %d, asked %d; want 1, 0", drv.writeCount(), drv.asked.Load())
+	if drv.writeCount() != 0 || drv.asked.Load() == 0 {
+		t.Fatalf("before ready: writes %d, asked %d; want 0, >0", drv.writeCount(), drv.asked.Load())
+	}
+	drv.ready.Store(true)
+	rt.Scan()
+	if drv.writeCount() != 1 || drv.lastOut["Out"] != 2.0 {
+		t.Fatalf("once ready: writes %d, Out %v; want 1, 2", drv.writeCount(), drv.lastOut["Out"])
 	}
 }
 

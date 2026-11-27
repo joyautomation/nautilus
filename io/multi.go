@@ -450,6 +450,20 @@ func (m *Multi) InputsReady() bool {
 	return ready
 }
 
+// InputsPending names the children whose inputs have not arrived, in set
+// order (io.InputsPending).
+func (m *Multi) InputsPending() []string {
+	m.set.RLock()
+	defer m.set.RUnlock()
+	var out []string
+	for _, c := range m.children {
+		if r, ok := c.Driver.(InputsReadier); ok && !r.InputsReady() {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
 // Start fans out to every child with its own loop to launch (eip's poll
 // loop, a Sparkplug host's MQTT session); a child without Start has
 // nothing to start, exactly as `naut run` treats a lone driver.
@@ -566,6 +580,7 @@ var (
 	_ QualityReporter  = (*Multi)(nil)
 	_ OutputsRequester = (*Multi)(nil)
 	_ InputsReadier    = (*Multi)(nil)
+	_ InputsPending    = (*Multi)(nil)
 
 	_ interface{ SetWriteGate(func() bool) } = (*Multi)(nil)
 	_ SendGated                              = (*Multi)(nil)
