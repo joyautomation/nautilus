@@ -1,0 +1,68 @@
+FUNCTION_BLOCK "naut_Main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      dw : DINT;
+      ng : DINT;
+      lm : LINT;
+      wm : WORD;
+      lx2 : LREAL := 1.5;
+      io : "naut_SetLow";
+      dio : DINT;
+      lp : LREAL;
+      lq : LREAL;
+      lr : LREAL;
+      la : LREAL;
+      ln : LREAL;
+   END_VAR
+   VAR_TEMP 
+      tt : LREAL;
+   END_VAR
+
+BEGIN
+	#tt := LWORD_TO_LREAL(16#4005BF0A8B145769) (* 2.718281828459045 *);
+	"naut_Tags".Lx := 16#0102030405060708;
+	"naut_Tags".rB0 := "naut_Tags".Dx.%B0;
+	"naut_Tags".rB1 := "naut_Tags".Dx.%B1;
+	"naut_Tags".rB2 := "naut_Tags".Dx.%B2;
+	"naut_Tags".rB3 := "naut_Tags".Dx.%B3;
+	"naut_Tags".rW0 := "naut_Tags".Dx.%W0;
+	"naut_Tags".rW1 := "naut_Tags".Dx.%W1;
+	"naut_Tags".rD0 := DINT_TO_DWORD("naut_Tags".Dx);
+	"naut_Tags".rFl := "naut_Tags".Dx.%B2;
+	"naut_Tags".rX11 := "naut_Tags".Dx.%X11;
+	"naut_Tags".rL0 := LINT_TO_LWORD("naut_Tags".Lx);
+	#dw := "naut_Tags".Dx;
+	#dw.%B1 := 16#AA;
+	"naut_Tags".rDw := #dw;
+	#ng := "naut_Tags".Neg;
+	#ng.%B3 := 16#7F;
+	"naut_Tags".rNg := #ng;
+	#lm := 0;
+	#lm.%D1 := DINT_TO_DWORD("naut_Tags".Dx);
+	"naut_Tags".rLm := #lm;
+	#wm := "naut_Tags".Wx;
+	#wm.%B1 := 16#55;
+	"naut_Tags".rWm := #wm;
+	"naut_Tags".rS := BYTE_TO_SINT("naut_Tags".Top.%B3);
+	"naut_Tags".rBf := "naut_Tags".Bx;
+	"naut_Tags".rIw := INT_TO_WORD("naut_Tags".Ix);
+	"naut_Tags".rGt := USINT_TO_LINT(BYTE_TO_USINT("naut_Tags".Dx2.%B0)) + USINT_TO_LINT(BYTE_TO_USINT("naut_Tags".Dx2.%B1)) > 255;
+	#dio := "naut_Tags".Dx;
+	#io(b := #dio.%B2);
+	"naut_Tags".rIo := #dio;
+	"naut_Tags".FastN := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".FastN) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	"naut_Scan_main".tags.Sh.%B0 := DINT_TO_BYTE(LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".FastN) MOD 256) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648));
+	"naut_Scan_main".assigned.Sh.%B0 := BYTE#16#FF;
+	#lp := LWORD_TO_LREAL(16#400921FB54442D18) (* 3.141592653589793 *);
+	#lq := #lx2 * LWORD_TO_LREAL(16#4005BF0A8B145769) (* 2.718281828459045 *);
+	#lr := MAX(IN1 := #lx2, IN2 := LWORD_TO_LREAL(16#3FF6A09E667F3BCD) (* 1.4142135623730951 *));
+	#la := "naut_ATAN2"(Y := LWORD_TO_LREAL(16#3FF6A09E667F3BCD) (* 1.4142135623730951 *), X := #lx2);
+	#ln := -LWORD_TO_LREAL(16#400921FB54442D18) (* 3.141592653589793 *);
+	"naut_Tags".kStore := LREAL_TO_LWORD(#lp);
+	"naut_Tags".kBin := LREAL_TO_LWORD(#lq);
+	"naut_Tags".kCall := LREAL_TO_LWORD(#lr);
+	"naut_Tags".kAtan := LREAL_TO_LWORD(#la);
+	"naut_Tags".kTemp := LREAL_TO_LWORD(#tt);
+	"naut_Tags".kNeg := LREAL_TO_LWORD(#ln);
+END_FUNCTION_BLOCK

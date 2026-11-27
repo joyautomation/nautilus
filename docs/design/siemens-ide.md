@@ -339,6 +339,18 @@ The rules:
 - **ATAN2** (Go's math.Atan2; TIA has none) is a generated LReal FUNCTION
   `naut_ATAN2` (atan2.go) with Go's special cases in Go's order and
   float64's π constants; signed zeros through LREAL_TO_LWORD.
+- **Partial access** (#1305 B3) is TIA's slice access (`.%X`, `.%B`,
+  `.%W`, `.%D`), which numbers parts from the least significant bit as
+  nautilus does (lang/st lowerPartial; bench 2026-11-27, every byte and
+  word of 16#01020304). A part of a part is flattened to one slice
+  (`w.%W1.%B0` is `w.%B2`, naut-lead ruling). TIA has no slice as wide as
+  its variable (`Dx.%D0`: "Invalid access") and no `.%L`: such a part
+  reads as the variable, or its bit pattern (`DINT_TO_DWORD`,
+  `LINT_TO_LWORD`); writing one of another type is refused. In 64-bit
+  arithmetic a part is widened as a BYTE/WORD/DWORD variable is. A shared
+  tag's byte or word write flags every bit it covers, so copy-out lands
+  only those and another task's byte of the same word survives (bench:
+  two tasks, 80 bracketed samples).
 - **FOR** is TIA's own FOR only where it provably ends on the CPU
   (constant start, end and step, end + step inside the variable's type),
   run over a temp of the variable's type (`naut_for_v`) whose value the
@@ -365,7 +377,7 @@ The rules:
   gap there), #1375 the conversions to and from STRING it cannot write yet
   (REAL and LREAL text, TIME, bit strings, STRING_TO_BOOL); G #1304 TIME arithmetic, LTIME and dates (64-bit milliseconds against
   TIA's 32-bit TIME and nanosecond LTIME); #1305 the rest (ULINT and LWORD
-  arithmetic, ATAN2, integer ABS, an instance of the project's block in a
+  arithmetic, an instance of the project's block in a
   program's VAR RETAIN, which could hold a PID, …). Real limits keep their own words (a
   task interval over 60 s, a block name collision).
 - **Coverage PR A (#789)** writes:

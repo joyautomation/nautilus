@@ -78,37 +78,43 @@ func (pw *progWriter) use(g Global) *tagUse {
 // the path of the member written below it (as leaves() spells paths), the
 // member's declared type, and the bit written (-1: the whole member). ok
 // is false for anything else (a local, an FB pin).
-func (pw *progWriter) assignTarget(e st.Expression) (g Global, path, typ string, bit int, ok bool) {
+//
+// A part (w.%X3, w.%B1, a part of a part flattened) is the bits it covers:
+// bit is its first, width its width (1 for a bit; 0 for the whole member).
+func (pw *progWriter) assignTarget(e st.Expression) (g Global, path, typ string, bit, width int, ok bool) {
 	switch e := e.(type) {
 	case *st.IdentExpr:
 		if _, local := pw.locals[strings.ToLower(e.Name)]; local {
-			return Global{}, "", "", 0, false
+			return Global{}, "", "", 0, 0, false
 		}
 		g, ok := pw.w.globals[strings.ToLower(e.Name)]
-		return g, "", g.Type, -1, ok
+		return g, "", g.Type, -1, 0, ok
 	case *st.MemberExpr:
-		if n, isBit := bitIndex(e.Member); isBit {
-			g, path, typ, b, ok := pw.assignTarget(e.Object)
+		if obj, w, off, isPart := partOf(e); isPart {
+			g, path, typ, b, _, ok := pw.assignTarget(obj)
 			if !ok || b >= 0 {
-				return Global{}, "", "", 0, false
+				return Global{}, "", "", 0, 0, false
 			}
-			return g, path, typ, n, true
+			if fullPart(typ, w, off) { // Bx.%B0, lw.%L0: the whole member
+				return g, path, typ, -1, 0, true
+			}
+			return g, path, typ, off, w, true
 		}
-		g, path, typ, b, ok := pw.assignTarget(e.Object)
+		g, path, typ, b, _, ok := pw.assignTarget(e.Object)
 		if !ok || b >= 0 {
-			return Global{}, "", "", 0, false
+			return Global{}, "", "", 0, 0, false
 		}
 		sd := pw.w.structOf(typ)
 		if sd == nil {
-			return Global{}, "", "", 0, false
+			return Global{}, "", "", 0, 0, false
 		}
 		f, found := sd.fieldOf(e.Member)
 		if !found {
-			return Global{}, "", "", 0, false
+			return Global{}, "", "", 0, 0, false
 		}
-		return g, path + "." + sclName(f.Name), f.Datatype, -1, true
+		return g, path + "." + sclName(f.Name), f.Datatype, -1, 0, true
 	}
-	return Global{}, "", "", 0, false
+	return Global{}, "", "", 0, 0, false
 }
 
 // assigned follows every statement that writes target (an assignment, an
@@ -117,11 +123,11 @@ func (pw *progWriter) assignTarget(e st.Expression) (g Global, path, typ string,
 // wrote.
 func (pw *progWriter) assigned(b *strings.Builder, in string, at int, target st.Expression) {
 	pw.fcInputWrite(target, at)
-	if hasIndex(target) || hasIndex(bitObject(target)) {
+	if hasIndex(target) || hasIndex(partObject(target)) {
 		pw.assignedElement(at, target)
 		return
 	}
-	g, path, typ, bit, ok := pw.assignTarget(target)
+	g, path, typ, bit, width, ok := pw.assignTarget(target)
 	if !ok {
 		return
 	}
@@ -137,7 +143,9 @@ func (pw *progWriter) assigned(b *strings.Builder, in string, at int, target st.
 		if u.bits[path] == nil {
 			u.bits[path] = map[int]bool{}
 		}
-		u.bits[path][bit] = true
+		for n := bit; n < bit+width; n++ {
+			u.bits[path][n] = true // a byte or word written: each of its bits
+		}
 	}
 	sh := pw.share
 	if sh == nil {
@@ -149,7 +157,13 @@ func (pw *progWriter) assigned(b *strings.Builder, in string, at int, target st.
 	}
 	flag := quote(sh.db) + ".assigned." + sclName(g.Name)
 	if bit >= 0 {
-		pw.emit(b, at, "%s%s%s.%%X%d := TRUE;\n", in, flag, path, bit)
+		// Every bit the write covers: a byte's flags all set, so the other
+		// bits of the word keep another task's writes at copy-out.
+		if width == 1 {
+			pw.emit(b, at, "%s%s%s.%%X%d := TRUE;\n", in, flag, path, bit)
+		} else {
+			pw.emit(b, at, "%s%s%s%s := %s;\n", in, flag, path, sliceOf(width, bit), allOnes(width))
+		}
 		return
 	}
 	ls, why := pw.w.paths(typ, path)
@@ -179,16 +193,6 @@ func (pw *progWriter) fcInputWrite(target st.Expression, at int) {
 		return
 	}
 	pw.gap("siemens/var", at, gapOther, "writing "+exprShort(target)+", a STRUCT or ARRAY input of "+pw.what(), "TIA hands a function its STRUCT or ARRAY input by reference, so the write would reach the caller's variable; nautilus writes the function's own copy")
-}
-
-// bitObject is the word a bit access writes (w in w.%X3), or nil.
-func bitObject(e st.Expression) st.Expression {
-	if m, ok := e.(*st.MemberExpr); ok {
-		if _, bit := bitIndex(m.Member); bit {
-			return m.Object
-		}
-	}
-	return nil
 }
 
 // assignedElement records a write through an array element (a[i] := …,

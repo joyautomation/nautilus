@@ -1,0 +1,45 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      Bx : BYTE;
+      Dx : DINT;
+      Dx2 : DINT;
+      FastN : DINT;
+      Ix : INT;
+      kAtan : LWORD;
+      kBin : LWORD;
+      kCall : LWORD;
+      kNeg : LWORD;
+      kStore : LWORD;
+      kTemp : LWORD;
+      Lx : LINT;
+      Neg : DINT;
+      rB0 : BYTE;
+      rB1 : BYTE;
+      rB2 : BYTE;
+      rB3 : BYTE;
+      rBf : BYTE;
+      rD0 : DWORD;
+      rDw : DINT;
+      rFl : BYTE;
+      rGt : BOOL;
+      rIo : DINT;
+      rIw : WORD;
+      rL0 : LWORD;
+      rLm : LINT;
+      rNg : DINT;
+      rS : SINT;
+      rW0 : WORD;
+      rW1 : WORD;
+      rWm : WORD;
+      rX11 : BOOL;
+      Sh : DWORD;
+      SlowN : DINT;
+      Top : DINT;
+      Wx : WORD;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

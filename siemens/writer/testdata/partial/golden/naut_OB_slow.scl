@@ -1,0 +1,40 @@
+ORGANIZATION_BLOCK "naut_OB_slow"
+TITLE = "Cyclic interrupt, 200ms"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+BEGIN
+	// The tags this task shares with others, copied in: the program works on the copy.
+	"naut_Scan_slow".tags.Sh := "naut_Tags".Sh;
+	"naut_Slow_DB"();
+	// What the scan assigned, back into the tags DB, member by member and bit by bit.
+	IF "naut_Scan_slow".assigned.Sh = DWORD#16#FFFFFFFF THEN
+		"naut_Tags".Sh := "naut_Scan_slow".tags.Sh;
+	ELSE
+		IF "naut_Scan_slow".assigned.Sh.%X8 THEN
+			"naut_Tags".Sh.%X8 := "naut_Scan_slow".tags.Sh.%X8;
+		END_IF;
+		IF "naut_Scan_slow".assigned.Sh.%X9 THEN
+			"naut_Tags".Sh.%X9 := "naut_Scan_slow".tags.Sh.%X9;
+		END_IF;
+		IF "naut_Scan_slow".assigned.Sh.%X10 THEN
+			"naut_Tags".Sh.%X10 := "naut_Scan_slow".tags.Sh.%X10;
+		END_IF;
+		IF "naut_Scan_slow".assigned.Sh.%X11 THEN
+			"naut_Tags".Sh.%X11 := "naut_Scan_slow".tags.Sh.%X11;
+		END_IF;
+		IF "naut_Scan_slow".assigned.Sh.%X12 THEN
+			"naut_Tags".Sh.%X12 := "naut_Scan_slow".tags.Sh.%X12;
+		END_IF;
+		IF "naut_Scan_slow".assigned.Sh.%X13 THEN
+			"naut_Tags".Sh.%X13 := "naut_Scan_slow".tags.Sh.%X13;
+		END_IF;
+		IF "naut_Scan_slow".assigned.Sh.%X14 THEN
+			"naut_Tags".Sh.%X14 := "naut_Scan_slow".tags.Sh.%X14;
+		END_IF;
+		IF "naut_Scan_slow".assigned.Sh.%X15 THEN
+			"naut_Tags".Sh.%X15 := "naut_Scan_slow".tags.Sh.%X15;
+		END_IF;
+	END_IF;
+	"naut_Scan_slow".assigned.Sh := DWORD#16#0;
+END_ORGANIZATION_BLOCK

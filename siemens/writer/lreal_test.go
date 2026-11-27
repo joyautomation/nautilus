@@ -76,9 +76,9 @@ lr := 3.141592653589793e0 * lx;`)
 		t.Fatal(diags)
 	}
 	wantLines(t, scl,
-		"#lr := "+pi+";", // LREAL#: the bits, no prefix
-		"#lr := REAL#3.141592653589793 + #lx;",          // REAL#: a REAL literal
-		"#lr := REAL_TO_LREAL(3.141592653589793);",      // a conversion's argument is of its source type
+		"#lr := "+pi+";",                           // LREAL#: the bits, no prefix
+		"#lr := REAL#3.141592653589793 + #lx;",     // REAL#: a REAL literal
+		"#lr := REAL_TO_LREAL(3.141592653589793);", // a conversion's argument is of its source type
 		"#r := LREAL_TO_REAL("+pi+");",
 		"#lr := LWORD_TO_LREAL(16#400921FB54442D18) (* 3.141592653589793 *) * #lx;")
 
