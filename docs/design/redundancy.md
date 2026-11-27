@@ -1834,7 +1834,9 @@ for the kept I/O configuration to be re-applied: up to `DefaultTakeoverIOWait` (
 `ioGrace` (2 s), so 12 s at worst. A standby that followed the store re-applies nothing, so the
 wait is about 0 otherwise. A pair refuses live I/O applies until the state stream (its retain is
 a file), and also while the peer's build doesn't keep them (the hello's `keeps-live-io`,
-#1013). The term matters once step 4 lets a pair keep them.
+#1013). The Kubernetes Lease mode has no hello, so it refuses every live I/O apply until the next minor
+release after the first that keeps them (`leaseModeRefusesKeep`, RELEASING.md). The term
+matters once step 4 lets a pair keep them.
 
 **An I/O-health handover** (§3.2) waits for its hold-off (3 × lease) first, then hands over by
 `Release`, so `L_rem` is 0.
