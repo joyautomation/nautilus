@@ -749,7 +749,7 @@ var errStandby = errors.New("optommp: standing by without a session (watchdog)")
 // first scan of the unit, so it reports them not ready (InputsReady) and
 // the runtime holds its takeover, frame reset, logic and every driver's
 // outputs, until a scan of the unit has been delivered (up to
-// runtime.Options.TakeoverInputsWait). As a backstop, for a takeover that
+// runtime.Options.InputsWait). As a backstop, for a takeover that
 // gave up waiting, WriteOutputs accepts no command until the runtime has
 // read a delivery made after the gate opened. That read asks for every
 // output (OutputsWanted), so the push of the same scan, computed from

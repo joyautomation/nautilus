@@ -1516,6 +1516,10 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 // (tests, a custom scheduler, or a redundancy standby stepping in sync).
 // A standby replica returns immediately — suppression by not scanning at
 // all, so a stale replica can never write an output.
+//
+// The first scan (at start, and the first after a takeover) waits for the
+// drivers' inputs (Options.InputsWait): until they arrive, Scan returns
+// at once having run, sent and counted nothing.
 func (r *Runtime) Scan() { r.scanAt(time.Time{}) }
 
 // scanAt is Scan with the slot the scan was due at (zero when the caller

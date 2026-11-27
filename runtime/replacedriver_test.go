@@ -480,6 +480,13 @@ func TestReplaceDriverObservedTwoSwapsBeforeAScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The first scan waits for the drivers' first read (#786): let it in,
+	// so this scan is the start and the scan after the swaps is no hold.
+	for end := time.Now().Add(5 * time.Second); !set.InputsReady(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(end) {
+			t.Fatal("the drivers never read their slaves")
+		}
+	}
 	rt.Scan()
 	var pushed []<-chan nio.Values
 	for _, sw := range []struct {

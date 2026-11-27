@@ -4,13 +4,19 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	nio "github.com/joyautomation/nautilus/io"
 )
 
 // lone runs a driver for m over l with no write gate (a lone controller),
 // scanning every 5 ms.
-func lone(t *testing.T, l *link) *Driver {
+func lone(t *testing.T, l *link, opts ...func(*ManifestOptions)) *Driver {
 	t.Helper()
-	m := benchManifest(t, l.dev, ManifestOptions{ScanRate: 5 * time.Millisecond})
+	mo := ManifestOptions{ScanRate: 5 * time.Millisecond}
+	for _, f := range opts {
+		f(&mo)
+	}
+	m := benchManifest(t, l.dev, mo)
 	drv, err := New(m, WithScanRate(5*time.Millisecond), WithDialer(l.dial))
 	if err != nil {
 		t.Fatal(err)
@@ -57,5 +63,35 @@ func TestInputsReadyAfterAFailedFirstAttempt(t *testing.T) {
 	eventually(t, "ready after the failed connect", drv.InputsReady)
 	if drv.Health().Reads != 0 {
 		t.Error("the unreachable unit delivered a read")
+	}
+}
+
+// The gate `naut run` gives a lone controller (io.SetPlainGate: open while
+// the scans are live, which a held start keeps them) changes nothing: not
+// ready before the unit's first read, ready after, with or without
+// `watchdog:` (Fable).
+func TestInputsReadyUnderThePlainGate(t *testing.T) {
+	wd := 100 * time.Millisecond
+	for _, tc := range []struct {
+		name     string
+		watchdog *time.Duration
+	}{{"no watchdog", nil}, {"watchdog", &wd}} {
+		t.Run(tc.name, func(t *testing.T) {
+			l := newLink(newBenchDevice())
+			l.delay = 50 * time.Millisecond
+			drv := lone(t, l, func(o *ManifestOptions) { o.Watchdog = tc.watchdog })
+			if n := nio.SetPlainGate(drv, func() bool { return true }); n != 1 {
+				t.Fatalf("SetPlainGate took %d drivers, want 1", n)
+			}
+			drv.Start(context.Background())
+			t.Cleanup(drv.Stop)
+			if drv.InputsReady() {
+				t.Fatal("ready before the unit answered")
+			}
+			eventually(t, "ready after the first delivery", drv.InputsReady)
+			if drv.Health().Reads == 0 {
+				t.Error("ready with no read delivered")
+			}
+		})
 	}
 }

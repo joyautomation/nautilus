@@ -230,13 +230,13 @@ While it waits, nothing scans: no program, no task, no output, no alarm.
 delivered inputs, not their `init:` values. Timers start there, and the
 first scan's `dt` is one normal cycle, not the wait.
 
-The wait is short, because a device that does not answer ends it when
-its first attempt fails. It is bounded at **2 seconds**: past that the
-scan starts on what the drivers hold, the log says
+The wait is usually short: a device that refuses the connection ends it
+when that first attempt fails. It is bounded at **2 seconds**, which a
+device that does not answer at all (a connect that times out) costs in
+full: past that the scan starts on what the drivers hold, the log says
 `inputs still not live` with the drivers still waited for, and those
-inputs read `notConnected` until they arrive. A device that is down at
-start therefore costs at most one connect attempt, and the rules in the
-table above still apply to its tags.
+inputs read `notConnected` until they arrive. The rules in the table
+above still apply to their tags.
 
 `memory` and `replay` deliver at once, so a project without field
 hardware starts on its first tick, as before. While the wait lasts,

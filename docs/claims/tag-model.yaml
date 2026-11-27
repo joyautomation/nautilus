@@ -701,5 +701,7 @@ claims:
       - go ./runtime TestFirstScanHoldIsInvisibleToTheProgram
       - go ./runtime TestFirstScanWaitGivesUpWithAWarning
       - go ./runtime TestFirstScanDoesNotWaitForADriverThatCannotSay
+      - go ./runtime TestFirstScanTaskWaitsForTheMainRead
+      - go ./runtime TestFirstScanWaitFollowsTheClock
       - go ./optommp TestInputsReadyAfterAFailedFirstAttempt
       - go ./server TestStateShowsTheInputsWait

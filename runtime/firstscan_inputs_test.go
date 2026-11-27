@@ -131,7 +131,12 @@ END_PROGRAM
 const firstScanTask = `PROGRAM Tk
 VAR_EXTERNAL
   TaskRuns : DINT;
+  Level : REAL;
+  TaskFirstLevel : REAL;
 END_VAR
+IF FIRST_SCAN() THEN
+  TaskFirstLevel := Level;
+END_IF;
 TaskRuns := TaskRuns + 1;
 END_PROGRAM
 `
@@ -155,7 +160,7 @@ func newFirstScanRuntime(t *testing.T, drv nio.Driver, clk runtime.Clock, more .
 		DtTag:   "Dt",
 		Scan:    100 * time.Millisecond,
 		Seed: nio.Values{"Level": 1.0, "Out": 0.0, "Firsts": int64(0), "FirstLevel": 0.0,
-			"Runs": int64(0), "Et": int64(0), "DtSeen": 0.0, "TaskRuns": int64(0)},
+			"Runs": int64(0), "Et": int64(0), "DtSeen": 0.0, "TaskRuns": int64(0), "TaskFirstLevel": 0.0},
 		Tasks:      []runtime.Task{{Name: "side", Program: firstScanTask, Scan: 100 * time.Millisecond}},
 		Clock:      clk,
 		InputsWait: time.Hour,
@@ -362,5 +367,88 @@ func TestFirstScanWaitIsOnlyAtStart(t *testing.T) {
 	rt.Scan()
 	if n := rt.Stats().Count; n != 3 {
 		t.Fatalf("Count = %d, want 3: a started controller held its scans again", n)
+	}
+}
+
+// Only the main scan reads the drivers, so a task whose tick comes first
+// once the inputs are in (a task faster than main) waits for main's first
+// read: its FIRST_SCAN() sees the delivered input, not the seed (Fable).
+func TestFirstScanTaskWaitsForTheMainRead(t *testing.T) {
+	drv := &lateDriver{}
+	rt := newFirstScanRuntime(t, drv, nil)
+	drv.deliver(nio.Values{"Level": 7.0})
+	if err := rt.ScanTask("side"); err != nil {
+		t.Fatal(err)
+	}
+	if n := tagNum(t, rt, "TaskRuns"); n != 0 {
+		t.Fatalf("the task ran %v times before the main scan read the inputs", n)
+	}
+	rt.Scan()
+	if err := rt.ScanTask("side"); err != nil {
+		t.Fatal(err)
+	}
+	if got := tagNum(t, rt, "TaskFirstLevel"); got != 7 {
+		t.Errorf("the task's first scan saw Level %v, want the delivered 7", got)
+	}
+}
+
+// The same on a pair's takeover: a task does not scan the standby's
+// frozen inputs before the new leader's first read.
+func TestTakeoverTaskWaitsForTheMainRead(t *testing.T) {
+	drv := &lateDriver{}
+	drv.deliver(nio.Values{"Level": 2.0})
+	coord := &standbyFlag{}
+	rt := newFirstScanRuntime(t, drv, nil, func(o *runtime.Options) { o.Coordinator = coord })
+	coord.lead.Store(true)
+	if err := rt.ScanTask("side"); err != nil {
+		t.Fatal(err)
+	}
+	if n := tagNum(t, rt, "TaskRuns"); n != 0 {
+		t.Fatalf("the task ran %v times before the new leader's first read", n)
+	}
+	rt.Scan()
+	if err := rt.ScanTask("side"); err != nil {
+		t.Fatal(err)
+	}
+	if got := tagNum(t, rt, "TaskFirstLevel"); got != 2 {
+		t.Errorf("the task's first scan saw Level %v, want the delivered 2", got)
+	}
+}
+
+// A replica that loses the lead while its takeover waits for inputs no
+// longer reports the wait: a standby is not starting (Fable).
+func TestStandDownEndsTheReportedWait(t *testing.T) {
+	drv := &lateDriver{}
+	coord := &standbyFlag{}
+	coord.lead.Store(true)
+	rt := newFirstScanRuntime(t, drv, nil, func(o *runtime.Options) { o.Coordinator = coord; o.Tasks = nil })
+	rt.Scan()
+	if rt.Stats().InputsWait == nil {
+		t.Fatal("the takeover's wait is not reported")
+	}
+	coord.lead.Store(false)
+	rt.Scan()
+	if w := rt.Stats().InputsWait; w != nil {
+		t.Errorf("a standby still reports a wait for inputs: %+v", w)
+	}
+}
+
+// Under a virtual Clock the wait's bound is on that clock: a driver that
+// never answers holds a harness for InputsWait of ITS time, not of the
+// wall's (Fable).
+func TestFirstScanWaitFollowsTheClock(t *testing.T) {
+	drv := &lateDriver{}
+	clk := &stepClock{t: time.Unix(1_700_000_000, 0)}
+	rt := newFirstScanRuntime(t, drv, clk, func(o *runtime.Options) { o.InputsWait = 2 * time.Second; o.Tasks = nil })
+	rt.Scan()
+	clk.add(time.Second)
+	rt.Scan()
+	if n := rt.Stats().Count; n != 0 {
+		t.Fatalf("Count = %d one virtual second into a 2 s wait", n)
+	}
+	clk.add(1100 * time.Millisecond)
+	rt.Scan()
+	if n := rt.Stats().Count; n != 1 {
+		t.Fatalf("Count = %d past the wait on the virtual clock, want 1", n)
 	}
 }

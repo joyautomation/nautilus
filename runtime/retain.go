@@ -292,7 +292,7 @@ func (r *Runtime) inputsReady() bool {
 	if r.ready == nil {
 		return true
 	}
-	now := time.Now()
+	now := r.now(time.Now()) // a virtual Clock bounds the wait too (clock.go)
 	what := "takeover"
 	if r.coord == nil {
 		what = "first scan"

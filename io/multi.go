@@ -434,8 +434,9 @@ func (m *Multi) BeginScan() {
 	}
 }
 
-// InputsReady is true when every child that can say so is ready: a
-// takeover runs on the whole delivery, so it waits for the slowest child.
+// InputsReady is true when every child that can say so is ready: a first
+// scan (a start or a takeover) runs on the whole delivery, so it waits
+// for the slowest child.
 // Every such child is asked (each may look at its write gate). A set with
 // no such child is always ready.
 func (m *Multi) InputsReady() bool {
