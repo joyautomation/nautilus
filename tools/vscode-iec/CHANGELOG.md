@@ -3,6 +3,34 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.21.3] - 2026-11-27
+
+Works with naut 0.22.0, and is the one to use with naut 0.23.0: the schemas
+below know its new keys.
+
+### Added
+
+- **The `nautilus.yaml` schema knows naut 0.23.0's new blocks.** `auth:` (roles,
+  areas, users, `oidc:`, `session:`, `elevation:`, `service-tokens:`, `sparkplug:`,
+  `opcua-certificates:`), `audit:` (`path`, `keep-days`, a Postgres `sink` with
+  `dsn-env` and `anchor-every`), `substitutes:` (`defaults`, `rules`), `plant:`,
+  `parameters:` (`writeBack`), `checkout:`, `pwa:`, `cameras:`,
+  `camera-snapshots:` and `camera-streams:`, and under `server:` the `tls:` and
+  `trusted-proxies:` keys.
+- **Alarm keys.** Escalation policies and levels (`via`, `notify`, `after`,
+  `repeat`), on-call rosters and shifts, the channels (`email`, `sms`, `voice`,
+  `webhook`, `push`), `oncall:` acknowledge-by-reply keys, `chatter:` and
+  `flood:` detection, and a rule's or alarm's `equipment`, `suppress-when`,
+  `suppress-reason`, `consequence`, `response` and `rationalization`.
+- **Device and tag keys.** A device's `driver:`, `ports:`, `validate:` and
+  `offline-alarm:`, a driver's `validate:` and `reassert-on-reconnect:`, a
+  tag's `min:` and `max:`, a Sparkplug `device-death-delay:`, and a Siemens
+  target's `block-prefix:` and a CPU's `access-control:` and
+  `configuration-protection:`.
+- **`nautilus-test.yaml`: `repeat:`, `steps:` (groups), `substitute:`,
+  `ack-substitutes:` and `restore:`.** A failed step inside a group or a
+  repeat names its path and which repetition failed.
+
 ## [0.21.2] - 2026-11-18
 
 Works with naut 0.21.0, and is the one to use with naut 0.22.0: a 0.22.0

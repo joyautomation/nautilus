@@ -3,8 +3,8 @@ package quorum
 import "testing"
 
 // releasedWire is the vote protocol version of the last release that
-// shipped it: 0 while none has (v0.22.0 has no vote protocol).
-const releasedWire = 0
+// shipped it: 0 while none has (v0.22.0 had none; v0.23.0 shipped 9).
+const releasedWire = 9
 
 // pinnedWire is WireVersion as this test last saw it.
 const pinnedWire = 9
