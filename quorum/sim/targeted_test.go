@@ -177,7 +177,7 @@ func TestTargetedDeafCandidateReasksAndStillLoses(t *testing.T) {
 				}
 			}
 			if last < first+lease*3/4 {
-				t.Errorf("seed %d, B at %v: A asked its campaign again only until %v (first %v), want three quarters of a lease on (the last ask whose wait ends with the round)", seed, bStart, last, first)
+				t.Errorf("seed %d, B at %v: A asked its campaign again only until %v (first %v), want three quarters of a lease on (the last ask, whose wait ends at seven eighths)", seed, bStart, last, first)
 			}
 		}
 	}

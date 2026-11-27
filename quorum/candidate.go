@@ -69,9 +69,12 @@ func (c Config) look() time.Duration { return c.Lease / 4 }
 func (c Config) reaskEvery() time.Duration { return c.Lease / 8 }
 
 // reaskFor is how long after its first send a campaign is asked again: a
-// lease less one reaskEvery, so the last ask's wait (reaskEvery) ends as
-// the round does (expire, a lease from the first send) and no ask goes
-// that no grant could still answer (#1436). Each grant leases from the
+// lease less one reaskEvery (#1436). The last ask goes at three quarters
+// of a lease and its wait (reaskEvery) ends at seven eighths, the write
+// budget; an ask at seven eighths would wait until the round's own end
+// (expire, a lease from the first send), racing it, so the window stops
+// an eighth short of the round (it was three quarters, which left a
+// voter write between 3/4 and 7/8 answered to nobody). Each grant leases from the
 // send of the ask it answers (round.leaseFrom), so a grant of the last
 // ask leaves a full lease to renew in; and each re-ask a voter takes keeps
 // its promise alive for a lease from there (expire backs off from the
@@ -547,9 +550,9 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 // so an unheard campaign backs off two leases from the last (expire,
 // yield), as from the one send before: the other controller still gets
 // the lease of silence it campaigns in (design §3.1, one-way partitions).
-// Asked every lease/8 while no majority has answered, up to seven
-// eighths of a lease after the first send (reaskFor), the last ask's
-// wait ending as the round does; with the same
+// Asked every lease/8 while no majority has answered, before seven
+// eighths of a lease after the first send (reaskFor): the last ask at
+// three quarters, its wait ending at seven eighths; with the same
 // guards as a new campaign. nil otherwise.
 func (c *Candidate) reask(now Instant, seenFrom NodeID, seenUntil Instant, healthy bool) *Request {
 	if !c.reasks() || now < c.reaskAt || now < c.backoffUntil || now < c.holdUntil {

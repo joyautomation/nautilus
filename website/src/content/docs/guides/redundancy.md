@@ -616,8 +616,8 @@ ends.
   written its grant to disk, and a vote waits an eighth of the lease for
   the answer. A slower write still counts: the controller asks the same
   vote again every eighth of a lease, and a voter that already granted it
-  answers at once, until the last ask's wait ends with the vote, seven
-  eighths of a lease after the first. So each voter's write, with any
+  answers at once. The last ask goes three quarters of a lease after the
+  first and waits until seven eighths. So each voter's write, with any
   write waiting ahead of it, must finish within seven eighths of a lease
   (875 ms at 1 s, less the network's round trip; measured: 870 ms
   elects, 880 ms does not), or no controller wins a vote, after a
@@ -637,8 +637,10 @@ ends.
 - **A controller that can send but not hear** (a one-way link fault):
   it keeps asking for a vote it never hears answered, for three quarters
   of a lease, and each ask holds the voters to it for a lease. So the
-  controller that can reach both voters takes over within about 1.75
-  leases of that controller's first ask (1.75 s at 1 s), not one.
+  voters are free of it 1.75 leases after its first ask, and the
+  controller that can reach both voters takes over within about 2.25
+  leases of that first ask (2.25 s at 1 s; measured in the simulator),
+  not one.
 
 Choose 2 s for:
 

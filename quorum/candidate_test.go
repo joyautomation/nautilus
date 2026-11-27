@@ -181,15 +181,15 @@ func TestCandidateBackOffWhenUnheard(t *testing.T) {
 	}
 }
 
-// A campaign is asked again every lease/8 until the last ask's wait ends
-// as the round does (#1436): at a 2 s lease, at 0.25 s up to 1.5 s, and
-// not at 1.75 s, whose wait (lease/8) would end after the round has
-// expired, a lease from the first send. A voter write that lands within
+// A campaign is asked again every lease/8 before seven eighths of a lease
+// (#1436): at a 2 s lease, at 0.25 s up to 1.5 s, and not at 1.75 s, whose
+// wait (lease/8) would run to the round's own end, a lease from the first
+// send, racing its expiry. A voter write that lands within
 // the last wait wins: the write budget is seven eighths of the lease (at
 // three quarters, a 1.6 s write could never win, though the round had
 // 0.4 s left). A grant of the 1.5 s ask, at 1.74 s, leads, its lease from
 // that ask's send.
-func TestCandidateReasksUntilTheLastWaitEndsWithTheRound(t *testing.T) {
+func TestCandidateReasksUntilSevenEighths(t *testing.T) {
 	cfg := cfgA()
 	if b := cfg.WriteBudget(); b != lease*7/8 {
 		t.Fatalf("write budget %v at a %v lease, want 7/8 of it, %v", b, lease, lease*7/8)

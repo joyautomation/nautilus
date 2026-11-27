@@ -56,10 +56,11 @@ func TestLoopbackEveryWriteSlowStillElectsAndSwitches(t *testing.T) {
 		c.slowWrite, took, hold, time.Since(fail), c.writes.Load())
 }
 
-// Every voter write at 0.8 of the lease (#1436): past three quarters, where
+// Every voter write at 0.775 of the lease (#1436): past three quarters, where
 // a campaign stopped being asked again and no write that slow could win,
 // and under seven eighths, where the last ask's wait now ends (the write
-// budget). At a 1 s lease (75 ms of margin either side), the pair:
+// budget). At a 1 s lease (100 ms under the budget for CI stalls, 25 ms
+// over the old one), the pair:
 //
 //   - elects at all;
 //
@@ -75,7 +76,7 @@ func TestLoopbackEveryWriteSlowStillElectsAndSwitches(t *testing.T) {
 func TestLoopbackWritesNearTheBudgetElectSwitchAndHold(t *testing.T) {
 	c := newCluster(t)
 	c.lease = time.Second
-	c.slowWrite = c.lease * 8 / 10
+	c.slowWrite = c.lease * 31 / 40
 	if b := writeBudget(c.lease); c.slowWrite <= c.lease*3/4 || c.slowWrite >= b {
 		t.Fatalf("write %v is not between 3/4 lease and the budget %v", c.slowWrite, b)
 	}
@@ -114,7 +115,7 @@ func TestLoopbackWritesNearTheBudgetElectSwitchAndHold(t *testing.T) {
 // past the write budget at this lease, while both controllers' own are
 // fast. A campaign needs any two grants, and the two controllers' voters
 // give them at once, so the pair elects and a switchover hands over
-// within a quarter lease, as with every disk fast: neither the re-asks
+// before the witness could have written (measured 6-11 ms): neither the re-asks
 // nor the writer's de-dup make a fast majority wait on the slow third.
 func TestLoopbackOneSlowVoterCostsNothing(t *testing.T) {
 	c := newCluster(t)
@@ -133,6 +134,8 @@ func TestLoopbackOneSlowVoterCostsNothing(t *testing.T) {
 	if err != nil || !rep.Resigned {
 		t.Fatalf("%s's resign: %+v %v", who, rep, err)
 	}
-	c.waitFor(string(peer)+" to lead within a quarter lease", c.lease/4+c.lease/32, func() bool { return c.elector(peer).IsLeader() })
+	// Under the witness's own write, with room for a CI disk stall
+	// (#1120): a switchover that waited on the witness takes over 450 ms.
+	c.waitFor(string(peer)+" to lead within half a lease", c.lease/2, func() bool { return c.elector(peer).IsLeader() })
 	t.Logf("the witness's writes %v: switchover led %v after the resign", c.slowWrite, time.Since(start))
 }

@@ -1114,7 +1114,9 @@ redundancy:
   resign hold ran out, and the old leader led again (CI on #1372). So while no majority has
   answered a campaign, the candidate asks **the same term** again (a new id and Seq) every
   `lease/8`, the last at `3·lease/4` after its first send: that ask's wait ends at `7·lease/8`,
-  as the round does, and a later one could not be answered in time (#1436). A voter that promised that term
+  an eighth before the round expires (a lease from its first send). An ask at `7·lease/8` would
+  wait to the round's own end, racing its expiry, so the asks stop there (#1436; they stopped at
+  `5·lease/8` before, leaving a write between `3·lease/4` and `7·lease/8` answered to nobody). A voter that promised that term
   to that boot grants it again with no write, at once, or once the write it already started
   lands. A voter that has since promised another, or a higher term, refuses it as it would the
   first ask arriving late. A grant's reply names the request it answers, and a voter promises

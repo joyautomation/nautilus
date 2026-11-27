@@ -21,8 +21,10 @@ import (
 // with the first's. Only a success counts: when the write in flight
 // fails, the re-ask queued behind it is the retry, and its grant leaves
 // on that write or is dropped with its failure (Voter.Persisted). A
-// writer serves one voter (Seqs are that voter's): the elector makes a
-// new one with each voter it builds before Run, and none after.
+// writer serves one voter (Seqs are that voter's): the elector makes one
+// with the voter it builds in New, and a witness one per pair. waitBox
+// rebuilds the voter before Run starts the writer, which has written
+// nothing then (the handlers that ask it wait for running).
 type writer struct {
 	save func(quorum.VoterState) error
 	done func(seq uint64, err error, took time.Duration)

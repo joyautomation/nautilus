@@ -871,8 +871,9 @@ var table = []mutation{
 	{"leaderless_word_unbound", []string{"TestLeaderlessWordRidesTheHello"}},
 	{"pair_alarm_none", []string{"TestPairLeaderlessAlarmPagesOnce"}},
 
-	{"reask_window_3q", []string{"TestCandidateBackOffWhenUnheard", "TestCandidateReasksUntilTheLastWaitEndsWithTheRound", "TestTargetedDeafCandidateReasksAndStillLoses", "TestSlowWriteWarned"}},
+	{"reask_window_3q", []string{"TestCandidateBackOffWhenUnheard", "TestCandidateReasksUntilSevenEighths", "TestTargetedDeafCandidateReasksAndStillLoses", "TestSlowWriteWarned"}},
 	{"write_dedup_off", []string{"TestWriterWritesASeqOnce"}},
+	{"handback_undo_unwritten", []string{"TestUndoneHandBackIsWrittenAgain"}},
 	{"write_dedup_failed_counts", []string{"TestWriterRetriesASeqItFailedToWrite", "TestWitnessReaskBehindAFailedWriteEndsOnDisk"}},
 }
 

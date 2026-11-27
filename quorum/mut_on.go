@@ -698,6 +698,7 @@ var Mutations = []string{
 
 	"reask_window_3q",           // quorum: a campaign is asked again only up to three quarters of a lease, so a voter write past 3/4 lease (an SD card, an eMMC) leaves the pair with no leader though the round has an eighth of a lease left (#1436 PR 2)
 	"write_dedup_off",           // node: a re-ask's write of a Seq already on disk is written again: two fsyncs for one promise on a slow card (#1436 PR 2)
+	"handback_undo_unwritten",   // quorum: an undone hand-back keeps the armed write's Seq, so once that write lands the reverted guard never reaches disk and a restart refuses a real hand-back (#1436 PR 2, Fable)
 	"write_dedup_failed_counts", // node: a failed write counts as written, so the re-ask queued behind it is skipped and the promise never reaches disk: the voter grants it nothing, silently (#1436 PR 2, F25)
 }
 
