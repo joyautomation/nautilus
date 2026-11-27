@@ -335,7 +335,11 @@ With a project and no `--root`, serve binds the data blocks the writer
 generates for that project: the tags DB, and each program's instance DB
 under the program's name (`Main.count`). The writer's own members, such as
 the `_last` static it keeps beside a timer, are left out. `--root` binds
-the blocks you name instead.
+the blocks you name instead. A program that declares no variables has an
+empty block on the CPU, and serve binds nothing from it. If the project
+declares variables in a program but the CPU's block is empty, the CPU runs
+an older download: serve binds nothing from that block and says to run
+`naut siemens deploy`.
 
 With a project, serve shows what `naut run` shows for it. The manifest
 tags are tags. Each program's variables are its locals, by name, with a

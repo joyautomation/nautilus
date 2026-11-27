@@ -436,3 +436,75 @@ func TestALocalThatIsNotCurrentIsLeftOut(t *testing.T) {
 		return len(locals()) == 0 && q["Level"] == "stale"
 	})
 }
+
+// emptyMain empties program Main's instance DB on the fake CPU: a browse
+// of it answers "not a structure" (202), as the bench CPU does.
+func emptyMain(s *webapitest.Server) {
+	for _, sym := range []string{`"Main_DB".count`, `"Main_DB".dwell.Q`, `"Main_DB".dwell.ET`, `"Main_DB".dwell`} {
+		s.Put(sym, nil)
+	}
+}
+
+// TestAnEmptyProgramDBTheProjectExpectsBindsNothing: the project's program
+// declares no variable (Root.Empty); its empty DB is no error, the tags
+// still bind, and a note says why the program shows nothing.
+func TestAnEmptyProgramDBTheProjectExpectsBindsNothing(t *testing.T) {
+	s, c := cpu(t)
+	emptyMain(s)
+	f, err := New(context.Background(), Options{Client: c, Roots: []Root{{DB: "Tags"}, {DB: "Main_DB", Prefix: "Main", Empty: true}}})
+	if err != nil {
+		t.Fatalf("an empty program DB the project expects: %v", err)
+	}
+	if n := len(f.Bindings()); n != 4 {
+		t.Fatalf("bound %v, want the 4 tags", f.Bindings())
+	}
+	if got := strings.Join(f.Skipped(), "; "); !strings.Contains(got, "Main_DB: no members") {
+		t.Fatalf("skipped %q", got)
+	}
+}
+
+// TestAnEmptyProgramDBTheProjectDoesNotExpectIsAMismatch: the project's
+// program declares variables but the CPU's DB is empty: the CPU runs an
+// older download. Nothing is bound from it (never silently empty), the
+// note names the fix, and a re-discovery that meets it keeps the running
+// set.
+func TestAnEmptyProgramDBTheProjectDoesNotExpectIsAMismatch(t *testing.T) {
+	s, c := cpu(t)
+	emptyMain(s)
+	f, err := New(context.Background(), Options{Client: c, Roots: roots})
+	if err != nil {
+		t.Fatalf("serve must still start on the tags: %v", err)
+	}
+	got := strings.Join(f.Skipped(), "; ")
+	if !strings.Contains(got, "older download") || !strings.Contains(got, "naut siemens deploy") || !strings.Contains(got, "program Main") {
+		t.Fatalf("skipped %q: want the mismatch note naming the fix", got)
+	}
+	for _, b := range f.Bindings() {
+		if strings.HasPrefix(b.Name, "Main.") {
+			t.Fatalf("bound %s from a mismatched block", b.Name)
+		}
+	}
+
+	// Under a running serve: Main's DB empties (a download in progress, or
+	// an older project loaded): the running set is kept.
+	s2, f2, base := startWith(t, Options{Rediscover: 100 * time.Millisecond, Settle: 10 * time.Millisecond})
+	waitFor(t, "first values", func() bool { return state(t, base)["Main.count"] != nil })
+	emptyMain(s2)
+	time.Sleep(600 * time.Millisecond)
+	if n := f2.Rebinds(); n != 0 {
+		t.Fatalf("rebinds = %d: an unexpected empty program DB was adopted", n)
+	}
+}
+
+// TestAMissingRootIsStillAnError: 202 is an empty block; a DB the CPU
+// does not have (200) is still an error, and so is nothing bound at all.
+func TestAMissingRootIsStillAnError(t *testing.T) {
+	s, c := cpu(t)
+	emptyMain(s)
+	if _, err := New(context.Background(), Options{Client: c, Roots: []Root{{DB: "Nope", Prefix: "Nope", Empty: true}}}); err == nil {
+		t.Fatal("a DB the CPU does not have must stay an error")
+	}
+	if _, err := New(context.Background(), Options{Client: c, Roots: []Root{{DB: "Main_DB", Prefix: "Main", Empty: true}}}); err == nil {
+		t.Fatal("nothing bound at all must stay an error")
+	}
+}

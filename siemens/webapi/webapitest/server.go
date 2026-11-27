@@ -660,6 +660,13 @@ func (s *Server) browse(resp rpcResp, v, mode string) rpcResp {
 		}
 	}
 	sort.Strings(syms)
+	if v != "" && len(syms) == 0 {
+		// The bench S7-1500 (FW 3.1) answered a children browse of the
+		// instance DB of a program without statics this way; the fake
+		// answers so for any structure with no members.
+		resp.Error = &rpcErr{202, "Variable is not a structure"}
+		return resp
+	}
 	out := []map[string]any{}
 	for _, sym := range syms {
 		out = append(out, entry(sym, s.Vars[sym]))
