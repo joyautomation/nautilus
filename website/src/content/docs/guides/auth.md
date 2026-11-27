@@ -182,6 +182,27 @@ auth:
     # redirect-url: https://plc1.plant.lan:8443/auth/oidc/callback
 ```
 
+### Registering the controller at the provider
+
+Do this once per provider. In both, the redirect URI is `https://<the controller's host>/auth/oidc/callback`, exactly as the browser reaches the controller (https, the port if it has one, no trailing slash). Set `redirect-url` to the same string when the host is not one the controller trusts. Keep the client secret out of the manifest and out of chat: put it in your password manager and hand it to the controller as `NAUTILUS_OIDC_SECRET`.
+
+**Microsoft Entra ID**
+
+1. Entra admin centre > Identity > Applications > App registrations > New registration. Name it; supported account types: *this organizational directory only* (single tenant); Redirect URI: platform **Web**, the URI above. Register.
+2. Copy *Application (client) ID* and *Directory (tenant) ID* from the Overview page.
+3. Certificates & secrets > New client secret. Copy the **Value** column (not *Secret ID*) at once: Entra shows it only until you leave the page.
+4. The default `User.Read` permission is enough (`openid`, `profile` and `email` are sign-in scopes, not API permissions). Leave the implicit grant boxes unticked.
+5. `issuer: https://login.microsoftonline.com/<tenant id>/v2.0`, `client-id:` the application id. The default username claim, `preferred_username`, is the person's sign-in address. For a first test grant by `users:`. To grant by `groups:` (object ids), add the claim first: Token configuration > Add groups claim > Security groups (ID token), ideally *Groups assigned to the application*, since Entra leaves the claim out when a person is in too many groups and the sign-in is then refused.
+
+**Google** (Google Cloud console)
+
+1. Create a project. APIs & Services > OAuth consent screen (called Google Auth Platform in newer consoles): choose **Internal** for a Google Workspace organization (only its people can sign in, and no Google verification is needed); otherwise External, with yourself under Test users (an External app left in Testing is limited to those users).
+2. Credentials > Create credentials > OAuth client ID > **Web application**; under Authorized redirect URIs add the URI above; leave the JavaScript origins empty.
+3. Copy the client ID and the client secret when the dialog shows them.
+4. `issuer: https://accounts.google.com`, `client-id:` the id. Google sends no `preferred_username` and no groups: set `username-claim: email` and grant by `users:` (the address).
+
+After the first sign-in, `naut users list` shows the pinned account. Entra and Google are not yet tested against a real tenant here (Keycloak is).
+
 - **The redirect URI.** Register `https://<the controller's host>/auth/oidc/callback` at the provider. `naut run` prints the one to register when it starts. Without `redirect-url` the controller builds it from the address the browser used, but only for a host it trusts (`localhost`, an IP address, or a name in `NAUTILUS_ALLOWED_HOSTS`); any other is refused.
 - **The sign-in page** shows "Sign in with <provider>" beside the password form (only the button when no local user is granted anything). Same transport rule as passwords: HTTPS, or the controller's own loopback.
 - **Who is signed in.** A person acts as `oidc:<name>`, the username claim lowercased (ASCII letters, digits and `- _ . @ + '`; any other character is refused, never folded into a look-alike). Their roles come from `auth.oidc.groups` (each group id the token carries) and `auth.oidc.users` (their name), never from `auth.users`: `oidc:akhan` and `user:akhan` are two people.
