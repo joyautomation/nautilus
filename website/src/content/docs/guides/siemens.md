@@ -489,6 +489,16 @@ assignment's target and every `=>` binding keep their values. `ENO` is
 `EN`: it is never TIA's own ENO, which turns FALSE on CPU-side errors
 nautilus does not have.
 
+## Long LREAL literals
+
+TIA keeps 15 significant digits of an LREAL literal, and a float64 can
+need 17. In the program, an LREAL literal that 15 digits cannot
+reproduce is written as its exact bit pattern,
+`LWORD_TO_LREAL(16#…)`, with the decimal in a comment beside it, so the
+CPU computes with the value nautilus does. A start value must be one
+literal, so a REAL or LREAL start value with more than 15 significant
+digits is refused: write at most 15 digits.
+
 ## ATAN2
 
 TIA has no ATAN2, so the writer adds a function of its own,

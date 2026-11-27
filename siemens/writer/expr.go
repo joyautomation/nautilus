@@ -50,6 +50,9 @@ var namedFuncs = map[string][]string{
 func (pw *progWriter) expr(e st.Expression, parent int) string {
 	switch e := e.(type) {
 	case *st.NumberLit:
+		if f, long := longReal(e, "LREAL"); long && pw.lreal {
+			return lrealBits(f)
+		}
 		return number(e)
 	case *st.BoolLit:
 		if e.Value {
@@ -72,6 +75,14 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 			}
 			pw.gap("siemens/enum", e.Pos.Line, gapOther, "the typed literal "+e.TypeName+"#…", "")
 			return ""
+		}
+		switch u {
+		case "LREAL": // the literal is an LREAL whatever its context (#1429)
+			if f, long := longReal(e, "LREAL"); long {
+				return lrealBits(f)
+			}
+		case "REAL":
+			return pw.inLREAL(false, func() string { return u + "#" + pw.expr(e.Inner, unaryPrec) })
 		}
 		return pw.widen(u, u+"#"+pw.expr(e.Inner, unaryPrec))
 	case *st.IdentExpr:
@@ -200,6 +211,9 @@ func (pw *progWriter) wideRefused(line int) {
 }
 
 func (pw *progWriter) binary(e *st.BinaryExpr, parent int) string {
+	if ctx := pw.realContext(pw.typ(e.Left), pw.typ(e.Right)); ctx != pw.lreal {
+		return pw.inLREAL(ctx, func() string { return pw.binary(e, parent) })
+	}
 	op := strings.ToUpper(e.Op)
 	p, ok := precedence[op]
 	if !ok {
@@ -414,9 +428,21 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			return ""
 		}
 	}
+	// A call that returns an LREAL takes LREAL arguments (a literal there is
+	// an LREAL); one that returns a REAL takes REALs.
+	argCtx := pw.lreal
+	switch pw.typ(c) {
+	case "LREAL":
+		argCtx = true
+	case "REAL":
+		argCtx = false
+	}
+	if from, _, ok := strings.Cut(name, "_TO_"); ok && from != "" {
+		argCtx = from == "LREAL" // a conversion's argument is of its source type
+	}
 	args := make([]string, len(argExprs))
 	for i, a := range argExprs {
-		args[i] = pw.expr(a, 0)
+		args[i] = pw.inLREAL(argCtx, func() string { return pw.expr(a, 0) })
 	}
 	switch {
 	case name == "TRUNC":

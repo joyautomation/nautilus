@@ -320,6 +320,14 @@ The rules:
   LINT temp (#1305 B1). Where it cannot (an input of a standard block, an
   argument of another standard function, a CASE selector, a REAL target,
   a FOR step), integer arithmetic is refused.
+- **LReal literals** (#1429): TIA keeps 15 significant digits of a
+  literal (bench: 3.141592653589793 compiled to 400921FB54442D11, π is
+  …2D18). An LREAL literal that a 15-digit round trip does not reproduce
+  is written `LWORD_TO_LREAL(16#…) (* decimal *)` wherever it is an LREAL
+  (pw.lreal: an LREAL store or argument, arithmetic or a comparison with
+  an LREAL operand, a call that returns an LREAL, ATAN2's LReal formals;
+  lreal.go). A REAL needs 9 digits and is written as it is. A start value
+  is one literal, so one that 15 digits cannot reproduce is refused.
 - **Integer ABS** is integer arithmetic (lang/ir builtins.go: computed,
   ABS of an INT at -32768 is 32768): `ABS(<LINT>)` at 64 bits, the store
   wraps (#1305 B2).

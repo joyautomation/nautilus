@@ -113,8 +113,8 @@ type Server struct {
 	Logins   int // successful Api.Login calls
 
 	loginAttempts int
-	writeError    int // when set, every PlcProgram.Write answers this code
-	browseError   int // when set, every PlcProgram.Browse answers this code
+	writeError    int            // when set, every PlcProgram.Write answers this code
+	browseError   int            // when set, every PlcProgram.Browse answers this code
 	browseErrorOf map[string]int // a PlcProgram.Browse of these symbols answers the code
 	holdWrite     *writeHold
 }

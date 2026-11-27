@@ -752,7 +752,7 @@ func (w *writer) globalDB() ([]byte, bool) {
 		}
 		line := fmt.Sprintf("      %s : %s", sclName(g.Name), typ)
 		if g.Init != "" {
-			init, why := literal(g.Init)
+			init, why := literal(g.Init, g.Type)
 			if w.enumOf(g.Type) != nil {
 				init, why = w.enumInit(g.Type, g.Init)
 			}
@@ -799,8 +799,9 @@ func (w *writer) globalDB() ([]byte, bool) {
 	return []byte(b.String()), true
 }
 
-// literal parses a manifest init as an ST literal and prints it in SCL.
-func literal(src string) (string, string) {
+// literal parses a manifest init as an ST literal and prints it in SCL,
+// as a start value of type typ.
+func literal(src, typ string) (string, string) {
 	prog, err := st.Parse("PROGRAM x\nVAR v : BOOL; END_VAR\nv := " + src + ";\nEND_PROGRAM\n")
 	if err != nil || len(prog.Statements) != 1 {
 		return "", fmt.Sprintf("init %q is not a literal", src)
@@ -814,7 +815,7 @@ func literal(src string) (string, string) {
 	default:
 		return "", fmt.Sprintf("init %q is not a literal", src)
 	}
-	return constValue(loadLibrary(nil, nil), a.Value)
+	return constValueOf(loadLibrary(nil, nil), a.Value, typ)
 }
 
 // constValue prints a constant (a manifest init, a TYPE member's initial
@@ -823,6 +824,16 @@ func literal(src string) (string, string) {
 // and whatever the expression printer refuses is refused here, never
 // printed as an empty value.
 func constValue(lib *library, e st.Expression) (string, string) {
+	return constValueOf(lib, e, "")
+}
+
+// constValueOf is constValue for a declared type: a REAL or LREAL start
+// value 15 digits cannot reproduce for that type is refused (#1429: TIA
+// keeps 15 significant digits of a literal; a start value is one).
+func constValueOf(lib *library, e st.Expression, typ string) (string, string) {
+	if f, long := longReal(e, strings.ToUpper(strings.TrimSpace(typ))); long {
+		return "", tooLongStart(f)
+	}
 	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
 		if n, ok := u.Operand.(*st.NumberLit); ok {
 			return "-" + number(n), ""

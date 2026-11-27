@@ -26,8 +26,10 @@ func (pw *progWriter) atan2(argExprs []st.Expression, args []string, line int) s
 	in := make([]string, 2)
 	for i, a := range argExprs {
 		switch t := pw.typ(a); {
-		case t == "LREAL" || t == tAnyReal:
-			in[i] = args[i] // a literal takes the LReal formal's type, all its digits
+		case t == "LREAL":
+			in[i] = args[i]
+		case t == tAnyReal: // the formal is LReal: the literal is an LREAL (#1429)
+			in[i] = pw.inLREAL(true, func() string { return pw.expr(a, 0) })
 		case t == "REAL":
 			in[i] = "REAL_TO_LREAL(" + args[i] + ")"
 		case isInt(t) && t != "ULINT":

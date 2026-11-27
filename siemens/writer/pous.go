@@ -703,7 +703,7 @@ func (pw *progWriter) constInit(e st.Expression, typ string, seen map[string]boo
 			return pw.constInit(d.Initial, strings.ToUpper(strings.TrimSpace(d.Datatype)), seen)
 		}
 	}
-	v, why := constValue(pw.w.lib, e)
+	v, why := constValueOf(pw.w.lib, e, typ)
 	if why != "" && isInt(typ) {
 		// Integer arithmetic on literals and constants (STAGES : INT :=
 		// 2 + 1): folded as nautilus folds it, into one literal.

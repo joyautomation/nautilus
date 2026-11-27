@@ -77,7 +77,8 @@ type progWriter struct {
 	forRange   map[string]forBounds
 	hoistN     int
 	hoistDecls []string
-	forN       int // the FOR loops' temps' numbering (forTemp)
+	forN       int  // the FOR loops' temps' numbering (forTemp)
+	lreal      bool // printing an LREAL's operand: a long literal is its bit pattern (lreal.go)
 	faults     bool
 	// fcFault is where a FUNCTION that can fault, being printed, hands
 	// its fault (lift sets it).
@@ -216,7 +217,8 @@ func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st
 		}
 		init, _ := w.zeroOf(v.Datatype)
 		if v.Initial != nil {
-			init = pw.expr(v.Initial, 0)
+			lreal := strings.EqualFold(strings.TrimSpace(v.Datatype), "LREAL")
+			init = pw.inLREAL(lreal, func() string { return pw.expr(v.Initial, 0) }) // an assignment: a long LREAL is its bits
 		}
 		pw.emit(&body, v.Pos.Line, "\t#%s := %s;\n", sclName(v.Name), init)
 	}
@@ -495,6 +497,8 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 				}
 				if n, ok := w.enumValue(v.Datatype, v.Initial); ok {
 					line += " := " + n
+				} else if pw.refusedStart(v.Initial, v.Name, v.Datatype, v.Pos.Line) {
+					continue
 				} else {
 					line += " := " + pw.initValue(v.Initial)
 				}
@@ -839,6 +843,9 @@ func (pw *progWriter) ident(name string, line int) string {
 // literal; what reaches the wrap here is a value nautilus types as its
 // 64-bit int (a counter's CV) and the result of integer arithmetic.
 func (pw *progWriter) store(v st.Expression, tt string, line int) string {
+	if tt == "LREAL" && !pw.lreal {
+		return pw.inLREAL(true, func() string { return pw.store(v, tt, line) })
+	}
 	vt := pw.typ(v)
 	switch {
 	case vt == tWide:
