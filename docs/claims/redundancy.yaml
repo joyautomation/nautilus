@@ -425,7 +425,8 @@ claims:
     claim: >-
       Without `redundancy:`, naut run still gates the drivers whose gate is
       only a gate (io.PlainGated: Modbus, EtherNet/IP, OPC UA client, groov
-      EPIC, a Sparkplug host, a PROFINET device, Redfish and SNMP) on live
+      EPIC, PLCnext, a Sparkplug host, a PROFINET device, Redfish and
+      SNMP) on live
       scans, on the same timing as a standalone replica, so a hung scan
       stops their own output traffic (a Modbus rewrite: keep-alive) and
       their queued commands (a Redfish reset or an SNMP SET waiting for a
@@ -447,7 +448,8 @@ claims:
       conformance suite's C5 (internal/driverconformance) checks that each
       driver it covers takes the gate (all of these but the OPC UA client
       and the PROFINET device); the hw test checks that a closed plain gate
-      holds a command queued before it closed. That a
+      holds a command queued before it closed, and that the first change
+      after it reopens goes out. That a
       healthy project's driver behaviour is unchanged rests on those
       drivers treating an open gate as no gate (their own gate tests).
 

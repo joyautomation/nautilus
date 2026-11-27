@@ -1059,6 +1059,16 @@ func TestBasePlainGateHoldsAQueuedCommand(t *testing.T) {
 	if got := writes(); got != "PDU1/PDU1_Outlet03.On=false" {
 		t.Fatalf("after the gate reopened: %q", got)
 	}
+	// Nothing was pushed while the gate was closed (the scans hung), so the
+	// next change is a command, not a baseline.
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": true})
+	deadline = time.Now().Add(time.Second)
+	for !strings.HasSuffix(writes(), "On=true") && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := writes(); got != "PDU1/PDU1_Outlet03.On=false,PDU1/PDU1_Outlet03.On=true" {
+		t.Fatalf("the first change after the gate reopened: %q", got)
+	}
 }
 
 // A class that never answers, next to one that does, does not hide: its
