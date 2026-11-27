@@ -506,7 +506,7 @@
 					>
 				{:else if l.state}
 					<span class="lbl state" class:qbad={lq === 'bad'} class:qstale={lq === 'stale' || lq === 'substituted'} class:plain={l.as === 'text'} class:center={l.align === 'center'} style={box} use:regLabel={i}
-						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if st && flagged(lq)}<span class="qbadge {lq}" title={STATUS_META[lq].description}>{qWord(lq)}</span>{:else if st}{#if l.as === 'text'}<b class="word {st.kind ?? 'off'}">{st.text}</b>{:else}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}{/if}</span
+						>{#if l.text}<span class="name">{l.text}</span>{/if}{#if flagged(lq)}<span class="qbadge {lq}" title={STATUS_META[lq].description}>{qWord(lq)}</span>{:else if st}{#if l.as === 'text'}<b class="word {st.kind ?? 'off'}">{st.text}</b>{:else}<StatusPill kind={st.kind ?? 'off'} label={st.text} />{/if}{/if}</span
 					>
 				{:else}
 					<span class="lbl" class:center={l.align === 'center'} style={box} use:regLabel={i}>{l.text}</span>

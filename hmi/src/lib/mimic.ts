@@ -1428,8 +1428,9 @@ export function autoRoutes(
  * (#1056: a label's quality is the worst of these). */
 export function labelRefs(l: MimicLabel): string[] {
 	const refs: string[] = [];
+	// a label with a bind draws the value, never its states (Mimic.svelte)
 	if (l.bind) refs.push(l.bind);
-	for (const s of l.state ?? []) if (s.when) refs.push(s.when);
+	else for (const s of l.state ?? []) if (s.when) refs.push(s.when);
 	return refs;
 }
 

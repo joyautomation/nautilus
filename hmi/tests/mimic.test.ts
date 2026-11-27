@@ -466,6 +466,8 @@ describe('labelRefs / equipmentRefs — what a chip reads (#1056)', () => {
 			labelRefs({ x: 0, y: 0, state: [{ when: 'P_Fault', text: 'Fault' }, { text: 'OK' }] })
 		).toEqual(['P_Fault']);
 		expect(labelRefs({ x: 0, y: 0, text: 'plain' })).toEqual([]);
+		// a bind wins over state (the label draws the value), so only it counts
+		expect(labelRefs({ x: 0, y: 0, bind: 'Level', state: [{ when: 'P_Fault', text: 'F' }] })).toEqual(['Level']);
 	});
 	it('equipment reads what its bind names, a negated one included', () => {
 		expect(
