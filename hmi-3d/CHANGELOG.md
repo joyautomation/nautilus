@@ -1,5 +1,12 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.4.1 — 2026-11-27 (patch)
+
+**Changed.** A part whose reading an operator has substituted (#707) is drawn
+as `assumed`, never as healthy and never as stale: it is held, not the part's
+own reading. `partState` takes the new flag, and the asset drawer says "held by
+an operator; not the plant's reading". Its range on hmi now admits `^0.11.0`.
+
 ## 0.4.0 — 2026-11-18 (minor: a dark paper look; flowing pipes drawn as moving dashes)
 
 **Added.** A dark paper look: under a dark theme (read off the theme's
