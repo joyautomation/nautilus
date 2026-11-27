@@ -74,6 +74,27 @@ func (c Config) reaskEvery() time.Duration { return c.Lease / 8 }
 // promise alive for a lease from there (expire backs off from the last).
 func (c Config) reaskFor() time.Duration { return c.Lease * 3 / 4 }
 
+// WriteBudget is how long a voter's state write may take, from the ask
+// that needs it to the state on disk, for a campaign to win on it (#1436):
+// the end of the wait of the last ask a campaign sends (reask). A grant
+// leaves a voter only after its write, and a campaign is asked again
+// every reaskEvery up to reaskFor after its first send, each ask waiting
+// reaskEvery for its answer: a write that lands after the last wait has
+// ended is answered to nobody, and the campaign is lost. Writes slower
+// than this can leave a pair with no leader (it fails safe: never two).
+// The operator's warnings and the start-up probe judge by it, so a change
+// to the re-ask window moves them with it.
+func (c Config) WriteBudget() time.Duration {
+	every, window := c.reaskEvery(), c.reaskFor()
+	if every <= 0 {
+		return window
+	}
+	// The last ask goes at the last multiple of every before the window
+	// ends; its wait ends one every later.
+	last := (window - 1) / every * every
+	return last + every
+}
+
 // round is one request sent to every voter: a campaign or a renewal.
 type round struct {
 	id   uint64
@@ -246,7 +267,53 @@ type Candidate struct {
 	// (fencedHold).
 	fencedBy    map[NodeID]bool
 	witnessWord bool
+
+	// words: each voter's latest word on this boot's campaigns (Word),
+	// for the operator: why no leader (#1436). Never read by the vote.
+	words map[NodeID]Word
 }
+
+// Word is a voter's latest answer to one of this boot's campaigns, as the
+// candidate took it (Candidate.Word): a note for the operator, never part
+// of the vote (#1436).
+type Word struct {
+	At   Instant
+	Term uint64
+	// Granted: the voter granted the term asked. Counted: the candidate
+	// counted the answer (a grant toward a lease, a refusal as a refusal);
+	// when not, Why says why it did not.
+	Granted, Counted bool
+	Why              string
+	// Promised is the term the voter said it promised.
+	Promised uint64
+}
+
+// Word is the latest answer voter v gave one of this boot's campaigns,
+// and whether there is one.
+func (c *Candidate) Word(v NodeID) (Word, bool) {
+	w, ok := c.words[v]
+	return w, ok
+}
+
+// noteWord keeps r as its voter's latest campaign answer. A probe's or a
+// renewal's reply says nothing about a campaign.
+func (c *Candidate) noteWord(now Instant, r Reply, counted bool, why string) {
+	if r.Term == 0 || c.leading {
+		return
+	}
+	if c.words == nil {
+		c.words = map[NodeID]Word{}
+	}
+	c.words[r.From] = Word{At: now, Term: r.Term, Granted: r.Granted, Counted: counted, Why: why, Promised: r.Promised}
+}
+
+// HoldUntil is the end of its own voter's restart wait: no campaign
+// before it (NewAdoption).
+func (c *Candidate) HoldUntil() Instant { return c.holdUntil }
+
+// FencedHold reports whether this candidate holds because a voter said
+// its state is fenced (fencedHold).
+func (c *Candidate) FencedHold() bool { return c.fencedHold() }
 
 // fencedHold: this boot campaigns no more, as a state from before an
 // operator replaced its name (#1029 3c-3c-1b): the witness's latest word
@@ -838,6 +905,9 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	case r.From == c.cfg.Witness && mut("any_incarnation"):
 	case mut("any_sender") && r.From != c.cfg.Witness:
 	default:
+		if r.From == c.cfg.Witness && (r.To == c.cfg.Self && r.Nonce == c.cfg.Nonce) {
+			c.noteWord(now, r, false, fmt.Sprintf("it answered as witness incarnation %d, and this controller counts %d", r.Incarnation, c.countInc))
+		}
 		return // not one of our voters, or a witness incarnation we don't count
 	}
 	if (r.To != c.cfg.Self && !mut("no_grantee_check")) || (r.Nonce != c.cfg.Nonce && !mut("no_nonce_check")) {
@@ -847,6 +917,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		// The voter's state is from before an operator replaced its name
 		// (recommission --from-spare): its word counts for nothing here,
 		// grant, refusal or promised term (#1029 3c-3c-1b).
+		c.noteWord(now, r, false, "its state is fenced: from before an operator replaced it")
 		return
 	}
 	discounted := false
@@ -857,6 +928,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		// Two processes cast this voter's vote: it backs no lease, this
 		// controller's own included (#1029 step 1). It is still a grant,
 		// not a term conflict: it never re-terms a leader.
+		c.noteWord(now, r, false, "two processes cast its vote")
 		r.Granted = false
 		discounted = !mut("discount_reterms")
 	}
@@ -870,12 +942,22 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		}
 	}
 	if rd == nil {
+		if r.Granted {
+			c.noteWord(now, r, false, "its grant came after the campaign was given up")
+		}
 		return // not ours, or long gone: a replay, or late
 	}
 	if !mut("retired_reply_unmatched") && c.noteRetired(now, &r) {
 		discounted = true
 	}
 	rd.replies[r.From] = true
+	if rd.campaign && !discounted {
+		why := ""
+		if quiet {
+			why = "the witness is in its quiet period after an adoption"
+		}
+		c.noteWord(now, r, !quiet, why)
+	}
 	if rd.campaign && (!discounted || mut("discounted_vouches")) {
 		// A discounted voter's word (two processes cast it) never vouches
 		// for a hot takeover either.

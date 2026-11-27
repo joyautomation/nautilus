@@ -82,6 +82,13 @@ type witnessPair struct {
 	markSeen uint64            // the voter's MarkCount last reported
 	dupAt    time.Time         // when it was last reported
 	log      *slog.Logger
+	// lease is the lease the pair's latest vote stated (0 before one):
+	// its writes are judged by it, not by --lease (#1436). writes: the
+	// pair's write times and their warnings.
+	lease  time.Duration
+	own    time.Duration // --lease
+	writes writeNote
+	now    func() quorum.Instant
 }
 
 // stateSuffix names a cluster's state file in the witness's directory;
@@ -359,11 +366,11 @@ func (w *Witness) pair(name, members string) (*witnessPair, error) {
 		}
 	}
 	p := &witnessPair{name: name, members: members, waiters: map[waitKey]chan quorum.Reply{},
-		refused: map[string]string{}, log: w.log.With("cluster", name, "members", members)}
+		refused: map[string]string{}, log: w.log.With("cluster", name, "members", members), now: w.now, own: w.o.Lease}
 	v, first := quorum.NewWitness(w.o.Self, w.o.Lease, st, w.now(), w.o.draw)
 	v.SetBoot(w.o.draw()) // #1113 review: a hold ends only on this boot's word
 	p.v = v
-	p.w = newWriter(file.Save, p.persisted)
+	p.w = newWriter(file.Save, p.persisted, w.now)
 	w.wg.Add(1)
 	go func() { defer w.wg.Done(); p.w.run(w.ctx) }()
 	if first != nil {
@@ -383,12 +390,40 @@ func (p *witnessPair) controllers() []quorum.NodeID {
 	return out
 }
 
-func (p *witnessPair) persisted(seq uint64, err error) {
+func (p *witnessPair) persisted(seq uint64, err error, took time.Duration) {
 	p.mu.Lock()
+	var missed, hit map[quorum.NodeID]bool
 	for _, r := range p.v.Persisted(seq, err == nil || mut("witness_write_ignored")) {
 		if ch, ok := p.waiters[keyFor(r)]; ok {
 			delete(p.waiters, keyFor(r))
 			ch <- r
+			if hit == nil {
+				hit = map[quorum.NodeID]bool{}
+			}
+			hit[r.To] = true
+		} else if r.Granted {
+			if missed == nil {
+				missed = map[quorum.NodeID]bool{}
+			}
+			missed[r.To] = true
+		}
+	}
+	// Judged by the pair's own lease: --lease is only the longest any
+	// pair may have.
+	lease := p.lease
+	if mut("witness_write_by_own_lease") {
+		lease = p.own
+	}
+	if lease > 0 {
+		now := p.now()
+		if warn, n, worst := p.writes.took(now, took, lease); warn {
+			p.log.Warn(slowWriteMsg("witness", n, worst, lease))
+		}
+		for range lateGrants(missed, hit) {
+			if warn, n := p.writes.lateGrant(now); warn {
+				p.log.Warn(fmt.Sprintf("witness: granted %d vote(s) of this pair only after the asker had stopped waiting: the state write (%v) outlasted the vote's wait, "+
+					"so that campaign is lost", n, took.Round(time.Millisecond)), "lease", lease)
+			}
 		}
 	}
 	switch {
@@ -470,6 +505,9 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		p.mu.Unlock()
 		refuse(rw, "lease", msg)
 		return
+	}
+	if stated > 0 {
+		p.lease = stated
 	}
 	if st := p.v.State(); termJump(req.Term, st.Promised, st.Floor) && !mut("no_term_cap") {
 		p.mu.Unlock()

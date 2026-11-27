@@ -150,6 +150,10 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 	}
 	defer w.Close()
 	wit.Store(w)
+	// How fast the state disk writes: --lease is the longest pair lease
+	// served, and a pair whose lease is under min-lease can't elect on
+	// writes this slow. After NewWitness, which makes the directory. A report only, never a refusal (#1436).
+	node.ProbeAndLog(slog.Default(), "witness", stateDir, *lease, testStateWrite)
 	// Each pair's operator-intent log beside its votes (#710 PR 3b-4b).
 	logs := newWitnessLogs(w, *state, token, *lease, slog.Default())
 	defer logs.Close()

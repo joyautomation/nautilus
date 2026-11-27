@@ -119,6 +119,17 @@ var mutations = []string{
 	"lease_mismatch_never_clears",    // node: a lease refusal stays raised after the voter takes the lease again (#710 1 s lease)
 	"lease_clear_on_wait",            // node: a voter's restart wait, which still takes a lease it refuses after, clears a lease refusal (#710 1 s lease review)
 	"lease_refusal_one_way",          // node: a refusal given and one received share one report, so a pair whose leases differ flaps (#710 1 s lease)
+	"write_timed_from_take",          // node: a voter state write is timed from when the writer takes it, not from the oldest ask: its queue behind a write in flight goes unseen (#1436)
+	"slow_write_at_budget",           // node: a slow voter state write is warned of only past the whole write budget, when the pair may already be unable to elect (#1436)
+	"slow_write_unlimited",           // node: every slow voter state write is warned of, unlimited (#1436)
+	"late_grant_any_miss",            // node: a grant a write released to no waiter counts as late though a re-ask of the same campaign was answered by it (#1436)
+	"leaderless_from_boot",           // node: the no-leader report counts from the start, not from the end of the restart wait (#1436)
+	"leaderless_never_quiet",         // node: the no-leader error is logged where a report of its own already covers it (an uncommissioned controller) (#1436)
+	"cause_cut_as_slow",              // node: the no-leader cause says a voter that does not answer at all has not confirmed its write, blaming its disk for a cut link (#1436)
+	"own_disk_blamed_always",         // node: the no-leader cause blames this controller's own slow disk though its grant would make no majority (#1436)
+	"driver_drops_unseen",            // node: a campaign reply the driver drops (an unadopted witness incarnation, a fenced state) leaves the no-leader cause saying the voter is silent (#1436)
+	"probe_error_as_info",            // node: the start-up write probe logs a disk too slow for the lease as info, not an error (#1436)
+	"witness_write_by_own_lease",     // node: the witness judges a pair's write times by its own --lease, not the pair's (#1436)
 }
 
 // guessPeerAPI is what a standby named before the hello announced the

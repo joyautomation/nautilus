@@ -115,20 +115,5 @@ func (e *Elector) MayLead() string {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	now := e.now()
-	switch {
-	case e.released:
-		return "this controller released the lead"
-	case e.handingBack(now):
-		return "this controller is handing the lead back itself"
-	case e.boxPending || e.v.State().Incarnation == 0:
-		return "this controller is not commissioned"
-	case !e.mayCampaign(now):
-		return "this controller's configuration differs from its peer's"
-	case e.c.Marked():
-		return "this controller's name is marked duplicated"
-	case hasLog && e.logDefers(now, ls, hasLog) != deferNo && (e.holdSince.IsZero() || time.Since(e.holdSince) < 2*e.o.Lease):
-		return "this controller's operator log defers its campaign"
-	}
-	return ""
+	return e.mayLeadLocked(e.now(), true, ls, hasLog)
 }
