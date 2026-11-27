@@ -180,7 +180,15 @@ func TestForExitValue(t *testing.T) {
 	w("i, x : INT;", "FOR i := 1 TO 10 DO x := i; END_FOR;", "\tEND_FOR;\n\t#i := 11;\n")
 	w("i, x : INT;", "FOR i := 10 TO 1 BY -3 DO x := i; END_FOR;", "\tEND_FOR;\n\t#i := -2;\n")
 	w("i, x : INT;", "FOR i := 1 TO 10 BY 4 DO x := i; END_FOR;", "\tEND_FOR;\n\t#i := 13;\n")
-	w("i, x : INT;", "FOR i := 5 TO 1 DO x := i; END_FOR;", "\tEND_FOR;\n\t#i := 5;\n")
+	// A constant FOR that never runs: TIA refuses to compile it ("The high
+	// limit is not higher than the low limit", bench 11-27), so the counter
+	// loop writes it, and the variable takes start.
+	for _, body := range []string{"FOR i := 5 TO 1 DO x := i; END_FOR;", "FOR i := 1 TO 5 BY -1 DO x := i; END_FOR;"} {
+		scl := w("i, x : INT;", body, "\tEND_WHILE;\n\t#i := LINT_TO_INT((((#naut_for_c1) + LINT#32768)")
+		if strings.Contains(scl, "FOR #") {
+			t.Errorf("%s: a constant FOR that never runs is no TIA FOR:\n%s", body, scl)
+		}
+	}
 	// Counter loop: the counter steps every pass and the variable takes it,
 	// wrapped (to INT's last value: the exit value is -32768).
 	w("i, x : INT;", "FOR i := 0 TO 32767 DO x := i; END_FOR;",

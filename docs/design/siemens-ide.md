@@ -352,7 +352,9 @@ The rules:
   only those and another task's byte of the same word survives (bench:
   two tasks, 80 bracketed samples).
 - **FOR** is TIA's own FOR only where it provably ends on the CPU
-  (constant start, end and step, end + step inside the variable's type),
+  (constant start, end and step that run at least one pass, end + step
+  inside the variable's type; TIA refuses to compile a constant FOR that
+  never runs, bench 11-27),
   run over a temp of the variable's type (`naut_for_v`) whose value the
   variable takes first thing in the body, so body writes do not steer it;
   after the loop the variable takes the exit value, a constant there. Any

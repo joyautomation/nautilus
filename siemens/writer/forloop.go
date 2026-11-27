@@ -45,9 +45,9 @@ import (
 // refused.
 
 // forPlain reports whether TIA's own FOR, run over a temp of the
-// variable's type (forPlainLoop), surely ends and runs exactly as nautilus
-// does: a constant non-zero step, and a constant start and end that keep
-// the temp, stepped past the end, inside the type.
+// variable's type, surely ends and runs exactly as nautilus does: a
+// constant non-zero step, and a constant start and end that run at least
+// one pass and keep the temp, stepped past the end, inside the type.
 func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 	t := pw.typ(&st.IdentExpr{Name: s.Variable})
 	if !isInt(t) {
@@ -69,6 +69,12 @@ func (pw *progWriter) forPlain(s *st.ForStmt) bool {
 	}
 	end, ok := pw.fold(s.End)
 	if !ok || addOverflows(end, step) {
+		return false
+	}
+	// TIA refuses to compile a constant FOR that never runs ("The high
+	// limit is not higher than the low limit", bench 11-27): the counter
+	// loop writes it.
+	if (step > 0 && start > end) || (step < 0 && start < end) {
 		return false
 	}
 	return inRange(end, t) && inRange(end+step, t)
@@ -314,18 +320,15 @@ func exitsLoop(body []st.Statement) bool {
 	return false
 }
 
-// forPlainExit is the exit value of a loop forPlain writes: start when no
-// pass runs, else the last pass's value plus the step (inside the type,
-// forPlain saw to it).
+// forPlainExit is the exit value of a loop forPlain writes: the last
+// pass's value plus the step (at least one pass runs, and the value is
+// inside the type: forPlain saw to both).
 func (pw *progWriter) forPlainExit(s *st.ForStmt) int64 {
 	start, _ := pw.fold(s.Start)
 	end, _ := pw.fold(s.End)
 	step := int64(1)
 	if s.Step != nil {
 		step, _ = pw.fold(s.Step)
-	}
-	if (step > 0 && start > end) || (step < 0 && start < end) {
-		return start
 	}
 	return start + ((end-start)/step+1)*step
 }
