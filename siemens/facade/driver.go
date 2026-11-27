@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ var types = map[string]string{
 	"usint": "USINT", "uint": "UINT", "udint": "UDINT", "ulint": "ULINT",
 	"byte": "BYTE", "word": "WORD", "dword": "DWORD", "lword": "LWORD",
 	"real": "REAL", "lreal": "LREAL",
+	"time": "TIME",
 }
 
 // maxDepth bounds the browse into structs and instances.
@@ -33,21 +35,30 @@ const maxDepth = 4
 // skipped with why. A root that does not exist is an error: it names the
 // tags DB or a program the project says is there.
 func Discover(ctx context.Context, c *webapi.Client, roots []Root) ([]Binding, []string, error) {
+	bs, skipped, _, err := discover(ctx, c, roots)
+	return bs, skipped, err
+}
+
+// discover is Discover, also counting the members whose browse failed: a
+// re-discovery that could not browse all of the CPU (one in the middle of
+// a download) is not a layout to adopt.
+func discover(ctx context.Context, c *webapi.Client, roots []Root) ([]Binding, []string, int, error) {
 	var bs []Binding
 	var skipped []string
+	failed := 0
 	for _, r := range roots {
 		sym, err := webapi.Symbol(r.DB)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
-		if err := walk(ctx, c, sym, r.Prefix, 0, &bs, &skipped); err != nil {
-			return nil, nil, fmt.Errorf("browse %s: %w", sym, err)
+		if err := walk(ctx, c, sym, r.Prefix, 0, &bs, &skipped, &failed); err != nil {
+			return nil, nil, 0, fmt.Errorf("browse %s: %w", sym, err)
 		}
 	}
-	return bs, skipped, nil
+	return bs, skipped, failed, nil
 }
 
-func walk(ctx context.Context, c *webapi.Client, sym, name string, depth int, bs *[]Binding, skipped *[]string) error {
+func walk(ctx context.Context, c *webapi.Client, sym, name string, depth int, bs *[]Binding, skipped *[]string, failed *int) error {
 	vs, err := c.Browse(ctx, sym, false)
 	if err != nil {
 		return err
@@ -63,7 +74,8 @@ func walk(ctx context.Context, c *webapi.Client, sym, name string, depth int, bs
 				*skipped = append(*skipped, cname+": nested deeper than the facade browses")
 				continue
 			}
-			if err := walk(ctx, c, child, cname, depth+1, bs, skipped); err != nil {
+			if err := walk(ctx, c, child, cname, depth+1, bs, skipped, failed); err != nil {
+				*failed++
 				*skipped = append(*skipped, fmt.Sprintf("%s: %v", cname, err))
 			}
 			continue
@@ -77,7 +89,7 @@ func walk(ctx context.Context, c *webapi.Client, sym, name string, depth int, bs
 			*skipped = append(*skipped, fmt.Sprintf("%s: type %s is not bound yet", cname, v.Datatype))
 			continue
 		}
-		*bs = append(*bs, Binding{Name: cname, Symbol: child, Type: t})
+		*bs = append(*bs, Binding{Name: cname, Symbol: child, Type: t, Parent: sym, Member: v.Name})
 	}
 	return nil
 }
@@ -104,6 +116,8 @@ func decode(t string, raw json.RawMessage) (any, error) {
 		var f float64
 		err := json.Unmarshal(raw, &f)
 		return f, err
+	case t == "TIME":
+		return decodeTime(raw)
 	default: // integers and bit strings
 		var n json.Number
 		if err := json.Unmarshal(raw, &n); err != nil {
@@ -115,6 +129,82 @@ func decode(t string, raw json.RawMessage) (any, error) {
 		}
 		return i, nil
 	}
+}
+
+// decodeTime reads a TIME as the milliseconds naut run shows it as (a
+// TON's PT of T#2s is 2000). The Web API's JSON for TIME is not measured
+// on a CPU yet: a number is taken as milliseconds, and an IEC literal
+// (T#2s, T#1m_30s_5ms) is read as one.
+func decodeTime(raw json.RawMessage) (any, error) {
+	var n json.Number
+	if err := json.Unmarshal(raw, &n); err == nil {
+		if i, err := n.Int64(); err == nil {
+			return i, nil
+		}
+		if f, err := n.Float64(); err == nil && f == math.Trunc(f) {
+			return int64(f), nil
+		}
+		return nil, fmt.Errorf("TIME value %s is not a whole number of milliseconds", raw)
+	}
+	var str string
+	if err := json.Unmarshal(raw, &str); err != nil {
+		return nil, fmt.Errorf("TIME value %s is neither milliseconds nor a TIME literal", raw)
+	}
+	ms, ok := timeLiteralMs(str)
+	if !ok {
+		return nil, fmt.Errorf("TIME value %q is neither milliseconds nor a TIME literal", str)
+	}
+	return ms, nil
+}
+
+// timeLiteralMs reads T#[-]1d2h3m4s5ms (any case, "_" ignored, TIME# too)
+// as milliseconds.
+func timeLiteralMs(s string) (int64, bool) {
+	u := strings.ToLower(strings.ReplaceAll(s, "_", ""))
+	switch {
+	case strings.HasPrefix(u, "time#"):
+		u = u[5:]
+	case strings.HasPrefix(u, "t#"):
+		u = u[2:]
+	default:
+		return 0, false
+	}
+	neg := strings.HasPrefix(u, "-")
+	u = strings.TrimPrefix(u, "-")
+	if u == "" {
+		return 0, false
+	}
+	unit := map[string]int64{"d": 86400000, "h": 3600000, "m": 60000, "s": 1000, "ms": 1}
+	var total int64
+	for u != "" {
+		i := 0
+		for i < len(u) && u[i] >= '0' && u[i] <= '9' {
+			i++
+		}
+		if i == 0 {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(u[:i], 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		u = u[i:]
+		name := ""
+		switch {
+		case strings.HasPrefix(u, "ms"):
+			name = "ms"
+		case u != "" && strings.ContainsRune("dhms", rune(u[0])):
+			name = u[:1]
+		default:
+			return 0, false
+		}
+		u = u[len(name):]
+		total += n * unit[name]
+	}
+	if neg {
+		total = -total
+	}
+	return total, true
 }
 
 var intRange = map[string][2]float64{
@@ -134,6 +224,10 @@ func convertWrite(t string, v any) (any, error) {
 			return b, nil
 		}
 		return nil, errors.New("BOOL takes true or false")
+	case "TIME":
+		// The Web API's JSON for TIME is not pinned down on a CPU yet
+		// (#789): a write could land as a different duration.
+		return nil, errors.New("TIME is not written over the Web API yet: the encoding the CPU takes is not measured (#789)")
 	case "REAL", "LREAL":
 		f, ok := number(v)
 		if !ok {
@@ -200,6 +294,11 @@ type Driver struct {
 	// Defaults: one poll period (at least 1 s), and 30 s.
 	BackoffMin, BackoffMax time.Duration
 	now                    func() time.Time
+	// onGone, when set, is called when a read says a bound symbol no
+	// longer exists, or reads a value its bound type cannot hold (a
+	// download changed the program): the facade then browses the CPU
+	// again.
+	onGone func()
 
 	mu        sync.Mutex
 	values    nio.Values      // last good value per tag
@@ -281,12 +380,18 @@ func (d *Driver) PollOnce(ctx context.Context) {
 		if r.Err != nil {
 			d.failing[name] = true
 			d.lastErr = fmt.Sprintf("read %s: %v", d.bs[i].Symbol, r.Err)
+			if d.onGone != nil && webapi.Code(r.Err) == webapi.CodeAddressDoesNotExist {
+				d.onGone()
+			}
 			continue // the last value is held; Quality says it is Bad
 		}
 		v, err := decode(d.bs[i].Type, r.Value)
 		if err != nil {
 			d.failing[name] = true
 			d.lastErr = fmt.Sprintf("read %s: %v", d.bs[i].Symbol, err)
+			if d.onGone != nil { // retyped under us, most likely
+				d.onGone()
+			}
 			continue
 		}
 		delete(d.failing, name)

@@ -57,8 +57,18 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // start runs a facade over the fake CPU and serves its API.
 func start(t *testing.T) (*webapitest.Server, *Facade, string) {
 	t.Helper()
+	return startWith(t, Options{})
+}
+
+// startWith is start with options set beyond the client, roots and poll.
+func startWith(t *testing.T, o Options) (*webapitest.Server, *Facade, string) {
+	t.Helper()
 	s, c := cpu(t)
-	f, err := New(context.Background(), Options{Client: c, Host: "cpu", Roots: roots, Poll: 20 * time.Millisecond})
+	o.Client, o.Host, o.Poll = c, "cpu", 20*time.Millisecond
+	if o.Roots == nil {
+		o.Roots = roots
+	}
+	f, err := New(context.Background(), o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,12 +129,13 @@ func TestDiscoverNamesLikeTheWriter(t *testing.T) {
 		got[b.Name] = b.Symbol + " " + b.Type
 	}
 	want := map[string]string{
-		"Level":        `"Tags".Level REAL`,
-		"Run":          `"Tags".Run BOOL`,
-		"Speed":        `"Tags".Speed INT`,
-		"Total":        `"Tags".Total DINT`,
-		"Main.count":   `"Main_DB".count INT`,
-		"Main.dwell.Q": `"Main_DB".dwell.Q BOOL`,
+		"Level":         `"Tags".Level REAL`,
+		"Run":           `"Tags".Run BOOL`,
+		"Speed":         `"Tags".Speed INT`,
+		"Total":         `"Tags".Total DINT`,
+		"Main.count":    `"Main_DB".count INT`,
+		"Main.dwell.Q":  `"Main_DB".dwell.Q BOOL`,
+		"Main.dwell.ET": `"Main_DB".dwell.ET TIME`,
 	}
 	if len(got) != len(want) {
 		t.Errorf("bound %v, want %v", got, want)
@@ -134,7 +145,7 @@ func TestDiscoverNamesLikeTheWriter(t *testing.T) {
 			t.Errorf("%s: %q, want %q", k, got[k], v)
 		}
 	}
-	if len(skipped) != 1 || !strings.HasPrefix(skipped[0], "Main.dwell.ET: type time") {
+	if len(skipped) != 0 {
 		t.Errorf("skipped %v", skipped)
 	}
 }
@@ -232,7 +243,7 @@ func TestProgramEndpointsSayWhereTheProgramIs(t *testing.T) {
 	}
 	b, _ = io.ReadAll(res.Body)
 	res.Body.Close()
-	if res.StatusCode != http.StatusForbidden || !strings.Contains(string(b), "Siemens CPU") || !strings.Contains(string(b), "#789") {
+	if res.StatusCode != http.StatusForbidden || !strings.Contains(string(b), "Siemens CPU") || !strings.Contains(string(b), "naut siemens deploy") {
 		t.Fatalf("PUT /api/program: %d %s, want the facade's 403", res.StatusCode, b)
 	}
 }
@@ -318,10 +329,11 @@ func TestConvertWrite(t *testing.T) {
 }
 
 // TestQualityFollowsTheReads: a tag whose read fails keeps its last value
-// and is Bad; when the CPU cannot be reached every held value is Stale.
-// The quality is what the API says, not just the status message.
+// and is Bad (until a re-discovery re-binds without it, and again with it
+// once it is back); when the CPU cannot be reached every held value is
+// Stale. The quality is what the API says, not just the status message.
 func TestQualityFollowsTheReads(t *testing.T) {
-	s, _, base := start(t)
+	s, _, base := startWith(t, Options{Rediscover: 2 * time.Second, Settle: time.Second})
 	waitFor(t, "all good", func() bool {
 		tags, q := stateQ(t, base)
 		return tags["Main.count"] != nil && len(q) == 0
