@@ -1,0 +1,15 @@
+DATA_BLOCK "naut_Scan_main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      tags : Struct
+         Sh : DWORD;
+      END_STRUCT;
+      assigned : Struct
+         Sh : DWORD;
+      END_STRUCT;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

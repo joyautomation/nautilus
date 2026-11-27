@@ -551,7 +551,7 @@ func (pw *progWriter) fbCall(b *strings.Builder, c *st.CallExpr, l local, p *pou
 			}
 			parts = append(parts, sclName(pn.name)+" := "+v)
 		case pn.kind == "VAR_IN_OUT":
-			if pw.refusedTimerWrite(a.Value, line) {
+			if pw.refusedTimerWrite(a.Value, line) || pw.refusedPartWrite(a.Value, line) {
 				return
 			}
 			parts = append(parts, sclName(pn.name)+" := "+pw.expr(a.Value, 0))

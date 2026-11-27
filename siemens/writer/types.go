@@ -154,10 +154,10 @@ func (pw *progWriter) typ0(e st.Expression) string {
 			return strings.ToUpper(strings.TrimSpace(d.Datatype))
 		}
 	case *st.MemberExpr:
-		ot := pw.typ(e.Object)
-		if _, ok := bitIndex(e.Member); ok && intOrBits(ot) {
-			return "BOOL"
+		if obj, w, _, ok := partOf(e); ok && intOrBits(pw.typ(obj)) {
+			return partType(w)
 		}
+		ot := pw.typ(e.Object)
 		if ms, ok := instMembers[ot]; ok {
 			return ms[strings.ToUpper(e.Member)]
 		}

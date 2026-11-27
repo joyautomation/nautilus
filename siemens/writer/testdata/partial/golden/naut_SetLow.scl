@@ -1,0 +1,10 @@
+FUNCTION_BLOCK "naut_SetLow"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_IN_OUT 
+      b : BYTE;
+   END_VAR
+
+BEGIN
+	#b := #b OR BYTE#16#F;
+END_FUNCTION_BLOCK

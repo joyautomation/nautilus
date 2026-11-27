@@ -88,12 +88,8 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 	case *st.IdentExpr:
 		return pw.widen(pw.typ(e), pw.ident(e.Name, e.Pos.Line))
 	case *st.MemberExpr:
-		if n, ok := bitIndex(e.Member); ok {
-			return pw.bitAccess(e, n)
-		}
-		if strings.HasPrefix(e.Member, "%") {
-			pw.gap("siemens/partial", e.Pos.Line, gapOther, "the partial access ."+e.Member, "bit access (.3, .%X3) is written")
-			return ""
+		if _, _, _, ok := partOf(e); ok {
+			return pw.partAccess(e)
 		}
 		member := e.Member
 		ot := pw.typ(e.Object)

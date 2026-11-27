@@ -605,7 +605,7 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 				break
 			}
 		}
-		if pw.refusedTimerWrite(s.TargetExpr, s.Pos.Line) || pw.refusedTimerCopy(s) {
+		if pw.refusedTimerWrite(s.TargetExpr, s.Pos.Line) || pw.refusedTimerCopy(s) || pw.refusedPartWrite(s.TargetExpr, s.Pos.Line) {
 			break
 		}
 		target, tt := s.Target, ""

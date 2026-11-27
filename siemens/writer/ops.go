@@ -323,19 +323,3 @@ func bitIndex(member string) (int, bool) {
 	n, err := strconv.Atoi(m)
 	return n, err == nil && n >= 0 && m[0] != '+'
 }
-
-// bitAccess writes a bit of an integer or bit string, read or written,
-// as TIA's slice access .%Xn: bit 0 is the least significant, as in
-// nautilus (whose lowering already checked n against the width).
-func (pw *progWriter) bitAccess(e *st.MemberExpr, n int) string {
-	t := pw.typ(e.Object)
-	if !intOrBits(t) {
-		pw.gap("siemens/partial", e.Pos.Line, gapOther, "bit access on "+orUnknown(t), "")
-		return ""
-	}
-	wide := pw.wide
-	pw.wide = false
-	s := pw.expr(e.Object, unaryPrec+1)
-	pw.wide = wide
-	return s + ".%X" + strconv.Itoa(n)
-}

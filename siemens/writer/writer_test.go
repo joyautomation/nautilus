@@ -184,7 +184,7 @@ func TestRefusals(t *testing.T) {
 		{"mixed named and positional", "a : INT;", "a := LIMIT(0, IN := a, MX := 9);", "siemens/nautilus", 3},
 		{"shift of a literal", "w : WORD; n : INT;", "w := SHL(16#FF, n);", "siemens/function", 3},
 		{"bitwise of int and lword", "a : INT; w : LWORD;", "w := w AND a;", "siemens/int-width", 3},
-		{"byte access", "w : WORD; b : BYTE;", "b := w.%B0;", "siemens/partial", 3},
+		{"writing .%L0 of a LINT", "l : LINT; v : LWORD;", "l.%L0 := v;", "siemens/partial", 3},
 		{"bitwise in an FB input", "c : CTU; a, b : INT; q : BOOL;", "c(CU := q, PV := NOT a);", "siemens/int-width", 3},
 		{"array of instances", "a : ARRAY[1..3] OF TON;", "", "siemens/type", 2},
 		{"unknown function (nautilus refuses first)", "a : INT;", "a := FOO(a);", "siemens/nautilus", 3},
