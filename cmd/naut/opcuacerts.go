@@ -168,7 +168,7 @@ func opcuaTrustMain(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "trusted %s\n  %s\n  %s\nThe client can connect now; the server reads the trust list on every connection.\n", c.Thumbprint, printable(c.ApplicationURI), printable(c.Subject))
 		if m, err := project.ReadManifest(os.DirFS("."), *manifest); err == nil && m.Auth != nil {
-			fmt.Fprintf(stdout, "Under auth: it reads as anonymous (anonymous: none reads nothing) and does not write until mapped: naut opcua trust %s --as <name>:<role> lets it write (or its client signs in with a user name).\n", c.Thumbprint)
+			fmt.Fprintf(stdout, "Under auth: until it is mapped it gets anonymous access (auth.anonymous: nothing under anonymous: none) and cannot write: naut opcua trust %s --as <name>:<role> maps it (or its client signs in with a user name).\n", c.Thumbprint)
 		}
 		return 0
 	}
