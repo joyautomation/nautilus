@@ -109,15 +109,16 @@ claims:
       At start, retained values load before the first scan; an output
       with init: is written on the first scan, while a typed output
       without one is not written to its driver until something writes
-      it; without redundancy the first scan does not wait for a driver's
-      inputs to be live; under the Type=notify unit, systemd counts the
-      service started when its first scan has completed.
+      it; the first scan waits, up to 2 s, until each field driver has
+      read its devices or failed its first attempt; under the Type=notify
+      unit, systemd counts the service started when its first scan has
+      completed.
     source: "#from-power-on-to-the-first-good-scan"
     tests:
       - go ./runtime TestRetainedValueLoadsBeforeFirstScan
       - go ./runtime TestLoadRetainedBeforeRunKeepsAnEarlyWrite
       - go ./runtime TestTypedOutputZeroIsNotPushedUntilWritten
-      - go ./runtime TestNoCoordinatorDoesNotWaitForInputs
+      - go ./runtime TestNoCoordinatorFirstScanWaitsForInputs
       - go ./cmd/naut TestNautRunSystemdNotify
     partial: true
     note: >-
