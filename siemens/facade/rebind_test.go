@@ -322,3 +322,59 @@ func TestAReadTheBoundTypeCannotHoldAsksForARediscovery(t *testing.T) {
 	s.Put(`"Tags".Run`, &webapitest.Var{Datatype: "int", Value: 5})
 	waitFor(t, "Run re-bound as INT", func() bool { return state(t, base)["Run"] == float64(5) && f.Rebinds() == 1 })
 }
+
+// TestAWriteInFlightAndOneInTheSwapWindowBothFinish: write 1 is held at
+// the CPU (it holds the write lock shared) when a re-binding starts; the
+// swap waits for it, and write 2, which got past the Handler before the
+// swap began (called as its handler would call it), waits for the swap
+// and then goes to the CPU against the new set. stop() waits for the old
+// set's driver, runtime and server Run loops, never for HTTP handlers, so
+// nothing deadlocks.
+func TestAWriteInFlightAndOneInTheSwapWindowBothFinish(t *testing.T) {
+	s, f, base := startWith(t, Options{Rediscover: -1, Settle: 10 * time.Millisecond})
+	waitFor(t, "first values", func() bool { return state(t, base)["Main.count"] != nil })
+
+	held, release := s.HoldWrites()
+	defer release()
+	w1 := make(chan int, 1)
+	go func() { code, _ := post(t, base, "/api/tags", `{"name":"Level","value":40}`); w1 <- code }()
+	<-held // write 1 is at the CPU, holding the write lock shared
+
+	s.Put(`"Main_DB".extra`, &webapitest.Var{Datatype: "bool", Value: true}) // a download added a local
+	f.Kick()
+	waitFor(t, "the swap waiting on write 1", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.swapping })
+
+	w2 := make(chan error, 1)
+	go func() { w2 <- f.write("Speed", 7.0) }()
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-w2:
+		t.Fatalf("write 2 finished during the swap (%v): it should wait for it", err)
+	default:
+	}
+	if f.Rebinds() != 0 {
+		t.Fatal("the swap finished while write 1 was still in flight")
+	}
+
+	release()
+	select {
+	case code := <-w1:
+		if code/100 != 2 || s.Value(`"Tags".Level`) != 40.0 {
+			t.Fatalf("write 1: %d, CPU Level %v", code, s.Value(`"Tags".Level`))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("write 1 never finished: deadlock with the swap")
+	}
+	select {
+	case err := <-w2:
+		if err != nil || s.Value(`"Tags".Speed`) != 7.0 {
+			t.Fatalf("write 2: %v, CPU Speed %v", err, s.Value(`"Tags".Speed`))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("write 2 never finished: deadlock with the swap")
+	}
+	if f.Rebinds() != 1 {
+		t.Fatalf("rebinds = %d", f.Rebinds())
+	}
+	waitFor(t, "the new set serving", func() bool { return state(t, base)["Main.extra"] == true })
+}

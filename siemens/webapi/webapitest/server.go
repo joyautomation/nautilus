@@ -29,6 +29,7 @@
 package webapitest
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -114,6 +115,7 @@ type Server struct {
 	loginAttempts int
 	writeError    int // when set, every PlcProgram.Write answers this code
 	browseError   int // when set, every PlcProgram.Browse answers this code
+	holdWrite     *writeHold
 }
 
 type session struct {
@@ -198,6 +200,22 @@ func (s *Server) FailWrites(code int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.writeError = code
+}
+
+type writeHold struct {
+	held, release chan struct{}
+}
+
+// HoldWrites makes the next PlcProgram.Write wait, before the fake takes
+// its lock (so other requests go on), until release is called; held
+// closes once that write is waiting.
+func (s *Server) HoldWrites() (held <-chan struct{}, release func()) {
+	h := &writeHold{held: make(chan struct{}), release: make(chan struct{})}
+	s.mu.Lock()
+	s.holdWrite = h
+	s.mu.Unlock()
+	var once sync.Once
+	return h.held, func() { once.Do(func() { close(h.release) }) }
 }
 
 // FailBrowse makes every later PlcProgram.Browse answer the CPU error
@@ -305,17 +323,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Read before the lock, so a held write (HoldWrites) waits without
+	// holding up the fake's other requests.
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<24))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if bytes.Contains(body, []byte(`"PlcProgram.Write"`)) {
+		s.mu.Lock()
+		h := s.holdWrite
+		s.holdWrite = nil
+		s.mu.Unlock()
+		if h != nil {
+			close(h.held)
+			<-h.release
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.defaults()
 	s.Requests++
 	if s.FailAfter < 0 || s.FailAfter > 0 && s.Requests > s.FailAfter {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
-		return
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, int64(s.MaxBody)+1))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if len(body) > s.MaxBody {
