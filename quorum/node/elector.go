@@ -382,6 +382,17 @@ type Status struct {
 	// two processes behind the peer's name.
 	ConfigDiffers   bool
 	HelloDuplicates uint64
+	// StateWriteLast and StateWriteMax are how long this controller's
+	// voter state writes took, from the ask to on disk, its queue behind
+	// a write in flight included: the last and the slowest this boot.
+	// StateWriteBudget is what this lease needs them under
+	// (quorum.Config.WriteBudget, #1436). LateGrants counts the votes its
+	// voter granted only after the asker had stopped waiting.
+	StateWriteLast, StateWriteMax, StateWriteBudget time.Duration
+	LateGrants                                      uint64
+	// Leaderless: this controller has seen no leader for a while, and
+	// what it can name of why (#1436); nil otherwise.
+	Leaderless *Leaderless
 }
 
 // Elector is a controller's side of the vote: its voter, its candidate and
@@ -487,7 +498,7 @@ type Elector struct {
 	// unboundNext is the earliest quorum.Instant unboundWitnessReply may
 	// close the kept connections again (0: any time): once a lease.
 	unboundNext atomic.Int64
-	wake    chan struct{}
+	wake        chan struct{}
 	// helloNow asks the hello loop for a hello at once, from the fast
 	// start: the link to the peer came up, or the peer's votes carry a new
 	// boot nonce (it restarted). peerDown and peerVoteNonce, under mu, are
@@ -498,10 +509,26 @@ type Elector struct {
 
 	w       *writer
 	running atomic.Bool
-	ctx     context.Context // Run's: sends end with it
-	events  chan Event
-	decided chan struct{}
-	once    sync.Once
+
+	// The slow-write and no-leader reports (leaderless.go, #1436), under
+	// mu. writes: this controller's voter's write times. leaderAt: when a
+	// leader was last seen (the start before one is); ll: the standing
+	// no-leader report since llSince, nil while a leader is seen or not
+	// long gone; llLogged, llLogAt: its last log. drops: campaign replies
+	// the driver dropped before the candidate saw them; answers: when each
+	// voter last answered a call at all.
+	writes   writeNote
+	leaderAt quorum.Instant
+	ll       *Leaderless
+	llSince  quorum.Instant
+	llLogged bool
+	llLogAt  quorum.Instant
+	drops    map[quorum.NodeID]quorum.Word
+	answers  map[quorum.NodeID]quorum.Instant
+	ctx      context.Context // Run's: sends end with it
+	events   chan Event
+	decided  chan struct{}
+	once     sync.Once
 }
 
 // gateState is what the write gate is judged on, published after every
@@ -611,7 +638,7 @@ func New(o Options) (*Elector, error) {
 				return nil, err
 			}
 			e.free = free
-			e.w = newWriter(e.file.Save, e.persisted)
+			e.w = newWriter(e.file.Save, e.persisted, e.now)
 			e.publish(t)
 			return e, nil
 		}
@@ -645,7 +672,8 @@ func New(o Options) (*Elector, error) {
 		return nil, err
 	}
 	e.free = free
-	e.w = newWriter(e.file.Save, e.persisted)
+	e.w = newWriter(e.file.Save, e.persisted, e.now)
+	e.leaderAt = t
 	e.publish(t)
 	return e, nil
 }
@@ -973,6 +1001,7 @@ func (e *Elector) look() time.Duration {
 		probe.Promise = e.v.Relay(now)
 	}
 	e.after(now)
+	e.noteLeaderless(now, healthy, ls, hasLog)
 	next := e.c.NextLook().Sub(now)
 	e.mu.Unlock()
 
@@ -993,8 +1022,11 @@ func (e *Elector) look() time.Duration {
 }
 
 // route delivers replies the voter released: to its own candidate, or to
-// the waiting request of the peer. Under mu.
-func (e *Elector) route(now quorum.Instant, rs []quorum.Reply) {
+// the waiting request of the peer. Under mu. It returns the late grants:
+// how many askers had none of theirs answered, as they had stopped
+// waiting (lateGrants).
+func (e *Elector) route(now quorum.Instant, rs []quorum.Reply) int {
+	var missed, hit map[quorum.NodeID]bool
 	for _, r := range rs {
 		if r.To == e.o.Self {
 			e.noteMark(r)
@@ -1004,8 +1036,18 @@ func (e *Elector) route(now quorum.Instant, rs []quorum.Reply) {
 		if ch, ok := e.waiters[keyFor(r)]; ok {
 			delete(e.waiters, keyFor(r))
 			ch <- r
+			if hit == nil {
+				hit = map[quorum.NodeID]bool{}
+			}
+			hit[r.To] = true
+		} else if r.Granted {
+			if missed == nil {
+				missed = map[quorum.NodeID]bool{}
+			}
+			missed[r.To] = true
 		}
 	}
+	return lateGrants(missed, hit)
 }
 
 // after drains the handshake's events and publishes the gate. Under mu.
@@ -1115,13 +1157,22 @@ func (e *Elector) emit(ctx context.Context) {
 	}
 }
 
-// persisted is the writer's report of the write of seq.
-func (e *Elector) persisted(seq uint64, err error) {
+// persisted is the writer's report of the write of seq, which took took
+// from the oldest ask it served.
+func (e *Elector) persisted(seq uint64, err error, took time.Duration) {
 	var fix *quorum.Persist // a failed spare write's correction (#1144 review)
 	e.mu.Lock()
 	now := e.now()
 	replies, msgs := e.a.Persisted(now, seq, err == nil || mut("controller_write_ignored"))
-	e.route(now, replies)
+	late := e.route(now, replies)
+	if warn, n, worst := e.writes.took(now, took, e.o.Lease); warn {
+		e.log.Warn(slowWriteMsg("redundancy", n, worst, e.o.Lease), "file", e.o.StatePath)
+	}
+	for range late {
+		if warn, n := e.writes.lateGrant(now); warn {
+			e.log.Warn(lateGrantMsg("redundancy: this controller's voter", n, took, e.o.Lease), "file", e.o.StatePath, "lease", e.o.Lease)
+		}
+	}
 	switch {
 	case err != nil && e.writeErr == "":
 		e.writeErr = err.Error()
@@ -1164,11 +1215,19 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 	b, _ := r.MarshalBinary()
 	go func() {
 		body, hdr, cn, err := e.call.callCert(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
-		if to == e.o.Witness && e.call.tls && !witnessOpOK(cn, e.adopted.Load()) && !mut("witness_refusals_unbound") {
+		var se *statusError
+		unbound := to == e.o.Witness && e.call.tls && !witnessOpOK(cn, e.adopted.Load())
+		if (err == nil || (errors.As(err, &se) && se.code == http.StatusConflict)) && (!unbound || mut("answered_unbound")) {
+			// It is reachable and its voter runs, whatever it said: a
+			// campaign it leaves unanswered waits on its write (#1436).
+			// Not a witness under a certificate this controller does
+			// not count: that one may be another copy.
+			e.answered(to)
+		}
+		if unbound && !mut("witness_refusals_unbound") {
 			e.unboundWitnessReply(to, cn, body, err)
 			return
 		}
-		var se *statusError
 		if errors.As(err, &se) && se.code == http.StatusConflict {
 			switch se.reason {
 			case "lease":
@@ -1276,6 +1335,7 @@ func (e *Elector) unboundWitnessReply(to quorum.NodeID, cn string, body []byte, 
 func (e *Elector) unadoptedWitness(rep quorum.Reply) {
 	e.mu.Lock()
 	now := e.now()
+	e.noteDropLocked(e.o.Witness, rep, fmt.Sprintf("it answered as witness incarnation %d, which this controller has not adopted (it adopted %d)", rep.Incarnation, e.adopted.Load()))
 	e.a.OnWitness(now, rep)
 	e.after(now)
 	e.mu.Unlock()
@@ -1298,6 +1358,7 @@ func (e *Elector) witnessBound(to quorum.NodeID, cn string, rep quorum.Reply) bo
 	if ok && inc != 0 && inc == rep.Incarnation {
 		return true
 	}
+	e.noteDrop(to, rep, fmt.Sprintf("its reply's incarnation %d is not the one its certificate names (%s)", rep.Incarnation, nonEmptyCN(cn)))
 	if !mut("bound_reply_keeps_conn") {
 		e.call.client.CloseIdleConnections() // the next vote dials again: a pair's first vote rode witness@0
 	}
@@ -1312,6 +1373,7 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 	e.mu.Lock()
 	now := e.now()
 	if e.v.FencedReply(r) {
+		e.noteDropLocked(from, r, "its state is fenced: from before an operator replaced it")
 		e.mu.Unlock()
 		return // a fenced state's voter: nothing it says counts (#1029 3c-3c-1b)
 	}
@@ -2394,6 +2456,11 @@ func (e *Elector) Status() Status {
 		RecommissionNeeded: e.needOp && st.Incarnation == 0, ClientToken: e.token, Users: e.users, TLS: e.tls, Contacts: e.contacts,
 		StateWriteError: e.writeErr, Acquisitions: e.acquired, Duplicates: e.dupSeen,
 		ConfigDiffers: e.cfgDiffers, HelloDuplicates: e.helloDups, BoxChanged: e.boxChanged, BoxPending: e.boxPending,
+		StateWriteLast: e.writes.last, StateWriteMax: e.writes.max, StateWriteBudget: writeBudget(e.o.Lease), LateGrants: e.writes.late,
+	}
+	if e.ll != nil && !e.spare.Load() {
+		ll := *e.ll
+		s.Leaderless = &ll
 	}
 	g := e.gate.Load()
 	s.Leading = g.open && g.end.Sub(now) > e.Fence()

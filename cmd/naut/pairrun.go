@@ -315,6 +315,10 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		return nil, err
 	}
 	m.q, m.o = q, o
+	// How fast the state disk writes, against what this lease needs: a
+	// report only, never a refusal (#1436). After the election locked the
+	// state file: a second process of this controller stopped above.
+	node.ProbeAndLog(slog.Default(), "redundancy", filepath.Dir(o.StatePath), o.Lease, testStateWrite)
 	el.Store(q.Node())
 	if pt != nil {
 		q.SetPeerKeys(func() *leader.PeerKeys { return peerKeys(pt) })

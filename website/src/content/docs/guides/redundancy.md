@@ -619,6 +619,17 @@ ends.
   answers at once. So each voter's write, with any write waiting ahead
   of it, must finish within three quarters of a lease (750 ms at 1 s),
   or no controller wins a vote, after a failover or a switchover alike.
+  That fails safe (never two leaders; the outputs stay off), and the
+  logs say so. Each controller and the witness time every state write,
+  from the ask to on disk, and warn when one passes half that budget. At
+  start each times three writes of a probe file in its state directory
+  and logs an error when the disk is too slow for the lease (it starts
+  all the same). A voter that wrote a grant only after the controller
+  that asked had stopped waiting says so. A controller that has seen no
+  leader for four leases logs an error that names why, voter by voter:
+  it does not answer, it refused, its answer is not counted (and why),
+  or it answers but has not confirmed its write. A slow disk is named
+  only where it was measured.
 - **A controller that can send but not hear** (a one-way link fault):
   it keeps asking for a vote it never hears answered, for three quarters
   of a lease, and each ask holds the voters to it for a lease. So the
