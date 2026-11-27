@@ -2,6 +2,7 @@ package writer
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestArrayChecksInOrder(t *testing.T) {
 	order(`#inst.k := "naut_Tags".sel;`, "#naut_ix8 := #j;", "#inst.x := \"naut_Tags\".tbl[#naut_ix8];", "#inst();", "IF #inst.naut_fault.faulted THEN\n\t\t#naut_fault := #inst.naut_fault;", "#naut_ix9 := #i;", "#outs[#naut_ix9] := #inst.y;")
 	order("#o(k := #j);", "IF #o.naut_fault.faulted THEN", "#y := #o.y;")
 	// No check where the index is proved: a literal, a FOR variable.
-	order("FOR #i := 1 TO #N DO\n\t\t#a[#i] := #i;", "#a[2] := 7;", "#b[#naut_ix1, #naut_ix2] := #b[-2, 0];")
+	order("FOR #naut_for_v1 := 1 TO #N DO\n\t\t#i := #naut_for_v1;\n\t\t#a[#i] := #i;", "#a[2] := 7;", "#b[#naut_ix1, #naut_ix2] := #b[-2, 0];")
 	outer := fileOf(t, out, "naut_Outer.scl")
 	if !strings.Contains(outer, "#g(k := #k, x := 2.0);\n\tIF #g.naut_fault.faulted THEN\n\t\t#naut_fault := #g.naut_fault;\n\t\tRETURN;\n\tEND_IF;\n\t#y := #g.y;") {
 		t.Errorf("a nested FB's fault must end its caller before its output is stored:\n%s", outer)
@@ -133,7 +134,7 @@ func TestForVariableProvedOnlyWhenUnwritten(t *testing.T) {
 		if err != nil || len(diags) > 0 {
 			t.Fatal(name, err, diags)
 		}
-		if name == "negative start" && !strings.Contains(fileOf(t, out, "naut_P.scl"), "FOR #i := -2 TO 2 DO") {
+		if name == "negative start" && !strings.Contains(fileOf(t, out, "naut_P.scl"), "FOR #naut_for_v1 := -2 TO 2 DO") {
 			t.Errorf("a constant FOR bound is one literal:\n%s", fileOf(t, out, "naut_P.scl"))
 		}
 		if got := strings.Contains(fileOf(t, out, "naut_P.scl"), "naut_ix"); got != c.checked {
@@ -320,7 +321,7 @@ func TestArrayScopes(t *testing.T) {
 	if len(diags) > 0 {
 		t.Fatal(diags)
 	}
-	if g := fileOf(t, out, "naut_G.scl"); !strings.Contains(g, "#naut_ix1 := #i;") {
+	if g := fileOf(t, out, "naut_G.scl"); !regexp.MustCompile(`#naut_ix\d+ := #i;`).MatchString(g) {
 		t.Errorf("a FOR to a variable named like a constant must be checked:\n%s", g)
 	}
 	// A STRUCT member's bounds are the project's N, whatever P calls N.
@@ -342,7 +343,9 @@ func TestArrayScopes(t *testing.T) {
 	if len(diags) > 0 {
 		t.Fatal(diags)
 	}
-	wantLines(t, fileOf(t, out, "naut_P.scl"), "#naut_ix1 := #i;")
+	if p := fileOf(t, out, "naut_P.scl"); !regexp.MustCompile(`#naut_ix\d+ := #i;`).MatchString(p) {
+		t.Errorf("a FOR up to its variable type's last value must be checked:\n%s", p)
+	}
 	// A FUNCTION in the arguments of one that can fault writes a tag: it
 	// must not pass the read before it.
 	_, diags = write("PROGRAM P\nVAR_EXTERNAL tg : INT; END_VAR\nVAR a : ARRAY[0..3] OF INT; x : INT; END_VAR\nx := tg + F(k := Wr(), a := a);\nEND_PROGRAM\n",

@@ -121,10 +121,18 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 	case *st.BinaryExpr:
 		return pw.binary(e, parent)
 	case *st.CallExpr:
+		// A call's arguments are in their own width, except where SEL,
+		// MIN, MAX or LIMIT pass integer arithmetic through to a 64-bit
+		// caller: then they are computed at 64 bits too, and the caller
+		// wraps the result.
 		wide := pw.wide
-		pw.wide = false
+		through := wide && wideGeneric[strings.ToUpper(e.Name)] && pw.typ(e) == tWide
+		pw.wide = through
 		s := pw.call(e, false)
 		pw.wide = wide
+		if through {
+			return s
+		}
 		return pw.widen(pw.typ(e), s)
 	}
 	pw.gap("siemens/expression", lineAt(e), gapOther, fmt.Sprintf("the expression %T", e), "")
@@ -388,8 +396,20 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		// arithmetic, which strArg computes at 64 bits.
 		return pw.stringCall(c, name, argExprs)
 	}
+	// A conversion of integer arithmetic converts its 64-bit value, as
+	// nautilus does (lang/ir conversions.go: from LINT, an int-to-int
+	// conversion wraps).
+	if len(argExprs) == 1 && pw.typ(argExprs[0]) == tWide {
+		if out, ok := pw.wideConversion(name, argExprs[0], line); ok {
+			return out
+		}
+	}
+	// SEL, MIN, MAX and LIMIT return their 64-bit value unwrapped in
+	// nautilus; where the caller computes at 64 bits (a store, a
+	// comparison), the arguments do too, and the caller wraps.
+	wideOK := pw.wide && wideGeneric[name] && pw.intValueArgs(name, argExprs)
 	for _, a := range argExprs {
-		if pw.typ(a) == tWide {
+		if pw.typ(a) == tWide && !wideOK {
 			pw.wideRefused(line)
 			return ""
 		}
@@ -515,6 +535,60 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 	}
 	pw.gap("siemens/function", line, functionGap(name), name, "")
 	return ""
+}
+
+// wideGeneric are the functions whose integer arithmetic argument a
+// 64-bit caller may pass through.
+var wideGeneric = map[string]bool{"SEL": true, "MIN": true, "MAX": true, "LIMIT": true}
+
+// intValueArgs reports whether every value argument of the call (SEL's
+// selector aside) is an integer or integer arithmetic.
+func (pw *progWriter) intValueArgs(name string, args []st.Expression) bool {
+	if name == "SEL" && len(args) == 3 {
+		args = args[1:]
+	}
+	for _, a := range args {
+		if t := pw.typ(a); t != tWide && (!isInt(t) || t == "ULINT") && t != tAnyInt {
+			return false // ULINT: refused at 64 bits everywhere else too
+		}
+	}
+	return len(args) > 0
+}
+
+// wideConversion writes a conversion of integer arithmetic: nautilus
+// converts its 64-bit value (a LINT). To an integer or bit string it wraps
+// exactly as a store does; A_TO_B wraps to A first, then converts A to B;
+// to anything else it is LINT_TO_<type>. ok is false for a name that is
+// not a conversion the writer knows.
+func (pw *progWriter) wideConversion(name string, arg st.Expression, line int) (string, bool) {
+	if to, ok := strings.CutPrefix(name, "TO_"); ok && pw.w.enumOf(to) == nil {
+		if isInt(to) || isBits(to) {
+			return pw.store(arg, to, line), true
+		}
+		if !elementary[to] {
+			return "", false
+		}
+		if to == "BOOL" { // nautilus: the 64-bit value is not zero
+			wide := pw.wide
+			pw.wide = true
+			v := pw.expr(arg, 0)
+			pw.wide = wide
+			return "(" + v + ") <> 0", true
+		}
+		if to == "TIME" || to == "LTIME" || strings.HasPrefix(to, "DATE") || to == "TOD" || to == "DT" || strings.HasPrefix(to, "TIME_OF") {
+			pw.gap("siemens/time", line, gapTime, name+" of integer arithmetic", "nautilus's TIME is 64-bit milliseconds, TIA's 32-bit")
+			return "", true
+		}
+		wide := pw.wide
+		pw.wide = true
+		v := pw.expr(arg, 0)
+		pw.wide = wide
+		return pw.conversion("LINT_TO_"+to, "LINT", to, arg, []string{v}, line), true
+	}
+	if from, to, ok := strings.Cut(name, "_TO_"); ok && from != "" && (isInt(from) || isBits(from)) {
+		return pw.conversion(name, from, to, arg, []string{pw.store(arg, from, line)}, line), true
+	}
+	return "", false
 }
 
 // conversion writes the explicit conversion name, from one elementary
