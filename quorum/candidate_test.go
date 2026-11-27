@@ -1,6 +1,7 @@
 package quorum
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -148,9 +149,10 @@ func TestCandidateBackOffAfterLapse(t *testing.T) {
 
 // A campaign no majority even heard within a lease backs the candidate
 // off two leases from its last ask (#710): sent at 0 and asked again (same
-// term, a new id) at the looks of 0.5 s and 1 s (up to three quarters of a
-// lease, 1.5 s, from the first send); unheard at 2 s, silent until 5 s,
-// since a voter that took the 1 s ask promised it until 3 s.
+// term, a new id) at the looks of 0.5 s, 1 s and 1.5 s (up to seven
+// eighths of a lease, 1.75 s, from the first send); unheard at 2 s,
+// silent until 5.5 s, since a voter that took the 1.5 s ask promised it
+// until 3.5 s.
 func TestCandidateBackOffWhenUnheard(t *testing.T) {
 	c := newC(t, cfgA(), 0, 0)
 	r := c.Tick(0, "", 0, true)
@@ -168,14 +170,63 @@ func TestCandidateBackOffWhenUnheard(t *testing.T) {
 		}
 		asks = append(asks, at(now))
 	}
-	if len(asks) != 2 || asks[0] != at(500*ms) || asks[1] != at(time.Second) {
-		t.Fatalf("asked again at %v, want 0.5 s and 1 s (not from 1.5 s on)", asks)
+	if len(asks) != 3 || asks[0] != at(500*ms) || asks[1] != at(time.Second) || asks[2] != at(1500*ms) {
+		t.Fatalf("asked again at %v, want 0.5 s, 1 s and 1.5 s (not at 2 s)", asks)
 	}
-	if r := c.Tick(at(4999*ms), "A", 0, true); r != nil {
-		t.Fatalf("campaigned at 4.999 s inside the back-off from the last ask: %+v", r)
+	if r := c.Tick(at(5499*ms), "A", 0, true); r != nil {
+		t.Fatalf("campaigned at 5.499 s inside the back-off from the last ask: %+v", r)
 	}
-	if r := c.Tick(at(5*time.Second), "A", 0, true); r == nil || r.Term <= 1 {
-		t.Fatalf("at 5 s, once the back-off ended: %+v, want a new campaign", r)
+	if r := c.Tick(at(5500*ms), "A", 0, true); r == nil || r.Term <= 1 {
+		t.Fatalf("at 5.5 s, once the back-off ended: %+v, want a new campaign", r)
+	}
+}
+
+// A campaign is asked again every lease/8 until the last ask's wait ends
+// as the round does (#1436): at a 2 s lease, at 0.25 s up to 1.5 s, and
+// not at 1.75 s, whose wait (lease/8) would end after the round has
+// expired, a lease from the first send. A voter write that lands within
+// the last wait wins: the write budget is seven eighths of the lease (at
+// three quarters, a 1.6 s write could never win, though the round had
+// 0.4 s left). A grant of the 1.5 s ask, at 1.74 s, leads, its lease from
+// that ask's send.
+func TestCandidateReasksUntilTheLastWaitEndsWithTheRound(t *testing.T) {
+	cfg := cfgA()
+	if b := cfg.WriteBudget(); b != lease*7/8 {
+		t.Fatalf("write budget %v at a %v lease, want 7/8 of it, %v", b, lease, lease*7/8)
+	}
+	c := newC(t, cfg, 0, 0)
+	if c.Tick(0, "", 0, true) == nil {
+		t.Fatal("no campaign")
+	}
+	var asks []time.Duration
+	var last *Request
+	for now := Instant(0); now < at(1740*ms); {
+		now = max(now, c.NextLook())
+		if now >= at(1740*ms) {
+			break
+		}
+		if q := c.Tick(now, "", 0, true); q != nil {
+			asks = append(asks, time.Duration(now))
+			last = q
+		}
+		if c.NextLook() == now {
+			now++
+		}
+	}
+	want := []time.Duration{250 * ms, 500 * ms, 750 * ms, time.Second, 1250 * ms, 1500 * ms}
+	if !slices.Equal(asks, want) {
+		t.Fatalf("asked again at %v, want %v", asks, want)
+	}
+	if q := c.Tick(at(1750*ms), "", 0, true); q != nil {
+		t.Fatalf("asked again at 1.75 s, where no grant could answer it before the round ends: %+v", q)
+	}
+	c.OnReply(at(1740*ms), granted("A", last, 0))
+	c.OnReply(at(1740*ms), granted("W", last, 42))
+	if !c.Leading(at(1740 * ms)) {
+		t.Fatal("grants of the last ask, inside its wait, did not lead")
+	}
+	if end, want := c.LeaseEnd(), at(1500*ms).Add(time.Duration(float64(lease)*(1-cfg.Rho))); end != want {
+		t.Fatalf("lease ends at %v, want %v (a lease from the last ask's send)", time.Duration(end), time.Duration(want))
 	}
 }
 
@@ -183,7 +234,7 @@ func TestCandidateBackOffWhenUnheard(t *testing.T) {
 // NextLook at a look already past (#710): a driver arms its timer there,
 // and one in the past fires at once, again and again, so it would spin
 // until the round expires (the simulator hung on it). Whatever stops the
-// re-ask (the three quarters of a lease run out, the controller unhealthy,
+// re-ask (seven eighths of a lease run out, the controller unhealthy,
 // another leader's lease seen on its own voter), the looks move on.
 func TestCandidateNextLookNeverPastWhenAReaskIsDeclined(t *testing.T) {
 	for _, tc := range []struct {

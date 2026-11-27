@@ -489,7 +489,6 @@ var table = []mutation{
 	{"driver_drops_unseen", []string{"TestLeaderlessCause"}},
 	{"probe_error_as_info", []string{"TestProbeVerdict"}},
 	{"witness_write_by_own_lease", []string{"TestWitnessJudgesWritesByThePairLease"}},
-	{"rewrite_timed", []string{"TestWriteTimedFromItsOldestAsk"}},
 	{"words_stale_at_backoff", []string{"TestLeaderlessCause"}},
 	{"answered_unbound", []string{"TestLeaderlessCause"}},
 	{"lease_clear_on_wait", []string{"TestLoopbackWitnessRefusingTheLeaseIsRaisedAndCleared"}},
@@ -871,6 +870,10 @@ var table = []mutation{
 	{"leaderless_alarm_relay_gap_unseen", []string{"TestLeaderlessAlarmNotWhenThePeerLeadsOutOfReach"}},
 	{"leaderless_word_unbound", []string{"TestLeaderlessWordRidesTheHello"}},
 	{"pair_alarm_none", []string{"TestPairLeaderlessAlarmPagesOnce"}},
+
+	{"reask_window_3q", []string{"TestCandidateBackOffWhenUnheard", "TestCandidateReasksUntilTheLastWaitEndsWithTheRound", "TestTargetedDeafCandidateReasksAndStillLoses", "TestSlowWriteWarned"}},
+	{"write_dedup_off", []string{"TestWriterWritesASeqOnce"}},
+	{"write_dedup_failed_counts", []string{"TestWriterRetriesASeqItFailedToWrite", "TestWitnessReaskBehindAFailedWriteEndsOnDisk"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -1091,7 +1094,6 @@ var rowPkgs = map[string][]string{
 	"driver_drops_unseen":               {"./quorum/node"},
 	"probe_error_as_info":               {"./quorum/node"},
 	"witness_write_by_own_lease":        {"./quorum/node"},
-	"rewrite_timed":                     {"./quorum/node"},
 	"words_stale_at_backoff":            {"./quorum/node"},
 	"answered_unbound":                  {"./quorum/node"},
 	"witness_refusals_unbound":          {"./quorum/node"},
@@ -1308,6 +1310,10 @@ var rowPkgs = map[string][]string{
 	"leaderless_word_unbound":              {"./quorum/node"},
 	"leaderless_alarm_second_never_defers": {"./quorum/node", "./cmd/naut"},
 	"pair_alarm_none":                      {"./cmd/naut"},
+
+	"reask_window_3q":           {"./quorum/..."},
+	"write_dedup_off":           {"./quorum/node"},
+	"write_dedup_failed_counts": {"./quorum/node"},
 }
 
 // args are the go test arguments for m.

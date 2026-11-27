@@ -13,8 +13,16 @@ import (
 // each write, ok or failed, to done: the grants and Adopts the write holds
 // leave only from there. took is how long the oldest ask the write
 // served waited for it, its queue behind a write in flight included: what
-// a grant held behind it waited (#1436); below 0 for a write of a Seq
-// already on disk, which serves no ask.
+// a grant held behind it waited (#1436).
+//
+// A Seq already written successfully is not written again (#1436): a
+// campaign's re-ask, taken while the first ask's write was in flight,
+// asks the same Seq, and the first write's success released its grant
+// with the first's. Only a success counts: when the write in flight
+// fails, the re-ask queued behind it is the retry, and its grant leaves
+// on that write or is dropped with its failure (Voter.Persisted). A
+// writer serves one voter (Seqs are that voter's): the elector makes a
+// new one with each voter it builds before Run, and none after.
 type writer struct {
 	save func(quorum.VoterState) error
 	done func(seq uint64, err error, took time.Duration)
@@ -29,9 +37,9 @@ type writer struct {
 	// is.
 	busyAt quorum.Instant
 	busy   bool
-	// written is the highest Seq written successfully: a later write of
-	// it or below (a re-ask's, queued while the first was in flight)
-	// releases nothing new, and is not timed (took < 0).
+	// written is the highest Seq written successfully: an ask of it or
+	// below (a re-ask's, queued while the first was in flight) is not
+	// written again.
 	written uint64
 	kick    chan struct{}
 }
@@ -70,6 +78,9 @@ func (w *writer) run(ctx context.Context) {
 		w.mu.Lock()
 		p, at := w.want, w.wantAt
 		w.want = nil
+		if p != nil && p.Seq <= w.written && !mut("write_dedup_off") {
+			p = nil // on disk already: its grants left with that write
+		}
 		w.busy, w.busyAt = p != nil, at
 		w.mu.Unlock()
 		if p == nil {
@@ -83,17 +94,11 @@ func (w *writer) run(ctx context.Context) {
 			_ = w.save(p.State)
 			continue
 		}
-		w.mu.Lock()
-		again := p.Seq <= w.written && !mut("rewrite_timed")
-		w.mu.Unlock()
 		err := w.save(p.State)
 		took := w.now().Sub(at)
-		if again {
-			took = -1
-		}
 		w.mu.Lock()
 		w.busy = false
-		if err == nil && p.Seq > w.written {
+		if (err == nil || mut("write_dedup_failed_counts")) && p.Seq > w.written {
 			w.written = p.Seq
 		}
 		w.mu.Unlock()
