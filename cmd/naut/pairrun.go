@@ -132,6 +132,9 @@ type pairMember struct {
 	journal     atomic.Pointer[audit.Recorder]
 	// hold is the takeover hold (pairhold.go), nil without one.
 	hold *pairHold
+	// pairAlarms is the no-leader alarm's own engine (pairleaderless.go),
+	// nil until the alarms are built, and without an alarms: section.
+	pairAlarms atomic.Pointer[project.PairAlarms]
 	// failback is redundancy.failback (pairfailback.go, #710 d2), nil
 	// without one.
 	failback *pairFailback
@@ -308,6 +311,7 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	}
 	m := &pairMember{peers: r.Peers, box: boxFn, getenv: d.getenv, restart: make(chan struct{}), peerTLS: pt, pins: pins, logTLS: logTLS}
 	o.OnEvent = m.onEvent // events start with the election's Run, after m.q is set
+	o.LeaderlessWord = m.leaderlessWord
 	// The election first: it locks the state file, so a second process of
 	// this controller stops here, before it binds anything.
 	q, err := leader.NewQuorum(o)

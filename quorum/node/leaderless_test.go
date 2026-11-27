@@ -66,13 +66,20 @@ const (
 	wayMarked                    // refuses everything, marking the asker a duplicate
 	wayRefuse                    // refuses every campaign: promised a higher term elsewhere
 	wayRefuseLow                 // refuses every campaign, its promise below the term (a restart wait)
+	wayPeerLeads                 // as a voter renewing the peer: refuses every campaign with its promise below the term, and relays its running promise to the peer on every reply
 )
 
 // fakeVoters answers a's vote calls for b and the witness.
 type fakeVoters struct {
 	mu  sync.Mutex
 	way map[string]voterWay // by host
-	cn  map[string]string   // the certificate each host answers under (peer TLS), by host
+	// peer is the name the peer's host answers as ("" is b).
+	peer quorum.NodeID
+	// hello, when set, answers the peer's /hello.
+	hello http.Handler
+	// relayLeft is what a wayPeerLeads voter says its promise has left.
+	relayLeft time.Duration
+	cn        map[string]string // the certificate each host answers under (peer TLS), by host
 	// answered counts the requests other than campaigns each host
 	// answered (probes).
 	answered map[string]int
@@ -84,6 +91,13 @@ func (f *fakeVoters) probes(host string) int {
 	return f.answered[host]
 }
 
+func (f *fakeVoters) peerName() quorum.NodeID {
+	if f.peer != "" {
+		return f.peer
+	}
+	return "b"
+}
+
 func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 	f.mu.Lock()
 	way, cn := f.way[r.URL.Hostname()], f.cn[r.URL.Hostname()]
@@ -93,6 +107,14 @@ func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 		cs = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{{Subject: pkix.Name{CommonName: cn}}}}
 	}
 	from := quorum.NodeID("b")
+	if f.peer != "" {
+		from = f.peer
+	}
+	if f.hello != nil && strings.HasSuffix(r.URL.Path, "/hello") {
+		rec := httptest.NewRecorder()
+		f.hello.ServeHTTP(rec, r)
+		return rec.Result(), nil
+	}
 	if r.URL.Hostname() == "witness.test" {
 		from = WitnessID
 	}
@@ -133,6 +155,11 @@ func (f *fakeVoters) RoundTrip(r *http.Request) (*http.Response, error) {
 		rep.Promised = req.Term + 5
 	case wayRefuseLow:
 		rep.Promised = 0
+	case wayPeerLeads:
+		if req.Term > 0 {
+			rep.Promised = req.Term - 1
+		}
+		rep.Promise = quorum.Relay{To: f.peerName(), Nonce: 1, Left: f.relayLeft}
 	}
 	out, _ := rep.MarshalBinary()
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(out)), Header: http.Header{}, Request: r, TLS: cs}, nil
@@ -152,13 +179,23 @@ type lelector struct {
 // write as its state write (nil: the file's own).
 func newLelector(t *testing.T, peer, witness voterWay, commissioned bool, write func(*os.File, []byte) (int, error)) *lelector {
 	t.Helper()
-	o := testOptions(t, "a", "b")
+	return newLelectorAs(t, "a", "b", peer, witness, commissioned, write, nil)
+}
+
+// newLelectorAs is newLelector as self, with peer as its peer, and opt
+// (when set) changing its options before it is built.
+func newLelectorAs(t *testing.T, self, peerName quorum.NodeID, peer, witness voterWay, commissioned bool, write func(*os.File, []byte) (int, error), opt func(*Options)) *lelector {
+	t.Helper()
+	o := testOptions(t, self, peerName)
 	o.PeerAddr, o.WitnessAddr = "peer.test:1", "witness.test:1"
 	clk := newFakeClock()
 	logs := &logBuf{}
-	fv := &fakeVoters{way: map[string]voterWay{"peer.test": peer, "witness.test": witness}}
+	fv := &fakeVoters{way: map[string]voterWay{"peer.test": peer, "witness.test": witness}, peer: peerName}
 	o.clock, o.write, o.client = clk.now, write, &http.Client{Transport: fv}
 	o.Log = slog.New(slog.NewTextHandler(logs, nil))
+	if opt != nil {
+		opt(&o)
+	}
 	if commissioned {
 		if err := (&State{Path: o.StatePath}).Save(quorum.VoterState{Incarnation: 5, Gen: 1, Lease: o.Lease}); err != nil {
 			t.Fatal(err)

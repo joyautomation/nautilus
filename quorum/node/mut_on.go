@@ -133,6 +133,16 @@ var mutations = []string{
 	"rewrite_timed",                  // node: a write of a Seq already on disk (a re-ask's, queued behind the first) is timed, counting the first write's time twice (#1436, Fable)
 	"words_stale_at_backoff",         // node: a voter's campaign word goes stale after two leases, so the no-leader cause flips at the look that ends an unheard campaign's back-off (#1436, Fable)
 	"answered_unbound",               // node: a witness answer under a certificate this controller does not count proves the witness reachable, so the no-leader cause blames its write (#1436, Fable)
+
+	"leaderless_alarm_one_episode",         // node: the no-leader alarm keeps one episode across spells, so a page queued in one spell may leave in the next (#1436)
+	"leaderless_alarm_second_never_defers", // node: the second-named controller raises the no-leader alarm despite the first's fresh word that it pages it: paged twice (#1436)
+	"leaderless_alarm_stale_word",          // node: the second-named controller defers to the first's no-leader alarm word however old, and whether or not the first still answers: paged by nobody (#1436)
+	"leaderless_alarm_no_grace",            // node: the second-named controller raises the no-leader alarm at once, before the first's word can come: paged twice (#1436)
+	"leaderless_alarm_unlatched",           // node: a controller drops the no-leader alarm when the first's word comes back, so a flapping link pages again at each hand-off (#1436)
+	"leaderless_alarm_uncommissioned",      // node: an uncommissioned controller (a pair being set up) raises the no-leader alarm (#1436)
+	"leaderless_alarm_reach_any_relay",     // node: one witness reply naming a promise to the peer silences the no-leader alarm, so a duel across a cut link pages nobody (#1436, Fable)
+	"leaderless_alarm_relay_gap_unseen",    // node: the witness's promise to the peer counts as renewed across a gap with no reply, so a duel across a cut link pages nobody (#1436, Fable)
+	"leaderless_word_unbound",              // node: the no-leader alarm word in a hello answer is not bound by its MAC: anyone between the controllers can silence the second's page (#1436)
 }
 
 // guessPeerAPI is what a standby named before the hello announced the

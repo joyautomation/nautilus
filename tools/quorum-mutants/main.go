@@ -860,6 +860,17 @@ var table = []mutation{
 	{"peer_api_guessed", []string{"TestLoopbackNewPairCommissionsAndElects", "TestPairStandbyProxiesToTheLeadersOwnAPIPort"}},
 	{"peer_api_unbound", []string{"TestTheAnnouncedAPIIsBoundByTheMAC"}},
 	{"peer_api_self", []string{"TestThePeersAPIIsOnlyWhatItAnnounced"}},
+	// #1436: the no-leader alarm.
+	{"leaderless_alarm_one_episode", []string{"TestLeaderlessAlarmFirstRaises"}},
+	{"leaderless_alarm_second_never_defers", []string{"TestLeaderlessAlarmSecondPagesWithoutTheFirstsWord", "TestPairLeaderlessAlarmPagesOnce"}},
+	{"leaderless_alarm_stale_word", []string{"TestLeaderlessAlarmSecondPagesWithoutTheFirstsWord"}},
+	{"leaderless_alarm_no_grace", []string{"TestLeaderlessAlarmSecondPagesWithoutTheFirstsWord"}},
+	{"leaderless_alarm_unlatched", []string{"TestLeaderlessAlarmSecondPagesWithoutTheFirstsWord"}},
+	{"leaderless_alarm_uncommissioned", []string{"TestLeaderlessAlarmNotWhileUncommissioned"}},
+	{"leaderless_alarm_reach_any_relay", []string{"TestLeaderlessAlarmNotWhenThePeerLeadsOutOfReach"}},
+	{"leaderless_alarm_relay_gap_unseen", []string{"TestLeaderlessAlarmNotWhenThePeerLeadsOutOfReach"}},
+	{"leaderless_word_unbound", []string{"TestLeaderlessWordRidesTheHello"}},
+	{"pair_alarm_none", []string{"TestPairLeaderlessAlarmPagesOnce"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -1286,6 +1297,17 @@ var rowPkgs = map[string][]string{
 	"abort_twice_fails":                 {"./internal/fence"},
 	"resign_unchecked":                  {"./cmd/naut"},
 	"final_sent_once_per_connection":    {"./cmd/naut"},
+
+	"leaderless_alarm_one_episode":         {"./quorum/node"},
+	"leaderless_alarm_stale_word":          {"./quorum/node"},
+	"leaderless_alarm_no_grace":            {"./quorum/node"},
+	"leaderless_alarm_unlatched":           {"./quorum/node"},
+	"leaderless_alarm_uncommissioned":      {"./quorum/node"},
+	"leaderless_alarm_reach_any_relay":     {"./quorum/node"},
+	"leaderless_alarm_relay_gap_unseen":    {"./quorum/node"},
+	"leaderless_word_unbound":              {"./quorum/node"},
+	"leaderless_alarm_second_never_defers": {"./quorum/node", "./cmd/naut"},
+	"pair_alarm_none":                      {"./cmd/naut"},
 }
 
 // args are the go test arguments for m.

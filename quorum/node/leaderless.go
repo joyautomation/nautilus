@@ -12,8 +12,9 @@ import (
 // (#1436). A grant leaves a voter only after its write, so writes slower
 // than the lease's write budget (quorum.Config.WriteBudget) can leave a
 // pair with no leader: never two, the gates shut, but silent, and a pair
-// with no leader raises no alarm. These are the reports that make it
-// seen: each write's time, a grant released after its asker stopped
+// with no leader evaluates none of the manifest's alarms (it scans
+// nothing). These are the reports that make it seen, and the one alarm it
+// does raise (leaderlessalarm.go) is raised from them: each write's time, a grant released after its asker stopped
 // waiting, and a controller that has seen no leader for a while, with the
 // cause it can name.
 
@@ -49,6 +50,9 @@ type Leaderless struct {
 	// Cause is what this controller can name of why, one clause per
 	// voter that did not grant its campaigns.
 	Cause string
+	// Raises: this controller raises the no-leader alarm
+	// (nautilus.pair-leaderless) for it now (leaderlessalarm.go).
+	Raises bool
 }
 
 // writeBudget is how long a state write may take at this lease
@@ -181,6 +185,7 @@ func (e *Elector) noteLeaderless(now quorum.Instant, healthy bool, ls LogState, 
 			e.log.Info("redundancy: a leader is seen again", "after", now.Sub(e.llSince).Round(time.Millisecond))
 		}
 		e.ll, e.llLogged, e.leaderAt = nil, false, now
+		e.endRaise()
 		return
 	}
 	since := max(e.leaderAt, e.c.HoldUntil())
@@ -189,10 +194,13 @@ func (e *Elector) noteLeaderless(now quorum.Instant, healthy bool, ls LogState, 
 	}
 	if now < since || now.Sub(since) <= leaderlessAfter*e.o.Lease {
 		e.ll = nil
+		e.endRaise()
 		return
 	}
 	cause, quiet := e.leaderlessCause(now, healthy, ls, hasLog)
+	start := e.ll == nil
 	e.ll, e.llSince = &Leaderless{For: now.Sub(since), Cause: cause}, since
+	e.noteRaise(now, start)
 	if quiet && !mut("leaderless_never_quiet") {
 		return // a report of its own stands for it
 	}
@@ -201,7 +209,8 @@ func (e *Elector) noteLeaderless(now quorum.Instant, healthy bool, ls LogState, 
 	}
 	e.llLogged, e.llLogAt = true, now
 	e.log.Error("redundancy: this controller has seen no leader for "+now.Sub(since).Round(time.Millisecond).String()+
-		" (its own voter has promised none, and the peer's renewals don't reach it). If none leads, the pair runs no outputs and raises no alarms until one does (it fails safe: never two). Cause: "+cause,
+		" (its own voter has promised none, and the peer's renewals don't reach it). If none leads, the pair runs no outputs and evaluates no alarms but "+
+		"nautilus.pair-leaderless, which a project with an alarms: section raises, paged by one controller (it fails safe: never two leaders). Cause: "+cause,
 		"lease", e.o.Lease)
 }
 

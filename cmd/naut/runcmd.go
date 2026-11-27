@@ -382,7 +382,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if camOpts != nil && camOpts.Snaps != nil {
 		proj.AlarmNotifiers = append(proj.AlarmNotifiers, camOpts.AlarmNotifier())
 	}
-	alarms, err := startAlarms(proj, rt, sysAlarms...)
+	alarms, err := startPairAlarms(proj, rt, pair, sysAlarms...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
 		return 1
