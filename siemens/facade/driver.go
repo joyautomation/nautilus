@@ -422,6 +422,25 @@ func (d *Driver) ReadInputs() (nio.Values, error) {
 	return out, nil
 }
 
+// Current is the values that are current (Good): read, and neither failing
+// nor held from before the CPU dropped off. Program locals are served from
+// it: a frame's locals carry no quality, so a value that is not current is
+// left out rather than shown as if live.
+func (d *Driver) Current() nio.Values {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := nio.Values{}
+	if !d.connected {
+		return out
+	}
+	for k, v := range d.values {
+		if !d.failing[k] {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // WriteOutputs has nothing to write: the CPU runs the program.
 func (d *Driver) WriteOutputs(nio.Values) error { return nil }
 

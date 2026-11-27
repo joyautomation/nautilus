@@ -598,9 +598,12 @@ func scopeOf(name string, scopes []string) string {
 
 // localsFrame is the program locals as naut run streams them: by bare
 // name, an instance or struct as a map of its members, the programs merged
-// in scope order (a later program's value wins a shared name).
+// in scope order (a later program's value wins a shared name). Only
+// current values: a frame's locals carry no quality, so a local whose read
+// failed, or every local while the CPU cannot be reached, is left out
+// until a good read brings it back.
 func (b *binder) localsFrame() map[string]any {
-	vals, _ := b.drv.ReadInputs()
+	vals := b.drv.Current() // not current: left out, not shown as live
 	out := map[string]any{}
 	for _, sc := range b.scopes {
 		for _, x := range b.locals {

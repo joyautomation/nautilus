@@ -3,6 +3,7 @@ package facade
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"sync"
@@ -397,4 +398,41 @@ func TestAnEqualProgramIsNoChange(t *testing.T) {
 	if n := f.Rebinds(); n != 0 {
 		t.Fatalf("rebinds = %d for an equal Program", n)
 	}
+}
+
+// TestALocalThatIsNotCurrentIsLeftOut: locals carry no quality in a
+// frame, so one whose read fails, or all of them while the CPU cannot be
+// reached, leave the frame (no pill) instead of showing a held value as
+// if live, and come back after a good read. The tags go Bad / Stale.
+func TestALocalThatIsNotCurrentIsLeftOut(t *testing.T) {
+	s, _, base := startWith(t, Options{Rediscover: -1, Settle: time.Hour})
+	locals := func() map[string]any {
+		res, err := http.Get(base + "/api/state")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var st struct{ Locals map[string]any }
+		if err := json.NewDecoder(res.Body).Decode(&st); err != nil {
+			t.Fatal(err)
+		}
+		return st.Locals
+	}
+	waitFor(t, "count in the locals", func() bool { return locals()["count"] == float64(4) })
+
+	// One local's read fails: it leaves; the others stay.
+	s.Put(`"Main_DB".count`, &webapitest.Var{Datatype: "struct"}) // reads answer "unsupported address"
+	waitFor(t, "count gone", func() bool { _, ok := locals()["count"]; return !ok })
+	if _, ok := locals()["dwell"]; !ok {
+		t.Fatal("dwell left too: only the failing local leaves")
+	}
+	s.Put(`"Main_DB".count`, &webapitest.Var{Datatype: "int", Value: 6})
+	waitFor(t, "count back", func() bool { return locals()["count"] == float64(6) })
+
+	// The CPU drops off: every local leaves while the tags go stale.
+	s.StopAnswering()
+	waitFor(t, "all locals gone, tags stale", func() bool {
+		_, q := stateQ(t, base)
+		return len(locals()) == 0 && q["Level"] == "stale"
+	})
 }
