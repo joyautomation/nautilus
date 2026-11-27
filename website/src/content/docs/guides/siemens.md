@@ -477,6 +477,19 @@ the counterpart of the `logicErrors` that `naut status` shows:
 A project whose indices are all proved in bounds gets no checks and no
 `naut_Faults`.
 
+## FOR loops
+
+A FOR whose loop provably ends on the CPU (constant bounds and step, and
+the variable stepped past its end still inside its type) is written as
+TIA's own FOR. Any other FOR, a variable end that could be its type's last
+value included, runs on a 64-bit counter that surely ends, as nautilus's
+does: the variable takes each value in turn, a body that writes it does
+not change the loop, and after the loop it holds the last value it ran
+with. A step of 0 faults the scan, as in nautilus. One difference: when a
+start or end is integer arithmetic and the loop reaches a value the
+variable's type cannot hold, nautilus stores it anyway (#1427), and the
+CPU faults the scan there instead, as for an index out of bounds.
+
 ## What does not translate yet
 
 These are gaps in the writer, not rules for you. The diagnostic reads

@@ -1,0 +1,16 @@
+DATA_BLOCK "naut_Faults"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+NON_RETAIN
+   VAR 
+      main : Struct
+         LogicErrors : LInt;
+         Faulting : Bool;
+         LastLine : DInt;
+         LastBlock : String;
+      END_STRUCT;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

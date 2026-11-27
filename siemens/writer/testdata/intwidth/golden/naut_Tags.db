@@ -1,0 +1,36 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      D1 : DINT;
+      D2 : DINT;
+      DoFault : BOOL;
+      DoZero : BOOL;
+      exBelow : INT;
+      exDown : INT;
+      exPlclab : DINT;
+      exTop : INT;
+      exVarEnd : INT;
+      itBelow : DINT;
+      itDown : DINT;
+      itPlclab : DINT;
+      itTop : DINT;
+      itVarEnd : DINT;
+      itVarStep : DINT;
+      M : INT;
+      N : INT;
+      rDintToInt : INT;
+      rLimit : INT;
+      rMax : INT;
+      rSel : INT;
+      rToInt : INT;
+      rToLint : LINT;
+      rToReal : REAL;
+      S : INT;
+      Scans : DINT;
+      Z : INT;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK

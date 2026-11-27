@@ -1,0 +1,186 @@
+FUNCTION_BLOCK "naut_Main"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      i : INT;
+      k : INT;
+      j : DINT;
+      nb : DINT := 3;
+      naut_fault : "naut_Fault";
+   END_VAR
+   VAR_TEMP 
+      naut_for_c1 : LINT;
+      naut_for_e2 : LINT;
+      naut_for_r3 : BOOL;
+      naut_for_c4 : LINT;
+      naut_for_e5 : LINT;
+      naut_for_r6 : BOOL;
+      naut_for_c7 : LINT;
+      naut_for_e8 : LINT;
+      naut_for_r9 : BOOL;
+      naut_for_c10 : LINT;
+      naut_for_e11 : LINT;
+      naut_for_r12 : BOOL;
+      naut_for_c13 : LINT;
+      naut_for_e14 : LINT;
+      naut_for_r15 : BOOL;
+      naut_for_s16 : LINT;
+      naut_for_c17 : LINT;
+      naut_for_e18 : LINT;
+      naut_for_r19 : BOOL;
+      naut_for_c20 : LINT;
+      naut_for_e21 : LINT;
+      naut_for_r22 : BOOL;
+      naut_for_s23 : LINT;
+      naut_for_c24 : LINT;
+      naut_for_e25 : LINT;
+      naut_for_r26 : BOOL;
+   END_VAR
+
+BEGIN
+	#naut_fault.faulted := FALSE;
+	"naut_Tags".rToInt := LINT_TO_INT((((DINT_TO_LINT("naut_Tags".D1) + DINT_TO_LINT("naut_Tags".D2)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	"naut_Tags".rToLint := DINT_TO_LINT("naut_Tags".D1) + DINT_TO_LINT("naut_Tags".D2);
+	"naut_Tags".rDintToInt := LINT_TO_INT((((DINT_TO_LINT(LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".D1) + DINT_TO_LINT("naut_Tags".D2)) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648))) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	"naut_Tags".rToReal := LINT_TO_REAL(DINT_TO_LINT("naut_Tags".D1) + DINT_TO_LINT("naut_Tags".D2));
+	"naut_Tags".rSel := LINT_TO_INT((((SEL(G := TRUE, IN0 := INT_TO_LINT("naut_Tags".N), IN1 := INT_TO_LINT("naut_Tags".N) + 1)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	"naut_Tags".rMax := LINT_TO_INT((((MAX(IN1 := INT_TO_LINT("naut_Tags".N) + 1, IN2 := 0)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	"naut_Tags".rLimit := LINT_TO_INT((((LIMIT(MN := 0, IN := INT_TO_LINT("naut_Tags".N) * 2, MX := 70000)) + LINT#32768) MOD LINT#65536 + LINT#65536) MOD LINT#65536 - LINT#32768);
+	"naut_Tags".itTop := 0;
+	#naut_for_c1 := 32765;
+	#naut_for_e2 := 32767;
+	#naut_for_r3 := #naut_for_c1 <= #naut_for_e2;
+	WHILE #naut_for_r3 DO
+		#i := LINT_TO_INT(#naut_for_c1);
+		#naut_for_r3 := (#naut_for_e2 - #naut_for_c1) - 1 >= 0;
+		IF #naut_for_r3 THEN
+			#naut_for_c1 := #naut_for_c1 + 1;
+		END_IF;
+		"naut_Tags".itTop := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itTop) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	END_WHILE;
+	"naut_Tags".exTop := #i;
+	"naut_Tags".itBelow := 0;
+	#i := 7;
+	#naut_for_c4 := 0;
+	#naut_for_e5 := INT_TO_LINT("naut_Tags".M) - 1;
+	#naut_for_r6 := #naut_for_c4 <= #naut_for_e5;
+	WHILE #naut_for_r6 DO
+		IF #naut_for_c4 < -32768 OR #naut_for_c4 > 32767 THEN
+			#naut_fault.faulted := TRUE;
+			#naut_fault.line := 38;
+			#naut_fault.block := 'Main';
+			RETURN;
+		END_IF;
+		#i := LINT_TO_INT(#naut_for_c4);
+		#naut_for_r6 := (#naut_for_e5 - #naut_for_c4) - 1 >= 0;
+		IF #naut_for_r6 THEN
+			#naut_for_c4 := #naut_for_c4 + 1;
+		END_IF;
+		"naut_Tags".itBelow := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itBelow) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	END_WHILE;
+	"naut_Tags".exBelow := #i;
+	"naut_Tags".itDown := 0;
+	#naut_for_c7 := -32766;
+	#naut_for_e8 := -32768;
+	#naut_for_r9 := #naut_for_c7 >= #naut_for_e8;
+	WHILE #naut_for_r9 DO
+		#i := LINT_TO_INT(#naut_for_c7);
+		#naut_for_r9 := (#naut_for_c7 - #naut_for_e8) - 1 >= 0;
+		IF #naut_for_r9 THEN
+			#naut_for_c7 := #naut_for_c7 + -1;
+		END_IF;
+		"naut_Tags".itDown := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itDown) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	END_WHILE;
+	"naut_Tags".exDown := #i;
+	"naut_Tags".itVarEnd := 0;
+	#naut_for_c10 := 32760;
+	#naut_for_e11 := INT_TO_LINT("naut_Tags".N);
+	#naut_for_r12 := #naut_for_c10 <= #naut_for_e11;
+	WHILE #naut_for_r12 DO
+		#k := LINT_TO_INT(#naut_for_c10);
+		#naut_for_r12 := (#naut_for_e11 - #naut_for_c10) - 1 >= 0;
+		IF #naut_for_r12 THEN
+			#naut_for_c10 := #naut_for_c10 + 1;
+		END_IF;
+		"naut_Tags".itVarEnd := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itVarEnd) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	END_WHILE;
+	"naut_Tags".exVarEnd := #k;
+	"naut_Tags".itVarStep := 0;
+	#naut_for_c13 := 1;
+	#naut_for_e14 := 10;
+	#naut_for_s16 := INT_TO_LINT("naut_Tags".S);
+	IF #naut_for_s16 = 0 THEN
+		#naut_fault.faulted := TRUE;
+		#naut_fault.line := 50;
+		#naut_fault.block := 'Main';
+		RETURN;
+	END_IF;
+	#naut_for_r15 := (#naut_for_s16 > 0 AND #naut_for_c13 <= #naut_for_e14) OR (#naut_for_s16 < 0 AND #naut_for_c13 >= #naut_for_e14);
+	WHILE #naut_for_r15 DO
+		#k := LINT_TO_INT(#naut_for_c13);
+		#naut_for_r15 := (#naut_for_s16 > 0 AND (#naut_for_e14 - #naut_for_c13) - #naut_for_s16 >= 0) OR (#naut_for_s16 < 0 AND (#naut_for_c13 - #naut_for_e14) + #naut_for_s16 >= 0);
+		IF #naut_for_r15 THEN
+			#naut_for_c13 := #naut_for_c13 + #naut_for_s16;
+		END_IF;
+		"naut_Tags".itVarStep := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itVarStep) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	END_WHILE;
+	"naut_Tags".itPlclab := 0;
+	#naut_for_c17 := 0;
+	#naut_for_e18 := DINT_TO_LINT(#nb) - 1;
+	#naut_for_r19 := #naut_for_c17 <= #naut_for_e18;
+	WHILE #naut_for_r19 DO
+		IF #naut_for_c17 < -2147483648 OR #naut_for_c17 > 2147483647 THEN
+			#naut_fault.faulted := TRUE;
+			#naut_fault.line := 53;
+			#naut_fault.block := 'Main';
+			RETURN;
+		END_IF;
+		#j := LINT_TO_DINT(#naut_for_c17);
+		#naut_for_r19 := (#naut_for_e18 - #naut_for_c17) - 1 >= 0;
+		IF #naut_for_r19 THEN
+			#naut_for_c17 := #naut_for_c17 + 1;
+		END_IF;
+		"naut_Tags".itPlclab := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itPlclab) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	END_WHILE;
+	"naut_Tags".exPlclab := #j;
+	"naut_Tags".Scans := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".Scans) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	IF "naut_Tags".DoZero THEN
+		#naut_for_c20 := 1;
+		#naut_for_e21 := 3;
+		#naut_for_s23 := INT_TO_LINT("naut_Tags".Z);
+		IF #naut_for_s23 = 0 THEN
+			#naut_fault.faulted := TRUE;
+			#naut_fault.line := 59;
+			#naut_fault.block := 'Main';
+			RETURN;
+		END_IF;
+		#naut_for_r22 := (#naut_for_s23 > 0 AND #naut_for_c20 <= #naut_for_e21) OR (#naut_for_s23 < 0 AND #naut_for_c20 >= #naut_for_e21);
+		WHILE #naut_for_r22 DO
+			#k := LINT_TO_INT(#naut_for_c20);
+			#naut_for_r22 := (#naut_for_s23 > 0 AND (#naut_for_e21 - #naut_for_c20) - #naut_for_s23 >= 0) OR (#naut_for_s23 < 0 AND (#naut_for_c20 - #naut_for_e21) + #naut_for_s23 >= 0);
+			IF #naut_for_r22 THEN
+				#naut_for_c20 := #naut_for_c20 + #naut_for_s23;
+			END_IF;
+			"naut_Tags".itVarStep := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itVarStep) + 100) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+		END_WHILE;
+	END_IF;
+	IF "naut_Tags".DoFault THEN
+		#naut_for_c24 := 32766;
+		#naut_for_e25 := INT_TO_LINT("naut_Tags".N) + 5;
+		#naut_for_r26 := #naut_for_c24 <= #naut_for_e25;
+		WHILE #naut_for_r26 DO
+			IF #naut_for_c24 < -32768 OR #naut_for_c24 > 32767 THEN
+				#naut_fault.faulted := TRUE;
+				#naut_fault.line := 62;
+				#naut_fault.block := 'Main';
+				RETURN;
+			END_IF;
+			#i := LINT_TO_INT(#naut_for_c24);
+			#naut_for_r26 := (#naut_for_e25 - #naut_for_c24) - 1 >= 0;
+			IF #naut_for_r26 THEN
+				#naut_for_c24 := #naut_for_c24 + 1;
+			END_IF;
+			"naut_Tags".itTop := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".itTop) + 100) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+		END_WHILE;
+	END_IF;
+END_FUNCTION_BLOCK

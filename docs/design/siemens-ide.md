@@ -313,9 +313,22 @@ The rules:
 - **Integer arithmetic** is 64-bit in nautilus, wrapped only at the store
   (#800). The writer widens every narrow operand to LINT and wraps
   explicitly at the store, an argument of the project's own FB or
-  function included (nautilus stores an argument by the same rule). Where
-  it cannot (an input of a standard block, an argument of a standard
-  function, a CASE selector, a REAL target), integer arithmetic is refused.
+  function included (nautilus stores an argument by the same rule). A
+  conversion converts the 64-bit value (lang/ir conversions.go: `TO_<int>`
+  wraps as a store, `A_TO_B` wraps to A first), SEL, MIN, MAX and LIMIT
+  pass it through to a 64-bit caller, and a FOR bound is computed into a
+  LINT temp (#1305 B1). Where it cannot (an input of a standard block, an
+  argument of another standard function, a CASE selector, a REAL target,
+  a FOR step), integer arithmetic is refused.
+- **FOR** is TIA's own FOR only where it provably ends on the CPU
+  (constant bounds and step, end + step inside the variable's type); any
+  other FOR is a LINT counter loop (`naut_for_c/e/r`, siemens/writer
+  forloop.go) that decides whether to continue before it steps, so it
+  cannot wrap round, and keeps nautilus's semantics (lang/ir vm.go: bounds
+  evaluated once, the counter decides the next pass, the exit value is the
+  last value run, step 0 faults). A pass outside the variable's type (a
+  bound that is integer arithmetic) faults the scan like an index out of
+  bounds (naut-lead ruling); nautilus stores the value (#1427).
 - **What it does not translate yet is a writer gap,** never a rule for
   the person: the diagnostic reads "the Siemens writer doesn't translate X
   yet (#N)", N the issue that closes it. B #1299 (closed: structs and

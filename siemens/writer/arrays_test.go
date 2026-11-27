@@ -2,6 +2,7 @@ package writer
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -320,7 +321,7 @@ func TestArrayScopes(t *testing.T) {
 	if len(diags) > 0 {
 		t.Fatal(diags)
 	}
-	if g := fileOf(t, out, "naut_G.scl"); !strings.Contains(g, "#naut_ix1 := #i;") {
+	if g := fileOf(t, out, "naut_G.scl"); !regexp.MustCompile(`#naut_ix\d+ := #i;`).MatchString(g) {
 		t.Errorf("a FOR to a variable named like a constant must be checked:\n%s", g)
 	}
 	// A STRUCT member's bounds are the project's N, whatever P calls N.
@@ -342,7 +343,9 @@ func TestArrayScopes(t *testing.T) {
 	if len(diags) > 0 {
 		t.Fatal(diags)
 	}
-	wantLines(t, fileOf(t, out, "naut_P.scl"), "#naut_ix1 := #i;")
+	if p := fileOf(t, out, "naut_P.scl"); !regexp.MustCompile(`#naut_ix\d+ := #i;`).MatchString(p) {
+		t.Errorf("a FOR up to its variable type's last value must be checked:\n%s", p)
+	}
 	// A FUNCTION in the arguments of one that can fault writes a tag: it
 	// must not pass the read before it.
 	_, diags = write("PROGRAM P\nVAR_EXTERNAL tg : INT; END_VAR\nVAR a : ARRAY[0..3] OF INT; x : INT; END_VAR\nx := tg + F(k := Wr(), a := a);\nEND_PROGRAM\n",

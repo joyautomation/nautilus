@@ -629,6 +629,10 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 		}
 		pw.emit(b, at, "%sEND_IF;\n", in)
 	case *st.ForStmt:
+		if !pw.forPlain(s) {
+			pw.forCounter(b, s, in, at, d)
+			break
+		}
 		step := ""
 		if s.Step != nil {
 			step = " BY " + pw.forBound(s.Step, s.Variable)
@@ -827,9 +831,10 @@ func (pw *progWriter) store(v st.Expression, tt string, line int) string {
 			return s
 		}
 		if isBits(tt) {
+			wide := pw.wide
 			pw.wide = true
 			s := pw.expr(v, 0)
-			pw.wide = false
+			pw.wide = wide
 			if tt == "LWORD" {
 				return "LINT_TO_LWORD(" + s + ")"
 			}
@@ -840,9 +845,10 @@ func (pw *progWriter) store(v st.Expression, tt string, line int) string {
 			pw.gap("siemens/int-width", line, gapOther, "integer arithmetic stored into a "+orUnknown(tt), "until then, convert it explicitly (…_TO_…)")
 			return ""
 		}
+		wide := pw.wide
 		pw.wide = true
 		s := pw.expr(v, 0)
-		pw.wide = false
+		pw.wide = wide
 		return wrap(s, tt)
 	case isInt(vt) && isInt(tt) && vt != tt:
 		if vt == "ULINT" || tt == "ULINT" {
