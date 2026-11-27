@@ -154,7 +154,7 @@ type updateItem struct {
 	diff            []string // what the project would derive differently
 	filesDiffer     bool     // some file's bytes differ (docs, notes, simulator)
 	edited          bool     // the copy matches no release of the source
-	editedUnknown   bool     // a --from source keeps no releases, so edits cannot be told
+	fromFolder      bool     // the source is a --from folder, which keeps no releases
 	err             error
 }
 
@@ -267,16 +267,45 @@ func updateProfiles(dir, only, from string, yes, discard bool, w io.Writer) erro
 		u.copyVer, u.srcVer = cp.Version, sp.Version
 		u.diff = lineDiff(ct, st)
 		u.filesDiffer = !sameFiles(u.copyF, u.srcF)
-		if u.filesDiffer {
-			if from == "" {
-				u.edited = !releasedHashes(id)[u.copyF.hash(id)]
-			} else {
-				u.editedUnknown = true
+		// Source file names are the source's to choose: only a simulator
+		// (.st) beside the profile, and never a file already in profiles/
+		// that is not this profile's own.
+		for n, data := range u.srcF {
+			if n == id+".yaml" {
+				continue
 			}
+			if !strings.HasSuffix(n, ".st") {
+				u.err = fmt.Errorf("the source's simulator %s is not a .st file", n)
+				break
+			}
+			if _, mine := u.copyF[n]; mine {
+				continue
+			}
+			if have, err := os.Lstat(filepath.Join(pdir, n)); err == nil {
+				if have.Mode().IsRegular() {
+					if cur, err := os.ReadFile(filepath.Join(pdir, n)); err == nil && bytes.Equal(cur, data) {
+						continue
+					}
+				}
+				u.err = fmt.Errorf("the source's simulator %s would replace a file in %s/ that is not this profile's", n, devprofile.ProjectDir)
+				break
+			}
+		}
+		if u.err != nil {
+			continue
+		}
+		if u.filesDiffer {
+			// A copy is unedited only when it is byte-for-byte a release of
+			// the built-in library. A --from folder keeps no releases of its
+			// own, so a copy of one of its profiles that is not a built-in
+			// release is treated as edited too: it is never replaced without
+			// --discard-edits.
+			u.edited = !releasedHashes(id)[u.copyF.hash(id)]
+			u.fromFolder = from != ""
 		}
 	}
 
-	report(w, items, from != "")
+	report(w, items)
 	var replace []*updateItem
 	blocked := false
 	for _, u := range items {
@@ -362,7 +391,7 @@ func sameFiles(a, b profileFiles) bool {
 	return true
 }
 
-func report(w io.Writer, items []*updateItem, from bool) {
+func report(w io.Writer, items []*updateItem) {
 	for _, u := range items {
 		switch {
 		case u.err != nil:
@@ -381,10 +410,10 @@ func report(w io.Writer, items []*updateItem, from bool) {
 				fmt.Fprintln(w, "  the simulator file differs")
 			}
 			switch {
+			case u.edited && u.fromFolder:
+				fmt.Fprintf(w, "  HAND-EDITED, as far as naut can tell: the copy is not a release of a built-in %s, and a --from folder keeps no past releases to compare with. The lines above include any edits: they would be lost. Replace with --yes --discard-edits once you have checked them\n", u.id)
 			case u.edited:
 				fmt.Fprintf(w, "  HAND-EDITED: the copy matches no release of %s, so it has been changed in this project. The lines above include its edits: they would be lost. Keep them by moving them to a profile of your own, or replace anyway with --yes --discard-edits\n", u.id)
-			case u.editedUnknown:
-				fmt.Fprintf(w, "  note: a --from folder keeps no past releases, so this cannot tell a hand edit from an older version of %s; the lines above are everything that would change\n", u.id)
 			case u.copyVer == u.srcVer:
 				fmt.Fprintf(w, "  note: the source changed at the same version %d (a release of the source should bump version:)\n", u.copyVer)
 			}
@@ -424,9 +453,13 @@ func sharedSimulatorProblem(pdir string, replace []*updateItem) string {
 				}
 				raw, err := os.ReadFile(filepath.Join(pdir, other+".yaml"))
 				if err != nil {
-					continue
+					return fmt.Sprintf("cannot read %s/%s.yaml to see whether it shares the simulator %s: %v", devprofile.ProjectDir, other, name, err)
 				}
-				if p, err := devprofile.ParseProfile(raw, other+".yaml"); err == nil && p.Simulator != nil && p.Simulator.Source == name {
+				p, err := devprofile.ParseProfile(raw, other+".yaml")
+				if err != nil {
+					return fmt.Sprintf("%s/%s.yaml does not parse, so naut cannot see whether it shares the simulator %s: %v", devprofile.ProjectDir, other, name, err)
+				}
+				if p.Simulator != nil && p.Simulator.Source == name {
 					return fmt.Sprintf("%s is the simulator of %s and of %s; replacing it for one would change the other's. Update them together: naut devices update (no profile named)", name, u.id, other)
 				}
 			}
@@ -438,6 +471,13 @@ func sharedSimulatorProblem(pdir string, replace []*updateItem) string {
 // replaceCopy writes the source's files over the copy's: each to a new
 // file beside it, then renamed over (a symlink is replaced, not followed).
 func replaceCopy(pdir string, u *updateItem) error {
+	// What was compared is what is replaced: a copy changed since is not.
+	for n, was := range u.copyF {
+		now, err := os.ReadFile(filepath.Join(pdir, n))
+		if err != nil || (!bytes.Equal(now, was) && !bytes.Equal(now, u.srcF[n])) { // (a shared simulator may have been replaced a moment ago)
+			return fmt.Errorf("%s/%s changed while update was running; nothing more was replaced", devprofile.ProjectDir, n)
+		}
+	}
 	names := make([]string, 0, len(u.srcF))
 	for n := range u.srcF {
 		names = append(names, n)
@@ -464,52 +504,78 @@ func replaceCopy(pdir string, u *updateItem) error {
 // the new profiles in place. ok is false when it fails and the project's
 // check as it stands passes; out is the check's output.
 func checkWithReplaced(dir string, replace []*updateItem) (out string, ok bool) {
-	_, beforeCode := runCheckCaptured(dir)
-	if beforeCode != 0 {
-		return "", true // already failing: nothing this update breaks can be told apart
+	before, beforeCode, err := runCheckCaptured(dir)
+	if err != nil {
+		return err.Error(), false
 	}
 	tmp, err := os.MkdirTemp("", "naut-update-check-")
 	if err != nil {
-		return "", true
+		return err.Error(), false
 	}
 	defer os.RemoveAll(tmp)
 	if err := copyProject(dir, tmp); err != nil {
-		return "", true
+		return err.Error(), false
 	}
 	for _, u := range replace {
 		for n, d := range u.srcF {
 			if err := os.WriteFile(filepath.Join(tmp, devprofile.ProjectDir, n), d, 0o644); err != nil {
-				return "", true
+				return err.Error(), false
 			}
 		}
 	}
-	after, code := runCheckCaptured(tmp)
-	if code != 0 {
-		return strings.ReplaceAll(after, tmp, dir), false
+	after, code, err := runCheckCaptured(tmp)
+	if err != nil {
+		return err.Error(), false
 	}
-	return "", true
+	after = strings.ReplaceAll(after, tmp, dir)
+	if code == 0 {
+		return "", true
+	}
+	if beforeCode == 0 {
+		return after, false
+	}
+	// The project already fails its check: the update may not add to it.
+	had := map[string]bool{}
+	for _, l := range strings.Split(before, "\n") {
+		had[l] = true
+	}
+	var added []string
+	for _, l := range strings.Split(after, "\n") {
+		if !had[l] && strings.TrimSpace(l) != "" {
+			added = append(added, l)
+		}
+	}
+	if len(added) == 0 {
+		return "", true
+	}
+	return strings.Join(added, "\n") + "\n", false
 }
 
 // runCheckCaptured runs `naut check` on dir and returns what it printed.
-func runCheckCaptured(dir string) (string, int) {
-	prev := renderScreens
-	defer func() { renderScreens = prev }()
+// Standard output and error are put back however it ends.
+func runCheckCaptured(dir string) (out string, code int, err error) {
+	prevRender, prevVerbose := renderScreens, checkVerbose
 	oo, oe := os.Stdout, os.Stderr
 	r, wr, err := os.Pipe()
 	if err != nil {
-		return "", 0
+		return "", 0, fmt.Errorf("cannot run the project's check: %w", err)
 	}
-	os.Stdout, os.Stderr = wr, wr
 	done := make(chan string)
 	go func() {
 		var b bytes.Buffer
 		io.Copy(&b, r)
 		done <- b.String()
 	}()
-	code := runCheck([]string{"-render=false", dir})
-	os.Stdout, os.Stderr = oo, oe
-	wr.Close()
-	return <-done, code
+	func() {
+		os.Stdout, os.Stderr = wr, wr
+		defer func() {
+			os.Stdout, os.Stderr = oo, oe
+			renderScreens, checkVerbose = prevRender, prevVerbose
+			wr.Close()
+		}()
+		code = runCheck([]string{"-render=false", dir})
+	}()
+	return <-done, code, nil
 }
 
 // copyProject copies regular files of src into dst, leaving out .git and

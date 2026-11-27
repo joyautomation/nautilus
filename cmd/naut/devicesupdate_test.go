@@ -260,3 +260,96 @@ func TestUpdateRefusesASymlinkedCopy(t *testing.T) {
 		t.Fatal("update wrote through a symlink")
 	}
 }
+
+// A profile of the project's own, updated from a --from folder: no release
+// list says its copy is unedited, so it is treated as edited.
+func TestUpdateFromFolderOfAProfileOfYourOwnNeedsDiscardEdits(t *testing.T) {
+	dir := vendorDrive(t, libProgram)
+	own := slurp(t, dir, "profiles", driveID+".yaml")
+	own = strings.Replace(own, "profile: "+driveID, "profile: mine", 1)
+	sim := slurp(t, dir, "profiles", "abb-drives.st")
+	mk := func(address string) string {
+		d := t.TempDir()
+		os.WriteFile(filepath.Join(d, "mine.yaml"), []byte(strings.Replace(own, "address: 3,", "address: "+address+",", 1)), 0o644)
+		os.WriteFile(filepath.Join(d, "abb-drives.st"), []byte(sim), 0o644)
+		return d
+	}
+	pd := filepath.Join(dir, "profiles")
+	os.WriteFile(filepath.Join(pd, "mine.yaml"), []byte(own), 0o644)
+	src := mk("8")
+	before := slurp(t, pd, "mine.yaml")
+	out, code := runUpdate(t, "--from", src, "--yes", "mine", dir)
+	if code == 0 || !strings.Contains(out, "HAND-EDITED, as far as naut can tell") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if slurp(t, pd, "mine.yaml") != before {
+		t.Fatal("--yes alone replaced a copy no release list vouches for")
+	}
+	if out, code = runUpdate(t, "--from", src, "--yes", "--discard-edits", "mine", dir); code != 0 {
+		t.Fatalf("--discard-edits: exit %d\n%s", code, out)
+	}
+}
+
+// What a source calls its simulator is the source's to say, but it may not
+// name a file of the project's.
+func TestUpdateSourceCannotNameAnotherFileAsItsSimulator(t *testing.T) {
+	dir := vendorDrive(t, libProgram)
+	for _, bad := range []string{"nautilus.yaml", "notes.md"} {
+		src := srcDir(t, []string{driveID + ".yaml", "abb-drives.st"}, map[string][2]string{
+			driveID + ".yaml": {"source: abb-drives.st", "source: " + bad},
+		})
+		os.WriteFile(filepath.Join(src, bad), []byte("x"), 0o644)
+		os.WriteFile(filepath.Join(dir, "profiles", "notes.md"), []byte("my notes"), 0o644)
+		before := slurp(t, dir, "profiles", driveID+".yaml")
+		out, code := runUpdate(t, "--from", src, "--yes", "--discard-edits", driveID, dir)
+		if code == 0 || !strings.Contains(out, "cannot compare") {
+			t.Fatalf("%s: exit %d\n%s", bad, code, out)
+		}
+		if slurp(t, dir, "profiles", driveID+".yaml") != before || slurp(t, dir, "profiles", "notes.md") != "my notes" {
+			t.Fatalf("%s: a file was changed", bad)
+		}
+	}
+	// the project's files live outside profiles/, but a name that exists in
+	// it is refused too
+	src := srcDir(t, []string{driveID + ".yaml", "abb-drives.st"}, map[string][2]string{
+		driveID + ".yaml": {"source: abb-drives.st", "source: other.st"},
+	})
+	os.WriteFile(filepath.Join(src, "other.st"), []byte("FUNCTION_BLOCK X\nEND_FUNCTION_BLOCK\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "profiles", "other.st"), []byte("mine"), 0o644)
+	if out, code := runUpdate(t, "--from", src, "--yes", driveID, dir); code == 0 || !strings.Contains(out, "would replace a file") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if slurp(t, dir, "profiles", "other.st") != "mine" {
+		t.Fatal("the project's own file was replaced")
+	}
+}
+
+// A project whose check already fails may still be updated, but not into
+// new failures.
+func TestUpdateOfAProjectAlreadyFailingMayNotAddFailures(t *testing.T) {
+	prog := libProgram + "\nPROGRAM Other\nX := Nope1;\nEND_PROGRAM\n"
+	dir := vendorDrive(t, strings.Replace(libProgram, "END_PROGRAM", "END_PROGRAM", 1))
+	os.WriteFile(filepath.Join(dir, "other.st"), []byte("PROGRAM Other\nTripped := Nope1;\nEND_PROGRAM\n"), 0o644)
+	_ = prog
+	m := slurp(t, dir, "nautilus.yaml")
+	os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(strings.Replace(m, "tasks: [{ program: main.st }]", "tasks: [{ program: main.st }, { program: other.st }]", 1)), 0o644)
+	if _, code, _ := runCheckCaptured(dir); code == 0 {
+		t.Fatal("the fixture's check should already fail")
+	}
+	renamed := srcDir(t, []string{driveID + ".yaml", "abb-drives.st"}, map[string][2]string{
+		driveID + ".yaml": {"name: StatusWord,", "name: StatusWordX,"},
+	})
+	data, _ := os.ReadFile(filepath.Join(renamed, driveID+".yaml"))
+	os.WriteFile(filepath.Join(renamed, driveID+".yaml"), bytes.ReplaceAll(data, []byte("from: StatusWord,"), []byte("from: StatusWordX,")), 0o644)
+	before := slurp(t, dir, "profiles", driveID+".yaml")
+	out, code := runUpdate(t, "--from", renamed, "--yes", dir)
+	if code == 0 || !strings.Contains(out, `"StatusWord" not found`) {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if strings.Contains(out, "Nope1") {
+		t.Errorf("the refusal blames a failure the project already had:\n%s", out)
+	}
+	if slurp(t, dir, "profiles", driveID+".yaml") != before {
+		t.Fatal("a refused update changed the copy")
+	}
+}

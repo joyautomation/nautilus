@@ -75,9 +75,11 @@ alarms. For each vendored profile it reports:
   version has two). `update` says HAND-EDITED, shows what differs from the
   source, and does not replace it, not even with `--yes`: only
   `--yes --discard-edits` does, so an edit never goes silently. A
-  cosmetic edit counts as one. A `--from` folder keeps no releases, so
-  there `update` cannot tell an edit from an older version and says so; it
-  always shows the diff, and replaces only with `--yes`;
+  cosmetic edit counts as one. A `--from` folder keeps no
+  releases of its own, so a copy of a profile that is not a built-in is
+  treated as edited ("as far as naut can tell") and needs `--discard-edits`
+  after you have read the diff; a copy of a built-in is judged against the
+  built-in releases as usual;
 - **a changed profile with no new `version:`:** the built-in library's
   test fails (above), so it cannot ship; against a `--from` source `update`
   notes that the source changed at the same version, so a team bumps it;
