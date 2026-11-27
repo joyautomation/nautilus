@@ -197,7 +197,7 @@ capability, and `admin`'s sudo on a PLCnext is an allowlist without
 root login. So, once per binary, typed by the controller's owner:
 
 ```sh
-ssh -t admin@<plc> 'sudo passwd root && su -c "setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/io/nautilus_io; setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/naut; getcap /opt/plcnext/apps/nautilus/io/nautilus_io /opt/plcnext/apps/nautilus/naut"; sudo passwd -l root'
+ssh -t admin@<plc> 'sudo passwd root && su -c "setcap cap_sys_nice,cap_ipc_lock+ep /opt/plcnext/apps/nautilus/io/nautilus_io; setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/naut; getcap /opt/plcnext/apps/nautilus/io/nautilus_io /opt/plcnext/apps/nautilus/naut"; sudo passwd -l root'
 ```
 
 sets a root password, uses it once, and locks root again. A capability
@@ -310,8 +310,8 @@ busy. Now the cycle formats each log line into a bounded lock-free ring
 
 The process also calls `mlockall(MCL_CURRENT|MCL_FUTURE)` after setup, with
 the stack touched first, so a page fault cannot wait on I/O. That needs
-`CAP_IPC_LOCK` (or a large enough `RLIMIT_MEMLOCK`); without it the log says
-`mlockall refused (...)` and the cycle runs unlocked, as before.
+`CAP_IPC_LOCK` (the `setcap` above grants it to the shim beside `cap_sys_nice`); without it the log says
+`mlockall refused (...)` as a warning and the cycle runs unlocked, as before; never fatal.
 
 ## The exchange page
 
