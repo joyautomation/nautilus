@@ -362,7 +362,9 @@ func TestIOValidateRefuses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := startIORig(t, files, false)
 			if tc.redundant {
-				r.p.Redundancy = &RedundancyConfig{}
+				// A pair: the Lease mode refuses every live apply (#1013),
+				// which would hide the no-retain: refusal under test.
+				r.p.Redundancy = &RedundancyConfig{Peers: map[string]string{"a": "127.0.0.1:7001", "b": "127.0.0.1:7002"}}
 			}
 			c := r.io.Stage(tc.files, "upload", "tester")
 			v := r.io.Validate(c)

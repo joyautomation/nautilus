@@ -1331,10 +1331,10 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
   - **Not under the Kubernetes Lease, for now.** Its replicas have no
     hello, so a replica cannot tell whether the others keep a live apply.
     An apply on a project with `redundancy:` and no `peers:` is refused
-    (check `kept`): deploy the change instead. This lifts in a later
-    release, once no replica a rolling upgrade can meet runs v0.22.0 or
-    older. Upgrading from v0.22.0 straight past that release, deploy any
-    I/O change until every replica runs the new build.
+    (check `kept`): deploy the change instead. This lifts in the next
+    minor release after the first that keeps a live apply. Upgrading from
+    v0.22.0 or older straight to that one, deploy I/O changes, not apply
+    them, until every replica runs the new build.
 
   While what runs differs from the manifest, `config` on every frame
   says so (and `config.notKept` says if it would not survive a restart),

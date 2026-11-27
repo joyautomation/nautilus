@@ -122,13 +122,25 @@ nobody (design, "Wire"; #1436).
 #1013: under the Kubernetes Lease a live I/O apply is refused at validate
 (`leaseModeRefusesKeep` in `internal/project/iokeep.go`), because a
 replica on v0.22.0 or older drops what a live apply keeps, and a
-Lease-mode replica cannot ask the others. In the first release after
-v0.22.0, leave it as it is and write that release's version here
-(first release that keeps a live apply: _not yet released_). In the
-release after that one, set it `false` in the release commit, change
-`TestIOKeptRefusesLeaseMode` to expect the apply to validate, and remove
-this paragraph and the guide's Lease-mode line (`guides/http-api.md`,
-"Not while a pair runs mixed versions").
+Lease-mode replica cannot ask the others. Through every release of the
+first minor series after v0.22.0 (v0.23.x, if that is next), leave it as
+it is, and in that series' first release write its version here (first
+release that keeps a live apply: _not yet released_). In the next minor
+release (v0.24.0 then), in the release commit:
+
+- set `leaseModeRefusesKeep` to `false` and update its comment, or remove
+  it with `leaseModeKeepRefusal` and its case in `keptProblems`;
+- change `TestIOKeptRefusesLeaseMode` to expect the apply to validate;
+- in `guides/http-api.md`, replace the bullet "Not under the Kubernetes
+  Lease, for now" with one that says an upgrade straight from v0.22.0 or
+  older must deploy I/O changes, not apply them, until every replica runs
+  the new build (keep the pair's bullet, "Not while a pair runs mixed
+  versions");
+- in `guides/live-io-configuration.md`, the same for its Lease-mode
+  sentence;
+- in `docs/design/redundancy.md`, the sentence naming
+  `leaseModeRefusesKeep`;
+- and remove this paragraph.
 
 ## Guard rails
 

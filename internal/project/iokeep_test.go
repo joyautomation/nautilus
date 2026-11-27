@@ -124,16 +124,12 @@ type keepOpts struct {
 	store     retain.Store // nil: no retain: block
 	coord     *keepCoord   // nil: standalone
 	noFollow  bool
-	redundant bool // the manifest has redundancy: (implied by coord), a pair's
+	redundant bool // the manifest has redundancy: with peers: (implied by coord)
 	leaseMode bool // redundancy: without peers:, the Kubernetes Lease (#1013)
 	prep      func(*IOConfig)
 	hold      bool // Options.HoldOutputsOnSwap
 }
 
-// startKeepRig is startIORig wired as naut run wires a controller: a retain
-// store, the IOConfig registered with the runtime before its first scan,
-// Keep = SaveRetained, and with a coordinator the drivers' write gate and a
-// standby following the store.
 // rigRedundancy is the rig's redundancy: section: a pair's (peers:), or
 // with leaseMode the Kubernetes Lease's (no peers:).
 func rigRedundancy(o keepOpts) *RedundancyConfig {
@@ -143,6 +139,10 @@ func rigRedundancy(o keepOpts) *RedundancyConfig {
 	return &RedundancyConfig{Peers: map[string]string{"a": "127.0.0.1:7001", "b": "127.0.0.1:7002"}}
 }
 
+// startKeepRig is startIORig wired as naut run wires a controller: a retain
+// store, the IOConfig registered with the runtime before its first scan,
+// Keep = SaveRetained, and with a coordinator the drivers' write gate and a
+// standby following the store.
 func startKeepRig(t *testing.T, files fstest.MapFS, o keepOpts) *keepRig {
 	t.Helper()
 	p, err := Load(files, "")
@@ -1314,4 +1314,32 @@ func TestIOKeptRefusesLeaseMode(t *testing.T) {
 	if v := stage(pair); !v.Valid {
 		t.Fatalf("a pair whose peer keeps a live apply: failed %v", failed(v))
 	}
+}
+
+// #1013: the Lease-mode refusal is on the apply only. A Lease-mode replica
+// on this build still follows and, taking over, runs a state kept in the
+// store (one a later release's apply, or a pair-shaped rig here, kept):
+// the lift of the refusal depends on it.
+func TestIOKeptLeaseModeStillRunsAKeptState(t *testing.T) {
+	shortFollow(t)
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	store := &memStore{}
+	ca, cb := &keepCoord{}, &keepCoord{}
+	ca.lead.Store(true)
+	ca.term.Store(1)
+	a := startKeepRig(t, files, keepOpts{store: store, coord: ca})
+	b := startKeepRig(t, files, keepOpts{store: store, coord: cb, leaseMode: true})
+	a.leading(t)
+	eventually(t, "DEV_A polled", func() bool { return a.value("A_In") == "4" })
+	if res := a.applyMove(t, files, slavePort(s3), slavePort(s2), ApplyOptions{}); !res.Kept {
+		t.Fatalf("not kept: %s", res.KeptWhy)
+	}
+	eventually(t, "the Lease-mode standby to follow", func() bool { return len(b.io.Differs()) == 1 })
+	ca.lead.Store(false)
+	cb.term.Store(2)
+	cb.lead.Store(true)
+	b.leading(t)
+	s3.Unit(1).SetHolding(0, 20)
+	eventually(t, "the Lease-mode leader commands the kept address", func() bool { return s3.Unit(1).Holding(10) == 21 })
 }

@@ -157,26 +157,28 @@ func copyUnits(m map[string]ioUnit) map[string]ioUnit {
 // live apply (#1010) can be paired in a rolling upgrade with v0.22.0,
 // which does not: taking over, that replica would run the manifest's
 // addresses and its next save would clear what was kept. So this stays
-// true through that release and is set false only in the release after
-// it (RELEASING.md, "#1013"; TestIOKeptRefusesLeaseMode pins it).
+// true through every release of that minor series and is set false only
+// in the next minor release (RELEASING.md, "#1013";
+// TestIOKeptRefusesLeaseMode pins it). Only an apply is refused: a
+// restart's or a takeover's re-apply of a kept state (a restore) is not.
 const leaseModeRefusesKeep = true
 
 // leaseModeKeepRefusal is the kept check's reason in Lease mode.
-const leaseModeKeepRefusal = "this project runs under the Kubernetes Lease, whose replicas cannot tell each other that they keep a live I/O apply across a takeover; a replica on v0.22.0 or older does not, and would come up on the manifest's addresses (#1013): deploy the change instead"
+const leaseModeKeepRefusal = "this project runs under the Kubernetes Lease, whose replicas cannot tell each other that they keep a live I/O apply across a takeover; a replica on v0.22.0 or older does not, and would come up on the manifest's addresses (#1013): for now, deploy the change instead"
 
 // keptProblems refuses a candidate the store cannot keep where it must.
 func (io *IOConfig) keptProblems(c *IOCandidate) []string {
 	var out []string
 	switch {
+	case io.p.Redundancy != nil && !io.p.Redundancy.Pair() && leaseModeRefusesKeep:
+		// First and alone: a retain: block or a store would not help.
+		out = append(out, leaseModeKeepRefusal)
 	case io.p.Redundancy != nil && io.Keep == nil:
 		out = append(out, "this redundant project has no retain: block, so nothing keeps an applied configuration across a takeover and a standby would come up on the old addresses: add a retain: block, or deploy the change instead")
 	case io.p.Redundancy != nil && io.unreadableNow() != "":
 		out = append(out, io.unreadableNow()+"; a standby would come up on the old addresses: deploy the change instead")
 	case io.p.Redundancy != nil && io.KeepStore == "file":
 		out = append(out, "this redundant project's retain store is a file, which only this replica reads: a standby would come up on the old addresses; deploy the change instead")
-	}
-	if io.p.Redundancy != nil && !io.p.Redundancy.Pair() && leaseModeRefusesKeep {
-		out = append(out, leaseModeKeepRefusal)
 	}
 	if io.p.Redundancy != nil && io.PeersKeepIO != nil {
 		if why := io.PeersKeepIO(); why != "" {

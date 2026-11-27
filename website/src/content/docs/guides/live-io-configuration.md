@@ -47,7 +47,10 @@ has `retain:`: a controller that restarts or takes over re-applies it before
 its first scan. On a project with `redundancy:` an apply without `retain:` is
 refused. Live applies are refused while a restart or takeover is still
 re-applying, and during a rolling upgrade of a pair make none until both
-controllers run the new build.
+controllers run the new build. Under the Kubernetes Lease (`redundancy:`
+without `peers:`) a live apply is refused for now, since its replicas
+cannot check that the others keep it: deploy the change instead (see the
+[HTTP API guide](/guides/http-api/)).
 
 ## Forms instead of curl
 
