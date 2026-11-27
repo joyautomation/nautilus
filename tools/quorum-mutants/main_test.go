@@ -122,3 +122,83 @@ func readFile(p string) (string, error) {
 	b, err := os.ReadFile(p)
 	return string(b), err
 }
+
+// Every row runs only its own tests (#1096): a row without rowPkgs once
+// ran the whole quorum tree, 100 s or more, and the nightly timed out.
+func TestEveryRowRunsOnlyItsTests(t *testing.T) {
+	for _, m := range table {
+		a := m.args()
+		if len(a) < 3 || a[0] != "-run" {
+			t.Fatalf("%s runs %v, want -run first", m.name, a)
+		}
+		if want := "^(" + strings.Join(m.expect, "|") + ")$"; a[1] != want {
+			t.Fatalf("%s: -run %q, want %q", m.name, a[1], want)
+		}
+		if !slices.Equal(a[2:], m.pkgs()) {
+			t.Fatalf("%s: packages %v, want %v", m.name, a[2:], m.pkgs())
+		}
+	}
+}
+
+// The shards split the table: every row in exactly one shard, for any
+// leg count.
+func TestShardsCoverTheTableOnce(t *testing.T) {
+	for n := 1; n <= 9; n++ {
+		seen := map[string]int{}
+		for k := range n {
+			for _, m := range shard(table, k, n) {
+				seen[m.name]++
+			}
+		}
+		for _, m := range table {
+			if seen[m.name] != 1 {
+				t.Fatalf("n=%d: %s in %d shards", n, m.name, seen[m.name])
+			}
+		}
+		if len(seen) != len(table) {
+			t.Fatalf("n=%d: %d rows, table has %d", n, len(seen), len(table))
+		}
+	}
+}
+
+// The baselines run every judged row's tests in its packages, green
+// first, so a test already red is never counted as a catch; one run per
+// package set.
+func TestBaselinesCoverEveryRowsTests(t *testing.T) {
+	rows := shard(table, 1, 3)
+	runs := baselines(rows)
+	sets := map[string]bool{}
+	for _, a := range runs {
+		k := strings.Join(a[2:], " ")
+		if sets[k] {
+			t.Fatalf("two baseline runs for %s", k)
+		}
+		sets[k] = true
+	}
+	for _, m := range rows {
+		found := false
+		for _, a := range runs {
+			if !slices.Equal(a[2:], m.pkgs()) {
+				continue
+			}
+			names := strings.Split(strings.TrimSuffix(strings.TrimPrefix(a[1], "^("), ")$"), "|")
+			for _, e := range m.expect {
+				if !slices.Contains(names, e) {
+					t.Fatalf("%s: the baseline for %v lacks %s", m.name, m.pkgs(), e)
+				}
+			}
+			found = true
+		}
+		if !found {
+			t.Fatalf("%s: no baseline runs %v", m.name, m.pkgs())
+		}
+	}
+}
+
+func TestParseShard(t *testing.T) {
+	for s, ok := range map[string]bool{"0/1": true, "3/8": true, "7/8": true, "8/8": false, "-1/8": false, "0/0": false, "x": false} {
+		if _, _, err := parseShard(s); (err == nil) != ok {
+			t.Errorf("parseShard(%q): err %v, want ok %v", s, err, ok)
+		}
+	}
+}

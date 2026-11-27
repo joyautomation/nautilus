@@ -1,13 +1,14 @@
 // Command quorum-mutants runs the vote protocol's mutation checks (test
-// plan §3.3): for each mutation in package quorum it runs the quorum tests
-// with that one rule broken (build tag quorum_mut, QUORUM_MUT=<name>), and
-// checks that the tests named for it go red. A mutation whose tests stay
-// green has survived: the suite has a hole. A build or setup failure is a
-// failure too, never a pass. The baseline (the tag on, no mutation) must
-// be all green first.
+// plan §3.3): for each mutation in package quorum it runs the tests named
+// for it with that one rule broken (build tag quorum_mut,
+// QUORUM_MUT=<name>), and checks that they go red. A mutation whose tests
+// stay green has survived: the suite has a hole. A build or setup failure
+// is a failure too, never a pass. The baseline (the tag on, no mutation,
+// the same tests) must be all green first.
 //
 //	go run ./tools/quorum-mutants            every mutation
 //	go run ./tools/quorum-mutants -mut no_rho one
+//	go run ./tools/quorum-mutants -shard 2/8   every 8th row from the third (the nightly's legs)
 //
 // It prints a Markdown table and exits non-zero if anything survived or
 // failed to build.
@@ -1317,13 +1318,70 @@ var rowPkgs = map[string][]string{
 	"write_dedup_failed_counts": {"./quorum/node"},
 }
 
-// args are the go test arguments for m.
-func (m mutation) args() []string {
-	pkgs, ok := rowPkgs[m.name]
-	if !ok {
-		return []string{"./quorum/..."}
+// pkgs are the packages m's tests are in.
+func (m mutation) pkgs() []string {
+	if p, ok := rowPkgs[m.name]; ok {
+		return p
 	}
-	return append([]string{"-run", "^(" + strings.Join(m.expect, "|") + ")$"}, pkgs...)
+	return []string{"./quorum/..."}
+}
+
+// args are the go test arguments for m: only its tests (#1096). The
+// verdict reads only those, and running the whole tree for each of the
+// rows without rowPkgs (100 s or more each) ran the nightly past its
+// timeout.
+func (m mutation) args() []string {
+	return testArgs(m.expect, m.pkgs())
+}
+
+func testArgs(tests, pkgs []string) []string {
+	return append([]string{"-run", "^(" + strings.Join(tests, "|") + ")$"}, pkgs...)
+}
+
+// baselines are the runs that must be green, the tag on and no mutation,
+// before rows are judged: one per package set, filtered to the rows'
+// tests, so a red test is never counted as a catch.
+func baselines(rows []mutation) [][]string {
+	var keys []string
+	tests := map[string][]string{}
+	pkgs := map[string][]string{}
+	for _, m := range rows {
+		k := strings.Join(m.pkgs(), " ")
+		if _, ok := pkgs[k]; !ok {
+			keys = append(keys, k)
+			pkgs[k] = m.pkgs()
+		}
+		for _, t := range m.expect {
+			if !slices.Contains(tests[k], t) {
+				tests[k] = append(tests[k], t)
+			}
+		}
+	}
+	var out [][]string
+	for _, k := range keys {
+		out = append(out, testArgs(tests[k], pkgs[k]))
+	}
+	return out
+}
+
+// shard picks the rows of shard k of n, round robin, so the nightly can
+// split the table across jobs (#1096). n of 1 is every row.
+func shard(rows []mutation, k, n int) []mutation {
+	var out []mutation
+	for i, m := range rows {
+		if i%n == k {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// parseShard reads "k/n" (k from 0).
+func parseShard(s string) (k, n int, err error) {
+	if _, err = fmt.Sscanf(s, "%d/%d", &k, &n); err != nil || n < 1 || k < 0 || k >= n {
+		return 0, 0, fmt.Errorf("-shard %q: want k/n with 0 <= k < n", s)
+	}
+	return k, n, nil
 }
 
 // event is one line of `go test -json`.
@@ -1462,35 +1520,37 @@ func run(name string, args []string) []byte {
 
 func main() {
 	only := flag.String("mut", "", "run only this mutation")
+	shardFlag := flag.String("shard", "0/1", "run only shard k of n (k/n, k from 0), round robin over the table")
 	flag.Parse()
-	ok := true
+	k, n, err := parseShard(*shardFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	rows := shard(table, k, n)
+	if *only != "" {
+		i := slices.IndexFunc(table, func(m mutation) bool { return m.name == *only })
+		if i < 0 {
+			fmt.Fprintf(os.Stderr, "no mutation %q\n", *only)
+			os.Exit(2)
+		}
+		rows = []mutation{table[i]}
+	}
 	fmt.Println("| mutation | result |\n|---|---|")
-	r := parse(run("", mutation{}.args()))
-	b, why := baseline(r)
-	for _, m := range table {
-		if _, out := rowPkgs[m.name]; out && b {
-			r = parse(run("", m.args())) // the rows outside the tree, green first
-			b, why = baseline(r)
+	for _, args := range baselines(rows) {
+		r := parse(run("", args))
+		if b, why := baseline(r); !b {
+			fmt.Printf("| (baseline: the tag on, no mutation) | %s |\n", why)
+			fmt.Print(r.why())
+			os.Exit(1)
 		}
 	}
-	fmt.Printf("| (baseline: the tag on, no mutation) | %s |\n", why)
-	if !b {
-		fmt.Print(r.why())
-		os.Exit(1)
-	}
-	found := false
-	for _, m := range table {
-		if *only != "" && m.name != *only {
-			continue
-		}
-		found = true
+	fmt.Printf("| (baseline: the tag on, no mutation; shard %d/%d, %d rows) | green |\n", k, n, len(rows))
+	ok := true
+	for _, m := range rows {
 		caught, why := verdict(m, parse(run(m.name, m.args())))
 		ok = ok && caught
 		fmt.Printf("| %s | %s |\n", m.name, why)
-	}
-	if !found {
-		fmt.Fprintf(os.Stderr, "no mutation %q\n", *only)
-		os.Exit(2)
 	}
 	if !ok {
 		os.Exit(1)

@@ -1,6 +1,7 @@
 # The vote protocol's long checks, nightly (#997; #710's test plan §3.2,
-# §3.3): the mutation runner, then 200,000 seeded simulator schedules (a
-# PR runs 2,000). Not a PR gate. A red run opens (or comments on) the
+# §3.3): the mutation runner, split over 8 legs (#1096: the table grew
+# past an hour on one runner and every night timed out), and beside it
+# 200,000 seeded simulator schedules (a PR runs 2,000). Not a PR gate. A red run opens (or comments on) the
 # rolling "quorum: nightly simulator" issue with the failing step, the
 # mutation table or the failing seeds' QUORUM_SEED repro lines, and the
 # run; a green run closes it (.github/scripts/quorum-nightly-issue.sh).
@@ -18,26 +19,49 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
-  quorum:
-    name: Quorum — mutation runner + 200k seeds
+  # Each leg runs every 8th row of tools/quorum-mutants' table (about 8 min
+  # of a one-hour table) on its own VM, so the timing-bound loopback tests
+  # never share a CPU with another mutant. Its baseline is its rows' tests,
+  # green with no mutation. Non-zero if a mutation survived or a build broke.
+  mutants:
+    name: Quorum mutants ${{ matrix.shard }}/8
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     permissions:
       contents: read
-      issues: write # the rolling issue
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.25'}
-      # Non-zero if a mutation survived or a build broke (about 50 s).
-      - name: go run ./tools/quorum-mutants
-        id: mutants
+      - name: go run ./tools/quorum-mutants -shard ${{ matrix.shard }}/8
+        timeout-minutes: 25 # leaves the log's upload time to run
         shell: bash
         run: |
           set -o pipefail
-          go run ./tools/quorum-mutants 2>&1 | tee "$RUNNER_TEMP/mutants.log"
-      # Runs even when the mutants step is red (about 130 s). Each failing
-      # seed prints a QUORUM_SEED=k repro line. Then the operator-intent
+          go run ./tools/quorum-mutants -shard ${{ matrix.shard }}/8 2>&1 | tee "$RUNNER_TEMP/mutants-${{ matrix.shard }}.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quorum-mutants-${{ matrix.shard }}
+          path: ${{ runner.temp }}/mutants-${{ matrix.shard }}.log
+          retention-days: 14
+
+  seeds:
+    name: Quorum — 200k seeds
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      # TestSeeds takes about 130 s; each failing seed prints a
+      # QUORUM_SEED=k repro line. Then the operator-intent
       # log's three-replica schedules (#710 3b-4a, about 6 min); a failing
       # one names its seed (OPLOG_SIM_ONE=k reruns it with a trace). The
       # clone schedules (#1029 layer 2) run their own 200,000 too, the
@@ -47,7 +71,7 @@ jobs:
       # cell.
       - name: QUORUM_SEEDS=200000 go test ./quorum/sim (default and clone schedules), OPLOG_SIM_SEEDS=3000 go test ./oplog
         id: seeds
-        if: ${{ !cancelled() }}
+        timeout-minutes: 40 # leaves the log's upload time to run
         shell: bash
         env:
           QUORUM_SEEDS: '200000'
@@ -67,13 +91,39 @@ jobs:
           go test -count=1 -timeout 20m ./quorum/sim -run '^(TestACloneBesideASettledPairBecomesASpare|TestLateFramesOfARestartMakeNoSpare|TestTheIncumbentRestartsOrDiesWhileTheSpareRuns|TestTheSpareDecisionUnderASplit|TestASplitWithASpareClearsByRestarts|TestALossyOriginalNeverGoesSpare|TestAnOriginalRestartingAfterTheMarkStaysAMember|TestLateFramesToBothVotersUpToALeaseMakeNoSpare|TestFromSpareNeverMakesTwoLeaders)$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
           go test -count=1 -timeout 20m ./oplog -run '^TestThreeReplicaSimulation$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
           exit $rc
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quorum-seeds
+          path: ${{ runner.temp }}/seeds.log
+          retention-days: 14
+
+  # The rolling issue, from every leg's outcome and log.
+  report:
+    name: Quorum — rolling issue
+    needs: [mutants, seeds]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write # the rolling issue
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        continue-on-error: true # a leg that never started has no log
+        with:
+          pattern: quorum-*
+          path: ${{ runner.temp }}/logs
+          merge-multiple: true
       - name: Rolling issue
-        if: always() && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
-          MUTANTS_OUTCOME: ${{ steps.mutants.outcome }}
-          SEEDS_OUTCOME: ${{ steps.seeds.outcome }}
+          MUTANTS_OUTCOME: ${{ needs.mutants.result }}
+          SEEDS_OUTCOME: ${{ needs.seeds.result }}
           MUTANTS_LOG: ${{ runner.temp }}/mutants.log
-          SEEDS_LOG: ${{ runner.temp }}/seeds.log
+          SEEDS_LOG: ${{ runner.temp }}/logs/seeds.log
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: .github/scripts/quorum-nightly-issue.sh
+        run: |
+          cat "$RUNNER_TEMP"/logs/mutants-*.log > "$MUTANTS_LOG" 2>/dev/null || true
+          .github/scripts/quorum-nightly-issue.sh

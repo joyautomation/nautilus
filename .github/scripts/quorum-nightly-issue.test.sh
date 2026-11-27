@@ -54,6 +54,20 @@ cat >"$tmp/mutants-red.log" <<'EOF'
 | retry_on_grid | caught (1 tests red) |
 exit status 1
 EOF
+# Two legs' logs run together (#1096): one leg red, one green.
+cat >"$tmp/mutants-legs.log" <<'EOF'
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 0/2, 2 rows) | green |
+| no_rho | caught (8 tests red) |
+| no_observe | SURVIVED: still green: TestObserveLiftsTheNextCampaign |
+exit status 1
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 1/2, 2 rows) | green |
+| retry_on_grid | caught (1 tests red) |
+| any_sender | BROKEN: package p failed with no test failing (a panic or a build error) |
+EOF
 cat >"$tmp/mutants-broken.log" <<'EOF'
 # github.com/joyautomation/nautilus/quorum
 quorum/vote.go:12:2: undefined: rho
@@ -133,6 +147,18 @@ check "mutants red comments" 7 failure mutants-red.log success seeds-green.log \
   'go run ./tools/quorum-mutants` failed' \
   '^\| no_observe \| SURVIVED: still green: TestObserveLiftsTheNextCampaign \|$' \
   '!QUORUM_SEEDS=200000' '!exit status'
+# The legs' tables: one header, only the rows not caught, and a count.
+check "mutants legs list only what was not caught" 7 failure mutants-legs.log success seeds-green.log \
+  '^issue comment 7 ' \
+  '^\| no_observe \| SURVIVED: still green: TestObserveLiftsTheNextCampaign \|$' \
+  '^\| any_sender \| BROKEN: ' \
+  'The other 2 mutations were caught' \
+  '!no_rho' '!retry_on_grid' '!shard 0/2' '!exit status'
+if [ "$(grep -c '^| mutation | result |$' "$tmp/body" 2>/dev/null)" != 1 ]; then
+  echo "FAIL mutants legs: want one table header"
+  cat "$tmp/body"
+  fail=1
+fi
 # A build break: no table, so the log's tail.
 check "mutants broken shows the log" '' failure mutants-broken.log success seeds-green.log \
   '^issue create ' 'undefined: rho'

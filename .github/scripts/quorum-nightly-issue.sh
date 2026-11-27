@@ -56,9 +56,17 @@ trap 'rm -f "$body"' EXIT
     echo
     echo "A mutation whose tests stayed green has survived: the suite has a hole. A build failure counts too."
     echo
-    table=$(log "${MUTANTS_LOG:-}" | grep -E '^\|' || true)
-    if [ -n "$table" ]; then
-      echo "$table"
+    # The legs' tables run together (#1096): one header, then only the
+    # rows that were not caught (a caught row and a green baseline say
+    # nothing), with a count of the caught.
+    rows=$(log "${MUTANTS_LOG:-}" | grep -E '^\| ' | grep -vE '^\| mutation \| result \|$|\| caught \(|\| green \|$' || true)
+    caught=$(log "${MUTANTS_LOG:-}" | grep -cE '^\| .* \| caught \(' || true)
+    if [ -n "$rows" ]; then
+      echo "| mutation | result |"
+      echo "|---|---|"
+      echo "$rows"
+      echo
+      echo "The other $caught mutations were caught."
     else
       echo '```'
       log "${MUTANTS_LOG:-}" | tail -n 30
