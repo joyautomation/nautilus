@@ -42,7 +42,10 @@ describe('config schema: the keywords the drivers and devices sections use', () 
 		seen.add(s);
 		walk(full.definitions[s]);
 	}
-	const IGNORED = ['description', 'title', '$comment', 'default', 'examples', '$schema', 'definitions', 'anyOf', 'not'];
+	const IGNORED = ['description', 'title', '$comment', 'default', 'examples', '$schema', 'definitions', 'anyOf', 'not', 'oneOf'];
+	// oneOf is ignored here on purpose: its one use is a device's offline-alarm
+	// (boolean or mapping), which the form shows as raw YAML; the field tree
+	// test below pins that it is the only raw field.
 	it('are all handled, or ignored on purpose (then.anyOf / then.not are the server\'s to judge)', () => {
 		const unhandled = [...used].filter((k) => !HANDLED.has(k) && !IGNORED.includes(k));
 		expect(unhandled.join(',')).toBe('');
@@ -92,11 +95,13 @@ describe('config schema: the field tree', () => {
 		expect(raws.map((r) => r.path.join('.')).join()).toBe('x.a,x.b');
 		expect(raws[0].why).toBe('uses format');
 	});
-	it('the drivers, driver and devices sections have no raw field at all', () => {
-		for (const s of ['drivers', 'driver', 'devices']) {
-			expect(JSON.stringify(rawFields(sectionField(slice(s), s)))).toBe('[]');
-		}
+	it('the drivers, driver and devices sections have no raw field but a device\'s offline-alarm (boolean or mapping: raw YAML)', () => {
+		const raw = (s: string) => rawFields(sectionField(slice(s), s)).map((r) => r.path.join('.') + ' ' + r.why);
+		expect(raw('drivers').join()).toBe('');
+		expect(raw('driver').join()).toBe('');
+		expect(raw('devices').join()).toBe('devices.[].devices.offline-alarm uses oneOf');
 	});
+
 });
 
 describe('config schema: the validator', () => {

@@ -707,6 +707,19 @@ jobs:
           path: evidence/
           retention-days: 14
 
+  # The kit's own unit tests (hmi/tests: the config walker over the real
+  # manifest schema, the palette contrast, the mimic and alarm logic). No
+  # other job ran `npm test` here, so a schema change (#1399's oneOf) turned
+  # two of them red on main unseen.
+  hmi-kit:
+    name: HMI kit — unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: npm ci && npm test
+        working-directory: hmi
   hmi-3d:
     name: HMI 3D package — test, check, package; build the examples
     runs-on: ubuntu-latest
@@ -1525,7 +1538,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, go, go-race, siemens-tiad, examples, go-crossbuild, go-naut-rig, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
+    needs: [changes, go, go-race, siemens-tiad, examples, go-crossbuild, go-naut-rig, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-kit, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
