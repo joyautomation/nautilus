@@ -120,6 +120,9 @@ func TestWriteGateShmWithoutWatchdog(t *testing.T) {
 	if !d.Health().GateHolds {
 		t.Fatal("shm with output-watchdog 0: the closed gate must be shown as holding the outputs")
 	}
+	// The driver marks the gate shut before it logs why, so the line can
+	// trail what Health shows (#1120): wait for it.
+	eventually(t, "the closed gate was never logged", func() bool { _, ok := logs.level("outputs HOLD"); return ok })
 	if lv, ok := logs.level("outputs HOLD"); !ok || lv != slog.LevelError {
 		t.Fatalf("shm with output-watchdog 0: a closed gate must be logged as an error (found=%v level=%v)", ok, lv)
 	}
