@@ -439,6 +439,23 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 			pw.divergesAs(ConversionRangeRule, line, name, "the value exceeds "+to+"'s range (or is NaN)", "TRUNC_"+to+" sets ENO FALSE")
 		}
 		return "TRUNC_" + to + "(" + args[0] + ")"
+	case name == "ABS" && len(args) == 1 && pw.wide && pw.typ(c) == tWide:
+		// Integer ABS at 64 bits; the caller wraps. A constant is folded
+		// (TIA would type a lone literal by its value, -128 as SINT, and
+		// overflow). TIA's ABS of a LINT: see the B2 bench row for
+		// LINT's least value.
+		if n, ok := pw.fold(argExprs[0]); ok {
+			if n == -1<<63 {
+				return "(LINT#-9223372036854775807 - 1)" // Go: -min is min
+			}
+			if n < 0 {
+				n = -n
+			}
+			return "LINT#" + strconv.FormatInt(n, 10)
+		}
+		return "ABS(" + args[0] + ")"
+	case name == "ATAN2":
+		return pw.atan2(argExprs, args, line)
 	case mathFuncs[name]:
 		if len(args) != 1 {
 			pw.diag("siemens/call", line, fmt.Sprintf("%s takes one argument", name))
@@ -539,7 +556,7 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 
 // wideGeneric are the functions whose integer arithmetic argument a
 // 64-bit caller may pass through.
-var wideGeneric = map[string]bool{"SEL": true, "MIN": true, "MAX": true, "LIMIT": true}
+var wideGeneric = map[string]bool{"SEL": true, "MIN": true, "MAX": true, "LIMIT": true, "ABS": true}
 
 // intValueArgs reports whether every value argument of the call (SEL's
 // selector aside) is an integer or integer arithmetic.

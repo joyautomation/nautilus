@@ -1,0 +1,16 @@
+FUNCTION "naut_Bump" : REAL
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR_INPUT 
+      x : REAL;
+   END_VAR
+   VAR_TEMP 
+      Bump : REAL;
+   END_VAR
+
+BEGIN
+	#Bump := 0.0;
+	"naut_Tags".Bumps := LINT_TO_DINT((((DINT_TO_LINT("naut_Tags".Bumps) + 1) + LINT#2147483648) MOD LINT#4294967296 + LINT#4294967296) MOD LINT#4294967296 - LINT#2147483648);
+	#Bump := #x;
+	#naut_Bump := #Bump;
+END_FUNCTION

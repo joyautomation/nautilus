@@ -443,6 +443,9 @@ func Write(in Input) (Output, []Diag, error) {
 		if _, ok := stringHelpers[fn]; ok {
 			src, what = stringHelperSource, "the STRING conversion function "
 		}
+		if fn == atan2Helper {
+			src, what = atan2Source, "the ATAN2 function "
+		}
 		if !claim(name, what+fn) {
 			continue
 		}

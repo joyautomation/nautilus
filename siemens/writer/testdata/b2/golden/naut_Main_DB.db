@@ -1,0 +1,8 @@
+DATA_BLOCK "naut_Main_DB"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+"naut_Main"
+
+BEGIN
+
+END_DATA_BLOCK

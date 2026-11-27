@@ -353,7 +353,9 @@ A download can change the program while serve runs:
   data layout changed, it re-binds: new variables appear, removed ones go,
   and VS Code reconnects by itself. While the CPU is stopped (a download
   that changes the layout stops it), serve keeps showing what it had and
-  re-binds once the CPU runs again.
+  re-binds once the CPU runs again. This needs a web user that can read
+  the CPU's operating mode (`read_diagnostics`); without it, serve
+  re-discovers whatever the mode.
 - Before every write, serve checks the variable on the CPU. A variable
   that is gone, or whose type changed, is refused, and nothing is sent.
   The message says serve catches up by itself within 15 s. Retry after
@@ -479,6 +481,23 @@ the counterpart of the `logicErrors` that `naut status` shows:
 A project whose indices are all proved in bounds gets no checks and no
 `naut_Faults`.
 
+## EN and ENO
+
+A call that binds `EN` or `ENO` runs as nautilus runs it: while `EN` is
+FALSE the call does not run, its arguments are not evaluated, and the
+assignment's target and every `=>` binding keep their values. `ENO` is
+`EN`: it is never TIA's own ENO, which turns FALSE on CPU-side errors
+nautilus does not have.
+
+## ATAN2
+
+TIA has no ATAN2, so the writer adds a function of its own,
+`naut_ATAN2`, that computes exactly what nautilus computes (Go's
+`math.Atan2`). Its zeros, infinities and NaN match bit for bit. One
+difference: with a REAL argument that a 32-bit REAL cannot hold exactly
+(0.001, 0.7071), the result can differ in its last bit, because nautilus
+keeps a REAL at 64 bits and the CPU at 32.
+
 ## FOR loops
 
 Every FOR runs as nautilus's does: the variable takes each value in
@@ -503,7 +522,7 @@ that closes it.
 | #1303 | WSTRING, and a STRING literal with characters outside ASCII |
 | #1375 | the conversions to and from STRING TIA has no match for: REAL and LREAL to STRING (TIA writes `+2.150000E+1` where nautilus writes `21.5`), TIME, BYTE, WORD, DWORD, LWORD, and STRING_TO_BOOL |
 | #1304 | TIME arithmetic, LTIME, dates |
-| #1305 | the rest: an array of function block instances, an array temp (a function's local array included), an index inside a REPEAT's UNTIL, a function writing its own STRUCT or ARRAY input (TIA hands a function such an input by reference, so the write would reach the caller's variable), writing an element of a tag several tasks share, type aliases, converting an enumeration to anything but an integer (such as `TO_STRING`), ULINT and LWORD arithmetic, ATAN2, integer ABS, `VAR RETAIN` inside a block, an instance of your own block in a program's `VAR RETAIN`, reading or writing an instance's in-out from outside it, a manifest tag named inside a block when the project has several tasks, and more |
+| #1305 | the rest: an array of function block instances, an array temp (a function's local array included), an index inside a REPEAT's UNTIL, a function writing its own STRUCT or ARRAY input (TIA hands a function such an input by reference, so the write would reach the caller's variable), writing an element of a tag several tasks share, type aliases, converting an enumeration to anything but an integer (such as `TO_STRING`), ULINT and LWORD arithmetic, `VAR RETAIN` inside a block, an instance of your own block in a program's `VAR RETAIN`, reading or writing an instance's in-out from outside it, a manifest tag named inside a block when the project has several tasks, and more |
 
 Real limits keep their own words, such as a task interval over 60 s or a
 block name collision.

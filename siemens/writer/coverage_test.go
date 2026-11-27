@@ -374,7 +374,8 @@ func TestEveryGapNamesItsIssue(t *testing.T) {
 		"PROGRAM P\nVAR a : ARRAY[1..2] OF INT; i : INT; END_VAR\nREPEAT i := i + 1; UNTIL a[i] > 0 END_REPEAT;\nEND_PROGRAM\n",
 		"PROGRAM P\nFUNCTION_BLOCK H\nVAR RETAIN n : INT; END_VAR\nEND_FUNCTION_BLOCK\nVAR h : H; END_VAR\nh();\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a, b : TIME; r, q : REAL; u : ULINT; END_VAR\na := a + b;\nr := r MOD q;\nu := u + 1;\na := T#1500us;\nEND_PROGRAM\n",
-		"PROGRAM P\nVAR a : INT; r : REAL; c : CTU; END_VAR\nr := ATAN2(r, r);\nc(CU := TRUE, PV := a + 1);\nEND_PROGRAM\n",
+		"PROGRAM P\nVAR t : ARRAY[0..1] OF TON; END_VAR\nt[0](IN := TRUE, PT := T#1s);\nEND_PROGRAM\n",
+		"PROGRAM P\nVAR a : INT; c : CTU; END_VAR\nc(CU := TRUE, PV := a + 1);\nEND_PROGRAM\n",
 		"PROGRAM P\nVAR a : LTIME; END_VAR\nEND_PROGRAM\n",
 		"TYPE Mode : (Run, Stop); END_TYPE\nPROGRAM P\nVAR a : Mode; s : STRING; END_VAR\ns := TO_STRING(a);\nEND_PROGRAM\n",
 		"FUNCTION F : INT\nF := 1;\nEND_FUNCTION\nPROGRAM P\nVAR a : INT; END_VAR\na := F();\nEND_PROGRAM\n",
@@ -461,7 +462,7 @@ func TestDivergencesAreWarnedWhereTheyBite(t *testing.T) {
 	}
 
 	// A refused program still reports its warnings.
-	out, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a, k : INT; r : REAL; END_VAR\na := MUX(k, a, 1);\nr := ATAN2(r, r);\nEND_PROGRAM\n"}}})
+	out, diags, _ = Write(Input{Programs: []Program{{Path: "p.st", Source: "PROGRAM P\nVAR a, k : INT; r : REAL; END_VAR\na := MUX(k, a, 1);\nr := r MOD r;\nEND_PROGRAM\n"}}})
 	if len(diags) == 0 || len(out.Warnings) != 1 || len(out.Files) != 0 {
 		t.Errorf("refused: diags %v, warnings %v", diags, out.Warnings)
 	}

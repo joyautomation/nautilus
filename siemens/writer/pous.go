@@ -414,6 +414,16 @@ func (w *writer) writeOne(p *pou, s site) *pouFile {
 	} else {
 		header, footer = "FUNCTION_BLOCK "+name+"\n", "END_FUNCTION_BLOCK"
 	}
+	// A block's own EN input or ENO output (a ladder-style user block,
+	// lang/st lower_eneno.go): in SCL, EN and ENO name TIA's own execution
+	// control, so the pins cannot keep their names.
+	for _, vb := range p.vbs {
+		for _, v := range vb.Variables {
+			if (vb.Kind == "VAR_INPUT" && strings.EqualFold(v.Name, "EN")) || (vb.Kind == "VAR_OUTPUT" && strings.EqualFold(v.Name, "ENO")) {
+				pw.gap("siemens/var", p.lineOf(), gapOther, p.name+"'s own "+strings.ToUpper(v.Name)+" pin", "in SCL, EN and ENO are TIA's own execution control")
+			}
+		}
+	}
 	ok := len(w.diags) == mark && pw.block(header, footer, p.vbs, p.stmts)
 	for i := mark; i < len(w.diags); i++ {
 		w.diags[i] = pw.relocate(w.diags[i])
