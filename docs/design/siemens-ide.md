@@ -320,6 +320,17 @@ The rules:
   LINT temp (#1305 B1). Where it cannot (an input of a standard block, an
   argument of another standard function, a CASE selector, a REAL target,
   a FOR step), integer arithmetic is refused.
+- **Integer ABS** is integer arithmetic (lang/ir builtins.go: computed,
+  ABS of an INT at -32768 is 32768): `ABS(<LINT>)` at 64 bits, the store
+  wraps (#1305 B2).
+- **EN/ENO** (lang/st lower_eneno.go) is written as nautilus lowers it:
+  `IF <EN> THEN <call or assignment>; ENO := TRUE; ELSE ENO := FALSE;
+  END_IF;` (eneno.go), before the statement's own hoisting, so the
+  arguments, their checks and a FUNCTION that can fault run only under
+  the gate. TIA's ENO is never wired.
+- **ATAN2** (Go's math.Atan2; TIA has none) is a generated LReal FUNCTION
+  `naut_ATAN2` (atan2.go) with Go's special cases in Go's order and
+  float64's π constants; signed zeros through LREAL_TO_LWORD.
 - **FOR** is TIA's own FOR only where it provably ends on the CPU
   (constant start, end and step, end + step inside the variable's type),
   run over a temp of the variable's type (`naut_for_v`) whose value the
