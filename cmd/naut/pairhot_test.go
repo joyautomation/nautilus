@@ -212,8 +212,8 @@ func TestPairColdTakeoverOnAnotherBuild(t *testing.T) {
 	r.shadowed(t, lead)
 	// A standby on another build acknowledges nothing: a takeover would
 	// be cold, so the leader's PEER_READY() stays FALSE (#710 (b);
-	// ack_other_build turns it red), also right after it reconnects with
-	// the ack its earlier boot made (ack_kept_across_reconnect).
+	// ack_other_build turns it red). Right after it reconnects, the ack its
+	// earlier boot made is dropped too: TestAReconnectDropsTheEarlierAcknowledgement.
 	for end := time.Now().Add(1500 * time.Millisecond); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
 		if r.nodes[lead].rt.PeerReady() {
 			t.Fatal("PEER_READY TRUE with a standby on another build")

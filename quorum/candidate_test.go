@@ -564,7 +564,9 @@ func TestCandidateGranteeCheckedEvenOnANonceCollision(t *testing.T) {
 // In its quiet period (a restart, or a new adoption) the counted witness
 // incarnation's grant does not count, but its reply shows the link works:
 // a campaign it and the own voter refuse is refused by a majority and
-// retries on a later look, not backed off two leases as if unheard.
+// retries on a later look at a new term, not asked again as if the
+// witness were unheard (a re-ask carries a new id too, so the term tells
+// them apart, #1096), nor backed off two leases.
 func TestQuietReplyIsHeardNotCounted(t *testing.T) {
 	c := newC(t, cfgA(), 0, 0)
 	c.Count(42, at(lease)) // quiet until one lease
@@ -579,8 +581,8 @@ func TestQuietReplyIsHeardNotCounted(t *testing.T) {
 	r = c.Tick(0, "", 0, true)
 	c.OnReply(at(10*ms), refused("A", r, 0, 0))
 	c.OnReply(at(10*ms), refused("W", r, 0, 42))
-	if r2 := c.Tick(at(300*ms), "", 0, true); r2 == nil || r2.ID == r.ID {
-		t.Fatal("no retry at 300 ms: the refusal in the quiet period was not heard")
+	if r2 := c.Tick(at(300*ms), "", 0, true); r2 == nil || r2.Term <= r.Term {
+		t.Fatalf("at 300 ms %+v, want a new campaign above term %d: the refusal in the quiet period was not heard", r2, r.Term)
 	}
 }
 

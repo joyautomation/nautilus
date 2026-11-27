@@ -253,3 +253,27 @@ func TestAFinalImageWaitingIsSentAtOnce(t *testing.T) {
 		t.Fatal("pending on a connection that sent it, or for another term")
 	}
 }
+
+// A new stream connection drops the acknowledgement made before it (#710
+// (b)): the standby may have restarted on another build or with an empty
+// shadow, so the image it acknowledged on the old connection is no word
+// on what it holds now. Right after the reconnect, one image out, it is
+// not current. ack_kept_across_reconnect turns it red (#1096:
+// TestPairColdTakeoverOnAnotherBuild reads PEER_READY only once the
+// standby is in sync, past that moment).
+func TestAReconnectDropsTheEarlierAcknowledgement(t *testing.T) {
+	s := &pairStream{}
+	now := time.Now()
+	s.noteSent(4, 1, now.Add(-100*time.Millisecond), true)
+	s.noteSent(4, 2, now.Add(-50*time.Millisecond), false)
+	if ok, _ := s.takeAck(4, streamAck{Epoch: 4, Seq: 2}, now.Add(-40*time.Millisecond)); !ok {
+		t.Fatal("the acknowledgement of the last image refused")
+	}
+	if seq, cur := s.syncMark(4); seq != 2 || !cur {
+		t.Fatalf("before the reconnect: mark %d %v, want 2, current", seq, cur)
+	}
+	s.noteSent(4, 3, now, true) // the first image on a new connection
+	if seq, cur := s.syncMark(4); seq != 0 || cur {
+		t.Fatalf("right after a reconnect: mark %d %v, want none (the old connection's acknowledgement dropped)", seq, cur)
+	}
+}

@@ -287,11 +287,16 @@ func TestLateCopiesAfterARestartMarkNothing(t *testing.T) {
 // boot first and then the old boot's last frames still in flight. No
 // voter marks the name (#1029 3c: a mark needs EACH boot to send past the
 // other's first frame, which a dead boot never does), and a leader is
-// back within the bound. dup_mark_one_sided turns it red (one run of the
-// 300 marks; TestAVoterThatMissedTheOldBootMarksNoRestart pins it alone).
+// back within the bound. dup_mark_one_sided turns it red (5 runs of
+// 3,000 mark, about 4 s; at 300 runs one marked, and timing changes since
+// took that to none, #1096; TestAVoterThatMissedTheOldBootMarksNoRestart
+// pins it alone). Under -race, 300.
 func TestRestartsBesideAVoterRestartMarkNothing(t *testing.T) {
-	marked := 0
-	for seed := uint64(1); seed <= 300; seed++ {
+	marked, n := 0, uint64(3000)
+	if raceOn {
+		n = 300
+	}
+	for seed := uint64(1); seed <= n; seed++ {
 		o := randomRun(seed, profClone)
 		o.Delay, o.Jitter = lease/5, lease/40
 		r := rand.New(rand.NewPCG(seed, 0x76727374))
@@ -317,6 +322,6 @@ func TestRestartsBesideAVoterRestartMarkNothing(t *testing.T) {
 		}
 	}
 	if marked > 0 {
-		t.Logf("%d of 300 runs marked a name", marked)
+		t.Logf("%d of %d runs marked a name", marked, n)
 	}
 }

@@ -244,3 +244,21 @@ func TestARefusedWitnessReplyClosesTheConnections(t *testing.T) {
 		t.Fatalf("a reply under another incarnation's certificate: closes %d", spy.closed)
 	}
 }
+
+// A witness reply counts only when it carries the incarnation its
+// certificate names (#710 2b), even when that certificate is the adopted
+// incarnation's: the adoption check (witnessOpOK) reads the certificate
+// alone, so this is the case only the binding refuses. (The loopback test
+// above, a certificate naming another incarnation than the adopted one,
+// is refused by the adoption check too, #1096.)
+func TestAReplyCarryingAnotherIncarnationThanItsCertificateDoesNotCount(t *testing.T) {
+	spy := &closeSpy{}
+	e := &Elector{o: Options{Witness: WitnessID}, log: slog.Default(), call: caller{tls: true, client: &http.Client{Transport: spy}}}
+	e.adopted.Store(7)
+	if e.witnessReplyCounts(WitnessID, "witness@7", quorum.Reply{From: WitnessID, To: "b", Incarnation: 8}) {
+		t.Fatal("a reply carrying incarnation 8 under the adopted witness@7's certificate counted")
+	}
+	if !e.witnessReplyCounts(WitnessID, "witness@7", quorum.Reply{From: WitnessID, To: "b", Incarnation: 7}) {
+		t.Fatal("a bound reply from the adopted incarnation does not count")
+	}
+}

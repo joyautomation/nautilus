@@ -400,7 +400,7 @@ var table = []mutation{
 	{"placeholder_keeps_synced", []string{"TestRebindAPendingReplica"}},
 	{"unsynced_log_writes", []string{"TestFollowerOfAnUnsyncedLeaderIsNotWritable", "TestPairUnsyncedTakeoverCarriesNoAcks"}},
 	// In the pair's wiring (cmd/naut), end to end.
-	{"witness_log_unbound", []string{"TestPairWitnessLogAdmitsOnlyItsGrantedLeader"}},
+	{"witness_log_unbound", []string{"TestPairWitnessLogAdmitsOnlyItsGrantedLeader", "TestWitnessAdmitsAtOrBelowItsPromise"}},
 	{"witness_log_term_unbound", []string{"TestPairWitnessLogAdmitsOnlyItsGrantedLeader", "TestWitnessAdmitsAtOrBelowItsPromise"}},
 	{"witness_log_any_incarnation", []string{"TestWitnessCountsOnlyAtTheCountedIncarnation"}},
 	{"witness_not_a_replica", []string{"TestPairLogWritesWithItsPeerDown", "TestPairLogSurvivesALeaderCrash", "TestPairAckCarriesAcrossATakeoverAfterTheLeaderDied"}},
@@ -681,7 +681,10 @@ var table = []mutation{
 	{"resign_unchecked", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"final_sent_once_per_connection", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"ack_other_build", []string{"TestPairColdTakeoverOnAnotherBuild"}},
-	{"ack_kept_across_reconnect", []string{"TestPairColdTakeoverOnAnotherBuild"}},
+	// TestPairColdTakeoverOnAnotherBuild reads PEER_READY once the
+	// standby is in sync, past the one image after a reconnect that a kept
+	// acknowledgement makes look current: the unit test carries it (#1096).
+	{"ack_kept_across_reconnect", []string{"TestAReconnectDropsTheEarlierAcknowledgement"}},
 	{"spend_failure_keeps_alone", []string{"TestASpendThatCantBeWrittenIsSpentInMemoryAndRetried"}},
 	{"accept_survives_reboot", []string{"TestAVouchDoesNotSurviveARestart"}},
 	{"superseded_lead_keeps_substitutes", []string{"TestPairALeaderThatLearnsANewerHistoryRunsNoneOfTheOld"}},
@@ -816,7 +819,10 @@ var table = []mutation{
 	{"witness_call_any_inc", []string{"TestAWitnessCallTakesOnlyTheCountedIncarnation"}},
 	{"drop_ban_in_memory", []string{"TestADroppedKeyStaysRefusedAcrossARestart"}},
 	{"adopt_keeps_witness_pins", []string{"TestEachIncarnationIsPinnedAndAdoptionDropsTheOthers", "TestPairRebuiltWitnessIsRecopiedAndCarriesATakeover"}},
-	{"reply_inc_unbound", []string{"TestLoopbackAWitnessReplyCountsOnlyUnderItsIncarnation", "TestARefusedWitnessReplyClosesTheConnections"}},
+	// TestLoopbackAWitnessReplyCountsOnlyUnderItsIncarnation's certificate
+	// names an incarnation the pair has not adopted, which the adoption
+	// check refuses as well: the unit tests carry this row (#1096).
+	{"reply_inc_unbound", []string{"TestAReplyCarryingAnotherIncarnationThanItsCertificateDoesNotCount", "TestARefusedWitnessReplyClosesTheConnections"}},
 	{"witness_ops_any_inc", []string{"TestLoopbackAWitnessReplyCountsOnlyUnderItsIncarnation"}},
 	{"bound_reply_keeps_conn", []string{"TestARefusedWitnessReplyClosesTheConnections"}},
 	{"unbound_refusal_keeps_conn", []string{"TestAnUnboundWitnessRefusalClosesTheConnections"}},
@@ -836,7 +842,11 @@ var table = []mutation{
 	{"key_box_virtual_nics", []string{"TestThePeerKeyIgnoresVirtualInterfaces"}},
 	{"pin_journal_unbuffered", []string{"TestPinEventsWaitForTheJournal", "TestPairPeerKeysShowInStatus"}},
 	{"unpin_self", []string{"TestUnpinThroughTheCLI"}},
-	{"unpin_lifts_on_retry", []string{"TestPairAnUnpinRetryNeverLifts", "TestPairALostWitnessAnswerNeverLifts"}},
+	// TestPairAnUnpinRetryNeverLifts's retry finds the witness still
+	// holding the pin, so an unpin taken afresh drops it there and lifts
+	// nothing either: only a lost answer (the witness dropped it, the
+	// first run never heard) makes the fresh path lift (#1096).
+	{"unpin_lifts_on_retry", []string{"TestPairALostWitnessAnswerNeverLifts"}},
 	{"unpin_other_cluster", []string{"TestTheWitnessTakesAnUnpinOnlyByItsRules"}},
 	{"witness_unpin_self", []string{"TestTheWitnessTakesAnUnpinOnlyByItsRules"}},
 	{"unpin_newer_caller", []string{"TestTheWitnessTakesAnUnpinOnlyByItsRules"}},
