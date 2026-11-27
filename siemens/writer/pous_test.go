@@ -241,10 +241,12 @@ func TestSectionsInTIAOrder(t *testing.T) {
 // TestENOnABlockCall: EN/ENO on a call of the project's block is refused
 // (SCL calls a block without them).
 func TestENOnABlockCall(t *testing.T) {
-	_, diags := writePOU(t, "PROGRAM P\nFUNCTION_BLOCK H\nVAR_INPUT x : BOOL; END_VAR\nEND_FUNCTION_BLOCK\nVAR h : H; END_VAR\nh(EN := B, x := TRUE);\nEND_PROGRAM\n")
-	if len(diags) == 0 || diags[0].Line != 6 || !strings.Contains(diags[0].Message, "EN/ENO on a call of FUNCTION_BLOCK H yet (#1305)") {
-		t.Errorf("EN: %v", diags)
+	// EN gates the call as nautilus does (eneno.go, #1305 B2).
+	out, diags := writePOU(t, "PROGRAM P\nFUNCTION_BLOCK H\nVAR_INPUT x : BOOL; END_VAR\nEND_FUNCTION_BLOCK\nVAR h : H; END_VAR\nh(EN := B, x := TRUE);\nEND_PROGRAM\n")
+	if len(diags) > 0 {
+		t.Fatalf("EN: %v", diags)
 	}
+	wantLines(t, fileOf(t, out, "naut_P.scl"), "IF \"naut_Tags\".B THEN\n\t\t#h(x := TRUE);\n\tEND_IF;")
 }
 
 // TestOnlyReachedBlocksAreWritten: a library block nothing calls is not

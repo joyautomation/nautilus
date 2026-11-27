@@ -276,6 +276,22 @@ func (pw *progWriter) typ0(e st.Expression) string {
 		if to, ok := strings.CutPrefix(name, "TO_"); ok {
 			return to
 		}
+		if name == "ABS" && len(args) == 1 {
+			// nautilus types ABS of an integer as computed (lang/ir
+			// builtins.go): ABS of an INT at -32768 is 32768, cut back
+			// only by its store, like integer arithmetic.
+			if t := pw.typ(args[0]); isIntish(t) || t == tWide {
+				return tWide
+			}
+		}
+		if name == "ATAN2" {
+			for _, a := range args {
+				if pw.typ(a) == "LREAL" {
+					return "LREAL"
+				}
+			}
+			return "REAL"
+		}
 		if mathFuncs[name] || name == "EXPT" {
 			if len(args) > 0 && pw.typ(args[0]) == "LREAL" {
 				return "LREAL"

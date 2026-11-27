@@ -577,6 +577,12 @@ func (pw *progWriter) stmts(b *strings.Builder, ss []st.Statement, depth int) {
 }
 
 func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
+	// A call with EN/ENO runs under its gate (eneno.go): first, so that
+	// what the call computes first stays inside it, as nautilus skips
+	// the call's arguments while EN is FALSE.
+	if pw.gated(b, s, d) {
+		return
+	}
 	in := indent(d)
 	at := lineAt(s)
 	// What the statement computes first: its array checks and the

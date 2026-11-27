@@ -1,0 +1,27 @@
+DATA_BLOCK "naut_Tags"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      A16 : INT;
+      A32 : DINT;
+      A64 : LINT;
+      Bumps : DINT;
+      Cu : BOOL;
+      cv : INT;
+      En : BOOL;
+      eno1 : BOOL;
+      eno2 : BOOL;
+      Gr : Array[0..143] of REAL;
+      rA16 : INT;
+      rA32 : DINT;
+      rA64 : LINT;
+      rAbs5 : INT;
+      rLim : REAL;
+      Scans : DINT;
+      Sp : Array[0..48] of LREAL;
+      X : REAL;
+   END_VAR
+
+BEGIN
+
+END_DATA_BLOCK
