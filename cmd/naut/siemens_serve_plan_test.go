@@ -94,11 +94,28 @@ func TestSiemensServeBindsWhatTheWriterGenerates(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer res.Body.Close()
-		var st struct{ Tags map[string]any }
+		var st struct{ Tags, Locals map[string]any }
 		if err := json.NewDecoder(res.Body).Decode(&st); err != nil {
 			t.Fatal(err)
 		}
-		return st.Tags
+		// Main's locals come back under "locals" by bare name, as under
+		// naut run; flattened here as Main.<path>.
+		out := map[string]any{}
+		for k, v := range st.Tags {
+			out[k] = v
+		}
+		var flat func(prefix string, m map[string]any)
+		flat = func(prefix string, m map[string]any) {
+			for k, v := range m {
+				if sub, ok := v.(map[string]any); ok {
+					flat(prefix+k+".", sub)
+					continue
+				}
+				out[prefix+k] = v
+			}
+		}
+		flat("Main.", st.Locals)
+		return out
 	}
 	waitUntil := func(what string, cond func(map[string]any) bool) map[string]any {
 		t.Helper()
@@ -114,7 +131,7 @@ func TestSiemensServeBindsWhatTheWriterGenerates(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
-	got := waitUntil("the program's variables", func(m map[string]any) bool { return m["Main.count"] != nil })
+	got := waitUntil("the program's variables", func(m map[string]any) bool { return m["Main.count"] != nil && m["Level"] != nil })
 	if got["Level"] != 2.0 || got["Main.dwell.Q"] != true {
 		t.Fatalf("state %v", got)
 	}

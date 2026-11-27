@@ -96,11 +96,28 @@ func stateQ(t *testing.T, base string) (map[string]any, map[string]string) {
 	defer res.Body.Close()
 	var st struct {
 		Tags    map[string]any    `json:"tags"`
+		Locals  map[string]any    `json:"locals"`
 		Quality map[string]string `json:"quality"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&st); err != nil {
 		t.Fatal(err)
 	}
+	// The fixture has one program, Main: its locals come back under the
+	// names the facade binds them by (Main.count, Main.dwell.Q).
+	if st.Tags == nil {
+		st.Tags = map[string]any{}
+	}
+	var flat func(prefix string, m map[string]any)
+	flat = func(prefix string, m map[string]any) {
+		for k, v := range m {
+			if sub, ok := v.(map[string]any); ok {
+				flat(prefix+k+".", sub)
+				continue
+			}
+			st.Tags[prefix+k] = v
+		}
+	}
+	flat("Main.", st.Locals)
 	return st.Tags, st.Quality
 }
 
@@ -161,7 +178,7 @@ func TestMissingRootIsAnError(t *testing.T) {
 // types, and follow the CPU when it changes them.
 func TestLiveValuesFollowTheCPU(t *testing.T) {
 	s, _, base := start(t)
-	waitFor(t, "first values", func() bool { return state(t, base)["Main.count"] != nil })
+	waitFor(t, "first values", func() bool { st := state(t, base); return st["Main.count"] != nil && st["Level"] != nil })
 	st := state(t, base)
 	if st["Level"] != 12.5 || st["Run"] != false || st["Main.count"] != float64(4) || st["Main.dwell.Q"] != true {
 		t.Fatalf("state %v", st)
@@ -329,6 +346,7 @@ func TestConvertWrite(t *testing.T) {
 }
 
 // TestQualityFollowsTheReads: a tag whose read fails keeps its last value
+// (program locals carry no quality, as under naut run)
 // and is Bad (until a re-discovery re-binds without it, and again with it
 // once it is back); when the CPU cannot be reached every held value is
 // Stale. The quality is what the API says, not just the status message.
@@ -336,26 +354,26 @@ func TestQualityFollowsTheReads(t *testing.T) {
 	s, _, base := startWith(t, Options{Rediscover: 2 * time.Second, Settle: time.Second})
 	waitFor(t, "all good", func() bool {
 		tags, q := stateQ(t, base)
-		return tags["Main.count"] != nil && len(q) == 0
+		return tags["Speed"] != nil && len(q) == 0
 	})
-	s.Put(`"Main_DB".count`, nil)
-	waitFor(t, "Main.count bad", func() bool { _, q := stateQ(t, base); return q["Main.count"] == "bad" })
+	s.Put(`"Tags".Speed`, nil)
+	waitFor(t, "Speed bad", func() bool { _, q := stateQ(t, base); return q["Speed"] == "bad" })
 	tags, q := stateQ(t, base)
-	if tags["Main.count"] != float64(4) {
-		t.Fatalf("a failed read must hold the last value: %v", tags["Main.count"])
+	if tags["Speed"] != float64(3) {
+		t.Fatalf("a failed read must hold the last value: %v", tags["Speed"])
 	}
 	if q["Level"] != "" {
 		t.Fatalf("the other tags stay good: %v", q)
 	}
-	s.Put(`"Main_DB".count`, &webapitest.Var{Datatype: "int", Value: 6})
+	s.Put(`"Tags".Speed`, &webapitest.Var{Datatype: "int", Value: 6})
 	waitFor(t, "good again", func() bool {
 		tags, q := stateQ(t, base)
-		return tags["Main.count"] == float64(6) && q["Main.count"] == ""
+		return tags["Speed"] == float64(6) && q["Speed"] == ""
 	})
 	s.StopAnswering()
 	waitFor(t, "all stale", func() bool {
 		_, q := stateQ(t, base)
-		return q["Level"] == "stale" && q["Main.count"] == "stale"
+		return q["Level"] == "stale" && q["Speed"] == "stale"
 	})
 }
 

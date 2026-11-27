@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/siemens/webapi"
 	"github.com/joyautomation/nautilus/siemens/webapi/webapitest"
 )
@@ -188,9 +189,9 @@ func TestKnownLeavesOutTheWritersOwnMembers(t *testing.T) {
 // again at each re-discovery (a program added since serve started).
 func TestReloadPicksUpTheProjectsNewRoots(t *testing.T) {
 	calls := 0
-	reload := func() ([]Root, func(string) bool, error) {
+	reload := func() (Plan, error) {
 		calls++
-		return roots, nil, nil
+		return Plan{Roots: roots}, nil
 	}
 	_, f, base := startWith(t, Options{Roots: []Root{{DB: "Tags"}}, Reload: reload, Rediscover: 100 * time.Millisecond})
 	if _, ok := state(t, base)["Main.count"]; ok {
@@ -271,11 +272,11 @@ func TestTheSwapWindowAnswers503(t *testing.T) {
 func TestKicksThatFindNothingAreRateLimited(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
-	reload := func() ([]Root, func(string) bool, error) {
+	reload := func() (Plan, error) {
 		mu.Lock()
 		calls++
 		mu.Unlock()
-		return roots, nil, nil
+		return Plan{Roots: roots}, nil
 	}
 	_, f, _ := startWith(t, Options{Rediscover: -1, Settle: 10 * time.Millisecond, KickGap: time.Hour, Reload: reload})
 	for i := 0; i < 25; i++ {
@@ -295,14 +296,14 @@ func TestKicksThatFindNothingAreRateLimited(t *testing.T) {
 func TestADifferentBrowseIsConfirmedFirst(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
-	reload := func() ([]Root, func(string) bool, error) { // odd: half loaded; even: whole
+	reload := func() (Plan, error) { // odd: half loaded; even: whole
 		mu.Lock()
 		defer mu.Unlock()
 		calls++
 		if calls%2 == 1 {
-			return []Root{{DB: "Tags"}}, nil, nil
+			return Plan{Roots: []Root{{DB: "Tags"}}}, nil
 		}
-		return roots, nil, nil
+		return Plan{Roots: roots}, nil
 	}
 	_, f, _ := startWith(t, Options{Rediscover: 100 * time.Millisecond, Settle: 20 * time.Millisecond, Reload: reload})
 	time.Sleep(700 * time.Millisecond)
@@ -377,4 +378,23 @@ func TestAWriteInFlightAndOneInTheSwapWindowBothFinish(t *testing.T) {
 		t.Fatalf("rebinds = %d", f.Rebinds())
 	}
 	waitFor(t, "the new set serving", func() bool { return state(t, base)["Main.extra"] == true })
+}
+
+// TestAnEqualProgramIsNoChange: the project is read again at every
+// re-discovery, so each Reload builds a new Program; an equal one does
+// not re-bind.
+func TestAnEqualProgramIsNoChange(t *testing.T) {
+	reload := func() (Plan, error) {
+		return Plan{Roots: roots, Program: &Program{
+			TagTypes:   map[string]*ir.Type{"Level": {Kind: ir.TypeReal}},
+			LocalTypes: map[string]*ir.Type{"count": {Kind: ir.TypeInt}},
+			Order:      []string{"Main"},
+		}}, nil
+	}
+	p, _ := reload()
+	_, f, _ := startWith(t, Options{Program: p.Program, Reload: reload, Rediscover: 50 * time.Millisecond, Settle: 10 * time.Millisecond})
+	time.Sleep(500 * time.Millisecond)
+	if n := f.Rebinds(); n != 0 {
+		t.Fatalf("rebinds = %d for an equal Program", n)
+	}
 }

@@ -337,6 +337,12 @@ under the program's name (`Main.count`). The writer's own members, such as
 the `_last` static it keeps beside a timer, are left out. `--root` binds
 the blocks you name instead.
 
+With a project, serve shows what `naut run` shows for it. The manifest
+tags are tags. Each program's variables are its locals, by name, with a
+timer as its members (`dwell.ET`, `dwell.Q`). `/api/meta` reports the
+types the project declares. In VS Code, a program variable gets its live
+value the same way under both.
+
 A download can change the program while serve runs:
 
 - Every 15 s, serve reads the project and browses the CPU again. If the

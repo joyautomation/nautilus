@@ -294,6 +294,10 @@ type Driver struct {
 	// Defaults: one poll period (at least 1 s), and 30 s.
 	BackoffMin, BackoffMax time.Duration
 	now                    func() time.Time
+	// tags, when set, are the bindings that are runtime tags: Quality
+	// reports only those (the rest are program locals, which carry no
+	// quality in a frame).
+	tags map[string]bool
 	// onGone, when set, is called when a read says a bound symbol no
 	// longer exists, or reads a value its bound type cannot hold (a
 	// download changed the program): the facade then browses the CPU
@@ -429,6 +433,9 @@ func (d *Driver) Quality() map[string]nio.Quality {
 	defer d.mu.Unlock()
 	var out map[string]nio.Quality
 	for _, b := range d.bs {
+		if d.tags != nil && !d.tags[b.Name] {
+			continue
+		}
 		_, held := d.values[b.Name]
 		var q nio.Quality
 		switch {

@@ -120,14 +120,28 @@ func holdsEnum(t *ir.Type, depth int) bool {
 	return false
 }
 
+// allLocals is the frame's program locals: the fronted controller's when
+// the server fronts one (Options.Fronted), else the runtime's.
+func (s *Server) allLocals() map[string]any {
+	if s.fronted.Locals != nil {
+		return s.fronted.Locals()
+	}
+	return s.rt.AllLocals()
+}
+
 // metaTags merges the runtime's tag documentation with every tag's
-// declared type, keyed by the spelling the stream uses.
-func metaTags(rt *runtime.Runtime) map[string]tagMetaJSON {
+// declared type, keyed by the spelling the stream uses. types, when set,
+// stands in for the runtime's (a fronted controller, Options.Fronted).
+func metaTags(rt *runtime.Runtime, types func() map[string]*ir.Type) map[string]tagMetaJSON {
 	out := map[string]tagMetaJSON{}
 	for name, m := range rt.Meta() {
 		out[name] = tagMetaJSON{TagMeta: m}
 	}
-	for name, t := range rt.TagTypes() {
+	tt := rt.TagTypes
+	if types != nil {
+		tt = types
+	}
+	for name, t := range tt() {
 		e := out[name]
 		e.typeInfo = describeType(t)
 		out[name] = e
@@ -135,10 +149,15 @@ func metaTags(rt *runtime.Runtime) map[string]tagMetaJSON {
 	return out
 }
 
-// metaLocals is every streamed program local's declared type.
-func metaLocals(rt *runtime.Runtime) map[string]typeInfo {
+// metaLocals is every streamed program local's declared type; types, when
+// set, stands in for the runtime's (Options.Fronted).
+func metaLocals(rt *runtime.Runtime, types func() map[string]*ir.Type) map[string]typeInfo {
 	out := map[string]typeInfo{}
-	for name, t := range rt.LocalTypes() {
+	lt := rt.LocalTypes
+	if types != nil {
+		lt = types
+	}
+	for name, t := range lt() {
 		out[name] = describeType(t)
 	}
 	return out
