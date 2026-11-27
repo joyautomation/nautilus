@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -121,5 +122,60 @@ func TestInputsReadyWithNoDataBindings(t *testing.T) {
 	}
 	if !d.InputsReady() {
 		t.Fatal("a driver with no data bindings must be ready at once")
+	}
+}
+
+// A birth from a same-named edge in another group is not the bound node's
+// (Fable): it does not end the wait; the bound group's does.
+func TestInputsReadyCountsBirthsFromTheBoundGroupOnly(t *testing.T) {
+	d := newReadyDriver(t, "127.0.0.1:1", "h-ready-group", time.Hour)
+	d.mu.Lock()
+	d.in.firstConn = time.Now()
+	birthAll := func(group func(edge string) string) {
+		for edge, devs := range d.in.srcs {
+			d.noteBirthLocked(group(edge), edge)
+			for dev := range devs {
+				d.noteDeviceBirthLocked(group(edge), edge, dev)
+			}
+		}
+	}
+	birthAll(func(string) string { return "some-other-group" })
+	d.mu.Unlock()
+	if d.InputsReady() {
+		t.Fatal("ready on births from another group")
+	}
+	d.mu.Lock()
+	birthAll(func(edge string) string {
+		g, ok := d.groupFor(edge)
+		if !ok {
+			t.Fatalf("no group for %s", edge)
+		}
+		return g
+	})
+	d.mu.Unlock()
+	if !d.InputsReady() {
+		t.Fatal("not ready after the bound group's births")
+	}
+}
+
+// A node the start sweep has not asked yet is timed from the session, not
+// from the sweep's end: a large fleet's sweep must not hold every start
+// past the runtime's 2 s wait (Fable).
+func TestInputsReadyDoesNotWaitOutALargeFleetsSweep(t *testing.T) {
+	cfg := testConfig("127.0.0.1:1", "h-ready-fleet")
+	cfg.RebirthOnStart = true
+	d, err := New(testManifest(), cfg, WithLogger(quietLogger()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.birthWait = time.Second
+	for i := range 100 { // a fleet: its sweep alone would take 5 s
+		d.manifest.Nodes = append(d.manifest.Nodes, Node{EdgeNode: fmt.Sprintf("fleet-%d", i)})
+	}
+	d.mu.Lock()
+	d.in.firstConn = time.Now().Add(-1500 * time.Millisecond)
+	d.mu.Unlock()
+	if !d.InputsReady() {
+		t.Fatal("not ready 1.5 s after the session with no birth: a silent node costs birthWait, not the sweep")
 	}
 }

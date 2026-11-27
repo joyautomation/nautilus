@@ -55,21 +55,34 @@ func (d *Driver) buildInputSources() {
 
 // noteBirthLocked and noteDeviceBirthLocked record a birth for InputsReady.
 // Caller holds d.mu.
-func (d *Driver) noteBirthLocked(edge string) {
+func (d *Driver) noteBirthLocked(group, edge string) {
+	if !d.boundGroup(group, edge) {
+		return
+	}
 	if d.in.born == nil { // a Driver built by hand, not by New
 		d.in.born = map[string]bool{}
 	}
 	d.in.born[edge] = true
 }
 
-func (d *Driver) noteDeviceBirthLocked(edge, device string) {
+func (d *Driver) noteDeviceBirthLocked(group, edge, device string) {
+	if !d.boundGroup(group, edge) {
+		return
+	}
 	if d.in.devBorn == nil {
 		d.in.devBorn = map[string]bool{}
 	}
 	d.in.devBorn[edge+"\x00"+device] = true
 }
 
-// noteAsked records the first rebirth request published for edge.
+// boundGroup reports whether a birth from group/edge is the bound node's:
+// with several groups subscribed, a same-named edge in another group is
+// not it (Fable). A node whose group the host cannot name is taken.
+func (d *Driver) boundGroup(group, edge string) bool {
+	g, ok := d.groupFor(edge)
+	return !ok || g == group
+}
+
 func (d *Driver) noteAsked(edge string) {
 	d.mu.Lock()
 	if d.in.askedAt == nil {
@@ -93,7 +106,9 @@ func (d *Driver) noteAsked(edge string) {
 // second) of its rebirth request being published; a node not yet asked
 // (the connect-time sweep staggers requests, rebirthStagger apart; a
 // standby or a host with rebirth requests off asks none) is timed from
-// when the sweep should have reached it, or from the session coming up.
+// the session coming up, so a large fleet's sweep does not hold the
+// start past the runtime's wait. Births are counted from the bound node's
+// own group only.
 // A dead device under a live node therefore costs at most that one
 // second, once, as does a silent node.
 //
@@ -112,10 +127,6 @@ func (d *Driver) InputsReady() bool {
 		return false
 	}
 	now := time.Now()
-	sweep := time.Duration(0)
-	if d.cfg.RebirthOnStart && !d.cfg.NoRebirthRequests {
-		sweep = rebirthStagger * time.Duration(len(d.manifest.Nodes))
-	}
 	for edge, devs := range d.in.srcs {
 		delivered := d.in.born[edge]
 		for dev := range devs {
@@ -126,7 +137,11 @@ func (d *Driver) InputsReady() bool {
 		}
 		ref, asked := d.in.askedAt[edge]
 		if !asked {
-			ref = d.in.firstConn.Add(sweep)
+			// Not asked (yet): timed from the first session, not from the
+			// end of the start sweep, which on a large fleet runs past the
+			// runtime's 2 s wait (Fable). A node the sweep reaches late
+			// then reads NotConnected until its birth, without a WARN.
+			ref = d.in.firstConn
 		}
 		if now.Sub(ref) < d.birthWait {
 			return false
