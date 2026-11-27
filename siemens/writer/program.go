@@ -217,7 +217,8 @@ func (pw *progWriter) block(header, footer string, vbs []st.VarBlock, stmts []st
 		}
 		init, _ := w.zeroOf(v.Datatype)
 		if v.Initial != nil {
-			init = pw.expr(v.Initial, 0)
+			lreal := strings.EqualFold(strings.TrimSpace(v.Datatype), "LREAL")
+			init = pw.inLREAL(lreal, func() string { return pw.expr(v.Initial, 0) }) // an assignment: a long LREAL is its bits
 		}
 		pw.emit(&body, v.Pos.Line, "\t#%s := %s;\n", sclName(v.Name), init)
 	}
@@ -496,7 +497,7 @@ func (pw *progWriter) declare(vbs []st.VarBlock) []section {
 				}
 				if n, ok := w.enumValue(v.Datatype, v.Initial); ok {
 					line += " := " + n
-				} else if pw.refusedStart(v.Initial, v.Name, v.Pos.Line) {
+				} else if pw.refusedStart(v.Initial, v.Name, v.Datatype, v.Pos.Line) {
 					continue
 				} else {
 					line += " := " + pw.initValue(v.Initial)

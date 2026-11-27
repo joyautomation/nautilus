@@ -366,7 +366,7 @@ func (w *writer) overrides(typ, path string, start any) ([]string, string) {
 		if err != nil {
 			return nil, err.Error()
 		}
-		v, why := literal(lit)
+		v, why := literal(lit, typ)
 		if why != "" {
 			return nil, why
 		}

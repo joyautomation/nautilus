@@ -50,7 +50,7 @@ var namedFuncs = map[string][]string{
 func (pw *progWriter) expr(e st.Expression, parent int) string {
 	switch e := e.(type) {
 	case *st.NumberLit:
-		if f, long := longReal(e); long && pw.lreal {
+		if f, long := longReal(e, "LREAL"); long && pw.lreal {
 			return lrealBits(f)
 		}
 		return number(e)
@@ -75,6 +75,14 @@ func (pw *progWriter) expr(e st.Expression, parent int) string {
 			}
 			pw.gap("siemens/enum", e.Pos.Line, gapOther, "the typed literal "+e.TypeName+"#…", "")
 			return ""
+		}
+		switch u {
+		case "LREAL": // the literal is an LREAL whatever its context (#1429)
+			if f, long := longReal(e, "LREAL"); long {
+				return lrealBits(f)
+			}
+		case "REAL":
+			return pw.inLREAL(false, func() string { return u + "#" + pw.expr(e.Inner, unaryPrec) })
 		}
 		return pw.widen(u, u+"#"+pw.expr(e.Inner, unaryPrec))
 	case *st.IdentExpr:
@@ -428,6 +436,9 @@ func (pw *progWriter) call(c *st.CallExpr, stmt bool) string {
 		argCtx = true
 	case "REAL":
 		argCtx = false
+	}
+	if from, _, ok := strings.Cut(name, "_TO_"); ok && from != "" {
+		argCtx = from == "LREAL" // a conversion's argument is of its source type
 	}
 	args := make([]string, len(argExprs))
 	for i, a := range argExprs {

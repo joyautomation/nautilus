@@ -20,12 +20,22 @@ import (
 // digits, so a REAL literal is written as it is. A start value is one
 // literal in SCL: one that 15 digits cannot reproduce is refused.
 
-// longReal reports a real literal (or its negation) whose float64 value
-// a 15-digit decimal does not reproduce, with that value.
-func longReal(e st.Expression) (float64, bool) {
+// longReal reports a real literal (or its negation, or a REAL# or LREAL#
+// typed one) whose value 15 significant digits do not reproduce, with
+// that value: for an LREAL (typ "LREAL", or "" when unknown) as a
+// float64, for a REAL as the float32 it rounds to.
+func longReal(e st.Expression, typ string) (float64, bool) {
 	neg := false
 	if u, ok := e.(*st.UnaryExpr); ok && u.Op == "-" {
 		e, neg = u.Operand, true
+	}
+	if tl, ok := e.(*st.TypedLit); ok {
+		switch t := strings.ToUpper(tl.TypeName); t {
+		case "LREAL", "REAL":
+			e, typ = tl.Inner, t
+		default:
+			return 0, false
+		}
 	}
 	n, ok := e.(*st.NumberLit)
 	if !ok || (n.Base != 10 && n.Base != 0) || !strings.ContainsAny(n.Value, ".eE") {
@@ -36,7 +46,7 @@ func longReal(e st.Expression) (float64, bool) {
 		return 0, false
 	}
 	back, err := strconv.ParseFloat(strconv.FormatFloat(f, 'g', 15, 64), 64)
-	if err == nil && back == f {
+	if err == nil && (back == f || strings.EqualFold(typ, "REAL") && float32(back) == float32(f)) {
 		return 0, false
 	}
 	if neg {
@@ -71,14 +81,20 @@ func (pw *progWriter) realContext(a, b string) bool {
 	return pw.lreal
 }
 
-// refusedStart refuses a start value 15 digits cannot reproduce: a real
-// limit of TIA's literals, not a writer gap.
-func (pw *progWriter) refusedStart(e st.Expression, name string, line int) bool {
-	f, long := longReal(e)
+// tooLongStart words the refusal of a start value 15 digits cannot
+// reproduce: a real limit of TIA's literals, not a writer gap.
+func tooLongStart(f float64) string {
+	return fmt.Sprintf("the start value %s has more than the 15 significant digits TIA keeps of a literal (it would start at %s): write at most 15, or assign the value in the program, where it is written exactly (#1429)",
+		strconv.FormatFloat(f, 'g', -1, 64), strconv.FormatFloat(f, 'g', 15, 64))
+}
+
+// refusedStart refuses a declaration's start value 15 digits cannot
+// reproduce for its type.
+func (pw *progWriter) refusedStart(e st.Expression, name, typ string, line int) bool {
+	f, long := longReal(e, strings.ToUpper(strings.TrimSpace(typ)))
 	if !long {
 		return false
 	}
-	pw.diag("siemens/literal", line, fmt.Sprintf("%s: the start value %s has more than the 15 significant digits TIA keeps of a literal (it would start at %s); write at most 15 (#1429)",
-		name, strconv.FormatFloat(f, 'g', -1, 64), strconv.FormatFloat(f, 'g', 15, 64)))
+	pw.diag("siemens/literal", line, name+": "+tooLongStart(f))
 	return true
 }
