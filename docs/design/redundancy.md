@@ -243,8 +243,9 @@ bumpless, and the measured takeover time is published instead.
   heal (§7). The guide states that bound, and the override's record names it.
 - **`naut run` under systemd** comes from #733. Install, update and rollback come from
   `tools/deploy` (#741). The pair uses both and duplicates neither.
-- **Waiting for live inputs** before the first scan after a start or a takeover is #786. That
-  issue builds it once for both: this design's takeover step and a plain start.
+- **Waiting for live inputs** before the first scan after a start or a takeover is #786, built
+  once for both: `runtime.Options.InputsWait` (2 s), asked of each driver's `io.InputsReadier`
+  (every source delivered or failed its first attempt, sticky, so a polling standby waits ~0).
 
 ## 2. Members and the manifest
 
