@@ -202,3 +202,24 @@ func TestStringTagInit(t *testing.T) {
 		t.Errorf("a TIME keeps its literal: %s %v", got, err)
 	}
 }
+
+// #1432: an integer start value is written as the integer it is (the
+// manifest loader no longer turns it into a float64, which rounded one
+// above 2^53), and as milliseconds on a TIME.
+func TestIntegerInitLiteralIsExact(t *testing.T) {
+	for _, c := range []struct {
+		v    any
+		typ  string
+		want string
+	}{
+		{9007199254740993, "LINT", "9007199254740993"},
+		{int64(-9007199254740993), "LINT", "-9007199254740993"},
+		{5000, "TIME", "T#5000ms"},
+		{3, "REAL", "3.0"},
+		{7, "DINT", "7"},
+	} {
+		if got, err := InitLiteral(c.v, c.typ); err != nil || got != c.want {
+			t.Errorf("InitLiteral(%v, %s) = %q, %v; want %q", c.v, c.typ, got, err, c.want)
+		}
+	}
+}

@@ -2456,12 +2456,12 @@ func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
 		switch strings.ToLower(t.Role) {
 		case "input":
 			if t.Init != nil {
-				meta = append(meta, runtime.Init(normalize(t.Init)))
+				meta = append(meta, runtime.Init(t.Init))
 			}
 			def = runtime.Input(t.Name, meta...)
 		case "output":
 			if t.Init != nil {
-				meta = append(meta, runtime.Init(normalize(t.Init)))
+				meta = append(meta, runtime.Init(t.Init))
 			}
 			def = runtime.Output(t.Name, meta...)
 		case "setpoint":
@@ -2472,12 +2472,12 @@ func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
 			if t.Init == nil && t.Type == "" {
 				return nil, fmt.Errorf("tag %s: a setpoint needs init or type (its value from scan one)", t.Name)
 			}
-			def = runtime.Setpoint(t.Name, normalize(t.Init), meta...)
+			def = runtime.Setpoint(t.Name, t.Init, meta...)
 		case "state":
 			if t.Init == nil && t.Type == "" {
 				return nil, fmt.Errorf("tag %s: state needs init or type", t.Name)
 			}
-			def = runtime.State(t.Name, normalize(t.Init), meta...)
+			def = runtime.State(t.Name, t.Init, meta...)
 		default:
 			return nil, fmt.Errorf("tag %s: role must be input, output, setpoint, or state (got %q)", t.Name, t.Role)
 		}
@@ -2538,17 +2538,12 @@ func applyTagMeta(defs []runtime.TagDef, tm map[string]MetaConfig) map[string]ru
 }
 
 // normalize maps yaml's integer literals onto float64 (yaml decodes 65 as
-// int, 65.0 as float64). BOOL and string pass through. This is only the
-// fallback shape: runtime.expandTags seeds a scalar tag against the type the
-// programs declare it as (VAR_EXTERNAL), and ir.SeedFromInit turns an
-// integral float back into an INT there — so `init: 0` on a `Counter : DINT`
-// seeds an integer, and only a tag no program declares seeds a REAL from a
-// number.
-//
-// It does NOT recurse into a struct tag's nested init map: a member's
-// target kind (REAL vs INT vs BOOL) is only known once the tag's `type:`
-// resolves against the compiled TYPE table, so ir.SeedFromInit does that
-// conversion itself, per member, once expandTags has the type in hand.
+// int, 65.0 as float64). BOOL and string pass through. A tag's init is
+// NOT normalized (#1432): a float64 holds no integer above 2^53 exactly,
+// so the init reaches runtime.expandTags as YAML decoded it, and
+// ir.SeedFromInit converts it to the type the tag has (`type:`, or a
+// program's VAR_EXTERNAL) exactly; a tag nothing types seeds a REAL from
+// an int as from a float64 (runtime irValue).
 func normalize(v any) any {
 	switch x := v.(type) {
 	case int:

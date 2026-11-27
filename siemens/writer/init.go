@@ -68,6 +68,12 @@ func initLiteral(v any, typ string) (string, error) {
 		integer = true
 	}
 	if u == "TIME" {
+		switch x := v.(type) {
+		case int:
+			return "T#" + strconv.Itoa(x) + "ms", nil
+		case int64:
+			return "T#" + strconv.FormatInt(x, 10) + "ms", nil
+		}
 		if x, ok := v.(float64); ok {
 			if x != math.Trunc(x) || math.Abs(x) >= 1<<53 {
 				return "", fmt.Errorf("init %v is not a whole number of milliseconds", x)
@@ -82,9 +88,9 @@ func initLiteral(v any, typ string) (string, error) {
 		}
 		return "FALSE", nil
 	case int:
-		return numberLiteral(float64(x), integer, real)
+		return intLiteral(int64(x), integer, real)
 	case int64:
-		return numberLiteral(float64(x), integer, real)
+		return intLiteral(x, integer, real)
 	case float64:
 		return numberLiteral(x, integer, real)
 	case uint64: // above the int64 range: YAML hands it over unconverted
@@ -119,6 +125,15 @@ func initLiteral(v any, typ string) (string, error) {
 		return st.QuoteString(x), nil
 	}
 	return "", fmt.Errorf("init %v is not a value the Siemens target can seed", v)
+}
+
+// intLiteral writes an integer init: exactly on an integer type (a float64
+// holds none above 2^53 exactly, #1432), through numberLiteral otherwise.
+func intLiteral(x int64, integer, real bool) (string, error) {
+	if integer {
+		return strconv.FormatInt(x, 10), nil
+	}
+	return numberLiteral(float64(x), integer, real)
 }
 
 func numberLiteral(x float64, integer, real bool) (string, error) {
