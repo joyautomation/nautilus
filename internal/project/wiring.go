@@ -254,7 +254,11 @@ func wiredTags(set *wirebind.Set, m *Manifest) ([]TagConfig, error) {
 			def.Online = in.Name + "__Online"
 			for _, c := range in.Conns {
 				if c.Shared {
-					def.OnlineOf = append(def.OnlineOf, m.sharedOPCUACompanion(c.Driver))
+					name := m.sharedOPCUACompanion(c.Driver)
+					if ir.SameName(name, def.Online) {
+						return nil, fmt.Errorf("instance %s: source %s shares driver %s, whose companion %s is the name of the instance's combined companion: rename the driver", in.Name, c.Source, c.Driver, name)
+					}
+					def.OnlineOf = append(def.OnlineOf, name)
 				} else {
 					def.OnlineOf = append(def.OnlineOf, c.Online())
 				}

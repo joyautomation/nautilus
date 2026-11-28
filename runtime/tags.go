@@ -456,6 +456,18 @@ func (t *Tags) setMany(names []string, in map[string]any) uint64 {
 	return t.gen
 }
 
+// instancesOffline writes every instance's combined companion FALSE: the
+// read failed, so whether its connections answer is unknown.
+func (t *Tags) instancesOffline() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, in := range t.instList {
+		if in.online != "" {
+			t.writeLocked(in.online, ir.BoolVal(false))
+		}
+	}
+}
+
 // writeOnlineLocked writes an instance's combined companion: TRUE while
 // every connection companion it reads holds TRUE (InstanceDef.Online).
 // Caller holds t.mu, right after a delivery.

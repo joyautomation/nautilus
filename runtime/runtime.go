@@ -1620,6 +1620,11 @@ func (r *Runtime) scanAt(due time.Time) {
 			// whole delivery, and a re-delivered identical value is not a
 			// write at all — see Tags' "Write generations".
 			r.tags.setMany(r.inputs, in)
+		} else {
+			// A read that failed tells nothing of the connections: an
+			// instance's combined companion fails false rather than hold a
+			// stale TRUE (InstanceDef.Online).
+			r.tags.instancesOffline()
 		}
 	}
 	if r.coord == nil && !r.mainIn.Load() {
@@ -1907,17 +1912,23 @@ func seedInstanceOnline(defs []TagDef) ([]TagDef, error) {
 		return defs, nil
 	}
 	out := append([]TagDef(nil), defs...)
-	declared := map[string]bool{}
+	declared := map[string]TagDef{}
 	for _, d := range defs {
-		declared[ir.NameKey(d.Name)] = true
+		declared[ir.NameKey(d.Name)] = d
 	}
 	for _, d := range defs {
 		if d.Instance == nil {
 			continue
 		}
 		for _, c := range d.Instance.OnlineOf {
-			if !declared[ir.NameKey(c)] {
+			cd, ok := declared[ir.NameKey(c)]
+			switch {
+			case !ok:
 				return nil, fmt.Errorf("instance %s: its combined companion reads %s, which is no declared tag", d.Name, c)
+			case ir.SameName(c, d.Instance.Online):
+				return nil, fmt.Errorf("instance %s: its combined companion %s reads itself (a shared session's driver named like the instance?): rename the driver", d.Name, c)
+			case cd.Role != RoleInput || !strings.EqualFold(cd.Type, "BOOL"):
+				return nil, fmt.Errorf("instance %s: its combined companion reads %s, which is not an input of type BOOL: a connection's companion is the driver's", d.Name, c)
 			}
 		}
 	}
@@ -1929,6 +1940,9 @@ func seedInstanceOnline(defs []TagDef) ([]TagDef, error) {
 		}
 		if out[i].Role != RoleInput || !strings.EqualFold(out[i].Type, "BOOL") {
 			return nil, fmt.Errorf("instance %s: its combined companion %s is not an input of type BOOL (type %q); declare it role input, type BOOL", inst, out[i].Name, out[i].Type)
+		}
+		if out[i].Init != nil {
+			return nil, fmt.Errorf("instance %s: its combined companion %s has an init: it is FALSE until every connection answers, so it takes none", inst, out[i].Name)
 		}
 		out[i].Comms = true
 		found[ir.NameKey(out[i].Name)] = true

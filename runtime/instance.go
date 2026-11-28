@@ -120,11 +120,15 @@ type InstanceDef struct {
 	// Online names the instance's combined companion when it reads more
 	// than one connection (#1458 slice 9a-2): TRUE while every tag in
 	// OnlineOf (each connection's __Online) is TRUE, FALSE otherwise,
-	// a missing or non-BOOL one included. It is an Input tag of type BOOL
-	// the manifest declares; no driver delivers it, so it is seeded FALSE
-	// (as a Comms input is) and the runtime writes it right after each
-	// delivery, reading the companions as the store holds them (a force on
-	// one counts). As an input, it is written by nothing else.
+	// a missing or non-BOOL one included, and FALSE after a read that
+	// failed. It is an Input tag of type BOOL the manifest declares, with
+	// no init; no driver delivers it, so it is seeded FALSE (as a Comms
+	// input is) and the runtime writes it right after each delivery,
+	// reading the companions as the store holds them (a force on one
+	// counts). An outside write (Tags.Write, the API, the OPC UA server,
+	// Sparkplug) and a substitute are refused; a force holds it, and a
+	// program that assigns it, as any input, is overwritten by the next
+	// delivery.
 	// Experimental, as InstanceTag is.
 	Online   string
 	OnlineOf []string

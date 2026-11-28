@@ -162,6 +162,9 @@ func (t *Tags) substituteLocked(addr string, v any, e subEntry) (Substitution, *
 	if tv.v.Kind == ir.TypeFB {
 		return Substitution{}, nil, fmt.Errorf("tag %s is a function-block instance: it has no value to substitute", root)
 	}
+	if tv.computed {
+		return Substitution{}, nil, fmt.Errorf("tag %s is computed by the runtime, the AND of its instance's connection companions: substitute a connection's companion instead", root)
+	}
 	ss := t.subs[root]
 	base := t.liveLocked(root, tv)
 	rootT := t.types[ir.NameKey(root)]

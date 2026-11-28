@@ -406,6 +406,17 @@ instances:
 			"driver: opcua-client, and the project has more than one opcua-client driver: name the drivers: entry instead"},
 		"a companion declared as something else": {strings.Replace(wire("drivers:\n  - { name: ua, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\" }\n", `{ driver: ua }`, "      Running: { from: drive, node: \"i=1\" }\n"), "drivers:", "tags:\n  - { name: ua__Online, role: state, type: DINT }\ndrivers:", 1),
 			"its shared OPC UA session's companion ua__Online is declared as a state DINT tag"},
+		"a shared driver named like the instance": {base + "drivers:\n  - { name: P101, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\" }\n" + `wirings:
+  - type: Pump
+    sources:
+      pump: { driver: modbus, endpoint: 192.0.2.1 }
+      ua:   { driver: P101 }
+    members:
+      Running: { from: pump, table: coil, address: 0 }
+      Speed:   { from: ua, node: "i=1", type: Double }
+instances:
+  - { name: P101, type: Pump }
+`, "source ua shares driver P101, whose companion P101__Online is the name of the instance's combined companion: rename the driver"},
 		"a driver named like the instance": {wire("drivers:\n  - { name: P101, type: modbus }\n", own, "      Running: { from: drive, node: \"i=1\" }\n"),
 			"the project already has a driver P101"},
 	} {
