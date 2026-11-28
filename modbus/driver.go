@@ -288,9 +288,11 @@ type source struct {
 	lastErr  error
 	retries  uint64
 	excs     uint64
-	rttMs    float64 // EWMA of request round-trip
-	enabled  bool
-	held     bool // ReplaceOptions.Held: never started, its tags Bad
+	// dropped counts the event commands dropped at a reconnect (Event).
+	dropped uint64
+	rttMs   float64 // EWMA of request round-trip
+	enabled bool
+	held    bool // ReplaceOptions.Held: never started, its tags Bad
 
 	// pending is the last-value write queue (tag name → desired value),
 	// held across disconnects and flushed on reconnect. written is the last
@@ -1528,6 +1530,21 @@ func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
 	open := d.gateOpen()
 	now := time.Now()
 	s.mu.Lock()
+	// An event command still queued here was raised while the device could
+	// not be reached (or its write did not complete before the link broke):
+	// it is a trigger, and one sent now would fire late, so it is dropped,
+	// said and counted. Its written value stays, so a re-push of the same
+	// value is no change and only the binding's next change goes out. A
+	// queued FALSE is the trigger's release and still goes out: dropping
+	// it would leave the device asserted.
+	var dropped []string
+	for _, name := range sortedPending(s) {
+		if bs, ok := s.byName[name]; ok && bs.b.Event && !atRest(s.pending[name]) {
+			delete(s.pending, name)
+			s.dropped++
+			dropped = append(dropped, name)
+		}
+	}
 	for _, rw := range s.rewrites {
 		if v, ok := s.written[rw.name]; ok && open {
 			s.pending[rw.name] = v // re-assert after an outage, on the spot
@@ -1535,6 +1552,10 @@ func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
 		rw.next = now.Add(rw.period)
 	}
 	s.mu.Unlock()
+	for _, name := range dropped {
+		d.log.Warn("modbus: event command dropped at the reconnect: it was raised while the device could not be reached, and a trigger is never sent late",
+			"source", s.cfg.ID, "tag", name)
+	}
 	if !d.flushWrites(ctx, s, c) {
 		return false
 	}
@@ -2429,4 +2450,23 @@ func (d *Driver) Manifest() Manifest {
 	d.srcMu.RLock()
 	defer d.srcMu.RUnlock()
 	return d.manifest
+}
+
+// sortedPending is a source's queued command names in order, so what a
+// reconnect drops is logged in a stable order. Caller holds s.mu.
+func sortedPending(s *source) []string {
+	out := make([]string, 0, len(s.pending))
+	for n := range s.pending {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// atRest says whether an event command's value is its rest, FALSE: its
+// release, which is safe to send late. An event command is a BOOL
+// (Validate), so nothing else is at rest.
+func atRest(v any) bool {
+	b, ok := v.(bool)
+	return ok && !b
 }

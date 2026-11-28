@@ -42,6 +42,10 @@ type SourceHealth struct {
 	// NOW, waiting for a reconnect — a gauge that clears itself when the
 	// source comes back and they go out.
 	QueuedWrites int `json:"queuedWrites"`
+	// DroppedEvents counts, since the driver started, the event commands
+	// (TagBinding.Event) raised while the source was offline and dropped at
+	// its reconnect rather than sent late. It moves only at a reconnect.
+	DroppedEvents uint64 `json:"droppedEvents"`
 }
 
 // Health returns the current per-source states and counters.
@@ -56,15 +60,16 @@ func (d *Driver) Health() Health {
 	for _, s := range d.sources {
 		s.mu.Lock()
 		row := SourceHealth{
-			ID:           s.cfg.ID,
-			Addr:         s.cfg.Addr(),
-			State:        s.state,
-			SinceMs:      s.sinceMs,
-			Retries:      s.retries,
-			RTTMs:        s.rttMs,
-			Blocks:       len(s.blocks),
-			Exceptions:   s.excs,
-			QueuedWrites: len(s.pending),
+			ID:            s.cfg.ID,
+			Addr:          s.cfg.Addr(),
+			State:         s.state,
+			SinceMs:       s.sinceMs,
+			Retries:       s.retries,
+			RTTMs:         s.rttMs,
+			Blocks:        len(s.blocks),
+			Exceptions:    s.excs,
+			QueuedWrites:  len(s.pending),
+			DroppedEvents: s.dropped,
 		}
 		if s.lastErr != nil {
 			row.LastError = s.lastErr.Error()

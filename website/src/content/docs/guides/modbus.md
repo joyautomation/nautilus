@@ -354,6 +354,15 @@ registers since is left alone. Not so for a `rewrite:` binding: it
 re-asserts its last commanded value on connect and on every period, so it
 overwrites the other master's value anyway.
 
+An **event** command is the exception: a BOOL struct-wiring member with
+`event: true` (a reset, a start pulse) raised while the source is down is
+dropped when the source reconnects, never sent late. A Start pressed while
+the device could not be reached must not fire minutes later. The drop is
+logged once per command per outage, naming it, and counted as
+`droppedEvents` on the device row. Press it again once the device answers.
+Its release (FALSE) still goes out on the reconnect, so a device that
+took the press before the link broke is never left asserted.
+
 **An exception to a write depends on whether the write ran.** When the
 device itself refuses a write (0x02 illegal data address, 0x03 illegal
 data value, or any exception other than the three below), the write is
@@ -426,11 +435,13 @@ is exception-marked. The driver state climbs `connecting` → `error`
 (nothing answers) → `degraded` (a source dark, or any block refused) →
 `connected`, plus `waiting` when every source is parked by its enable tag.
 Metrics: `sources` (`connected / total`), `blocks`, `reads`, `writes`,
-`errors`, and `queued writes` when any command is parked.
+`errors`, `queued writes` when any command is parked, and
+`late commands dropped` once an event command has been dropped at a
+reconnect.
 
 `Extra["sources"]` carries the structured twin of the rows — `id`, `addr`,
 `state` (`connected | connecting | error | parked`), `sinceMs`, `blocks`,
-`badBlocks`, `queuedWrites`, `rttMs` (an EWMA of request round-trip),
+`badBlocks`, `queuedWrites`, `droppedEvents`, `rttMs` (an EWMA of request round-trip),
 `retries`, `exceptions`. That is the shape `DriverStatusPanel` and
 `DriverStatusCard` already render for an `eip` driver, so a Modbus project's
 comms status needs zero HMI changes.
