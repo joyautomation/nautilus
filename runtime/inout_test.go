@@ -73,8 +73,8 @@ func newInOutRuntime(t *testing.T, clk Clock, vars, body string, tags ...TagDef)
 		"Cmd.Start": {Kind: MemberTo}, "Cmd.Stop": {Kind: MemberTo}, "Cmd.SpeedRef": {Kind: MemberTo},
 	}}
 	all := append([]TagDef{
-		Instance("P101", "Pump", pump),
-		Instance("B1", "Bank", InstanceDef{}),
+		InstanceTag("P101", "Pump", pump),
+		InstanceTag("B1", "Bank", InstanceDef{}),
 		Typed("Plain", RoleState, "Pump"),
 	}, tags...)
 	r, err := New(Options{
