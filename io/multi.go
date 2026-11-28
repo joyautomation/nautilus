@@ -367,8 +367,9 @@ func (m *Multi) ReadInputsInto(dst Values) error {
 // first time a key arrives unclaimed it is logged, naming it, and Unclaimed
 // lists it from then on. (The runtime refuses at start an instance whose
 // to: or both: leaf no driver claims, so a command of a wired instance
-// never gets here.) Errors from several children are joined, each naming
-// its child.
+// never gets here.) When any child fails its share, the result is a
+// *PartialWriteError: the children's errors joined, each naming its child,
+// and which keys the other children took.
 func (m *Multi) WriteOutputs(vals Values) error {
 	m.set.RLock()
 	defer m.set.RUnlock()
@@ -391,10 +392,53 @@ func (m *Multi) WriteOutputs(vals Values) error {
 		}
 		if err := m.children[i].Driver.WriteOutputs(sub); err != nil {
 			errs = append(errs, fmt.Errorf("driver %q: %w", m.children[i].Name, err))
+			perChild[i] = nil // not taken
 		}
 	}
-	return errors.Join(errs...)
+	if len(errs) == 0 {
+		return nil
+	}
+	taken := map[string]bool{}
+	for _, sub := range perChild {
+		for k := range sub {
+			taken[k] = true
+		}
+	}
+	return NewPartialWriteError(errors.Join(errs...), taken)
 }
+
+// PartialWriteError is the error of a push that some of a composite
+// driver's children failed while the others took their share
+// (Multi.WriteOutputs). The runtime counts what was taken as handed over
+// (#1497), so an event: command a healthy child took is not handed to it
+// again, and only the failing children's commands are retried.
+//
+// Experimental: the shape may change while struct wiring (#1458) settles.
+type PartialWriteError struct {
+	err   error
+	taken map[string]bool
+}
+
+// NewPartialWriteError is a PartialWriteError for err, whose taken keys
+// were handed over to a child that took them. A key not in taken counts
+// as not handed, so a composite that cannot tell fails safe: its commands
+// are retried.
+func NewPartialWriteError(err error, taken map[string]bool) *PartialWriteError {
+	return &PartialWriteError{err: err, taken: taken}
+}
+
+func (e *PartialWriteError) Error() string {
+	if e.err == nil {
+		return "some children of a composite driver failed their share of a push"
+	}
+	return e.err.Error()
+}
+
+func (e *PartialWriteError) Unwrap() error { return e.err }
+
+// Taken says whether key was in the share of a child that took its write.
+// An unknown key, and every key of the zero value, is not taken.
+func (e *PartialWriteError) Taken(key string) bool { return e.taken[key] }
 
 // noteUnclaimed logs key the first time a write holds it and no child
 // claims it.
