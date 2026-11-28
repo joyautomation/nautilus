@@ -207,6 +207,7 @@ type instInfo struct {
 	pushGen    uint64
 	now        []bool
 	firstNow   []int
+	sub        [][]int // per key, the keys nested beneath it
 }
 
 type instKey struct {
@@ -357,6 +358,14 @@ func newInstInfo(d TagDef, types map[string]*ir.Type) (*instInfo, error) {
 	in.got = make([]atomic.Bool, len(in.keys))
 	in.lead = make([]bool, len(in.keys))
 	in.now = make([]bool, len(in.keys))
+	in.sub = make([][]int, len(in.keys))
+	for i, k := range in.keys {
+		for j, n := range in.keys {
+			if j != i && pathUnder(n.node.canon, k.node.canon) {
+				in.sub[i] = append(in.sub[i], j)
+			}
+		}
+	}
 	in.buildPush(d)
 	return in, nil
 }
@@ -620,8 +629,17 @@ func (t *Tags) deliverLocked(in *instInfo, vals map[string]any) {
 		now[i] = true
 		k.bad.Store(false)
 	}
+	// A key nested in a delivered one came with it.
+	for i, d := range now {
+		if d {
+			for _, j := range in.sub[i] {
+				now[j] = true
+				in.got[j].Store(true)
+			}
+		}
+	}
 	if len(in.push) > 0 {
-		if m := t.deliveredLocked(in, now, nv); !sameValue(&m, &nv) {
+		if m, adopted := t.deliveredLocked(in, now, nv); adopted {
 			nv, changed = m, true
 		}
 	}

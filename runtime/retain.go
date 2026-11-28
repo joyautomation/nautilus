@@ -392,8 +392,10 @@ func (r *Runtime) takeover() {
 	// (#707).
 	if r.coord != nil {
 		// A new leadership has written no command and read no peer value
-		// (instance_push.go). Not on a plain start: nothing came before it,
-		// and an outside write the API took before the first scan stands.
+		// (instance_push.go), its first one included: a write taken before
+		// this replica led is not this leadership's. Without a coordinator
+		// nothing came before the first scan, and a write the API took
+		// before it stands.
 		r.tags.newPushLeadership()
 		r.dropForces("takeover")
 		// READ/WRITE requests the last leadership queued are not this

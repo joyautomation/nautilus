@@ -66,17 +66,23 @@ type pushLeaf struct {
 	rbIdx []int
 
 	written bool // in this leadership (a both: leaf: since the peer last moved off it)
-	// A both: leaf's command: the value last written (cmd), and whether no
-	// push has handed it over yet (pend). The push hands cmd, not what the
-	// store shows: a delivery between the write and the push shows the
-	// peer's old value (the flicker of design question 13) and must not
-	// cancel the command.
-	pend bool
-	cmd  ir.Value
+	// byForce: a to: leaf written only by a force; when the force goes, so
+	// does the write (the actual value under it was never commanded).
+	byForce bool
+	// A both: leaf's command: the value last written (cmd), each new command
+	// numbered (wrev), and whether no push has handed it over yet (pend). The
+	// push hands cmd, not what the store shows: a delivery between the write
+	// and the push shows the peer's old value (the flicker of design question
+	// 13) and must not cancel the command. fillRev is the wrev the push map
+	// holds, so a new command of the value already in it is handed again.
+	pend          bool
+	cmd           ir.Value
+	wrev, fillRev uint64
 	// An event leaf's baseline (based), whether it has moved off it since
-	// (live), and the value it showed at the last evaluation (seen).
-	based, live bool
-	base, seen  ir.Value
+	// (live), and the value a push last handed over successfully (sent,
+	// hasSent): what the device holds once a driver has forgotten it.
+	based, live, hasSent bool
+	base, sent           ir.Value
 	// inc and last are what the last evaluation put in the push.
 	inc  bool
 	last ir.Value
@@ -165,8 +171,9 @@ func (in *instInfo) adoptFrom(l *pushLeaf, readback string) {
 
 // markWrittenLocked records a write of every push leaf under picks, after
 // the store took it. A both: leaf counts only once its peer value has been
-// delivered in this leadership, and its command is what the store holds for
-// it now. Caller holds t.mu.
+// delivered in this leadership; its command is what the write left under any
+// force, and a write that repeats the command it holds is no new command.
+// Caller holds t.mu.
 func (t *Tags) markWrittenLocked(in *instInfo, under func(*pushLeaf) bool) {
 	var root ir.Value
 	looked := false
@@ -176,8 +183,8 @@ func (t *Tags) markWrittenLocked(in *instInfo, under func(*pushLeaf) bool) {
 			continue
 		}
 		if !l.both {
-			if !l.written {
-				l.written = true
+			if !l.written || l.byForce {
+				l.written, l.byForce = true, false
 				t.pushRev++
 			}
 			continue
@@ -186,18 +193,79 @@ func (t *Tags) markWrittenLocked(in *instInfo, under func(*pushLeaf) bool) {
 			continue
 		}
 		if !looked {
-			tv, _, ok := t.lookupLocked(in.name)
+			tv, name, ok := t.lookupLocked(in.name)
 			if !ok {
 				return
 			}
-			root, looked = tv.v, true
+			root, looked = t.liveLocked(name, tv), true
 		}
 		c, ok := valueAt(root, l.idx)
 		if !ok {
 			continue
 		}
-		if !l.written || !l.pend || !sameValue(&c, &l.cmd) {
+		if !l.written || !sameValue(&c, &l.cmd) {
 			l.written, l.pend, l.cmd = true, true, c
+			l.wrev++
+			t.pushRev++
+		}
+	}
+}
+
+// markForcedLocked records a force at path: a to: leaf under it goes out
+// with the forced value, as a forced output does, for as long as the force
+// holds (forceReleasedLocked). A both: leaf is the peer's memory, and a
+// force of it is the logic's view, as a force of an input is: never a
+// command. Caller holds t.mu.
+func (t *Tags) markForcedLocked(path string) {
+	root, segs := ir.SplitAddress(path)
+	in := t.instanceOf(root)
+	if in == nil || len(in.push) == 0 {
+		return
+	}
+	chain, ok := in.walk(segs)
+	if !ok {
+		return
+	}
+	c := chain[len(chain)-1].canon
+	for i := range in.push {
+		l := &in.push[i]
+		if !l.both && !l.written && (c == "" || pathUnder(l.node.canon, c)) {
+			l.written, l.byForce = true, true
+			t.pushRev++
+		}
+	}
+}
+
+// forceReleasedLocked: forces on root went away and fs holds what remains.
+// A to: leaf that only a force had written, and no remaining force covers,
+// is unwritten again. Caller holds t.mu.
+func (t *Tags) forceReleasedLocked(root string, fs *forceSet) {
+	in := t.instanceOf(root)
+	if in == nil || len(in.push) == 0 {
+		return
+	}
+	var held []string
+	for _, e := range fs.entries {
+		if len(e.path) == 0 {
+			return // the whole tag is still forced
+		}
+		if ec, ok := in.walk(e.path); ok {
+			held = append(held, ec[len(ec)-1].canon)
+		}
+	}
+	for i := range in.push {
+		l := &in.push[i]
+		if !l.byForce {
+			continue
+		}
+		covered := false
+		for _, c := range held {
+			if pathUnder(l.node.canon, c) {
+				covered = true
+			}
+		}
+		if !covered {
+			l.written, l.byForce = false, false
 			t.pushRev++
 		}
 	}
@@ -305,9 +373,10 @@ func (in *instInfo) notDeliveredErr(segs []string, value any) error {
 // delivered (now) and the value it leaves (nv). A both: leaf whose command
 // was handed over and which the peer now shows otherwise is the peer's
 // again, so it is unwritten; a read-back delivered for the first time in this
-// leadership is adopted. Returns the value with any adoption. Caller holds
-// t.mu.
-func (t *Tags) deliveredLocked(in *instInfo, now []bool, nv ir.Value) ir.Value {
+// leadership is adopted. Returns the value with any adoption, and whether
+// one was made. Caller holds t.mu.
+func (t *Tags) deliveredLocked(in *instInfo, now []bool, nv ir.Value) (ir.Value, bool) {
+	adopted := false
 	first := in.firstNow[:0]
 	for i, d := range now {
 		if d && !in.lead[i] {
@@ -330,11 +399,11 @@ func (t *Tags) deliveredLocked(in *instInfo, now []bool, nv ir.Value) ir.Value {
 				continue
 			}
 			if m, ok := setAt(nv, l.idx, rv); ok {
-				nv = m
+				nv, adopted = m, true
 			}
 		}
 	}
-	return nv
+	return nv, adopted
 }
 
 func containsInt(s []int, v int) bool {
@@ -396,15 +465,18 @@ func (t *Tags) newPushLeadership() {
 		}
 		for i := range in.push {
 			l := &in.push[i]
-			l.written, l.based, l.live, l.pend = false, false, false, false
+			l.written, l.byForce, l.pend = false, false, false
+			l.based, l.live, l.hasSent = false, false, false
 		}
 	}
 	t.pushRev++
 }
 
-// rebaseEvents starts a new baseline for every event leaf, at the value it
-// showed at the last push (a driver asked for every output, a leadership
-// resumed, a driver swapped in).
+// rebaseEvents starts a new baseline for every event leaf (a driver asked for
+// every output, a leadership resumed, a driver swapped in): what the device
+// holds, the value last handed over successfully, or the baseline it had if
+// none was. A change from there, on this very scan too, still goes out; a
+// push that failed is no hand-over, so its change goes out again.
 func (t *Tags) rebaseEvents() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -414,7 +486,10 @@ func (t *Tags) rebaseEvents() {
 	for _, in := range t.instList {
 		for i := range in.push {
 			if l := &in.push[i]; l.event && l.based {
-				l.base, l.live = l.seen, false
+				if l.hasSent {
+					l.base = l.sent
+				}
+				l.live = false
 			}
 		}
 	}
@@ -459,7 +534,6 @@ func (t *Tags) instancePush(out nio.Values) bool {
 				case !l.live && !sameValue(&cur, &l.base):
 					l.live = true
 				}
-				l.seen = cur
 				inc = inc && l.live
 			}
 			switch {
@@ -468,7 +542,7 @@ func (t *Tags) instancePush(out nio.Values) bool {
 					delete(out, l.key)
 					changed = true
 				}
-			case !l.inc || !sameValue(&cur, &l.last):
+			case !l.inc || !sameValue(&cur, &l.last) || (l.both && l.fillRev != l.wrev):
 				if cur.Kind == ir.TypeStruct || cur.Kind == ir.TypeArray {
 					out[l.key] = cur
 				} else {
@@ -477,20 +551,31 @@ func (t *Tags) instancePush(out nio.Values) bool {
 				changed = true
 			}
 			l.inc, l.last = inc, cur
+			if inc && l.both {
+				l.fillRev = l.wrev
+			}
 		}
 	}
 	return changed
 }
 
-// instancePushed: the push instancePush filled was handed over, so every
-// both: command in it is no longer pending.
+// instancePushed: the push instancePush filled was handed over. A both:
+// command in it is no longer pending, unless a newer one came while the
+// driver had it; an event leaf in it is what the device now holds.
 func (t *Tags) instancePushed() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, in := range t.instList {
 		for i := range in.push {
-			if l := &in.push[i]; l.both && l.inc {
+			l := &in.push[i]
+			if !l.inc {
+				continue
+			}
+			if l.both && l.fillRev == l.wrev {
 				l.pend = false
+			}
+			if l.event {
+				l.sent, l.hasSent = l.last, true
 			}
 		}
 	}

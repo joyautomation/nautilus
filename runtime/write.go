@@ -232,6 +232,7 @@ func (t *Tags) WriteSetGuarded(ops []WriteOp, expect map[string]any, by string, 
 			continue
 		}
 		t.writeLocked(plans[i].key, plans[i].nv)
+		t.markPathWrittenLocked(op.Path, op.Value)
 		if t.paramNote != nil {
 			if tv, name, ok := t.lookupLocked(op.Path); ok {
 				out[i].To = plainNumeric(t.liveLocked(name, tv))

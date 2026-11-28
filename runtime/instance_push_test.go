@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/retain"
 )
 
@@ -24,6 +25,8 @@ type pushDriver struct {
 	want   bool
 	fail   bool
 	echo   bool
+	// during runs inside WriteOutputs, once, without the driver's lock.
+	during func()
 }
 
 func (d *pushDriver) ReadInputs() (nio.Values, error) {
@@ -38,6 +41,12 @@ func (d *pushDriver) ReadInputs() (nio.Values, error) {
 
 func (d *pushDriver) WriteOutputs(v nio.Values) error {
 	d.mu.Lock()
+	if f := d.during; f != nil {
+		d.during = nil
+		d.mu.Unlock()
+		f()
+		d.mu.Lock()
+	}
 	defer d.mu.Unlock()
 	c := make(nio.Values, len(v))
 	for k, x := range v {
@@ -559,4 +568,166 @@ func TestPushDriverSwapRebasesEvents(t *testing.T) {
 	write(t, p.r, "P101.RunHours", 0.0)
 	p.r.Scan()
 	wantHanded(t, b.last(t), "P101.Cmd.Stop", false)
+}
+
+// bothRig is a tank whose peer (echo) takes what it is handed, with Valve
+// delivered at 12 and the program assigning Valve := 99 while Note > 0.
+func bothRig(t *testing.T) (*Runtime, *pushDriver) {
+	t.Helper()
+	d := &pushDriver{echo: true}
+	r, _ := newTankRuntime(t, func(o *Options) {
+		o.Program = "PROGRAM Main\nVAR_EXTERNAL T1 : Tank; END_VAR\n" + bothProg + "\nEND_PROGRAM"
+		o.Driver = d
+	})
+	d.set("T1.Valve", 12.0)
+	r.Scan()
+	return r, d
+}
+
+// A program that assigns its command every scan hands it again once
+// another client moved the peer off it: the same value, but a new command.
+func TestPushBothProgramCommandReassertedAfterPeerMoved(t *testing.T) {
+	r, d := bothRig(t)
+	write(t, r, "T1.Note", 1)
+	r.Scan()
+	r.Scan()
+	wantHanded(t, d.last(t), "T1.Valve", 99.0)
+	n := d.count()
+	d.set("T1.Valve", 30.0)
+	r.Scan()
+	if got := d.since(n, "T1.Valve"); len(got) != 1 || got[0] != 99.0 {
+		t.Fatalf("after the peer moved to 30 the program's 99 was handed %v, want once", got)
+	}
+	r.Scan()
+	r.Scan()
+	if got := d.since(n, "T1.Valve"); len(got) != 1 {
+		t.Errorf("a steady command was handed again: %v", got)
+	}
+}
+
+// A write that repeats the command already handed is no new command: once
+// the peer moves off it, it is the peer's, and a reopen does not write the
+// stale copy back.
+func TestPushBothRepeatedWriteIsNoNewCommand(t *testing.T) {
+	r, d := bothRig(t)
+	write(t, r, "T1.Valve", 20.0)
+	r.Scan()
+	r.Scan()
+	write(t, r, "T1.Valve", 20.0)
+	n := d.count()
+	d.set("T1.Valve", 30.0)
+	r.Scan()
+	d.ask()
+	r.Scan()
+	if got := d.since(n, "T1.Valve"); len(got) != 0 {
+		t.Errorf("the stale 20 was written over the peer's 30: %v", got)
+	}
+}
+
+// A write that lands while the driver has the push is still a command: the
+// hand-over of the older one does not clear it.
+func TestPushBothWriteDuringThePushStands(t *testing.T) {
+	r, d := bothRig(t)
+	write(t, r, "T1.Valve", 20.0)
+	d.during = func() { write(t, r, "T1.Valve", 25.0) }
+	r.Scan()
+	wantHanded(t, d.last(t), "T1.Valve", 20.0)
+	d.set("T1.Valve", 12.0) // the peer has not applied either yet
+	r.Scan()
+	wantHanded(t, d.last(t), "T1.Valve", 25.0)
+}
+
+// A force of a both: member is the logic's view, as a force of an input:
+// never a command, before or after its delivery.
+func TestPushBothForceIsNoCommand(t *testing.T) {
+	d := &pushDriver{}
+	r, _ := newTankRuntime(t, func(o *Options) { o.Driver = d })
+	if err := r.Tags().Force("T1.Valve", 77.0); err != nil {
+		t.Fatal(err)
+	}
+	r.Scan()
+	d.set("T1.Valve", 12.0)
+	r.Scan()
+	r.Scan()
+	wantPath(t, r, "T1.Valve", 77.0)
+	if got := d.since(0, "T1.Valve"); len(got) != 0 {
+		t.Errorf("a forced both: member was handed to the peer: %v", got)
+	}
+}
+
+// A both: member nested in a delivered member came with it: it is
+// delivered, so it takes a write.
+func TestPushBothNestedInADeliveredMember(t *testing.T) {
+	def := InstanceDef{Members: map[string]MemberDef{"Sensor": {Kind: MemberFrom}, "Sensor.Offset": {Kind: MemberBoth}}}
+	d := &pushDriver{}
+	r, _ := newTankRuntime(t, func(o *Options) { o.Driver = d; o.Tags = []TagDef{InstanceTag("T1", "Tank", def)} })
+	typ := r.tags.types[ir.NameKey("T1")]
+	sv, err := ir.SetFieldTyped(ir.Zero(typ), typ, []string{"Sensor", "Offset"}, 3.0, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sensor, _ := valueAt(sv, []int{1})
+	d.set("T1.Sensor", sensor)
+	r.Scan()
+	wantPath(t, r, "T1.Sensor.Offset", 3.0)
+	if err := writeErr(r, "T1.Sensor.Offset", 4.0); err != nil {
+		t.Fatalf("a write to the delivered nested both: member: %v", err)
+	}
+	r.Scan()
+	wantHanded(t, d.last(t), "T1.Sensor.Offset", 4.0)
+}
+
+// An event: change whose push failed is not what the device holds: a driver
+// asking next (it lost the write) gets it.
+func TestPushEventFailedPushThenAsk(t *testing.T) {
+	p := newPushRig(t, eventProg, pumpDef(), false)
+	p.r.Scan()
+	write(t, p.r, "P101.RunHours", 1.0)
+	p.d.fail = true
+	p.r.Scan()
+	p.d.fail = false
+	p.d.ask()
+	p.r.Scan()
+	wantHanded(t, p.d.last(t), "P101.Cmd.Stop", true)
+}
+
+// Removing a force takes its command away: the actual value under it was
+// never commanded, so it is not handed over.
+func TestPushUnforceUnwritesAForcedOnlyCommand(t *testing.T) {
+	p := newPushRig(t, "", pumpDef(), false)
+	p.r.Scan()
+	if err := p.r.Tags().Force("P101.Cmd.SpeedRef", 40.0); err != nil {
+		t.Fatal(err)
+	}
+	p.r.Scan()
+	wantHanded(t, p.d.last(t), "P101.Cmd.SpeedRef", 40.0)
+	p.r.Tags().Unforce("P101.Cmd.SpeedRef")
+	p.r.Scan()
+	wantAbsent(t, p.d.last(t), "P101.Cmd.SpeedRef")
+
+	// Written under the force, it stays written with its own value.
+	if err := p.r.Tags().Force("P101.Cmd.SpeedRef", 40.0); err != nil {
+		t.Fatal(err)
+	}
+	write(t, p.r, "P101.Cmd.Start", true)
+	p.r.Scan()
+	if err := p.r.Tags().SetPath("P101.Cmd.SpeedRef", 15.0); err != nil {
+		t.Fatal(err)
+	}
+	p.r.Tags().Unforce("P101.Cmd.SpeedRef")
+	p.r.Scan()
+	wantHanded(t, p.d.last(t), "P101.Cmd.SpeedRef", 15.0)
+}
+
+// The parameter import's all-or-nothing write is a write too.
+func TestPushWriteSetIsAWrite(t *testing.T) {
+	p := newPushRig(t, "", pumpDef(), false)
+	p.r.Scan()
+	for _, o := range p.r.Tags().WriteSet([]WriteOp{{Path: "P101.Cmd.SpeedRef", Value: 30.0}}, "", false) {
+		if o.Err != nil {
+			t.Fatal(o.Err)
+		}
+	}
+	p.r.Scan()
+	wantHanded(t, p.d.last(t), "P101.Cmd.SpeedRef", 30.0)
 }

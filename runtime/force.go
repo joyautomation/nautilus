@@ -354,7 +354,7 @@ func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, string
 		}
 	}
 	t.storeLocked(root, tv, fs.apply(fs.actual))
-	t.markPathWrittenLocked(name, v) // a forced command goes out, as a forced output does
+	t.markForcedLocked(name) // a forced command goes out, as a forced output does
 	t.forceRev++
 	return e.gen, name, nil
 }
@@ -401,6 +401,7 @@ func (t *Tags) UnforceAll() int {
 // remaining forces over the actual value, or — with none left — the actual
 // value itself, and the tag leaves the table. Caller holds t.mu.
 func (t *Tags) releaseLocked(root string, fs *forceSet) {
+	t.forceReleasedLocked(root, fs)
 	tv := t.vals[root]
 	if len(fs.entries) == 0 {
 		delete(t.forces, root)
