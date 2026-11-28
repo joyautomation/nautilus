@@ -10,7 +10,8 @@ import (
 // SameNode: a node is its URI and its identifier, whatever index its id
 // was written with (the driver re-targets the index from the URI); a
 // binding with no URI is taken as the same node as any with its
-// identifier, except across the standard namespace, which never moves.
+// identifier, except in the standard namespace, which never moves; two
+// bindings with no URI are one node when their indexes are.
 func TestSameNode(t *testing.T) {
 	b := func(node, uri string) opcua.TagBinding { return opcua.TagBinding{NodeID: node, Namespace: uri} }
 	for _, tc := range []struct {
@@ -22,8 +23,10 @@ func TestSameNode(t *testing.T) {
 		{b("ns=1;s=P/Start", "urn:x"), b("ns=1;s=P/Start", ""), true},      // no URI: doubtful, so the same
 		{b("ns=1;s=P/Start", "urn:x"), b("ns=1;s=P/Start", "urn:y"), false},
 		{b("ns=1;s=P/Start", "urn:x"), b("ns=1;s=P/Stop", "urn:x"), false},
-		{b("i=2259", ""), b("ns=2;i=2259", ""), false}, // the standard namespace never moves
-		{b("ns=2;i=7", ""), b("ns=3;i=7", ""), true},
+		{b("i=2259", ""), b("ns=2;i=2259", ""), false}, // no URI on either: the indexes decide
+		{b("ns=2;i=7", ""), b("ns=3;i=7", ""), false},
+		{b("ns=2;i=7", ""), b("ns=2;i=7", ""), true},
+		{b("i=7", ""), b("ns=2;i=7", "urn:x"), false}, // the standard namespace never moves
 	} {
 		if got := SameNode(tc.a, tc.b); got != tc.same {
 			t.Errorf("SameNode(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.same)

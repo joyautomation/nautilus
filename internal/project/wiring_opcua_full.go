@@ -67,6 +67,7 @@ func withWiredOPCUA(configs, raw []DriverConfig, set *wirebind.Set) ([]DriverCon
 		taken[strings.ToLower(n)] = true
 	}
 	template := map[string]bool{} // raw section names used as templates
+	shared := map[string]bool{}   // built entries instances share
 	var made []DriverConfig
 	for _, in := range set.InstancesList() {
 		for _, c := range in.Conns {
@@ -81,6 +82,10 @@ func withWiredOPCUA(configs, raw []DriverConfig, set *wirebind.Set) ([]DriverCon
 				if at < 0 {
 					return nil, fmt.Errorf("instance %s: source %s gives no endpoint, so it shares the session of the drivers: entry it names, and the project has no opcua-client entry %s: add one with its endpoint and manifest, or give the source endpoint: for a session of the instance's own", in.Name, c.Source, c.Driver)
 				}
+				if out[at].Endpoint == "" {
+					return nil, fmt.Errorf("instance %s: source %s gives no endpoint, so it shares the session of drivers: %s, which has none either: give the entry its endpoint, or the source one for a session of the instance's own", in.Name, c.Source, names[at])
+				}
+				shared[strings.ToLower(names[at])] = true
 				out[at].wired = set
 				out[at].wiredByType = out[at].wiredByType || strings.EqualFold(c.Driver, "opcua-client")
 				continue
@@ -110,12 +115,15 @@ func withWiredOPCUA(configs, raw []DriverConfig, set *wirebind.Set) ([]DriverCon
 			made = append(made, d)
 		}
 	}
-	// A template is never also a shared session: a session needs its
-	// endpoint, which a template refuses (opcuaWiredTemplate).
 	kept := out[:0:0]
 	for i, c := range out {
-		if !template[strings.ToLower(names[i])] {
+		n := strings.ToLower(names[i])
+		if !template[n] {
 			kept = append(kept, c)
+			continue
+		}
+		if shared[n] {
+			return nil, fmt.Errorf("drivers: %s is a template for instances' own OPC UA sessions and a session instances share: give each its own entry", names[i])
 		}
 	}
 	return append(kept, made...), nil

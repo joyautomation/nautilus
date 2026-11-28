@@ -2629,21 +2629,7 @@ func normalize(v any) any {
 // included, since a Sparkplug device is named after its driver — and
 // none for the implicit memory loopback.
 func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error) {
-	configs := m.Drivers
-	if !reflect.DeepEqual(m.Driver, DriverConfig{}) {
-		if len(configs) > 0 {
-			return nil, nil, fmt.Errorf("%s: driver: and drivers: are both set — drivers: is the plural of the same section, so move the single driver into the list", ManifestName)
-		}
-		configs = []DriverConfig{m.Driver}
-	}
-	raw := configs
-	if m.devices.Len() > 0 {
-		var err error
-		if configs, err = withDevices(configs, m.devices); err != nil {
-			return nil, nil, err
-		}
-	}
-	configs, err := withWired(configs, raw, m.wired)
+	configs, err := composeDriverConfigs(&m)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2682,6 +2668,30 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		return nil, nil, fmt.Errorf("drivers: %w", err)
 	}
 	return multi, named, nil
+}
+
+// composeDriverConfigs is the drivers the manifest builds, before naming:
+// its driver:/drivers: entries, with the devices: rows' drivers and the
+// instances' connections composed in (an instance's own OPC UA session
+// finds its template in the entries as written). buildDrivers builds from
+// it and driverConfigs (the live I/O view, naut check's warnings) reads it,
+// so the two cannot drift apart.
+func composeDriverConfigs(m *Manifest) ([]DriverConfig, error) {
+	configs := m.Drivers
+	if !reflect.DeepEqual(m.Driver, DriverConfig{}) {
+		if len(configs) > 0 {
+			return nil, fmt.Errorf("%s: driver: and drivers: are both set — drivers: is the plural of the same section, so move the single driver into the list", ManifestName)
+		}
+		configs = []DriverConfig{m.Driver}
+	}
+	raw := configs
+	if m.devices.Len() > 0 {
+		var err error
+		if configs, err = withDevices(configs, m.devices); err != nil {
+			return nil, err
+		}
+	}
+	return withWired(configs, raw, m.wired)
 }
 
 // labelCuts tells a driver its name for the writes-cut counter (#710,

@@ -220,9 +220,11 @@ func nodeNamespace(node string) int {
 // SameNode says whether two bindings may address one node of a server.
 // The driver re-targets a binding's namespace index from its URI when it
 // connects, so a node is its URI and its identifier, whatever index its id
-// was written with. A binding with no URI keeps its index, which may now
-// be any namespace's: it is taken as the same node as any binding with its
-// identifier, so a doubtful pair is refused rather than written twice.
+// was written with. Two bindings with no URI keep their indexes, so they
+// are one node when the indexes are. One with no URI against one with a
+// URI is doubtful (the URI's index is only known at connect), so it is
+// taken as the same node and refused rather than written twice, unless it
+// is in the standard namespace 0, which never moves.
 func SameNode(a, b opcua.TagBinding) bool {
 	ida, ia := nodeIdent(a.NodeID)
 	idb, ib := nodeIdent(b.NodeID)
@@ -232,10 +234,13 @@ func SameNode(a, b opcua.TagBinding) bool {
 	switch {
 	case a.Namespace != "" && b.Namespace != "":
 		return a.Namespace == b.Namespace
-	case a.Namespace == "" && b.Namespace == "" && (ia == 0) != (ib == 0):
-		return false // the standard namespace is never renumbered
+	case a.Namespace == "" && b.Namespace == "":
+		return ia == ib
+	case a.Namespace == "":
+		return ia != 0
+	default:
+		return ib != 0
 	}
-	return true
 }
 
 // nodeIdent is a node id without its namespace index ("ns=3;s=x" is

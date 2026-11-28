@@ -384,6 +384,22 @@ instances:
   - { name: P101, type: Pump }
   - { name: C1, type: Counter }
 `, "driver: ua is the section the instance's own session is made from, which may set only security, security-mode, pki-dir, username, read-mode, scan-rate and reassert-on-reconnect, not endpoint"},
+		"a template with no endpoint that is also a shared session": {base + "drivers:\n  - { name: ua, type: opcua-client, security: None }\n" + `wirings:
+  - type: Pump
+    params: { endpoint: "opc.tcp://192.0.2.1:4840" }
+    sources:
+      own: { driver: ua, endpoint: "{endpoint}" }
+    members:
+      Running: { from: own, node: "i=1" }
+  - type: Counter
+    sources:
+      sh: { driver: ua }
+    members:
+      Count: { from: sh, node: "i=2", type: Int32 }
+instances:
+  - { name: P101, type: Pump }
+  - { name: C1, type: Counter }
+`, "source sh gives no endpoint, so it shares the session of drivers: ua, which has none either"},
 		"the type with two entries": {wire("drivers:\n  - { name: a, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\" }\n  - { name: b, type: opcua-client, endpoint: \"opc.tcp://192.0.2.8:4840\" }\n", own, "      Running: { from: drive, node: \"i=1\" }\n"),
 			"driver: opcua-client, and the project has more than one opcua-client driver: name the drivers: entry instead"},
 		"a companion declared as something else": {strings.Replace(wire("drivers:\n  - { name: ua, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\" }\n", `{ driver: ua }`, "      Running: { from: drive, node: \"i=1\" }\n"), "drivers:", "tags:\n  - { name: ua__Online, role: state, type: DINT }\ndrivers:", 1),
