@@ -83,7 +83,7 @@ trap 'rm -f "$body"' EXIT
   fi
   if [ "$seeds" != success ]; then
     echo
-    echo "### \`QUORUM_SEEDS=200000 go test ./quorum/sim -run '^TestSeeds\$'\` $(said "$seeds")"
+    echo "### The seeded schedules (\`go test ./quorum/sim\`, \`./oplog\`, one job per suite) $(said "$seeds")"
     echo
     repro=$(log "${SEEDS_LOG:-}" | grep -oE "QUORUM_SEED=[0-9]+ go test \./quorum/sim -run '[^']*' -v" | awk '!seen[$0]++' || true)
     if [ -n "$repro" ]; then
@@ -94,8 +94,14 @@ trap 'rm -f "$body"' EXIT
       echo '```'
       echo
     fi
+    said=$(log "${SEEDS_LOG:-}" | grep -E ': seed [0-9]+: |: seeds [0-9]+–[0-9]+: [0-9]+ failing|failing seeds in all|^(--- FAIL|FAIL|panic:)' | head -n 40 || true)
+    if [ -z "$said" ]; then
+      # No failing seed or test said so (a suite timed out, or never
+      # ran): the log's tail, which ends where it stopped (#1096).
+      said=$(log "${SEEDS_LOG:-}" | tail -n 15)
+    fi
     echo '```'
-    log "${SEEDS_LOG:-}" | grep -E ': seed [0-9]+: |: seeds [0-9]+–[0-9]+: [0-9]+ failing|failing seeds in all|^(--- FAIL|FAIL|panic:)' | head -n 40 || true
+    echo "$said"
     echo '```'
   fi
 } >"$body"

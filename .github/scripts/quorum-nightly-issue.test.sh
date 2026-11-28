@@ -42,6 +42,11 @@ FAIL
 FAIL	github.com/joyautomation/nautilus/quorum/sim	131.203s
 FAIL
 EOF
+# A suite cut off by its job's limit: nothing failed, the log just stops.
+cat >"$tmp/seeds-cut.log" <<'EOF'
+ok  	github.com/joyautomation/nautilus/quorum/sim	623.436s
+=== RUN   TestThreeReplicaSimulation
+EOF
 cat >"$tmp/seeds-green.log" <<'EOF'
 ok  	github.com/joyautomation/nautilus/quorum/sim	130.912s
 EOF
@@ -149,7 +154,7 @@ check "green closes the issue" 7 success mutants-green.log success seeds-green.l
 check "seeds red opens the issue" '' success mutants-green.log failure seeds-red.log \
   '^issue create --repo o/r --title quorum: nightly simulator --body-file ' \
   'Main at \*\*01234567\*\*.*https://example.test/run/1' \
-  "QUORUM_SEEDS=200000 go test ./quorum/sim -run $S\` failed" \
+  'The seeded schedules .* failed' \
   "^QUORUM_SEED=29 go test ./quorum/sim -run $S -v$" \
   "^QUORUM_SEED=106 go test ./quorum/sim -run $S -v$" \
   'seed 29: lease at 15.204795778s: B open' \
@@ -160,7 +165,7 @@ check "mutants red comments" 7 failure mutants-red.log success seeds-green.log \
   '^issue comment 7 --repo o/r --body-file ' \
   'go run ./tools/quorum-mutants` failed' \
   '^\| no_observe \| SURVIVED: still green: TestObserveLiftsTheNextCampaign \|$' \
-  '!QUORUM_SEEDS=200000' '!exit status'
+  '!The seeded schedules' '!exit status'
 # The legs' tables: one header, only the rows not caught, and a count.
 check "mutants legs list only what was not caught" 7 failure mutants-legs.log success seeds-green.log \
   '^issue comment 7 ' \
@@ -184,6 +189,9 @@ check "mutants broken shows the log" '' failure mutants-broken.log success seeds
 # Both red: both sections.
 check "both red" 7 failure mutants-red.log failure seeds-red.log \
   '^issue comment 7 ' 'SURVIVED' "^QUORUM_SEED=29 go test"
+# A suite cut off with nothing failing: the log's tail, not an empty block.
+check "seeds cut off shows the tail" 7 success mutants-green.log failure seeds-cut.log \
+  '^issue comment 7 ' 'The seeded schedules .* failed' '=== RUN   TestThreeReplicaSimulation' '!QUORUM_SEED='
 # A timed-out seeds run: red, said so, no repro lines to give.
 check "seeds cancelled" '' success mutants-green.log cancelled '' \
   '^issue create ' 'was cancelled \(timed out\?\)' '!QUORUM_SEED='
