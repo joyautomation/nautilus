@@ -3,8 +3,8 @@ package runtime
 import (
 	"testing"
 
-	"github.com/joyautomation/nautilus/lang/ir"
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
 )
 
 // SubstituteCovering (#715 PR 5): a path reads a substituted signal when

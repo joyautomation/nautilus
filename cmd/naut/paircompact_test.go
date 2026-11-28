@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -46,22 +48,26 @@ func TestADivergedControllerRestartsItselfOnlyUnderTheRule(t *testing.T) {
 
 func TestTheLogCompactionsConditions(t *testing.T) {
 	now := time.UnixMilli(1_800_000_000_000)
-	disk, behind, blocked := compactConditions(oplog.Status{}, now)
-	if disk != "" || behind != "" || blocked != "" {
-		t.Fatalf("a log with nothing to say: %q %q %q", disk, behind, blocked)
+	disk, behind, blocked, refused := compactConditions(oplog.Status{}, now)
+	if disk != "" || behind != "" || blocked != "" || refused != "" {
+		t.Fatalf("a log with nothing to say: %q %q %q %q", disk, behind, blocked, refused)
 	}
 	var st oplog.Status
 	st.CompactRefused = "/var/lib/naut: 3 MB free, the log is 9 MB: the compaction waits for at least 18 MB free"
 	st.BehindBase = []string{"b: it runs a build from before log compaction and missed the compacted part (it has 0, the base is at 30): update it"}
 	st.CompactBlocked = "waiting for the witness"
 	st.CompactBlockedSince = now.Add(-6 * 24 * time.Hour).UnixMilli()
-	disk, behind, blocked = compactConditions(st, now)
+	disk, behind, blocked, _ = compactConditions(st, now)
 	if !strings.Contains(disk, "3 MB free") || !strings.Contains(behind, "b: it runs a build from before") || blocked != "" {
 		t.Fatalf("disk %q, behind %q, blocked %q (6 days: not yet)", disk, behind, blocked)
 	}
 	st.CompactBlockedSince = now.Add(-8 * 24 * time.Hour).UnixMilli()
-	if _, _, blocked = compactConditions(st, now); !strings.Contains(blocked, "8 days") || !strings.Contains(blocked, "waiting for the witness") {
+	if _, _, blocked, _ = compactConditions(st, now); !strings.Contains(blocked, "8 days") || !strings.Contains(blocked, "waiting for the witness") {
 		t.Fatalf("blocked 8 days: %q", blocked)
+	}
+	st.CompactDecisionRefused = "oplog: compaction refused: alarms: a replay of the kept entries differs"
+	if _, _, _, refused = compactConditions(st, now); !strings.Contains(refused, "alarms: a replay") || !strings.Contains(refused, "report it") {
+		t.Fatalf("a refused decision: %q", refused)
 	}
 }
 
@@ -75,5 +81,22 @@ func TestADivergedLogIsNotToldToVouch(t *testing.T) {
 	st.Diverged = "the compaction at seq 9 does not fit"
 	if lost, unsynced := syncConditions(st); lost != "" || unsynced != "" {
 		t.Fatalf("a diverged log: lost %q, unsynced %q; want neither", lost, unsynced)
+	}
+}
+
+// TestCompactionStaysDarkInThisBuild (#1455 PR 2b-1): the keep decision is
+// wired (Options.Compact, Options.Base), but neither production log, the
+// pair's nor the witness's, sets a keep-rules version, so no copy
+// advertises compaction, marks its terms, or looks for one. PR 2b-2, the
+// switch-on, replaces this with a test that both set it.
+func TestCompactionStaysDarkInThisBuild(t *testing.T) {
+	for _, f := range []string{"pairrun.go", "witnesslog.go"} {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(src, []byte("CompactRules")) {
+			t.Fatalf("%s sets a keep-rules version: compaction is on (that is PR 2b-2, with its release notes)", f)
+		}
 	}
 }

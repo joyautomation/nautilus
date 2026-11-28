@@ -258,3 +258,32 @@ func (n *Node) compactedForTest(ctx context.Context) error {
 		}
 	}
 }
+
+// CompactInput is what the keep decision is given.
+type CompactInput struct {
+	// T is the compaction time: the least of the three copies' clocks and
+	// the newest committed entry's TS. Whatever is judged "over" is over
+	// by T.
+	T time.Time
+	// Through is the highest seq that may be dropped; Base the current
+	// base's Through (0: the log is dense), Commit the commit index.
+	Through, Base, Commit uint64
+	// Entries calls f with every committed entry, in order: the base's
+	// kept entries, then every entry after the base up to Commit, each
+	// Lapsed as at open (a KindLapse in the log names it). Compactions and
+	// noops, which nothing applies, are left out. f returns false to stop.
+	Entries func(f func(Entry) bool)
+}
+
+// Compactor is the keep decision (Options.Compact): the seqs up to
+// in.Through that are kept (sorted, distinct; any not named is dropped),
+// or an error. An error wrapping ErrCompactRefused says the decision's own
+// check failed (a replay of what it keeps did not give the state a full
+// replay gives): nothing is proposed, and Status says why
+// (oplog-compaction-refused). Any other error: nothing is proposed this
+// time.
+type Compactor func(ctx context.Context, in CompactInput) (keep []uint64, err error)
+
+// ErrCompactRefused: the keep decision's check before proposing failed.
+// It is a bug, with the evidence kept: nothing is proposed.
+var ErrCompactRefused = errors.New("oplog: compaction refused")

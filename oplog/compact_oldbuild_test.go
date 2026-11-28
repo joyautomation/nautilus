@@ -220,3 +220,56 @@ func sameStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// TestOldBuildsReadAndKeepTheRulesMarker (#1455 2b, the lead's ruling on
+// blocked-since): the noop a leader on compaction's rules writes to mark
+// its term is read by both readers from before compaction, opened and
+// replayed as any noop, and a follower on such a build, which re-marshals
+// what it takes and drops fields it doesn't know, keeps the marker: it is
+// in Value.
+func TestOldBuildsReadAndKeepTheRulesMarker(t *testing.T) {
+	tr := decideTrio(t, nil)
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	tr.nodes[0].markRules(tr.ctx())
+	tr.fill(0, 5, 1)
+	tr.beat(0)
+	f := tr.logFile(1)
+	for name, open := range map[string]func(string) error{"v0.23.0": v0230Open, "streaming": streamingOpen} {
+		if err := open(f); err != nil {
+			t.Fatalf("%s's reader refuses a log with the marker: %v", name, err)
+		}
+	}
+	for name, read := range map[string]func(string) ([]Entry, error){"v0.23.0": v0230ReadCommitted, "streaming": streamingReadCommitted} {
+		es, err := read(f)
+		if err != nil {
+			t.Fatalf("%s's ReadCommitted: %v", name, err)
+		}
+		if len(es) != 6 || es[0].Kind != KindNoop || string(es[0].Value) != `{"rules":1}` {
+			t.Fatalf("%s's ReadCommitted: %+v", name, es)
+		}
+	}
+	// A build that knows only the fields of before keeps Value whole.
+	var old struct {
+		Seq    uint64          `json:"seq"`
+		Term   uint64          `json:"term"`
+		TS     int64           `json:"ts"`
+		Kind   string          `json:"kind"`
+		By     string          `json:"by"`
+		Origin string          `json:"origin,omitempty"`
+		Value  json.RawMessage `json:"value,omitempty"`
+	}
+	raw, _ := json.Marshal(tr.nodes[1].After(0)[0])
+	if err := json.Unmarshal(raw, &old); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := json.Marshal(old)
+	var back Entry
+	if err := json.Unmarshal(again, &back); err != nil || string(back.Value) != `{"rules":1}` {
+		t.Fatalf("re-marshalled by an older build: %s (%v)", again, err)
+	}
+	if ts, ok := firstRulesTerm([]stored{storedOf(back)}); !ok || ts != back.TS {
+		t.Fatalf("the re-marshalled marker is not found: %d %t", ts, ok)
+	}
+}

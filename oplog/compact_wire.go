@@ -40,7 +40,7 @@ func (b baseState) wire() wireBase {
 // rules version) and no base answers exactly as a build from before.
 type compactWire struct {
 	// CompactRules is the answering copy's keep-rules version
-	// (Options.compactRules); Now its clock (unix ms), for the decision's
+	// (Options.CompactRules); Now its clock (unix ms), for the decision's
 	// T (§3). Both only once the rules version is set.
 	CompactRules int   `json:"compactRules,omitempty"`
 	Now          int64 `json:"now,omitempty"`
@@ -99,6 +99,7 @@ type wireNode struct {
 	// decision sets it: setCompactBlocked).
 	blocked      string
 	blockedSince time.Time
+	decideState  // the decision (compact_decide.go)
 }
 
 // peerWire is what a peer last said of compaction.
@@ -119,6 +120,9 @@ type wireStatus struct {
 	// CompactBlockedSince (unix ms): oplog-compaction-blocked after 7 days.
 	CompactBlocked      string `json:"compactBlocked,omitempty"`
 	CompactBlockedSince int64  `json:"compactBlockedSince,omitempty"`
+	// CompactDecisionRefused: why the keep decision's check before
+	// proposing refused (oplog-compaction-refused): a bug, with evidence.
+	CompactDecisionRefused string `json:"compactDecisionRefused,omitempty"`
 }
 
 var (
@@ -135,7 +139,7 @@ var (
 // mu.
 func (n *Node) wireLocked() compactWire {
 	var w compactWire
-	if r := n.o.compactRules; r > 0 || mutOplog("rules_advertised_unwired") {
+	if r := n.o.CompactRules; r > 0 || mutOplog("rules_advertised_unwired") {
 		w.CompactRules = max(r, 1)
 		w.Now = n.o.Now().UnixMilli()
 	}
@@ -189,6 +193,7 @@ func (n *Node) wireStatusLocked(s *Status) {
 	if n.blocked != "" {
 		s.CompactBlocked, s.CompactBlockedSince = n.blocked, n.blockedSince.UnixMilli()
 	}
+	s.CompactDecisionRefused = n.decideRefused
 }
 
 // setCompactBlocked records why a wanted compaction waits ("" once it does
@@ -476,6 +481,7 @@ func (n *Node) installLocked(s *staging, k Entry) error {
 		// The new file is in place (it holds the base) but can't be
 		// reopened: memory holds what it does, applied, and nothing more
 		// can be written.
+		n.baseLocked(h.Through)
 		n.applyRange(n.entries, h.Through)
 		return fmt.Errorf("oplog: writing the installed base: %w", err)
 	}
@@ -494,6 +500,7 @@ func (n *Node) installLocked(s *staging, k Entry) error {
 			n.log.Warn("oplog: can't record the installed base in the log's mark", "error", err)
 		}
 	}
+	n.baseLocked(h.Through)
 	n.applyRange(n.entries, h.Through)
 	n.log.Info("oplog: installed the compacted base", "from", s.from, "through", h.Through, "kept", h.Kept)
 	return nil

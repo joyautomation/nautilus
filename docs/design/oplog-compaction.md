@@ -1,9 +1,10 @@
 # Design brief: compacting the operator-intent log (#1455)
 
 Status: **approved, being built.** PR 2a-1 (the local side) and PR 2a-2 (the
-wire) build the log's part and change nothing in production: no build
-proposes a compaction until PR 2b (the decision, in `server`) lands and
-switches it on. §8 lists what each PR holds.
+wire) build the log's part, and PR 2b-1 the decision (in `oplog` and
+`server`), and none changes anything in production: no build proposes a
+compaction until PR 2b-2 sets a keep-rules version and switches it on. §8
+lists what each PR holds.
 
 The log (`oplog`) grows by about 2,400 entries a day at a busy plant's rate
 and is never compacted today. A year's log is about 876k entries. Reading it
@@ -112,7 +113,9 @@ Heartbeat). It compacts only when every one of these holds:
   was simply away. Status says `compaction: waiting for <copy>`. Once
   compaction has been blocked for more than 7 days, the condition
   `oplog-compaction-blocked` names the copy it waits for, or the reason
-  (clocks, rules, disk), so the growth is never silent;
+  (clocks, rules, disk), so the growth is never silent. Since when is
+  read from the log alone (§8, "blocked since"), so a restart or the other
+  controller leading never resets it;
 - every copy advertises a compaction rules version ≥ 1, and **the leader's
   rules version is ≥ every copy's**, so the decider knows every field and
   kind any current copy writes. The version is the keep-rules version, not a
@@ -462,7 +465,73 @@ the 7 days. Tests:
 - every note comes back to a wiped copy;
 - an old copy behind the base gets the condition and no resend loop.
 
-**PR 2b (server: the decision).** View-mode scratch consumers with T pinned
+**PR 2b, split in two (the lead's call, 2026-11-28).** The decision is big
+enough to need its own review, and the switch-on should be a small PR that
+can be reverted on its own:
+
+- **2b-1 (the decision, dark):** the gate, T, Through, the trigger,
+  blocked-since and the re-check at sequencing in `oplog` (kind-blind);
+  the keep decision in `server` (`Keeper`: provenance models, the closure,
+  scratch consumers, the check before proposing), `runtime.IntentView`
+  (the substitutes' view mode), `Options.Compact`/`Options.Base` wired in
+  `cmd/naut/pairrun.go`; the conditions. No production log sets a
+  keep-rules version, so nothing is advertised, marked or proposed.
+- **2b-2 (the switch-on):** the pair's and the witness's logs set
+  `CompactRules`, with the release notes, RELEASING.md and the guide's
+  "no downgrade past compaction" lines, and the old build's refusal naming
+  the fix.
+
+**How 2b-1 decides (as built).** Each consumer's model replays the log and
+says, per entry, which items of its state the outcome read (only items not
+empty then) and which it changed. Kept: the last writer of every item live
+at T, every note and checkout entry, every unclaimed kind; then, until
+nothing changes, a kept entry keeps the writer of what it read, every
+later writer of what it wrote (the closure rule), and the KindLapse naming
+it; the tail seeds it too. The check before proposing replays the real
+consumers (the alarm view's `Apply` with no engine, the session store,
+the `IntentView`) twice and compares digests. The substitutes' model and
+check are the same `IntentView`, so their guard is
+`TestIntentViewMatchesRuntime` (the view against the runtime itself); the
+view keeps more where it can't know: every start as installed, and a
+request-ID retry it did not apply while its time runs (the runtime runs
+one whose first start it refused). Through is the highest seq older than
+the margin, not the longest such prefix: entries below it that a stepped
+clock stamped later are judged at T like any other. An over-size K is retried
+on a smaller range. K's lapse check runs on the committed entries outside
+the locks; under them only the tail is scanned.
+
+**Blocked since (the lead's ruling, 2026-11-28).** Since when a compaction
+has waited is a pure function of the log: when the part after the base
+reached the threshold, plus the margin; after a compaction, never before
+its K's TS plus the gap; before the first, never before the margin has
+passed since the first term a deciding leader began. That leader says so
+in a noop, a kind every build already replicates, with `{"rules":N}` in
+Value (builds from before keep Value whole), written once by its decision
+loop (never a takeover's catch-up) when the log has no committed marker
+and no base. The earliest committed marker counts (two
+leaders in a row may each write one); an uncommitted one never does. So a
+rolling upgrade raises nothing, while a copy left on an old build raises
+the condition 7 days after the switch-on. Transient reasons (a takeover
+not caught up, leadership moving) neither start nor clear it.
+
+**Behaviour a compacted log changes (accepted):**
+
+- the substitutes' lapse listing (the last 32 lapsed starts, display only)
+  holds only lapses inside the request-ID window after a compacted
+  restart;
+- a start past its end that was never stopped in the log is dropped, so a
+  leader that replays it no longer installs it for an instant and expires
+  it (no expiry event; the same outcome);
+- the alarm view's `heardMs` (the newest applied TS, a liveness hint for
+  episodes at a takeover) may be earlier after a compacted restart: an
+  episode then reads as over sooner, the safe direction;
+- an unshelve, or an expired shelve, stays while any shelve on that alarm
+  could still be in force in a retain store (an unsynced takeover lays the
+  view over its own store's shelves), and so does that longer shelve, so a
+  later compaction still finds it (Fable, 2b-1).
+
+**PR 2b as first planned (both halves).**
+ View-mode scratch consumers with T pinned
 (alarms, substitutes (new), sessions, notes, checkout), `Rests()`/`Digest()`,
 the closure rule, `Options.Base` high-waters, the check before proposing,
 the trigger, and the rules version switched on. Tests, each consumer against

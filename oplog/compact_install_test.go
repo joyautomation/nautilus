@@ -225,7 +225,7 @@ func TestAnOldCopyBehindTheBaseIsNamedAndNotResentTo(t *testing.T) {
 	tr := compactTrio(t, func(i int, o *Options) {
 		smallPages(i, o)
 		if i == 2 {
-			o.compactRules = 0
+			o.CompactRules = 0
 		}
 	})
 	tr.compacted(40, 25, 26)
@@ -478,7 +478,7 @@ func TestAnUnwiredNodeSaysNothingOfCompaction(t *testing.T) {
 		t.Run(fmt.Sprintf("wired %v", wired), func(t *testing.T) {
 			tr := newTrio(t, func(i int, o *Options) {
 				if wired {
-					o.compactRules = 1
+					o.CompactRules = 1
 				}
 			})
 			mustSync(t, tr, 0)

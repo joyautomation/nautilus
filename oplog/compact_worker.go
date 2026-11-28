@@ -460,7 +460,15 @@ func (n *Node) resetDivergedLocked() error {
 // through naming an entry at or below it (so a lapse is never split from
 // the entries it names). Off unless the node's rules version is set.
 func (n *Node) proposeCompact(ctx context.Context, through uint64, keep []uint64) (Entry, error) {
-	if n.o.compactRules == 0 {
+	return n.proposeCompactChecked(ctx, through, keep, nil, nil)
+}
+
+// proposeCompactChecked is proposeCompact with recheck, when set, run
+// first under the sequencing lock and mu (the decision's re-check, given
+// this copy's leadership and term as they are then): its error is
+// returned, nothing proposed.
+func (n *Node) proposeCompactChecked(ctx context.Context, through uint64, keep []uint64, pre *compactBody, recheck func(leader bool, term uint64) error) (Entry, error) {
+	if n.o.CompactRules == 0 {
 		return Entry{}, errCompactOff
 	}
 	n.seqMu.Lock()
@@ -470,7 +478,13 @@ func (n *Node) proposeCompact(ctx context.Context, through uint64, keep []uint64
 	}
 	term := n.currentTerm()
 	n.mu.Lock()
-	e, err := n.compactEntryLocked(term, through, keep)
+	if recheck != nil {
+		if err := recheck(true, term); err != nil {
+			n.mu.Unlock()
+			return Entry{}, err
+		}
+	}
+	e, err := n.compactEntryLocked(term, through, keep, pre)
 	n.mu.Unlock()
 	if err != nil {
 		return Entry{}, err
@@ -478,11 +492,18 @@ func (n *Node) proposeCompact(ctx context.Context, through uint64, keep []uint64
 	if err := checkSize(e); err != nil {
 		return Entry{}, fmt.Errorf("%w: compact a smaller range", err)
 	}
+	if b, _ := json.Marshal(e); n.o.decide.maxK > 0 && len(b) > n.o.decide.maxK {
+		return Entry{}, fmt.Errorf("%w: %d bytes, at most %d (a test's cap): compact a smaller range", ErrTooLarge, len(b), n.o.decide.maxK)
+	}
 	return n.sequenceLocked(ctx, e)
 }
 
-// compactEntryLocked builds K for proposeCompact. Caller holds seqMu and mu.
-func (n *Node) compactEntryLocked(term, through uint64, keep []uint64) (Entry, error) {
+// compactEntryLocked builds K for proposeCompact. pre, when set, is K's
+// body already built outside the locks over the same base (compactBodyOf,
+// the decision's: proposeDecided): only what can have moved since is
+// checked here, so the sequencing lock and mu are held for the tail, never
+// the whole log. Caller holds seqMu and mu.
+func (n *Node) compactEntryLocked(term, through uint64, keep []uint64, pre *compactBody) (Entry, error) {
 	cur := n.cut
 	switch {
 	case n.stoppedLocked():
@@ -500,11 +521,8 @@ func (n *Node) compactEntryLocked(term, through uint64, keep []uint64) (Entry, e
 		return Entry{}, fmt.Errorf("oplog: entries up to %d are not committed yet: compact after they are", n.lastLocked())
 	case n.termAtLocked(through) == 0:
 		return Entry{}, fmt.Errorf("oplog: compact through %d: no entry there", through)
-	case cur.Rules > n.o.compactRules:
-		return Entry{}, fmt.Errorf("oplog: the log was compacted under keep rules %d, this build's are %d", cur.Rules, n.o.compactRules)
-	}
-	if !slices.IsSorted(keep) || len(slices.Compact(slices.Clone(keep))) != len(keep) {
-		return Entry{}, errors.New("oplog: the keep list is not sorted and distinct")
+	case cur.Rules > n.o.CompactRules:
+		return Entry{}, fmt.Errorf("oplog: the log was compacted under keep rules %d, this build's are %d", cur.Rules, n.o.CompactRules)
 	}
 	for _, s := range n.entries[n.indexAfterLocked(through):] {
 		if !s.mayLapse() {
@@ -518,10 +536,35 @@ func (n *Node) compactEntryLocked(term, through uint64, keep []uint64) (Entry, e
 			}
 		}
 	}
-	// Nor may a kept entry lose the lapse that names it: replayed without
-	// it, the entry would be carried out (KindLapse). The decision (PR 2b)
-	// keeps them together by its closure rule; the seam refuses one that
-	// does not.
+	var b compactBody
+	switch {
+	case pre != nil && (pre.PrevThrough == cur.Through && pre.Through == through || mutOplog("decide_base_unchecked")):
+		// Built over this base (the decision's re-check says it is the
+		// same one) from committed entries, which never change.
+		b = *pre
+	case pre != nil:
+		return Entry{}, fmt.Errorf("%w: K was built over the base at %d, it is at %d", errDecisionStale, pre.PrevThrough, cur.Through)
+	default:
+		var err error
+		if b, err = compactBodyOf(cur, n.entries, through, keep, n.o.CompactRules, n.termAtLocked); err != nil {
+			return Entry{}, err
+		}
+	}
+	v, _ := json.Marshal(b)
+	return Entry{Kind: KindCompact, By: "system", Origin: n.o.Self, Value: v}, nil
+}
+
+// compactBodyOf is K's body for keep up to through over the base cur and
+// entries (the log's, committed up to through), or why the keep list does
+// not fit: a kept entry must keep the KindLapse that names it (replayed
+// without it, the entry would be carried out), and every kept seq must be
+// held, at or below through, and not one an earlier compaction dropped.
+// termAt is the term at a seq (0: not held). It reads only committed
+// entries, so the decision runs it outside the locks.
+func compactBodyOf(cur baseState, entries []stored, through uint64, keep []uint64, rules int, termAt func(uint64) uint64) (compactBody, error) {
+	if !slices.IsSorted(keep) || len(slices.Compact(slices.Clone(keep))) != len(keep) {
+		return compactBody{}, errors.New("oplog: the keep list is not sorted and distinct")
+	}
 	old := map[uint64]bool{}
 	for _, s := range cur.Kept {
 		old[s] = true
@@ -530,40 +573,41 @@ func (n *Node) compactEntryLocked(term, through uint64, keep []uint64) (Entry, e
 	for _, s := range keep {
 		kept[s] = true
 	}
-	for _, s := range n.entries[:n.indexAfterLocked(through)] {
+	var y yielder
+	for _, s := range entries {
+		y.tick()
+		if s.Seq > through {
+			break
+		}
 		if s.Seq <= cur.Through && !old[s.Seq] || kept[s.Seq] || !s.mayLapse() {
 			continue
 		}
 		if l := s.entry(); l.Kind == KindLapse && !mutOplog("compact_drops_named_lapse") {
 			for _, r := range l.Refs {
 				if kept[r] {
-					return Entry{}, fmt.Errorf("oplog: the keep list keeps %d but drops the lapse at %d that names it", r, l.Seq)
+					return compactBody{}, fmt.Errorf("oplog: the keep list keeps %d but drops the lapse at %d that names it", r, l.Seq)
 				}
 			}
 		}
 	}
 	var fresh, drop []uint64
-	inKeep := map[uint64]bool{}
 	for _, s := range keep {
-		inKeep[s] = true
 		switch {
 		case s > through:
-			return Entry{}, fmt.Errorf("oplog: the keep list names %d, past %d", s, through)
+			return compactBody{}, fmt.Errorf("oplog: the keep list names %d, past %d", s, through)
 		case s <= cur.Through && !old[s]:
-			return Entry{}, fmt.Errorf("oplog: the keep list names %d, which an earlier compaction dropped", s)
-		case n.termAtLocked(s) == 0:
-			return Entry{}, fmt.Errorf("oplog: the keep list names %d, which this log does not hold", s)
+			return compactBody{}, fmt.Errorf("oplog: the keep list names %d, which an earlier compaction dropped", s)
+		case termAt(s) == 0:
+			return compactBody{}, fmt.Errorf("oplog: the keep list names %d, which this log does not hold", s)
 		case s > cur.Through:
 			fresh = append(fresh, s)
 		}
 	}
 	for _, s := range cur.Kept {
-		if !inKeep[s] {
+		if !kept[s] {
 			drop = append(drop, s)
 		}
 	}
-	b := compactBody{V: 1, Rules: n.o.compactRules, Through: through, ThroughTerm: n.termAtLocked(through), PrevThrough: cur.Through,
-		Keep: runs(fresh), Drop: runs(drop), Kept: len(keep), Digest: pairDigest(keep, n.termLocked)}
-	v, _ := json.Marshal(b)
-	return Entry{Kind: KindCompact, By: "system", Origin: n.o.Self, Value: v}, nil
+	return compactBody{V: 1, Rules: rules, Through: through, ThroughTerm: termAt(through), PrevThrough: cur.Through,
+		Keep: runs(fresh), Drop: runs(drop), Kept: len(keep), Digest: pairDigest(keep, termAt)}, nil
 }
