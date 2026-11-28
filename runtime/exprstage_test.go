@@ -35,6 +35,10 @@ FUNCTION Double : INT
 VAR_INPUT x : INT; END_VAR
 Double := x * 2;
 END_FUNCTION
+FUNCTION RawOf : INT
+VAR_INPUT g : Gauge; END_VAR
+RawOf := g.Raw;
+END_FUNCTION
 `
 
 // gaugeDef: Both reads Ok and Pick, and sorts before them, so it runs
@@ -525,4 +529,49 @@ func BenchmarkExprStage(b *testing.B) {
 		r.runExprs(now)
 	}
 	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/5, "ns/expr")
+}
+
+// An expression reading a whole instance (passed to a FUNCTION) waits for
+// every device member of it, and takes its quality.
+func TestExprStageReadsAWholeInstance(t *testing.T) {
+	def := gaugeDef()
+	def.Members["Twice"] = MemberDef{Kind: MemberExpr, Expr: "RawOf(G2)"}
+	d := &countDriver{}
+	r, err := New(Options{
+		Program: "PROGRAM Main\nEND_PROGRAM", Libraries: []string{gaugeLib}, Driver: d,
+		Tags: []TagDef{InstanceTag("G1", "Gauge", def), InstanceTag("G2", "Gauge", gaugeDef())},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deliver(d, 1, 0, 1)
+	d.set("G2.Raw", int64(7))
+	r.Scan()
+	wantPath(t, r, "G1.Twice", int64(0)) // G2.Idx and G2.Div not delivered yet
+	if q := r.TagQuality("G1.Twice"); q != nio.NotConnected {
+		t.Errorf("G1.Twice before G2 arrived: %v, want NotConnected", q)
+	}
+	d.set("G2.Idx", int64(0))
+	d.set("G2.Div", int64(1))
+	r.Scan()
+	wantPath(t, r, "G1.Twice", int64(7))
+	d.setQ("G2.Div", nio.Stale)
+	if q := r.TagQuality("G1.Twice"); q != nio.Stale {
+		t.Errorf("G1.Twice reading G2 whole, G2.Div Stale: %v", q)
+	}
+}
+
+// Tags.Given counts an instance's device members as delivered (a test's
+// given:), the whole instance or one member.
+func TestTagsGivenCountsAsDelivered(t *testing.T) {
+	r, _ := newGaugeRuntime(t, "", gaugeDef())
+	r.Tags().Given("G1", []string{"Raw"})
+	r.Tags().Set("G1.Raw", int64(3))
+	r.Scan()
+	wantPath(t, r, "G1.Twice", int64(6))
+	wantPath(t, r, "G1.Ratio", int64(0)) // Div was not given
+	r.Tags().Given("G1", []string{""})
+	r.Tags().Set("G1.Div", int64(4))
+	r.Scan()
+	wantPath(t, r, "G1.Ratio", int64(25))
 }

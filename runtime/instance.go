@@ -695,6 +695,31 @@ func (t *Tags) deliverLocked(in *instInfo, vals map[string]any) {
 	}
 }
 
+// Given counts the delivered (from: and both:) members of instance root at,
+// under or around each of paths as delivered: what a test's given: sets
+// there stands for a reading (acceptance), so an expression reading it runs
+// and its quality is Good until a delivery says otherwise, as for a force or
+// a substitute. Paths naming memory or commands change nothing; a root that
+// is no instance is left alone. Experimental.
+func (t *Tags) Given(root string, paths []string) {
+	in := t.instanceOf(root)
+	if in == nil {
+		return
+	}
+	for _, p := range paths {
+		n, ok := in.nodeAt(ir.PathSegments(p))
+		if !ok {
+			continue
+		}
+		for i, k := range in.keys {
+			if n == &in.root || pathUnder(k.node.canon, n.canon) || pathUnder(n.canon, k.node.canon) {
+				in.got[i].Store(true)
+				k.bad.Store(false)
+			}
+		}
+	}
+}
+
 // deliveryValue unwraps a scalar ir.Value for SetFieldTyped, which takes
 // the plain kinds a driver delivers.
 func deliveryValue(raw any) any {

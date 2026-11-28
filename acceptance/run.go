@@ -189,6 +189,18 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 	if err != nil {
 		return res, fmt.Errorf("%s: compile: %w", s.Path, err)
 	}
+	// With the stub driver the test is the device: an instance's from: and
+	// both: members hold what the test gives them (their zero until then),
+	// as a plain input holds its seed, so an expr: member reading them is
+	// computed from the first scan (#1458 slice 8b). Virtual devices deliver
+	// for themselves.
+	if dev == nil {
+		for _, d := range o.Tags {
+			if d.Instance != nil {
+				rt.Tags().Given(d.Name, []string{""})
+			}
+		}
+	}
 	sch := NewScheduler(rt, clk)
 	r := &testRun{
 		rt: rt, sch: sch, drv: drv, dev: dev, libs: o.Libraries,

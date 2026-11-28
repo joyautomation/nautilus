@@ -160,7 +160,9 @@ members:
   image never carries an expression's value.
 - **Until what it reads has arrived** it is not computed: a BOOL is FALSE,
   and its quality is `notConnected`. Then its quality is the worst of what it
-  reads.
+  reads. In `naut test` without virtual devices the test is the device: an
+  instance's device members count as arrived from the first scan, holding
+  what `given:` sets (their zero until then).
 - **A fault** (an index out of range, a division by zero) keeps its last
   value with quality `bad`. The log says when the fault starts and when it
   clears, the scan diagnostics (`scan.exprs.faulting` in `/api/state`) list

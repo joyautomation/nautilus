@@ -234,15 +234,16 @@ func (ex *exprSet) readOf(t *Tags, full string) exprRead {
 		return exprRead{tag: key}
 	}
 	n, _ := in.nodeAt(segs)
+	whole := n == &in.root // the instance read whole (passed to a FUNCTION)
 	r := exprRead{in: in}
 	for i, k := range in.keys {
-		if pathUnder(k.node.canon, n.canon) || pathUnder(n.canon, k.node.canon) {
+		if whole || pathUnder(k.node.canon, n.canon) || pathUnder(n.canon, k.node.canon) {
 			r.keys = append(r.keys, i)
 		}
 	}
 	for _, j := range ex.byInst[in] {
 		c := ex.units[j].node.canon
-		if pathUnder(c, n.canon) || pathUnder(n.canon, c) {
+		if whole || pathUnder(c, n.canon) || pathUnder(n.canon, c) {
 			r.units = append(r.units, j)
 		}
 	}
@@ -784,7 +785,7 @@ func (x *exprQual) of(i int) nio.Quality {
 	case u.faulted.Load():
 		q = worstQ(q, nio.Bad)
 	case !u.seen.Load():
-		q = worstQ(q, nio.NotConnected) // not computed yet: its zero is no value
+		q = nio.NotConnected // not computed yet: its zero is no value, whatever its inputs say
 	}
 	x.qs[i] = q
 	return q
