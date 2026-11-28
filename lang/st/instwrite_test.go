@@ -85,11 +85,12 @@ func TestInstanceWritesDirect(t *testing.T) {
 		{"an element by a variable index (it may be the read one)", "P101.Levels[i] := 2.0;", "Levels[1]", "from", false},
 		{"a sub-struct holding a from: member", "P101.Cmd := c;", "Cmd.Ack", "from", true},
 		{"the whole instance", "P101 := Spare;", "Cmd.Ack", "from", true},
+		{"an ENO => on a call in an assignment", "x := SQRT(EN := TRUE, IN := 4.0, ENO => P101.Healthy);", "Healthy", "from", false},
 		{"an => output", "Ctl(P := Spare, Demand := TRUE, Demand => P101.Healthy);", "Healthy", "from", false},
 		{"inside an IF, FOR, WHILE, REPEAT and CASE", `IF i > 1 THEN FOR i := 1 TO 3 DO WHILE TRUE DO REPEAT CASE i OF 1: P101.Running := TRUE; END_CASE; UNTIL TRUE END_REPEAT; END_WHILE; END_FOR; END_IF;`, "Running", "from", false},
 	} {
 		src := pumpCtl + `PROGRAM Main
-VAR Ctl : PumpCtl; Spare : Pump; c : Cmd; i : INT; END_VAR
+VAR Ctl : PumpCtl; Spare : Pump; c : Cmd; i : INT; x : REAL; END_VAR
   ` + c.body + `
 END_PROGRAM
 `

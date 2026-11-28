@@ -427,6 +427,12 @@ func (p *iwPOU) stmt(a *iwAnalysis, s Statement) {
 	switch v := s.(type) {
 	case *AssignStmt:
 		p.write(v.TargetExpr, v.Pos, "")
+		// `x := F(..., ENO => P101.Running)`: the gated call's => targets.
+		if c, ok := v.Value.(*CallExpr); ok {
+			for _, ob := range c.OutputBindings {
+				p.write(ob.Target, ob.Pos, "")
+			}
+		}
 	case *IfStmt:
 		p.block(a, v.Then)
 		for _, ei := range v.ElsIfs {
