@@ -9,6 +9,8 @@
 #   MUTANTS_OUTCOME, SEEDS_OUTCOME  the steps' outcomes (success, failure,
 #                                   cancelled, skipped); only success is green
 #   MUTANTS_LOG, SEEDS_LOG          the steps' output (a missing file is fine)
+#   MUTANTS_LEGS                    the mutant legs' count (#1096): a leg
+#                                   whose done row is missing is named
 #   RUN_URL, GITHUB_SHA, GITHUB_REPOSITORY
 #   GH                              the gh binary (the table test stubs it)
 set -euo pipefail
@@ -24,7 +26,14 @@ title="quorum: nightly simulator"
 num=$("$gh" issue list --repo "$repo" --state open --search "\"$title\" in:title" \
   --json number,title --jq "[.[]|select(.title==\"$title\")][0].number // empty")
 
-if [ "$mutants" = success ] && [ "$seeds" = success ]; then
+log() { [ -f "$1" ] && cat "$1" || true; }
+
+# Tests red in a leg's baseline and green alone (#1096): said at the top
+# of the issue on any night they happen, a green one too, so a flaky
+# failover test is never hidden by a rerun.
+flaky=$(log "${MUTANTS_LOG:-}" | grep -E '^\| .* \| flaky: ' || true)
+
+if [ "$mutants" = success ] && [ "$seeds" = success ] && [ -z "$flaky" ]; then
   if [ -n "$num" ]; then
     "$gh" issue close "$num" --repo "$repo" --comment "Green again: $run"
     echo "closed #$num"
@@ -44,21 +53,48 @@ said() {
   esac
 }
 
-log() { [ -f "$1" ] && cat "$1" || true; }
-
 body=$(mktemp)
 trap 'rm -f "$body"' EXIT
 {
-  echo "Main at **${sha::8}**: the quorum nightly is red: $run"
+  if [ "$mutants" = success ] && [ "$seeds" = success ]; then
+    echo "Main at **${sha::8}**: the quorum nightly is green, but a baseline test was flaky: $run"
+  else
+    echo "Main at **${sha::8}**: the quorum nightly is red: $run"
+  fi
+  if [ -n "$flaky" ]; then
+    echo
+    echo "### Flaky in a baseline"
+    echo
+    echo "Red with its leg's tests (the tag on, no mutation), green run alone. A row such a test catches counted only if a second run caught it too. Log each on #1120 with its output from the leg's log (the run's quorum-mutants-<k> artifact)."
+    echo
+    echo "| baseline | result |"
+    echo "|---|---|"
+    echo "$flaky"
+  fi
   if [ "$mutants" != success ]; then
     echo
     echo "### \`go run ./tools/quorum-mutants\` $(said "$mutants")"
     echo
     echo "A mutation whose tests stayed green has survived: the suite has a hole. A build failure counts too."
     echo
-    table=$(log "${MUTANTS_LOG:-}" | grep -E '^\|' || true)
-    if [ -n "$table" ]; then
-      echo "$table"
+    # The legs' tables run together (#1096): one header, then only the
+    # rows that were not caught (a caught row and a green baseline say
+    # nothing), with a count of the caught.
+    rows=$(log "${MUTANTS_LOG:-}" | grep -E '^\| ' | grep -vE '^\| mutation \| result \|$|\| caught \(|\| (green|done) \|$|\| flaky: ' || true)
+    legs=${MUTANTS_LEGS:-0}
+    all=$(log "${MUTANTS_LOG:-}") # read once: grep -q quitting early would SIGPIPE a cat under pipefail
+    for ((k = 0; k < legs; k++)); do
+      if ! grep -qF "| (shard $k/$legs: " <<<"$all"; then
+        rows+=${rows:+$'\n'}"| (shard $k/$legs) | never finished: timed out, cancelled, red baseline or never started; see the run |"
+      fi
+    done
+    caught=$(log "${MUTANTS_LOG:-}" | grep -cE '^\| .* \| caught \(' || true)
+    if [ -n "$rows" ]; then
+      echo "| mutation | result |"
+      echo "|---|---|"
+      echo "$rows"
+      echo
+      echo "The other $caught mutations were caught."
     else
       echo '```'
       log "${MUTANTS_LOG:-}" | tail -n 30
@@ -67,7 +103,7 @@ trap 'rm -f "$body"' EXIT
   fi
   if [ "$seeds" != success ]; then
     echo
-    echo "### \`QUORUM_SEEDS=200000 go test ./quorum/sim -run '^TestSeeds\$'\` $(said "$seeds")"
+    echo "### The seeded schedules (\`go test ./quorum/sim\`, \`./oplog\`, one job per suite) $(said "$seeds")"
     echo
     repro=$(log "${SEEDS_LOG:-}" | grep -oE "QUORUM_SEED=[0-9]+ go test \./quorum/sim -run '[^']*' -v" | awk '!seen[$0]++' || true)
     if [ -n "$repro" ]; then
@@ -78,8 +114,14 @@ trap 'rm -f "$body"' EXIT
       echo '```'
       echo
     fi
+    said=$(log "${SEEDS_LOG:-}" | grep -E ': seed [0-9]+: |: seeds [0-9]+–[0-9]+: [0-9]+ failing|failing seeds in all|^(--- FAIL|FAIL|panic:)' | head -n 40 || true)
+    if [ -z "$said" ]; then
+      # No failing seed or test said so (a suite timed out, or never
+      # ran): the log's tail, which ends where it stopped (#1096).
+      said=$(log "${SEEDS_LOG:-}" | tail -n 15)
+    fi
     echo '```'
-    log "${SEEDS_LOG:-}" | grep -E ': seed [0-9]+: |: seeds [0-9]+–[0-9]+: [0-9]+ failing|failing seeds in all|^(--- FAIL|FAIL|panic:)' | head -n 40 || true
+    echo "$said"
     echo '```'
   fi
 } >"$body"

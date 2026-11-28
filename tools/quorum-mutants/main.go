@@ -1,13 +1,14 @@
 // Command quorum-mutants runs the vote protocol's mutation checks (test
-// plan §3.3): for each mutation in package quorum it runs the quorum tests
-// with that one rule broken (build tag quorum_mut, QUORUM_MUT=<name>), and
-// checks that the tests named for it go red. A mutation whose tests stay
-// green has survived: the suite has a hole. A build or setup failure is a
-// failure too, never a pass. The baseline (the tag on, no mutation) must
-// be all green first.
+// plan §3.3): for each mutation in package quorum it runs the tests named
+// for it with that one rule broken (build tag quorum_mut,
+// QUORUM_MUT=<name>), and checks that they go red. A mutation whose tests
+// stay green has survived: the suite has a hole. A build or setup failure
+// is a failure too, never a pass. The baseline (the tag on, no mutation,
+// the same tests) must be all green first.
 //
 //	go run ./tools/quorum-mutants            every mutation
 //	go run ./tools/quorum-mutants -mut no_rho one
+//	go run ./tools/quorum-mutants -shard 2/8   every 8th row from the third (the nightly's legs)
 //
 // It prints a Markdown table and exits non-zero if anything survived or
 // failed to build.
@@ -19,6 +20,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
@@ -399,7 +401,7 @@ var table = []mutation{
 	{"placeholder_keeps_synced", []string{"TestRebindAPendingReplica"}},
 	{"unsynced_log_writes", []string{"TestFollowerOfAnUnsyncedLeaderIsNotWritable", "TestPairUnsyncedTakeoverCarriesNoAcks"}},
 	// In the pair's wiring (cmd/naut), end to end.
-	{"witness_log_unbound", []string{"TestPairWitnessLogAdmitsOnlyItsGrantedLeader"}},
+	{"witness_log_unbound", []string{"TestPairWitnessLogAdmitsOnlyItsGrantedLeader", "TestWitnessAdmitsAtOrBelowItsPromise"}},
 	{"witness_log_term_unbound", []string{"TestPairWitnessLogAdmitsOnlyItsGrantedLeader", "TestWitnessAdmitsAtOrBelowItsPromise"}},
 	{"witness_log_any_incarnation", []string{"TestWitnessCountsOnlyAtTheCountedIncarnation"}},
 	{"witness_not_a_replica", []string{"TestPairLogWritesWithItsPeerDown", "TestPairLogSurvivesALeaderCrash", "TestPairAckCarriesAcrossATakeoverAfterTheLeaderDied"}},
@@ -680,7 +682,10 @@ var table = []mutation{
 	{"resign_unchecked", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"final_sent_once_per_connection", []string{"TestPairSwitchoverAbortsWithoutTheFinalAck"}},
 	{"ack_other_build", []string{"TestPairColdTakeoverOnAnotherBuild"}},
-	{"ack_kept_across_reconnect", []string{"TestPairColdTakeoverOnAnotherBuild"}},
+	// TestPairColdTakeoverOnAnotherBuild reads PEER_READY once the
+	// standby is in sync, past the one image after a reconnect that a kept
+	// acknowledgement makes look current: the unit test carries it (#1096).
+	{"ack_kept_across_reconnect", []string{"TestAReconnectDropsTheEarlierAcknowledgement"}},
 	{"spend_failure_keeps_alone", []string{"TestASpendThatCantBeWrittenIsSpentInMemoryAndRetried"}},
 	{"accept_survives_reboot", []string{"TestAVouchDoesNotSurviveARestart"}},
 	{"superseded_lead_keeps_substitutes", []string{"TestPairALeaderThatLearnsANewerHistoryRunsNoneOfTheOld"}},
@@ -815,7 +820,10 @@ var table = []mutation{
 	{"witness_call_any_inc", []string{"TestAWitnessCallTakesOnlyTheCountedIncarnation"}},
 	{"drop_ban_in_memory", []string{"TestADroppedKeyStaysRefusedAcrossARestart"}},
 	{"adopt_keeps_witness_pins", []string{"TestEachIncarnationIsPinnedAndAdoptionDropsTheOthers", "TestPairRebuiltWitnessIsRecopiedAndCarriesATakeover"}},
-	{"reply_inc_unbound", []string{"TestLoopbackAWitnessReplyCountsOnlyUnderItsIncarnation", "TestARefusedWitnessReplyClosesTheConnections"}},
+	// TestLoopbackAWitnessReplyCountsOnlyUnderItsIncarnation's certificate
+	// names an incarnation the pair has not adopted, which the adoption
+	// check refuses as well: the unit tests carry this row (#1096).
+	{"reply_inc_unbound", []string{"TestAReplyCarryingAnotherIncarnationThanItsCertificateDoesNotCount", "TestARefusedWitnessReplyClosesTheConnections"}},
 	{"witness_ops_any_inc", []string{"TestLoopbackAWitnessReplyCountsOnlyUnderItsIncarnation"}},
 	{"bound_reply_keeps_conn", []string{"TestARefusedWitnessReplyClosesTheConnections"}},
 	{"unbound_refusal_keeps_conn", []string{"TestAnUnboundWitnessRefusalClosesTheConnections"}},
@@ -835,7 +843,11 @@ var table = []mutation{
 	{"key_box_virtual_nics", []string{"TestThePeerKeyIgnoresVirtualInterfaces"}},
 	{"pin_journal_unbuffered", []string{"TestPinEventsWaitForTheJournal", "TestPairPeerKeysShowInStatus"}},
 	{"unpin_self", []string{"TestUnpinThroughTheCLI"}},
-	{"unpin_lifts_on_retry", []string{"TestPairAnUnpinRetryNeverLifts", "TestPairALostWitnessAnswerNeverLifts"}},
+	// TestPairAnUnpinRetryNeverLifts's retry finds the witness still
+	// holding the pin, so an unpin taken afresh drops it there and lifts
+	// nothing either: only a lost answer (the witness dropped it, the
+	// first run never heard) makes the fresh path lift (#1096).
+	{"unpin_lifts_on_retry", []string{"TestPairALostWitnessAnswerNeverLifts"}},
 	{"unpin_other_cluster", []string{"TestTheWitnessTakesAnUnpinOnlyByItsRules"}},
 	{"witness_unpin_self", []string{"TestTheWitnessTakesAnUnpinOnlyByItsRules"}},
 	{"unpin_newer_caller", []string{"TestTheWitnessTakesAnUnpinOnlyByItsRules"}},
@@ -1317,13 +1329,133 @@ var rowPkgs = map[string][]string{
 	"write_dedup_failed_counts": {"./quorum/node"},
 }
 
-// args are the go test arguments for m.
-func (m mutation) args() []string {
-	pkgs, ok := rowPkgs[m.name]
-	if !ok {
-		return []string{"./quorum/..."}
+// pkgs are the packages m's tests are in.
+func (m mutation) pkgs() []string {
+	if p, ok := rowPkgs[m.name]; ok {
+		return p
 	}
-	return append([]string{"-run", "^(" + strings.Join(m.expect, "|") + ")$"}, pkgs...)
+	return []string{"./quorum/..."}
+}
+
+// args are the go test arguments for m: only its tests (#1096). The
+// verdict reads only those, and running the whole tree for each of the
+// rows without rowPkgs (100 s or more each) ran the nightly past its
+// timeout.
+func (m mutation) args() []string {
+	return testArgs(m.expect, m.pkgs())
+}
+
+func testArgs(tests, pkgs []string) []string {
+	return append([]string{"-run", "^(" + strings.Join(tests, "|") + ")$"}, pkgs...)
+}
+
+// baselines are the runs that must be green, the tag on and no mutation,
+// before rows are judged: one per package set, filtered to the rows'
+// tests, so a red test is never counted as a catch.
+func baselines(rows []mutation) [][]string {
+	var keys []string
+	tests := map[string][]string{}
+	pkgs := map[string][]string{}
+	for _, m := range rows {
+		k := strings.Join(m.pkgs(), " ")
+		if _, ok := pkgs[k]; !ok {
+			keys = append(keys, k)
+			pkgs[k] = m.pkgs()
+		}
+		for _, t := range m.expect {
+			if !slices.Contains(tests[k], t) {
+				tests[k] = append(tests[k], t)
+			}
+		}
+	}
+	var out [][]string
+	for _, k := range keys {
+		out = append(out, testArgs(tests[k], pkgs[k]))
+	}
+	return out
+}
+
+// checkBaselines runs rows' baselines, writing a row to w for each that is
+// red, and reports whether they are all green. A test red in a baseline
+// is run once more alone (#1096): a rig test can miss a timing bound on a
+// loaded runner, and one such miss would stop the whole leg. Green alone,
+// it is written as flaky (its report lines under it) and the leg goes on;
+// red alone, or a build or setup failure, stops it. flaky are the tests
+// green alone: a row they catch is run twice (judge).
+func checkBaselines(w io.Writer, rows []mutation, where string, run func(name string, args []string) []byte) (ok bool, flaky []string) {
+	for _, args := range baselines(rows) {
+		r := parse(run("", args))
+		b, why := baseline(r)
+		if b {
+			continue
+		}
+		if r.broken == "" && len(r.failed) > 0 {
+			pkgs := args[2:]
+			alone := true
+			for _, t := range r.failed {
+				if ok, _ := baseline(parse(run("", testArgs([]string{t}, pkgs)))); !ok {
+					alone = false
+				}
+			}
+			if alone {
+				fmt.Fprintf(w, "| (baseline: the tag on, no mutation; %s) | flaky: %s red with the leg's tests, green alone (log it on #1120) |\n", where, strings.Join(r.failed, ", "))
+				fmt.Fprint(w, r.why())
+				for _, t := range r.failed {
+					fmt.Fprint(w, r.full(t))
+				}
+				flaky = append(flaky, r.failed...)
+				continue
+			}
+		}
+		fmt.Fprintf(w, "| (baseline: the tag on, no mutation; %s) | %s |\n", where, why)
+		fmt.Fprint(w, r.why())
+		for _, t := range r.failed {
+			fmt.Fprint(w, r.full(t))
+		}
+		return false, flaky
+	}
+	return true, flaky
+}
+
+// judge runs row m and judges it. A row naming a test that was flaky in
+// the leg's baseline is caught only if a second run catches it too
+// (#1096): one red run of a flaky test is no catch.
+func judge(m mutation, flaky []string, run func(name string, args []string) []byte) (bool, string) {
+	caught, why := verdict(m, parse(run(m.name, m.args())))
+	var named []string
+	for _, t := range m.expect {
+		if slices.Contains(flaky, t) {
+			named = append(named, t)
+		}
+	}
+	if !caught || len(named) == 0 {
+		return caught, why
+	}
+	again, why2 := verdict(m, parse(run(m.name, m.args())))
+	if !again {
+		return false, "NOT COUNTED: caught once, not on a second run (" + strings.Join(named, ", ") + " flaky in this leg's baseline): " + why2
+	}
+	return true, why + " (twice: " + strings.Join(named, ", ") + " flaky in this leg's baseline)"
+}
+
+// shard picks the rows of shard k of n, round robin, so the nightly can
+// split the table across jobs (#1096). n of 1 is every row.
+func shard(rows []mutation, k, n int) []mutation {
+	var out []mutation
+	for i, m := range rows {
+		if i%n == k {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// parseShard reads "k/n" (k from 0).
+func parseShard(s string) (k, n int, err error) {
+	if _, err = fmt.Sscanf(s, "%d/%d", &k, &n); err != nil || n < 1 || k < 0 || k >= n {
+		return 0, 0, fmt.Errorf("-shard %q: want k/n with 0 <= k < n", s)
+	}
+	return k, n, nil
 }
 
 // event is one line of `go test -json`.
@@ -1344,6 +1476,23 @@ type result struct {
 	// lines, "--- FAIL", a panic), the last tailLines of them, so a red
 	// baseline says why, not only which test (#1120).
 	said map[string][]string
+	// all holds each top-level test's output, the last allLines lines,
+	// for a red baseline's full log (#1096: a rig test's timing miss is
+	// read from what it logged, not from its report line alone).
+	all map[string][]string
+}
+
+// allLines is how much of a red baseline test's output is kept.
+const allLines = 300
+
+// full gives test's output, the last allLines lines, indented.
+func (r result) full(test string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "    --- %s's output (the last %d lines):\n", test, allLines)
+	for _, l := range r.all[test] {
+		b.WriteString("    " + strings.TrimRight(l, "\n") + "\n")
+	}
+	return b.String()
 }
 
 // tailLines is how many of a failing test's report lines are kept.
@@ -1385,6 +1534,16 @@ func parse(out []byte) result {
 		}
 		if strings.HasPrefix(e.Output, "panic: ") {
 			r.panicked = true
+		}
+		if e.Action == "output" && e.Test != "" {
+			top, _, _ := strings.Cut(e.Test, "/")
+			if r.all == nil {
+				r.all = map[string][]string{}
+			}
+			r.all[top] = append(r.all[top], e.Output)
+			if n := len(r.all[top]); n > 2*allLines {
+				r.all[top] = append([]string(nil), r.all[top][n-allLines:]...)
+			}
 		}
 		if e.Action == "output" && e.Test != "" && reportLine(e.Output) {
 			top, _, _ := strings.Cut(e.Test, "/")
@@ -1453,8 +1612,13 @@ func baseline(r result) (bool, string) {
 	return true, "green"
 }
 
+// runTimeout bounds one run: a mutant that hangs a test fails that test
+// (a timeout panic, said in the row) instead of eating its nightly leg.
+// The slowest test is about 30 s; a baseline runs a leg's tests in turn.
+const runTimeout = "10m"
+
 func run(name string, args []string) []byte {
-	cmd := exec.Command("go", append([]string{"test", "-tags", "quorum_mut", "-count=1", "-json"}, args...)...)
+	cmd := exec.Command("go", append([]string{"test", "-tags", "quorum_mut", "-count=1", "-timeout", runTimeout, "-json"}, args...)...)
 	cmd.Env = append(os.Environ(), "QUORUM_MUT="+name)
 	out, _ := cmd.CombinedOutput() // a red run exits non-zero; the stream says why
 	return out
@@ -1462,37 +1626,43 @@ func run(name string, args []string) []byte {
 
 func main() {
 	only := flag.String("mut", "", "run only this mutation")
+	shardFlag := flag.String("shard", "0/1", "run only shard k of n (k/n, k from 0), round robin over the table")
 	flag.Parse()
-	ok := true
-	fmt.Println("| mutation | result |\n|---|---|")
-	r := parse(run("", mutation{}.args()))
-	b, why := baseline(r)
-	for _, m := range table {
-		if _, out := rowPkgs[m.name]; out && b {
-			r = parse(run("", m.args())) // the rows outside the tree, green first
-			b, why = baseline(r)
-		}
+	k, n, err := parseShard(*shardFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
 	}
-	fmt.Printf("| (baseline: the tag on, no mutation) | %s |\n", why)
-	if !b {
-		fmt.Print(r.why())
+	rows := shard(table, k, n)
+	if *only != "" {
+		i := slices.IndexFunc(table, func(m mutation) bool { return m.name == *only })
+		if i < 0 {
+			fmt.Fprintf(os.Stderr, "no mutation %q\n", *only)
+			os.Exit(2)
+		}
+		rows = []mutation{table[i]}
+	}
+	fmt.Println("| mutation | result |\n|---|---|")
+	bok, flaky := checkBaselines(os.Stdout, rows, fmt.Sprintf("shard %d/%d", k, n), run)
+	if !bok {
 		os.Exit(1)
 	}
-	found := false
-	for _, m := range table {
-		if *only != "" && m.name != *only {
-			continue
-		}
-		found = true
-		caught, why := verdict(m, parse(run(m.name, m.args())))
+	fmt.Printf("| (baseline: the tag on, no mutation; shard %d/%d, %d rows) | green |\n", k, n, len(rows))
+	ok := true
+	for _, m := range rows {
+		caught, why := judge(m, flaky, run)
 		ok = ok && caught
 		fmt.Printf("| %s | %s |\n", m.name, why)
 	}
-	if !found {
-		fmt.Fprintf(os.Stderr, "no mutation %q\n", *only)
-		os.Exit(2)
-	}
+	// The leg's last row: the nightly's report names a leg without it as
+	// one that never finished.
+	fmt.Println(doneRow(k, n, len(rows)))
 	if !ok {
 		os.Exit(1)
 	}
+}
+
+// doneRow is the table's last row, once every row of shard k/n is judged.
+func doneRow(k, n, rows int) string {
+	return fmt.Sprintf("| (shard %d/%d: %d rows judged) | done |", k, n, rows)
 }

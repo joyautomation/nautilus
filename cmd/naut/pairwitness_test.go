@@ -31,13 +31,19 @@ func (r *pairRig) cluster() string { return r.env["a"]["NAUTILUS_CLUSTER"] }
 // witnessLog sends one request to the witness's copy of the pair's log.
 func (r *pairRig) witnessLog(method, path, body string) (int, string) {
 	r.t.Helper()
+	return r.witnessLogAs("a", method, path, body)
+}
+
+// witnessLogAs is witnessLog under member as's certificate.
+func (r *pairRig) witnessLogAs(as, method, path, body string) (int, string) {
+	r.t.Helper()
 	req, err := http.NewRequest(method, r.peerScheme()+r.wit+node.Prefix+r.cluster()+"/log"+path, strings.NewReader(body))
 	if err != nil {
 		r.t.Fatal(err)
 	}
 	req.Header.Set(node.TokenHeader, r.token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := r.peerHTTPAs("a", "w").Do(req)
+	resp, err := r.peerHTTPAs(as, "w").Do(req)
 	if err != nil {
 		return 0, err.Error()
 	}
@@ -93,21 +99,31 @@ func TestPairWitnessLogAdmitsOnlyItsGrantedLeader(t *testing.T) {
 	stand := other(lead)
 	pairWait(t, "the witness's copy to open", 10*time.Second, func() bool { return r.witnessHolds(lead) })
 	term := r.nodes[lead].m.q.Term()
+	// Each sends under its own certificate (as "a" otherwise): the
+	// witness refuses a replication naming another member than the
+	// connection's certificate before its vote is asked, so the standby
+	// sent as a would never reach the vote's rule (#1096). The stranger
+	// has no certificate of this cluster.
 	send := func(from string, term uint64) (int, string) {
 		b, _ := json.Marshal(map[string]any{"from": "http://x", "node": from, "term": term})
-		return r.witnessLog("POST", "/api/oplog/replicate", string(b))
+		as := from
+		if as != "a" && as != "b" {
+			as = "a"
+		}
+		return r.witnessLogAs(as, "POST", "/api/oplog/replicate", string(b))
 	}
 	for _, c := range []struct {
 		what string
 		from string
 		term uint64
+		why  string
 	}{
-		{"the standby", stand, term},
-		{"a stranger", "z", term},
-		{"the leader, at a term the witness never promised", lead, term + 1<<20},
+		{"the standby", stand, term, "this witness's vote names"},
+		{"a stranger", "z", term, "certificate names another member"},
+		{"the leader, at a term the witness never promised", lead, term + 1<<20, "this witness promised"},
 	} {
-		if code, body := send(c.from, c.term); code != http.StatusForbidden {
-			t.Errorf("replication from %s: %d %s, want 403", c.what, code, body)
+		if code, body := send(c.from, c.term); code != http.StatusForbidden || !strings.Contains(body, c.why) {
+			t.Errorf("replication from %s: %d %s, want 403 %q", c.what, code, body, c.why)
 		}
 	}
 	if code, body := send(lead, term); code == http.StatusForbidden {

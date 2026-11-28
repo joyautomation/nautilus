@@ -42,6 +42,11 @@ FAIL
 FAIL	github.com/joyautomation/nautilus/quorum/sim	131.203s
 FAIL
 EOF
+# A suite cut off by its job's limit: nothing failed, the log just stops.
+cat >"$tmp/seeds-cut.log" <<'EOF'
+ok  	github.com/joyautomation/nautilus/quorum/sim	623.436s
+=== RUN   TestThreeReplicaSimulation
+EOF
 cat >"$tmp/seeds-green.log" <<'EOF'
 ok  	github.com/joyautomation/nautilus/quorum/sim	130.912s
 EOF
@@ -53,6 +58,45 @@ cat >"$tmp/mutants-red.log" <<'EOF'
 | no_observe | SURVIVED: still green: TestObserveLiftsTheNextCampaign |
 | retry_on_grid | caught (1 tests red) |
 exit status 1
+EOF
+# Two legs' logs run together (#1096): one leg red, one green.
+cat >"$tmp/mutants-legs.log" <<'EOF'
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 0/2, 2 rows) | green |
+| no_rho | caught (8 tests red) |
+| no_observe | SURVIVED: still green: TestObserveLiftsTheNextCampaign |
+| (shard 0/2: 2 rows judged) | done |
+exit status 1
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 1/2, 2 rows) | green |
+| retry_on_grid | caught (1 tests red) |
+| any_sender | BROKEN: package p failed with no test failing (a panic or a build error) |
+| (shard 1/2: 2 rows judged) | done |
+EOF
+# Three legs: shard 1 timed out after one row, shard 2 never started.
+cat >"$tmp/mutants-short.log" <<'EOF'
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 0/3, 1 rows) | green |
+| no_rho | caught (8 tests red) |
+| (shard 0/3: 1 rows judged) | done |
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 1/3, 2 rows) | green |
+| retry_on_grid | caught (1 tests red) |
+EOF
+# A green night with a baseline test flaky in one leg.
+cat >"$tmp/mutants-flaky.log" <<'EOF'
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 0/1) | flaky: TestPairHandBackToAGoodPeer red with the leg's tests, green alone (log it on #1120) |
+    pairhandback_test.go:102: timed out after 10s waiting for b to win the lease
+| (baseline: the tag on, no mutation; shard 0/1, 2 rows) | green |
+| no_rho | caught (8 tests red) |
+| handback_x | caught (1 tests red) (twice: TestPairHandBackToAGoodPeer flaky in this leg's baseline) |
+| (shard 0/1: 2 rows judged) | done |
 EOF
 cat >"$tmp/mutants-broken.log" <<'EOF'
 # github.com/joyautomation/nautilus/quorum
@@ -121,7 +165,7 @@ check "green closes the issue" 7 success mutants-green.log success seeds-green.l
 check "seeds red opens the issue" '' success mutants-green.log failure seeds-red.log \
   '^issue create --repo o/r --title quorum: nightly simulator --body-file ' \
   'Main at \*\*01234567\*\*.*https://example.test/run/1' \
-  "QUORUM_SEEDS=200000 go test ./quorum/sim -run $S\` failed" \
+  'The seeded schedules .* failed' \
   "^QUORUM_SEED=29 go test ./quorum/sim -run $S -v$" \
   "^QUORUM_SEED=106 go test ./quorum/sim -run $S -v$" \
   'seed 29: lease at 15.204795778s: B open' \
@@ -132,13 +176,49 @@ check "mutants red comments" 7 failure mutants-red.log success seeds-green.log \
   '^issue comment 7 --repo o/r --body-file ' \
   'go run ./tools/quorum-mutants` failed' \
   '^\| no_observe \| SURVIVED: still green: TestObserveLiftsTheNextCampaign \|$' \
-  '!QUORUM_SEEDS=200000' '!exit status'
+  '!The seeded schedules' '!exit status'
+# The legs' tables: one header, only the rows not caught, and a count.
+check "mutants legs list only what was not caught" 7 failure mutants-legs.log success seeds-green.log \
+  '^issue comment 7 ' \
+  '^\| no_observe \| SURVIVED: still green: TestObserveLiftsTheNextCampaign \|$' \
+  '^\| any_sender \| BROKEN: ' \
+  'The other 2 mutations were caught' \
+  '!no_rho' '!retry_on_grid' '!shard 0/2' '!exit status' '!\| done \|'
+if [ "$(grep -c '^| mutation | result |$' "$tmp/body" 2>/dev/null)" != 1 ]; then
+  echo "FAIL mutants legs: want one table header"
+  cat "$tmp/body"
+  fail=1
+fi
+# A leg without its done row is named, not hidden behind the caught rows.
+MUTANTS_LEGS=3 check "a leg that never finished is named" 7 cancelled mutants-short.log success seeds-green.log \
+  '^issue comment 7 ' 'was cancelled' \
+  '^\| \(shard 1/3\) \| never finished' '^\| \(shard 2/3\) \| never finished' \
+  '!shard 0/3\)' '!no_rho' 'The other 2 mutations were caught'
+# A flaky baseline test is said on a green night too: the issue is not
+# closed, the flaky row heads it, and no mutants section (it was green).
+check "a flaky baseline on a green night comments" 7 success mutants-flaky.log success seeds-green.log \
+  '^issue comment 7 ' 'green, but a baseline test was flaky' '### Flaky in a baseline' \
+  'flaky: TestPairHandBackToAGoodPeer red with the leg' '!quorum-mutants`' '!The seeded schedules' '!no_rho'
+check "a flaky baseline with no open issue opens one" '' success mutants-flaky.log success seeds-green.log \
+  '^issue create ' '### Flaky in a baseline'
+# On a red night it heads the issue, and is not repeated as a row not caught.
+cat "$tmp/mutants-flaky.log" "$tmp/mutants-red.log" >"$tmp/mutants-flaky-red.log"
+check "a flaky baseline on a red night heads the issue" 7 failure mutants-flaky-red.log success seeds-green.log \
+  '^issue comment 7 ' 'the quorum nightly is red' '### Flaky in a baseline' '^\| no_observe \| SURVIVED'
+if [ "$(grep -c 'flaky: TestPairHandBackToAGoodPeer' "$tmp/body" 2>/dev/null)" != 1 ] || [ "$(grep -n '### Flaky' "$tmp/body" | cut -d: -f1)" -gt "$(grep -n 'quorum-mutants`' "$tmp/body" | cut -d: -f1)" ]; then
+  echo "FAIL flaky on a red night: want the flaky row once, above the mutants section"
+  cat "$tmp/body"
+  fail=1
+fi
 # A build break: no table, so the log's tail.
 check "mutants broken shows the log" '' failure mutants-broken.log success seeds-green.log \
   '^issue create ' 'undefined: rho'
 # Both red: both sections.
 check "both red" 7 failure mutants-red.log failure seeds-red.log \
   '^issue comment 7 ' 'SURVIVED' "^QUORUM_SEED=29 go test"
+# A suite cut off with nothing failing: the log's tail, not an empty block.
+check "seeds cut off shows the tail" 7 success mutants-green.log failure seeds-cut.log \
+  '^issue comment 7 ' 'The seeded schedules .* failed' '=== RUN   TestThreeReplicaSimulation' '!QUORUM_SEED='
 # A timed-out seeds run: red, said so, no repro lines to give.
 check "seeds cancelled" '' success mutants-green.log cancelled '' \
   '^issue create ' 'was cancelled \(timed out\?\)' '!QUORUM_SEED='

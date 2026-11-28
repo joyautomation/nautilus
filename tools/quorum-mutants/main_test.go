@@ -122,3 +122,186 @@ func readFile(p string) (string, error) {
 	b, err := os.ReadFile(p)
 	return string(b), err
 }
+
+// Every row runs only its own tests (#1096): a row without rowPkgs once
+// ran the whole quorum tree, 100 s or more, and the nightly timed out.
+func TestEveryRowRunsOnlyItsTests(t *testing.T) {
+	for _, m := range table {
+		a := m.args()
+		if len(a) < 3 || a[0] != "-run" {
+			t.Fatalf("%s runs %v, want -run first", m.name, a)
+		}
+		if want := "^(" + strings.Join(m.expect, "|") + ")$"; a[1] != want {
+			t.Fatalf("%s: -run %q, want %q", m.name, a[1], want)
+		}
+		if !slices.Equal(a[2:], m.pkgs()) {
+			t.Fatalf("%s: packages %v, want %v", m.name, a[2:], m.pkgs())
+		}
+	}
+}
+
+// The shards split the table: every row in exactly one shard, for any
+// leg count.
+func TestShardsCoverTheTableOnce(t *testing.T) {
+	for n := 1; n <= 9; n++ {
+		seen := map[string]int{}
+		for k := range n {
+			for _, m := range shard(table, k, n) {
+				seen[m.name]++
+			}
+		}
+		for _, m := range table {
+			if seen[m.name] != 1 {
+				t.Fatalf("n=%d: %s in %d shards", n, m.name, seen[m.name])
+			}
+		}
+		if len(seen) != len(table) {
+			t.Fatalf("n=%d: %d rows, table has %d", n, len(seen), len(table))
+		}
+	}
+}
+
+// The baselines run every judged row's tests in its packages, green
+// first, so a test already red is never counted as a catch; one run per
+// package set.
+func TestBaselinesCoverEveryRowsTests(t *testing.T) {
+	rows := shard(table, 1, 3)
+	runs := baselines(rows)
+	sets := map[string]bool{}
+	for _, a := range runs {
+		k := strings.Join(a[2:], " ")
+		if sets[k] {
+			t.Fatalf("two baseline runs for %s", k)
+		}
+		sets[k] = true
+	}
+	for _, m := range rows {
+		found := false
+		for _, a := range runs {
+			if !slices.Equal(a[2:], m.pkgs()) {
+				continue
+			}
+			names := strings.Split(strings.TrimSuffix(strings.TrimPrefix(a[1], "^("), ")$"), "|")
+			for _, e := range m.expect {
+				if !slices.Contains(names, e) {
+					t.Fatalf("%s: the baseline for %v lacks %s", m.name, m.pkgs(), e)
+				}
+			}
+			found = true
+		}
+		if !found {
+			t.Fatalf("%s: no baseline runs %v", m.name, m.pkgs())
+		}
+	}
+}
+
+func TestParseShard(t *testing.T) {
+	for s, ok := range map[string]bool{"0/1": true, "3/8": true, "7/8": true, "8/8": false, "-1/8": false, "0/0": false, "x": false} {
+		if _, _, err := parseShard(s); (err == nil) != ok {
+			t.Errorf("parseShard(%q): err %v, want ok %v", s, err, ok)
+		}
+	}
+}
+
+// The issue script finds a finished leg by this row (quorum-nightly-issue.sh).
+func TestDoneRowIsWhatTheReportLooksFor(t *testing.T) {
+	src, err := readFile("../../.github/scripts/quorum-nightly-issue.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := doneRow(3, 8, 85); got != "| (shard 3/8: 85 rows judged) | done |" {
+		t.Fatalf("doneRow: %q", got)
+	}
+	if !strings.Contains(src, `"| (shard $k/$legs: "`) || !strings.Contains(src, `(green|done) \|$`) {
+		t.Fatal("quorum-nightly-issue.sh no longer looks for the done row's shape")
+	}
+}
+
+// A test red in a baseline is run once more alone (#1096): green alone,
+// the leg goes on and says it was flaky; red alone, or a build failure,
+// stops the leg.
+func TestABaselineRedTestIsRunAgainAlone(t *testing.T) {
+	rows := []mutation{{name: "x", expect: []string{"TestA", "TestB"}}}
+	fake := func(aloneRed bool, broken bool) (func(string, []string) []byte, *[]string) {
+		var calls []string
+		return func(name string, args []string) []byte {
+			calls = append(calls, args[1])
+			switch {
+			case broken:
+				return stream("FAIL\tp [build failed]")
+			case args[1] == "^(TestA|TestB)$":
+				return stream(failA, pkgF) // the leg's run: TestA red
+			case aloneRed:
+				return stream(failA, pkgF)
+			}
+			return stream(pass)
+		}, &calls
+	}
+	var out strings.Builder
+	run, calls := fake(false, false)
+	if ok, flaky := checkBaselines(&out, rows, "shard 0/1", run); !ok || !slices.Equal(flaky, []string{"TestA"}) {
+		t.Fatalf("a test green alone stopped the leg: %s", out.String())
+	}
+	if !slices.Equal(*calls, []string{"^(TestA|TestB)$", "^(TestA)$"}) || !strings.Contains(out.String(), "flaky: TestA red with the leg's tests, green alone") {
+		t.Fatalf("calls %v, out %q; want TestA run again alone and said flaky", *calls, out.String())
+	}
+	out.Reset()
+	run, _ = fake(true, false)
+	if ok, _ := checkBaselines(&out, rows, "shard 0/1", run); ok || !strings.Contains(out.String(), "baseline red: TestA") {
+		t.Fatalf("a test red alone too went on: %q", out.String())
+	}
+	out.Reset()
+	run, calls = fake(false, true)
+	if ok, _ := checkBaselines(&out, rows, "shard 0/1", run); ok || len(*calls) != 1 || !strings.Contains(out.String(), "BROKEN") {
+		t.Fatalf("a broken baseline went on, or was run again: calls %v, %q", *calls, out.String())
+	}
+}
+
+// A row naming a test flaky in the leg's baseline is caught only if a
+// second run catches it too (#1096, naut-lead): one red run of a flaky
+// test is no catch. A row naming none runs once.
+func TestARowCaughtByAFlakyTestIsRunAgain(t *testing.T) {
+	m := mutation{name: "x", expect: []string{"TestA"}}
+	seq := func(outs ...[]byte) (func(string, []string) []byte, *int) {
+		n := 0
+		return func(string, []string) []byte {
+			o := outs[min(n, len(outs)-1)]
+			n++
+			return o
+		}, &n
+	}
+	red, green := stream(failA, pkgF), stream(pass)
+	run, n := seq(red, green)
+	if caught, why := judge(m, []string{"TestA"}, run); caught || *n != 2 || !strings.HasPrefix(why, "NOT COUNTED") {
+		t.Fatalf("red then green with TestA flaky: %v %q after %d runs, want not counted after 2", caught, why, *n)
+	}
+	run, n = seq(red, red)
+	if caught, why := judge(m, []string{"TestA"}, run); !caught || *n != 2 || !strings.Contains(why, "twice") {
+		t.Fatalf("red twice with TestA flaky: %v %q after %d runs", caught, why, *n)
+	}
+	run, n = seq(red, green)
+	if caught, _ := judge(m, []string{"TestB"}, run); !caught || *n != 1 {
+		t.Fatalf("a row naming no flaky test: caught %v after %d runs, want caught after 1", caught, *n)
+	}
+}
+
+// A red baseline test's own output goes into the leg's log, not only its
+// report lines (#1096: a timing miss is read from what the test logged).
+func TestARedBaselineKeepsTheTestsOutput(t *testing.T) {
+	out := func(test, line string) string {
+		return `{"Action":"output","Package":"p","Test":"` + test + `","Output":` + strconv.Quote(line) + `}`
+	}
+	lines := []string{out("TestA", "2026/11/28 00:30:00 INFO redundancy: b campaigns\n")}
+	for i := range 3 * allLines {
+		lines = append(lines, out("TestA", "log "+strconv.Itoa(i)+"\n"))
+	}
+	lines = append(lines, out("TestA", "    x_test.go:9: timed out waiting for a leader\n"), failA, pkgF)
+	r := parse(stream(lines...))
+	f := r.full("TestA")
+	if !strings.Contains(f, "timed out waiting for a leader") || !strings.Contains(f, "log "+strconv.Itoa(3*allLines-1)) || strings.Contains(f, "INFO redundancy: b campaigns") {
+		t.Fatalf("full output: want the last %d lines (not the first): %d lines", allLines, strings.Count(f, "\n"))
+	}
+	if got := len(r.all["TestA"]); got < allLines || got > 2*allLines {
+		t.Fatalf("kept %d lines, want between %d and %d", got, allLines, 2*allLines)
+	}
+}

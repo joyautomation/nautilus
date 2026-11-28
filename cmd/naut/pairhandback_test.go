@@ -98,6 +98,11 @@ func TestPairHandBackToAGoodPeer(t *testing.T) {
 	ok := r.healthy(lead)
 	healthyOnAsk(ok)
 	before := r.nodes[stand].m.q.Node().Term()
+	// The standby may have taken over once already, while the pair
+	// settled after commissioning (the lead can move once): only a
+	// takeover on the hand-back's edge is wrong (#1096, a flake under
+	// slow voter writes).
+	prior := r.nodes[stand].rt.LastTakeover()
 	ok.Store(false) // the leader's lease lapses; the standby wins
 	r.wonAfter(t, stand, before)
 	won := time.Now()
@@ -124,7 +129,7 @@ func TestPairHandBackToAGoodPeer(t *testing.T) {
 	if !r.hasWarning(lead, "at term ") {
 		t.Error("the condition does not give the file's place")
 	}
-	if rep := r.nodes[stand].rt.LastTakeover(); !rep.At.IsZero() {
+	if rep := r.nodes[stand].rt.LastTakeover(); !rep.At.Equal(prior.At) {
 		t.Errorf("%s took over (%+v) on the edge it handed back", stand, rep)
 	}
 	if rep := r.nodes[lead].rt.LastTakeover(); rep.NoHandBack != "" {
@@ -403,7 +408,7 @@ func TestPairHandBackFallsBackWhenThePeerNeverTakes(t *testing.T) {
 // asked by its peer to take it back (the peer's takeover would go cold on
 // an unreadable retain file) ends its own resign hold when it says yes,
 // and leads again without waiting the hold's two leases out (#710 d1d).
-// handback_keeps_resign_hold turns it red.
+// handback_keeps_resign_hold turns it red, and handback_no_standdown_wait.
 func TestPairHandBackEndsTheResignersHold(t *testing.T) {
 	r, dirs := newHandBackRig(t)
 	lead := r.leader()
@@ -414,14 +419,28 @@ func TestPairHandBackEndsTheResignersHold(t *testing.T) {
 	corrupt(t, dirs, stand, false)
 	before := r.nodes[stand].m.q.Node().Term()
 	resigned := time.Now()
+	st := r.nodes[lead].m.stream
 	rep, err := r.nodes[lead].m.q.Resign(context.Background(), 1, false)
 	if err != nil || !rep.Resigned || !rep.Peer {
 		t.Fatalf("%s's resign: %+v %v", lead, rep, err)
 	}
+	// The elector stopped leading at once; the runtime stands down at its
+	// next scan (50 ms). A hand-back asked inside that scan must wait for
+	// it, not refuse for good (#1096: the peer's own ask rarely lands
+	// there, so the judge's wait is asked here directly).
+	// A scan late past the wait's bound (a loaded runner) is not this
+	// test's failure: only a judge that did not wait is.
+	if _, still := r.nodes[lead].rt.LeadingTerm(); still {
+		asked := time.Now()
+		if !st.awaitStandDown() && time.Since(asked) < st.standDownWait() {
+			t.Fatalf("%s's hand-back judge refused at once while its runtime had not yet stood down, after %v; want a wait of up to %v", lead, time.Since(asked), st.standDownWait())
+		}
+	} else {
+		t.Logf("%s's runtime stood down before the judge was asked: its wait not exercised", lead)
+	}
 	r.wonAfter(t, stand, before)
 	// Once it has said yes to the hand-back, its hold is over: ending it
 	// now ends nothing.
-	st := r.nodes[lead].m.stream
 	pairWait(t, lead+" to say yes to the hand-back", 10*time.Second, func() bool {
 		st.mu.Lock()
 		defer st.mu.Unlock()

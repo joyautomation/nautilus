@@ -323,12 +323,15 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 **The runner (2c).** Every PR-2 rule has a switch in package `quorum`. It exists only in a
 build with the `quorum_mut` tag, and `QUORUM_MUT=<name>` turns one on; a normal build compiles a
 constant false, so the checks cost nothing. `go run ./tools/quorum-mutants` does the following:
-- it runs `go test ./quorum/...` once per mutation;
+- it runs the tests named for each mutation, once per mutation (`./quorum/...` unless the row
+  names its packages);
 - it requires the named tests to go red;
 - it counts a build or setup failure as a failure, and says so when a test panicked (which
   hides the tests after it);
-- it checks the baseline (the tag on, no mutation) is green first;
-- it prints a Markdown table and exits non-zero on any survivor.
+- it checks the baseline (the tag on, no mutation, the same tests) is green first;
+- it prints a Markdown table and exits non-zero on any survivor;
+- `-shard k/n` runs every nth row: the nightly splits the table over 8 jobs (#1096; the whole
+  table is about an hour on one runner).
 
 Its own table test checks those verdicts, and that every mutation in `quorum/mut_on.go` has a
 row. All 17 are caught, in about 50 s. The handshake adds eight (`no_quiet`, `no_floor`,
