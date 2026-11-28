@@ -34,7 +34,7 @@ import (
 //	  Setpoint Double  (ns=2;s=Setpoint)   written by the driver
 type testServer struct {
 	srv  *server.Server
-	ns   *server.NodeNameSpace
+	ns   *lockedNS
 	url  string
 	port int
 	vars map[string]*server.Node
@@ -66,7 +66,7 @@ func startServerHooked(t *testing.T, port int, nsURI string, speed float64, befo
 		server.EnableAuthMode(ua.UserTokenTypeAnonymous),
 		server.EndPoint("127.0.0.1", port),
 	)...)
-	ns := server.NewNodeNameSpace(srv, nsURI)
+	ns := newLockedNS(srv, nsURI)
 	plant := ns.AddNode(server.NewFolderNode(ua.NewStringNodeID(ns.ID(), "Plant"), "Plant"))
 	// gopcua routes a Browse by the node's namespace, so the ns=0 Objects
 	// folder (what every client starts from) must reference our folder.

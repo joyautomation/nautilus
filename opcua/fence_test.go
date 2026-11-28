@@ -154,9 +154,7 @@ func silentWriteServer(t *testing.T, silent *atomic.Bool, release chan struct{})
 			}
 			results := make([]ua.StatusCode, len(req.NodesToWrite))
 			for i, w := range req.NodesToWrite {
-				if n := srv.Node(w.NodeID); n != nil {
-					_ = n.SetAttribute(ua.AttributeIDValue, w.Value)
-				}
+				setValue(srv, w.NodeID, w.Value)
 				results[i] = ua.StatusOK
 			}
 			return &ua.WriteResponse{
