@@ -13,8 +13,11 @@
 //
 // What it binds grows slice by slice (§18). Slice 5 binds Modbus: from: and
 // to: members, memory members, read-backs and event: commands, an instance
-// reading one connection of its own. The rest is refused here, naming the
-// slice it arrives with, never run half-way.
+// reading one connection of its own. Slice 9a-1 adds the OPC UA client
+// (opcua.go): a source with its own endpoint is a connection (and a driver)
+// of the instance's own, one without shares the drivers: entry it names. The
+// rest is refused here, naming the slice it arrives with, never run
+// half-way.
 package wirebind
 
 import (
@@ -124,8 +127,13 @@ type Conn struct {
 	DriverType string
 	// ID names the connection: the instance's name when it is the
 	// instance's only one, so its companions are <Instance>__Online (and
-	// __Outages on Modbus), as a devices: row's are.
+	// __Outages on Modbus), as a devices: row's are. A shared connection
+	// has none: its companion is its driver's own (Shared).
 	ID string
+	// Shared is an OPC UA source with no endpoint of its own: it binds into
+	// the one session of the drivers: entry it names, shared by every
+	// instance on it, whose companion is that driver's <name>__Online.
+	Shared bool
 	// Keys are the source's keys, params substituted.
 	Keys map[string]any
 	Pos  wiring.Pos
@@ -195,8 +203,8 @@ func (r *resolver) fence(w *wiring.Wiring) {
 	}
 	for _, s := range sortedKeys(w.Sources) {
 		typ, _ := r.driverType(w.Sources[s].Driver)
-		if typ != "modbus" {
-			r.add(w.Pos, "wiring %q: source %q uses the %s driver: this build runs struct wiring on Modbus only (#1458 slice 5); %s", name, s, typ, laterSlice(typ))
+		if typ != "modbus" && typ != "opcua-client" {
+			r.add(w.Pos, "wiring %q: source %q uses the %s driver: this build runs struct wiring on Modbus and OPC UA only (#1458 slices 5 and 9); %s", name, s, typ, laterSlice(typ))
 		}
 	}
 	for _, p := range sortedKeys(w.Members) {
@@ -217,8 +225,6 @@ func (r *resolver) fence(w *wiring.Wiring) {
 // laterSlice says when a driver type's wiring arrives.
 func laterSlice(typ string) string {
 	switch typ {
-	case "opcua-client":
-		return "OPC UA sources arrive with slice 9"
 	case "eip":
 		return "EtherNet/IP arrives with slice 12"
 	case "sparkplug-host":
@@ -356,7 +362,7 @@ func (r *resolver) instance(in *wiring.Instance) *Instance {
 	}
 	sort.Strings(srcs)
 	if len(srcs) > 1 {
-		r.add(in.Pos, "instance %s reads %d connections (%s): an instance on more than one connection arrives with slice 9 of struct wiring (#1458, mixed sources), with a companion per connection; until then give each its own type, or one source", in.Name, len(srcs), strings.Join(srcs, ", "))
+		r.add(in.Pos, "instance %s reads %d connections (%s): an instance on more than one connection arrives with slice 9a-2 of struct wiring (#1458, mixed sources), with a companion per connection; until then give each its own type, or one source", in.Name, len(srcs), strings.Join(srcs, ", "))
 	}
 	for _, s := range srcs {
 		src := w.Sources[s]
@@ -367,6 +373,11 @@ func (r *resolver) instance(in *wiring.Instance) *Instance {
 		}
 		for k, v := range src.Keys {
 			c.Keys[k] = subst(v)
+		}
+		if typ == "opcua-client" {
+			if _, own := c.Keys["endpoint"]; !own {
+				c.Shared, c.ID = true, ""
+			}
 		}
 		out.Conns = append(out.Conns, c)
 	}

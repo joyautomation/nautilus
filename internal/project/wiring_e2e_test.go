@@ -264,12 +264,12 @@ func TestWiredLoadRefusals(t *testing.T) {
 ` + members + inst
 	}
 	for name, tc := range map[string]struct{ manifest, want string }{
-		"opcua source": {base + `wirings:
+		"an EtherNet/IP source": {base + `wirings:
   - type: Pump
-    sources: { ua: { driver: opcua-client } }
+    sources: { plc: { driver: eip } }
     members:
-      Running: { from: ua, node: "ns=2;s=x" }
-` + "instances:\n  - { name: P101, type: Pump }\n", `source "ua" uses the opcua-client driver: this build runs struct wiring on Modbus only (#1458 slice 5); OPC UA sources arrive with slice 9`},
+      Running: { from: plc, tag: "Pump.Running" }
+` + "instances:\n  - { name: P101, type: Pump }\n", `source "plc" uses the eip driver: this build runs struct wiring on Modbus and OPC UA only (#1458 slices 5 and 9); EtherNet/IP arrives with slice 12`},
 		"wiring alarms": {wire("      Running: { from: drive, table: coil, address: 0 }\n    alarms:\n      - { member: Running, name: run }\n"), "alarms: in a wiring arrive with slice 9"},
 		"set": {strings.Replace(wire("      Running: { from: drive, table: coil, address: 0 }\n"), "192.0.2.1 }", "192.0.2.1 }, set: { SpeedSP: 1.0 }", 1),
 			"set: (initial values for memory members) arrives with slice 6"},

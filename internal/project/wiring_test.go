@@ -161,7 +161,7 @@ func TestWiringResolvesDriversByName(t *testing.T) {
 		{"", "eip"}, // a bare driver type needs no entry
 	} {
 		err = readWiring(t, both(tc.entry, tc.name), nil)
-		if err == nil || !strings.Contains(err.Error(), `source "plc" uses the eip driver: this build runs struct wiring on Modbus only`) ||
+		if err == nil || !strings.Contains(err.Error(), `source "plc" uses the eip driver: this build runs struct wiring on Modbus and OPC UA only`) ||
 			!strings.Contains(err.Error(), `member "SpeedSP": both: is for a peer controller, which this build does not wire yet`) {
 			t.Errorf("both: on eip (%s): %v", tc.name, err)
 		}

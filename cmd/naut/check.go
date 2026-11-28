@@ -676,6 +676,10 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		warns++
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
+	for _, w := range proj.WiringWarnings() {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
+	}
 
 	// Without an alarms: section nothing watches the devices: the profiles'
 	// alarms and every device's comms-loss alarm are alarms like the rest.
