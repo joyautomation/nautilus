@@ -1440,29 +1440,20 @@ type fileLine struct {
 }
 
 // open reads the file, dropping a torn final line, and replays the
-// committed prefix. damaged: a line before the last could not be read
-// (not a torn write, which is only ever the last line); everything from it
-// on was dropped. With a mark that is a lost log (openMarked).
+// committed prefix. It streams the file, one line at a time (#1455).
+// damaged: a line before the last could not be read (not a torn write,
+// which is only ever the last line); everything from it on was dropped.
+// With a mark that is a lost log (openMarked).
 func (n *Node) open() (damaged bool, err error) {
 	f, err := os.OpenFile(n.o.File, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return false, err
 	}
-	data, err := io.ReadAll(f)
-	if err != nil {
-		f.Close()
-		return false, err
-	}
-	good := 0
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
+	good, size, damaged, err := scanLines(f, func(line []byte) (bool, error) {
 		var l fileLine
 		if err := json.Unmarshal(line, &l); err != nil {
-			break // a torn last line: keep what parsed, drop the rest
+			return false, nil // a torn last line: keep what parsed, drop the rest
 		}
-		good += len(line) + 1
 		switch {
 		case l.E != nil:
 			n.entries = append(n.entries, *l.E)
@@ -1478,20 +1469,21 @@ func (n *Node) open() (damaged bool, err error) {
 			if err := json.Unmarshal(line, &e); err == nil && e.Seq > 0 {
 				n.entries = append(n.entries, e)
 				n.commit = e.Seq
-				continue
+				return true, nil
 			}
-			f.Close()
 			return false, fmt.Errorf("oplog: %s: unrecognised line %q", n.o.File, truncateStr(string(line), 80))
 		}
+		return true, nil
+	})
+	if err != nil {
+		f.Close()
+		n.entries, n.commit, n.term = nil, 0, 0
+		return false, err
 	}
-	if good < len(data) {
+	if good < size {
 		// A torn write is only ever the last line: each line goes out in
-		// one write, synced before it is acknowledged. A bad line with
-		// more after it is damage.
-		rest := data[good:]
-		if i := bytes.IndexByte(rest, '\n'); i >= 0 && len(bytes.TrimSpace(rest[i+1:])) > 0 {
-			damaged = true
-		}
+		// one write, newline last, synced before it is acknowledged. A bad
+		// line with more after it is damage.
 		if damaged && n.o.Mark != "" {
 			// Nothing applied, nothing truncated: openMarked keeps the
 			// file whole, aside, and starts empty.
@@ -1499,8 +1491,8 @@ func (n *Node) open() (damaged bool, err error) {
 			n.entries, n.commit, n.term = nil, 0, 0
 			return true, nil
 		}
-		n.log.Warn("oplog: dropping a torn final line", "file", n.o.File, "bytes", len(data)-good, "damaged", damaged)
-		if err := f.Truncate(int64(good)); err != nil {
+		n.log.Warn("oplog: dropping a torn final line", "file", n.o.File, "bytes", size-good, "damaged", damaged)
+		if err := f.Truncate(good); err != nil {
 			f.Close()
 			return false, err
 		}
@@ -1517,27 +1509,23 @@ func (n *Node) open() (damaged bool, err error) {
 // ReadCommitted reads a log file without opening a node: the entries it
 // holds that are committed, in order. A tool that reads a stopped
 // controller's log (naut notes export) uses it. A torn final line is
-// ignored; a file that does not parse before its end is an error.
+// ignored; a file that does not parse before its end is an error. It
+// streams the file (#1455); what it returns is the committed log.
 func ReadCommitted(path string) ([]Entry, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 	var es []Entry
 	var commit uint64
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	good := 0
-	for sc.Scan() {
-		line := sc.Bytes()
+	var bad string
+	_, _, damaged, err := scanLines(f, func(line []byte) (bool, error) {
 		var l fileLine
 		if err := json.Unmarshal(line, &l); err != nil {
-			if rest := data[good:]; bytes.IndexByte(rest, '\n') >= 0 && len(bytes.TrimSpace(rest[bytes.IndexByte(rest, '\n')+1:])) > 0 {
-				return nil, fmt.Errorf("oplog: %s: unrecognised line %q", path, truncateStr(string(line), 80))
-			}
-			break
+			bad = truncateStr(string(line), 80)
+			return false, nil
 		}
-		good += len(line) + 1
 		switch {
 		case l.E != nil:
 			es = append(es, *l.E)
@@ -1550,6 +1538,16 @@ func ReadCommitted(path string) ([]Entry, error) {
 				commit = e.Seq
 			}
 		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if damaged {
+		if bad == "" {
+			bad = "(a line over 1 MiB)"
+		}
+		return nil, fmt.Errorf("oplog: %s: unrecognised line %q", path, bad)
 	}
 	out := es[:0]
 	for _, e := range es {
@@ -1609,6 +1607,13 @@ func (n *Node) Commit() uint64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.commit
+}
+
+// entriesForTest is every stored entry, decoded. Tests only.
+func (n *Node) entriesForTest() []Entry {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return append([]Entry(nil), n.entries...)
 }
 
 func (n *Node) lastLocked() uint64 {
