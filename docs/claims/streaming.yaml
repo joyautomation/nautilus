@@ -225,8 +225,8 @@ claims:
     tests:
       - go ./server TestMetaAdvertisesQualityAndDeltas
     note: >-
-      blockDeltas is asserted true on the same /api/meta answer as quality and
-      deltas.
+      Asserted: the advertisement (blockDeltas true on the same /api/meta
+      answer as quality and deltas), not that ?blocks=delta is then served.
 
   - id: STR-024
     claim: >-

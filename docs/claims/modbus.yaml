@@ -135,11 +135,12 @@ claims:
       - go ./modbus TestTagClassOverridesTheManifestScanClass
     note: >-
       Asserted on the driver option (WithTagClass) the manifest's tag-classes:
-      becomes: it beats the class the manifest wrote, and a later assignment
-      beats an earlier. Not asserted: the manifest keys reaching that option
-      (internal/project), nor an import run that regenerates the manifest.
+      becomes, through New: it beats the class the manifest wrote, and a later
+      assignment beats an earlier. Not asserted: the manifest keys reaching
+      that option (internal/project), the second application path in a live
+      replace (modbus/replace.go), nor an import run that regenerates the
+      manifest.
     partial: true
-
   - id: MB-013
     claim: >-
       Addresses are 0-based PDU addresses end to end (datasheet 40001 is

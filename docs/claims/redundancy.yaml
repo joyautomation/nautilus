@@ -151,8 +151,9 @@ claims:
       - go ./internal/project TestRetainAndLeaseNameDefaults
     note: >-
       The names are asserted (default and set) where the manifest resolves
-      them. Which of the file or the ConfigMap is used in a cluster is chosen
-      in cmd/naut/runcmd.go and is not asserted.
+      them. The lease name applies in the Kubernetes Lease mode only; with
+      peers: the lease is a time. Which of the file or the ConfigMap is used
+      in a cluster is chosen in cmd/naut/runcmd.go and is not asserted.
     partial: true
 
   - id: RED-013
