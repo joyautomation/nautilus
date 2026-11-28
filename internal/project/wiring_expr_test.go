@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/joyautomation/nautilus/modbus/slave"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 const gaugeTypes = `TYPE GaugeSub : STRUCT X : REAL; Y : REAL; END_STRUCT; END_TYPE
@@ -50,8 +53,8 @@ const pureLib = "FUNCTION Scale : REAL\nVAR_INPUT x : INT; k : REAL; END_VAR\nSc
 	"FUNCTION SubSum : REAL\nVAR_INPUT s : GaugeSub; END_VAR\nSubSum := s.X + s.Y;\nEND_FUNCTION\n"
 
 // Each expr: rule of §6 and §15 is a check problem on the member's line,
-// naming the member and the fix; an expression that checks clean is still
-// refused at load, since this build does not evaluate it (slice 8b).
+// naming the member and the fix; an expression that checks clean loads
+// (want "").
 func TestExprMemberChecks(t *testing.T) {
 	for _, c := range []struct {
 		name, members, insts, lib, tags, want string
@@ -59,9 +62,9 @@ func TestExprMemberChecks(t *testing.T) {
 		{"clean: siblings, a param, a pure FUNCTION, a project tag, another instance",
 			"      Healthy: { expr: \"NOT Fault AND Level > 2.0 AND NOT G2.Fault\" }\n      Pct: { expr: \"Scale(Raw, {k}) + SubSum(Sub)\" }\n",
 			twoGauges, pureLib, "tags:\n  - { name: Level, role: input, init: 0.0 }\n",
-			"instances G1, G2: member \"Healthy\": expr: checks clean, but this build does not evaluate expressions yet: they run from slice 8b of struct wiring (#1458)"},
+			""},
 		{"a sibling wins over a tag of its name", "      Healthy: { expr: \"NOT Fault\" }\n", oneGauge, "", "tags:\n  - { name: Fault, role: input, init: 0 }\n",
-			"checks clean"},
+			""},
 		{"a second statement", "      Healthy: { expr: \"TRUE; Fault := TRUE\" }\n", oneGauge, "", "",
 			`member "Healthy": expr: "TRUE; Fault := TRUE" is not one expression`},
 		{"a statement through a param", "      Healthy: { expr: \"{k}\" }\n", strings.Replace(oneGauge, "192.0.2.1 }", "192.0.2.1, k: \"TRUE; Fault := TRUE\" }", 1), "", "",
@@ -93,13 +96,13 @@ func TestExprMemberChecks(t *testing.T) {
 		{"a comment hides nothing from the compile", "      Healthy: { expr: \"Fault // why\\n AND Nope\" }\n", oneGauge, "", "",
 			`undeclared identifier "Nope"`},
 		{"a comment before the rest of a clean expression", "      Healthy: { expr: \"Raw // why\\n > 3\" }\n", oneGauge, "", "",
-			"checks clean"},
+			""},
 		{"an array member", "      Vals[0]: { expr: \"INT_TO_REAL(Raw)\" }\n", oneGauge, "", "",
-			"checks clean"},
+			""},
 		{"an array member, narrowing", "      Vals[0]: { expr: \"Fault\" }\n", oneGauge, "", "",
 			"it gives BOOL, but the member is REAL"},
 		{"one element reads another: no cycle", "      Vals[0]: { expr: \"1.0\" }\n      Vals[1]: { expr: \"1.0 + Vals[0]\" }\n", oneGauge, "", "",
-			"checks clean"},
+			""},
 		{"an FB tag named like a conversion", "      Healthy: { expr: \"X_TO_Y(IN := Fault, PT := T#1s).Q\" }\n", oneGauge, "", "tags:\n  - { name: X_TO_Y, role: state, type: TON }\n",
 			"calls X_TO_Y, which is not a FUNCTION"},
 		{"a cycle across instances", "      A: { expr: \"{peer}.A\" }\n", strings.Replace(twoGauges, "192.0.2.2 }", "192.0.2.2, peer: G1 }", 1) + "", "", "",
@@ -107,6 +110,12 @@ func TestExprMemberChecks(t *testing.T) {
 	} {
 		fsys := gaugeProject(c.members, strings.Replace(c.insts, "192.0.2.1 }", "192.0.2.1, peer: G2 }", 1), c.lib, c.tags)
 		_, err := Load(fsys, "")
+		if c.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v, want it to load", c.name, err)
+			}
+			continue
+		}
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s:\n got %v\nwant %q", c.name, err, c.want)
 		}
@@ -134,4 +143,80 @@ func fmtErr(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// A sibling that hides a project tag of its name is a warning naming both
+// (§6): the sibling wins, as a local does over a tag. One that hides none is
+// not.
+func TestExprSiblingShadowsATagWarns(t *testing.T) {
+	p, err := Load(gaugeProject("      Healthy: { expr: \"NOT Fault AND Level > 1.0\" }\n", oneGauge, "", "tags:\n  - { name: Fault, role: input, init: 0 }\n  - { name: Level, role: input, init: 0.0 }\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := p.ExprShadows()
+	if len(w) != 1 || !strings.Contains(w[0], `instance G1: member "Healthy": expr: Fault reads the member G1.Fault, not the project tag Fault`) {
+		t.Fatalf("warnings %q", w)
+	}
+	p, err = Load(gaugeProject("      Healthy: { expr: \"NOT Fault\" }\n", oneGauge, "", ""), "")
+	if err != nil || len(p.ExprShadows()) != 0 {
+		t.Fatalf("no tag named Fault: %v, %q", err, p.ExprShadows())
+	}
+}
+
+// expr: members run end to end (slice 8b): through the real Modbus driver,
+// each computes from the device's members, a param, a project tag and a
+// FUNCTION of the project's library, before the program reads it.
+func TestExprMembersRunEndToEnd(t *testing.T) {
+	srv := slave.NewServer("", nil)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	dev := srv.Unit(1)
+	dev.SetHolding(0, 8)
+	manifest := `name: g
+tasks: [{ program: main.st, scan: 20ms }]
+drivers: [{ type: modbus, scan-rate: 20ms }]
+tags:
+  - { name: Limit, role: setpoint, type: INT, init: 2 }
+  - { name: Seen, role: state, type: BOOL }
+wirings:
+  - type: Gauge
+    params: { endpoint: null, k: 1.0 }
+    sources:
+      drive: { driver: modbus, endpoint: "{endpoint}", unit-id: 1 }
+    members:
+      Raw:     { from: drive, table: holding, address: 0, format: int16 }
+      Fault:   { from: drive, table: coil, address: 0 }
+      Healthy: { expr: "NOT Fault AND Raw > Limit" }
+      Pct:     { expr: "Scale(Raw, {k})" }
+instances:
+  - { name: G1, type: Gauge, params: { endpoint: "` + srv.Addr() + `", k: 0.5 } }
+`
+	fsys := fstest.MapFS{
+		"nautilus.yaml": {Data: []byte(manifest)},
+		"main.st":       {Data: []byte("PROGRAM Main\nSeen := G1.Healthy;\nEND_PROGRAM\n")},
+		"types.st":      {Data: []byte(gaugeTypes)},
+		"lib/f.st":      {Data: []byte(pureLib)},
+	}
+	proj, err := Load(fsys, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := startWired(t, proj)
+	eventually(t, "the expressions compute from the device", func() bool {
+		h, _ := rt.Tags().ReadPath("G1.Healthy")
+		p, _ := rt.Tags().ReadPath("G1.Pct")
+		s, _ := rt.Tags().ReadPath("Seen")
+		return h == true && p == 4.0 && s == true
+	})
+
+	dev.SetCoil(0, true)
+	eventually(t, "Healthy follows the device's Fault", func() bool {
+		h, _ := rt.Tags().ReadPath("G1.Healthy")
+		return h == false
+	})
+	if err := rt.Tags().Write([]runtime.WriteOp{{Path: "G1.Pct", Value: 1.0}})[0]; err == nil {
+		t.Error("a write to an expr: member must be refused")
+	}
 }

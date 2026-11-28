@@ -254,6 +254,119 @@ func ExprUnitOfLine(units []ExprUnit, line int) int {
 	return -1
 }
 
+// ExprEdges is the read graph of a set of expressions: edges[i] lists the
+// expressions unit i reads. targets are the members they compute ("P101.Healthy")
+// and reads[i] the tag paths unit i reads (ExprRef.Full). A read of a struct
+// or an array covers every member inside it, and a read inside a member
+// reads that member. Names compare as ir.NameKey does.
+func ExprEdges(targets []string, reads [][]string) [][]int {
+	keys := make([]string, len(targets))
+	for i, t := range targets {
+		keys[i] = ir.NameKey(t)
+	}
+	edges := make([][]int, len(targets))
+	for i := range targets {
+		seen := map[int]bool{}
+		for _, r := range reads[i] {
+			read := ir.NameKey(r)
+			for j, n := range keys {
+				if !seen[j] && (read == n || strings.HasPrefix(n, read+".") || strings.HasPrefix(n, read+"[") || strings.HasPrefix(read, n+".") || strings.HasPrefix(read, n+"[")) {
+					seen[j] = true
+					edges[i] = append(edges[i], j)
+				}
+			}
+		}
+	}
+	return edges
+}
+
+// ExprSCCs are the strongly connected components of a read graph (Tarjan),
+// each in ascending order, ordered by their lowest node: a component of
+// more than one node, or one that reads itself, is a cycle.
+func ExprSCCs(edges [][]int) [][]int {
+	n := len(edges)
+	index, low := make([]int, n), make([]int, n)
+	for i := range index {
+		index[i] = -1
+	}
+	on := make([]bool, n)
+	var stack []int
+	var out [][]int
+	next := 0
+	var visit func(v int)
+	visit = func(v int) {
+		index[v], low[v] = next, next
+		next++
+		stack = append(stack, v)
+		on[v] = true
+		for _, w := range edges[v] {
+			if index[w] < 0 {
+				visit(w)
+				low[v] = min(low[v], low[w])
+			} else if on[w] {
+				low[v] = min(low[v], index[w])
+			}
+		}
+		if low[v] == index[v] {
+			var comp []int
+			for {
+				w := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				on[w] = false
+				comp = append(comp, w)
+				if w == v {
+					break
+				}
+			}
+			sort.Ints(comp)
+			out = append(out, comp)
+		}
+	}
+	for v := 0; v < n; v++ {
+		if index[v] < 0 {
+			visit(v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+	return out
+}
+
+// ExprOrder is an order to evaluate a read graph in: every expression after
+// the ones it reads, and otherwise in the given order. cycle is the members
+// of the first cycle (ExprSCCs), and order is nil, when there is one.
+func ExprOrder(edges [][]int) (order, cycle []int) {
+	for _, c := range ExprSCCs(edges) {
+		if len(c) > 1 || slicesContains(edges[c[0]], c[0]) {
+			return nil, c
+		}
+	}
+	state := make([]uint8, len(edges)) // 0 new, 1 placed
+	var place func(v int)
+	place = func(v int) {
+		if state[v] != 0 {
+			return
+		}
+		state[v] = 1
+		for _, w := range edges[v] {
+			place(w)
+		}
+		order = append(order, v)
+	}
+	for v := range edges {
+		place(v)
+	}
+	return order, nil
+}
+
+func slicesContains(s []int, v int) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 // ExprProblem is one purity rule an expression breaks (§6).
 type ExprProblem struct {
 	// Func is the user FUNCTION that breaks the rule, "" for the

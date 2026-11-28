@@ -670,6 +670,12 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		warns++
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
+	// An expr: member's bare name that reads a sibling where a project tag
+	// of that name exists: the sibling wins (one-struct-model §6).
+	for _, w := range proj.ExprShadows() {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
+	}
 
 	// Without an alarms: section nothing watches the devices: the profiles'
 	// alarms and every device's comms-loss alarm are alarms like the rest.

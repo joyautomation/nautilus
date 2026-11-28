@@ -175,3 +175,27 @@ func TestExprRefsIndexesAndConversions(t *testing.T) {
 		t.Errorf("conversions refused: %+v", ps)
 	}
 }
+
+// ExprOrder puts each expression after the ones it reads, keeps the given
+// order otherwise, and names a cycle instead of ordering one.
+func TestExprOrder(t *testing.T) {
+	targets := []string{"P.Both", "P.Ok", "P.Pick", "Q.X"}
+	edges := ExprEdges(targets, [][]string{{"P.Ok", "P.Pick"}, {"P.Raw"}, {"P.Vals"}, {"P"}})
+	order, cycle := ExprOrder(edges)
+	if cycle != nil {
+		t.Fatalf("cycle %v", cycle)
+	}
+	at := map[int]int{}
+	for i, v := range order {
+		at[v] = i
+	}
+	if len(order) != 4 || at[0] < at[1] || at[0] < at[2] || at[3] < at[0] {
+		t.Errorf("order %v: Both must follow Ok and Pick, and Q.X (reads all of P) every P member", order)
+	}
+	if _, cycle := ExprOrder(ExprEdges([]string{"A", "B"}, [][]string{{"B"}, {"A"}})); len(cycle) != 2 {
+		t.Errorf("A and B read each other: cycle %v", cycle)
+	}
+	if _, cycle := ExprOrder(ExprEdges([]string{"A"}, [][]string{{"A.X"}})); len(cycle) != 1 {
+		t.Errorf("A reads inside itself: cycle %v", cycle)
+	}
+}

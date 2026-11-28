@@ -227,3 +227,23 @@ func TestLibWriteErrPlacesOrFallsBack(t *testing.T) {
 		t.Errorf("no library claims the line: %+v %v", le, ok)
 	}
 }
+
+// An expr: member checks clean and runs (slice 8b took the load fence
+// away), and a sibling that hides a project tag of its name is a warning
+// naming both.
+func TestCheckWarnsAnExprSiblingShadowsATag(t *testing.T) {
+	wiring := strings.Replace(checkPumpWiring, "      Start:   { to: drive, table: coil, address: 10 }\n",
+		"      Start:   { to: drive, table: coil, address: 10 }\n      Healthy: { expr: \"Running AND SpeedSP > 1.0\" }\n", 1)
+	types := strings.Replace(checkPumpTypes, "  Start    : BOOL;\n", "  Start    : BOOL;\n  Healthy  : BOOL;\n", 1)
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": "name: d\ntasks:\n  - program: main.st\n    scan: 100ms\ntags:\n  - { name: Running, role: state, type: BOOL }\n" + wiring,
+		"main.st":       "PROGRAM main\nVAR h : BOOL; END_VAR\nh := P101.Healthy;\nEND_PROGRAM\n",
+		"types.st":      types,
+	})
+	if code != 0 || strings.Contains(out, "slice 8b") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, `warning: nautilus.yaml:`) || !strings.Contains(out, `instance P101: member "Healthy": expr: Running reads the member P101.Running, not the project tag Running`) {
+		t.Errorf("no shadow warning:\n%s", out)
+	}
+}

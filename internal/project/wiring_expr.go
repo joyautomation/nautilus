@@ -19,9 +19,8 @@ import (
 // §6 and §15): each must be one expression that compiles in the project's
 // scope (a bare name is a sibling member first, then a project tag), give
 // its member's type without narrowing, call only what is pure, and read no
-// expr: that reads it back. The runtime does not evaluate expressions yet
-// (slice 8b), so a project whose expressions all check clean is still
-// refused at load, naming the slice.
+// expr: that reads it back. The runtime evaluates them
+// at each main scan (runtime/exprstage.go), from the same text.
 //
 // One compile for the whole project: every unit is one line of one
 // generated program after the library prelude (st.ExprProgram), so a
@@ -79,10 +78,16 @@ func (f *exprFindings) problems() []wiring.Problem {
 }
 
 // checkExprs checks every expr: member of set in m's scope. m.Tags already
-// holds the instance tags (composeWiring appends them first).
-func checkExprs(fsys fs.FS, m *Manifest, set *wirebind.Set, types map[string]*ir.Type) []wiring.Problem {
+// holds the instance tags (composeWiring appends them first). shadows are
+// warnings: a bare name that reads a sibling where a project tag of that
+// name exists (the sibling wins, §6).
+func checkExprs(fsys fs.FS, m *Manifest, set *wirebind.Set, types map[string]*ir.Type) (shadows []string, _ []wiring.Problem) {
 	var units []*exprUnit
 	var f exprFindings
+	tagNames := map[string]string{}
+	for _, t := range m.Tags {
+		tagNames[ir.NameKey(t.Name)] = t.Name
+	}
 	for _, in := range set.Instances {
 		siblings := map[string]bool{}
 		if t, _, ok := ir.Lookup(types, in.Type); ok && t.Kind == ir.TypeStruct && t.Struct != nil {
@@ -105,14 +110,23 @@ func checkExprs(fsys fs.FS, m *Manifest, set *wirebind.Set, types map[string]*ir
 				continue
 			}
 			units = append(units, &exprUnit{in: in, mem: mem, full: in.Name + "." + mem.Path, text: text, expr: e, refs: refs})
+			seen := map[string]bool{}
+			for _, r := range refs {
+				k := ir.NameKey(r.Root)
+				if tag, ok := tagNames[k]; ok && r.Sibling && !seen[k] {
+					seen[k] = true
+					shadows = append(shadows, fmt.Sprintf("%s:%d: instance %s: member %q: expr: %s reads the member %s.%s, not the project tag %s: a sibling member wins over a tag of the same name; rename one to read the tag",
+						mem.Pos.File, mem.Pos.Line, in.Name, mem.Path, r.Root, in.Name, r.Root, tag))
+				}
+			}
 		}
 	}
 	if len(units) == 0 {
-		return f.problems()
+		return shadows, f.problems()
 	}
 	libs, err := projectLibs(fsys, m)
 	if err != nil {
-		return append(f.problems(), wiring.Problem{Msg: "expr: members cannot be checked: the project's libraries do not read: " + err.Error()})
+		return shadows, append(f.problems(), wiring.Problem{Msg: "expr: members cannot be checked: the project's libraries do not read: " + err.Error()})
 	}
 	srcs := make([]string, len(libs))
 	for i, l := range libs {
@@ -125,7 +139,7 @@ func checkExprs(fsys fs.FS, m *Manifest, set *wirebind.Set, types map[string]*ir
 	exprCompile(units, prelude, preludeLines, m, &f)
 	exprPurity(units, prelude, where, &f)
 	exprCycles(units, &f)
-	return f.problems()
+	return shadows, f.problems()
 }
 
 // exprCompile lowers the units as one program; a unit that does not
@@ -246,28 +260,19 @@ func libLocator(libs []stproject.Library) func(int) string {
 // every member in it (§6). A read of a struct or an array covers every
 // expr: inside it; a variable index reads the whole array.
 func exprCycles(units []*exprUnit, f *exprFindings) {
-	idx := map[string]int{}
+	targets := make([]string, len(units))
+	reads := make([][]string, len(units))
 	for i, u := range units {
-		idx[ir.NameKey(u.full)] = i
-	}
-	edges := make([][]int, len(units))
-	for i, u := range units {
-		seen := map[int]bool{}
+		targets[i] = u.full
 		for _, r := range u.refs {
-			read := ir.NameKey(r.Full(u.in.Name))
-			for j, v := range units {
-				n := ir.NameKey(v.full)
-				if !seen[j] && (read == n || strings.HasPrefix(n, read+".") || strings.HasPrefix(n, read+"[") || strings.HasPrefix(read, n+".") || strings.HasPrefix(read, n+"[")) {
-					seen[j] = true
-					edges[i] = append(edges[i], j)
-				}
-			}
+			reads[i] = append(reads[i], r.Full(u.in.Name))
 		}
 	}
+	edges := st.ExprEdges(targets, reads)
 	// One problem per ring (strongly connected component), naming every
 	// member in it and one shortest cycle through its first member: linear
 	// in the reads, however densely the members read each other.
-	for _, comp := range sccs(edges) {
+	for _, comp := range st.ExprSCCs(edges) {
 		first := comp[0]
 		self := false
 		for _, w := range edges[first] {
@@ -297,56 +302,6 @@ func exprCycles(units []*exprUnit, f *exprFindings) {
 		f.add(u.mem.Pos, u.mem.Path, u.in.Name, "it is in a cycle, "+strings.Join(path, " → ")+": the expr: members "+strings.Join(names, ", ")+
 			" read each other, and an expression cannot read itself, directly or through another expr:; break the cycle with a memory: member a program sets")
 	}
-}
-
-// sccs are the strongly connected components of a graph (Tarjan), each
-// in ascending order, ordered by their lowest node.
-func sccs(edges [][]int) [][]int {
-	n := len(edges)
-	index, low := make([]int, n), make([]int, n)
-	for i := range index {
-		index[i] = -1
-	}
-	on := make([]bool, n)
-	var stack []int
-	var out [][]int
-	next := 0
-	var visit func(v int)
-	visit = func(v int) {
-		index[v], low[v] = next, next
-		next++
-		stack = append(stack, v)
-		on[v] = true
-		for _, w := range edges[v] {
-			if index[w] < 0 {
-				visit(w)
-				low[v] = min(low[v], low[w])
-			} else if on[w] {
-				low[v] = min(low[v], index[w])
-			}
-		}
-		if low[v] == index[v] {
-			var comp []int
-			for {
-				w := stack[len(stack)-1]
-				stack = stack[:len(stack)-1]
-				on[w] = false
-				comp = append(comp, w)
-				if w == v {
-					break
-				}
-			}
-			sort.Ints(comp)
-			out = append(out, comp)
-		}
-	}
-	for v := 0; v < n; v++ {
-		if index[v] < 0 {
-			visit(v)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
-	return out
 }
 
 // shortestCycle is a shortest path from s back to s inside the component
@@ -379,20 +334,6 @@ func shortestCycle(s int, edges [][]int, in map[int]bool) []int {
 		}
 	}
 	return []int{s, s}
-}
-
-// exprFence refuses what checked clean: this build does not evaluate
-// expressions yet.
-func exprFence(set *wirebind.Set) []wiring.Problem {
-	var f exprFindings
-	for _, in := range set.Instances {
-		for _, mem := range in.Members {
-			if mem.Kind == wiring.Expr {
-				f.add(mem.Pos, mem.Path, in.Name, "checks clean, but this build does not evaluate expressions yet: they run from slice 8b of struct wiring (#1458)")
-			}
-		}
-	}
-	return f.problems()
 }
 
 // projectLibs is the project's library prelude, as runtime.New composes it.

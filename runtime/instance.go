@@ -43,7 +43,7 @@ import (
 // StructDef and a recompiled TYPE after an online edit are the same shape.
 //
 // Experimental: CONTRIBUTING.md, "Go API". What is not here yet: memory is not
-// retained, and expressions are not evaluated. An instance is a RoleState
+// retained. Expressions are evaluated by the main task (exprstage.go). An instance is a RoleState
 // tag, so it is seeded, is no driver input or output tag, and is never
 // retained.
 
@@ -90,6 +90,10 @@ func (k MemberKind) delivered() bool { return k == MemberFrom || k == MemberBoth
 // readOnly: nothing but its own source (a device, the expression) sets it.
 func (k MemberKind) readOnly() bool { return k == MemberFrom || k == MemberExpr }
 
+// carried: a takeover's image brings it. A delivered member is the new
+// leader's to read, and an expression its to compute, on its first scan.
+func (k MemberKind) carried() bool { return k == MemberMemory || k == MemberTo }
+
 // MemberDef is one member's wiring, as the runtime needs it. Experimental.
 type MemberDef struct {
 	Kind MemberKind
@@ -100,6 +104,11 @@ type MemberDef struct {
 	// a takeover or a driver asking for every output, its first value is a
 	// baseline and only a later change goes out.
 	Event bool
+	// Expr is a MemberExpr's expression: one ST expression, its params
+	// already substituted, in which a bare name is a member of the same
+	// instance first ("Running AND NOT Fault"), then a project tag. The main
+	// task evaluates it each scan, before its program (exprstage.go).
+	Expr string
 }
 
 // InstanceDef is what makes a tag an instance. Experimental.
@@ -134,8 +143,8 @@ func WiredKinds(defs []TagDef) map[string]map[string]string {
 
 // InstanceTag declares a tag of a wired type. typeName is the project's TYPE
 // (a STRUCT); the tag is seeded at its zero, or at Init. Experimental while
-// struct wiring (#1458) lands: memory is not yet retained and expressions are
-// not yet evaluated.
+// struct wiring (#1458) lands: memory is not yet retained. A MemberExpr is
+// computed by the main task each scan, before its program (exprstage.go).
 //
 // A driver delivers an instance's from: and both: members either one by one,
 // under the member's full path ("P101.Speed", which mixes freely across the
@@ -164,26 +173,27 @@ func InstanceTag(name, typeName string, def InstanceDef, opts ...TagOpt) TagDef 
 // knode is one node of an instance's type, with its effective kind and what
 // its subtree holds.
 type knode struct {
-	kind   MemberKind
-	leaf   bool
-	path   string      // as the type spells it ("Cmd.Start", "Levels[1]"), "" at the root
-	canon  string      // path, canonical: the one key for this member
-	names  []string    // a struct's member names, as declared (nil for an array)
-	lo     int         // an array's lower bound
-	own    *MemberKind // the kind its own InstanceDef entry gives, if any
-	kids   []knode
-	hasRO  bool // some leaf beneath is read-only
-	hasDel bool // some leaf beneath is delivered
-	allDel bool // every leaf beneath is delivered
+	kind     MemberKind
+	leaf     bool
+	path     string      // as the type spells it ("Cmd.Start", "Levels[1]"), "" at the root
+	canon    string      // path, canonical: the one key for this member
+	names    []string    // a struct's member names, as declared (nil for an array)
+	lo       int         // an array's lower bound
+	own      *MemberKind // the kind its own InstanceDef entry gives, if any
+	kids     []knode
+	hasRO    bool // some leaf beneath is read-only
+	hasDel   bool // some leaf beneath is delivered
+	allDel   bool // every leaf beneath is delivered
+	hasCarry bool // some leaf beneath is memory or a command (a takeover carries it)
 }
 
 // pick chooses the leaves a merge takes from its source.
 type pick uint8
 
 const (
-	pickDelivered    pick = iota // a delivery: the device's leaves
-	pickReadOnly                 // a commit: the store keeps these
-	pickNotDelivered             // a hot install: the image brings these
+	pickDelivered pick = iota // a delivery: the device's leaves
+	pickReadOnly              // a commit: the store keeps these
+	pickCarried               // a hot install: the image brings these (memory, to:)
 )
 
 func (n *knode) has(p pick) bool {
@@ -193,7 +203,7 @@ func (n *knode) has(p pick) bool {
 	case pickReadOnly:
 		return n.hasRO
 	}
-	return !n.allDel
+	return n.hasCarry
 }
 
 func (n *knode) takes(p pick) bool {
@@ -203,7 +213,7 @@ func (n *knode) takes(p pick) bool {
 	case pickReadOnly:
 		return n.kind.readOnly()
 	}
-	return !n.kind.delivered()
+	return n.kind.carried()
 }
 
 // instInfo is one instance as the store uses it.
@@ -343,6 +353,12 @@ func newInstInfo(d TagDef, types map[string]*ir.Type) (*instInfo, error) {
 		if m.Event && m.Kind != MemberTo {
 			return nil, fmt.Errorf("instance %s: member %s: Event is for a MemberTo, and this one is %s", d.Name, p, m.Kind)
 		}
+		switch {
+		case m.Kind == MemberExpr && strings.TrimSpace(m.Expr) == "":
+			return nil, fmt.Errorf("instance %s: member %s is an expression with no Expr: give the expression it computes", d.Name, p)
+		case m.Kind != MemberExpr && m.Expr != "":
+			return nil, fmt.Errorf("instance %s: member %s: Expr is for a MemberExpr, and this one is %s", d.Name, p, m.Kind)
+		}
 	}
 	settle(&in.root, MemberMemory)
 	for _, p := range paths {
@@ -428,15 +444,17 @@ func settle(n *knode, inherited MemberKind) {
 		n.hasRO = n.kind.readOnly()
 		n.hasDel = n.kind.delivered()
 		n.allDel = n.hasDel
+		n.hasCarry = n.kind.carried()
 		return
 	}
-	n.hasRO, n.hasDel, n.allDel = false, false, true
+	n.hasRO, n.hasDel, n.allDel, n.hasCarry = false, false, true, false
 	for i := range n.kids {
 		k := &n.kids[i]
 		settle(k, n.kind)
 		n.hasRO = n.hasRO || k.hasRO
 		n.hasDel = n.hasDel || k.hasDel
 		n.allDel = n.allDel && k.allDel
+		n.hasCarry = n.hasCarry || k.hasCarry
 	}
 }
 
@@ -804,9 +822,10 @@ func (in *instInfo) stripReadOnly(committed, stored ir.Value) ir.Value {
 }
 
 // installCarried writes a value a pair's image carried (a hot takeover).
-// An instance takes from it every leaf but the delivered ones: like an
+// An instance takes from it only its memory and command leaves: like an
 // input, a from: or both: member is the new leader's to read on its first
-// scan, never the old leader's last reading. Caller holds no lock.
+// scan, never the old leader's last reading, and an expr: member its to
+// compute (exprstage.go). Caller holds no lock.
 func (t *Tags) installCarried(name string, v ir.Value) {
 	in := t.instanceOf(name)
 	if in == nil {
@@ -819,7 +838,7 @@ func (t *Tags) installCarried(name string, v ir.Value) {
 	if !ok {
 		return
 	}
-	if m, ok := mergeLeaves(&in.root, t.writeBase(key, cur), v, pickNotDelivered); ok {
+	if m, ok := mergeLeaves(&in.root, t.writeBase(key, cur), v, pickCarried); ok {
 		t.writeLocked(key, m)
 		return
 	}
@@ -979,6 +998,11 @@ func (r *Runtime) instanceQualities(out map[string]nio.Quality, standby bool) ma
 		}
 		out[k] = q
 	}
+	ex := r.prog.ex
+	var rolls map[*instInfo]instRoll
+	if ex != nil {
+		rolls = make(map[*instInfo]instRoll, len(r.tags.instList))
+	}
 	for _, in := range r.tags.instList {
 		roll := r.rollInstance(in, out, standby, readOK)
 		for i, k := range in.keys {
@@ -986,8 +1010,61 @@ func (r *Runtime) instanceQualities(out map[string]nio.Quality, standby bool) ma
 				set(k.key, q)
 			}
 		}
+		if rolls != nil && len(ex.byInst[in]) > 0 {
+			rolls[in] = roll // its root waits for its expressions
+			continue
+		}
 		if roll.root != nio.Good {
 			set(in.name, roll.root)
+		}
+	}
+	if ex == nil {
+		return out
+	}
+	// The expressions, over every instance's roll-up and the plain tags'
+	// qualities as said so far, then the roots they belong to.
+	// A plain tag's quality as TagQuality says it: what was said so far,
+	// with its substitute (applied to the map only after this).
+	tagQ := func(name string) nio.Quality {
+		q, ok := out[name]
+		if !ok {
+			q = nio.Good
+		}
+		if !standby {
+			switch r.tags.substitutedRoot(name) {
+			case subWhole:
+				return nio.Substituted
+			case subMember:
+				if q == nio.Good {
+					return nio.Substituted
+				}
+			}
+		}
+		return q
+	}
+	x := ex.newQual(func(in *instInfo) instRoll {
+		if roll, ok := rolls[in]; ok {
+			return roll
+		}
+		roll := r.rollInstance(in, out, standby, readOK)
+		rolls[in] = roll
+		return roll
+	}, tagQ, standby)
+	for _, in := range r.tags.instList {
+		units := ex.byInst[in]
+		if len(units) == 0 {
+			continue
+		}
+		eq := make([]nio.Quality, 0, len(units))
+		for _, i := range units {
+			q := x.of(i)
+			if q != nio.Good {
+				set(ex.units[i].full, q)
+			}
+			eq = append(eq, q)
+		}
+		if root := rootWithExprs(rolls[in].root, in, eq); root != nio.Good {
+			set(in.name, root)
 		}
 	}
 	return out
@@ -999,28 +1076,52 @@ func (r *Runtime) instanceQualities(out map[string]nio.Quality, standby bool) ma
 // quality, or the roll-up of the keys beneath it; the root is the roll-up.
 // A substitute covering the address makes a Good member Substituted.
 func (r *Runtime) instanceTagQuality(in *instInfo, segs []string, standby bool) nio.Quality {
-	roll := r.rollInstance(in, r.driverSaid(standby), standby, r.readOK.Load())
+	said, readOK := r.driverSaid(standby), r.readOK.Load()
+	roll := r.rollInstance(in, said, standby, readOK)
 	q := roll.root
+	// Its expressions, if it has any: over what each reads, the other
+	// instances' roll-ups and the plain tags' TagQuality.
+	var x *exprQual
+	if ex := r.prog.ex; ex != nil && len(ex.byInst[in]) > 0 {
+		rolls := map[*instInfo]instRoll{in: roll}
+		x = ex.newQual(func(o *instInfo) instRoll {
+			if v, ok := rolls[o]; ok {
+				return v
+			}
+			v := r.rollInstance(o, said, standby, readOK)
+			rolls[o] = v
+			return v
+		}, r.TagQuality, standby)
+	}
+	if len(segs) == 0 && x != nil {
+		q = rootWithExprs(roll.root, in, x.under(in, "", nil))
+	}
 	if len(segs) > 0 {
 		chain, ok := in.walk(segs)
 		n := chain[len(chain)-1]
-		switch {
-		case !ok:
+		if !ok {
 			return nio.Good
-		case !n.hasDel:
-			q = nio.Good
-			if standby && (n.kind == MemberTo || n.kind == MemberExpr) {
-				q = nio.Stale
-			}
-		default:
-			p := n.canon
-			var qs []nio.Quality
+		}
+		p := n.canon
+		var qs []nio.Quality
+		if n.hasDel {
 			for i, k := range in.keys {
 				if kp := k.node.canon; pathUnder(p, kp) || pathUnder(kp, p) {
 					qs = append(qs, roll.members[i])
 				}
 			}
+		}
+		if x != nil {
+			qs = x.under(in, p, qs)
+		}
+		switch {
+		case len(qs) > 0:
 			q, _ = instanceQuality(qs)
+		default:
+			q = nio.Good
+			if standby && (n.kind == MemberTo || n.kind == MemberExpr) {
+				q = nio.Stale
+			}
 		}
 	}
 	if !standby && q == nio.Good && r.tags.memberSubstituted(in, segs) {

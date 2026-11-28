@@ -47,7 +47,7 @@ func pumpDef() InstanceDef {
 		"Running":      {Kind: MemberFrom},
 		"Speed":        {Kind: MemberFrom},
 		"Fault":        {Kind: MemberFrom},
-		"Healthy":      {Kind: MemberExpr},
+		"Healthy":      {Kind: MemberExpr, Expr: "Running AND NOT Fault"},
 		"RunHours":     {Kind: MemberMemory},
 		"Cmd.Start":    {Kind: MemberTo},
 		"Cmd.Stop":     {Kind: MemberTo, Event: true},

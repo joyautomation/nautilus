@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"regexp"
 	"sync"
 	"sync/atomic"
@@ -83,6 +84,13 @@ type Program struct {
 	// the project's tags, visible without a VAR_EXTERNAL (see TagScope).
 	// An online edit compiles against the same tag table the boot did.
 	opts st.LowerOpts
+
+	// ex is the main task's expression stage (exprstage.go), nil for any
+	// other program and for one with no expr: members; its compiled stage
+	// follows this program's source through every install, under mu, and
+	// store is the tags it compiles against (set with ex by New).
+	ex    *exprSet
+	store *Tags
 }
 
 // fbdBlockRe detects a Function Block Diagram netlist in program source: an
@@ -197,8 +205,25 @@ func (p *Program) Check(src string) error {
 	p.mu.Lock()
 	opts := p.opts
 	p.mu.Unlock()
-	_, err := lowerSource(src, opts)
+	if _, err := lowerSource(src, opts); err != nil {
+		return err
+	}
+	_, err := p.compileExprs(src, opts)
 	return err
+}
+
+// compileExprs is the expression stage for src, nil when this program has
+// none. An install whose stage does not compile is refused whole (§6): the
+// error names the member and says what to fix.
+func (p *Program) compileExprs(src string, opts st.LowerOpts) (*exprStage, error) {
+	if p.ex == nil {
+		return nil, nil
+	}
+	s, err := p.ex.compile(src, opts, p.store)
+	if err != nil {
+		return nil, fmt.Errorf("%w; the expressions compile with the main program's FUNCTIONs and TYPEs, so an install that changes one must keep them compiling: fix the function or the expr:, then install again", err)
+	}
+	return s, nil
 }
 
 // switchingLocked is ErrSwitching while its runtime switches over (an
@@ -214,6 +239,10 @@ func (p *Program) switchingLocked() error {
 // retained frame. On a compile error the old program keeps running.
 func (p *Program) Swap(src string) error {
 	prog, err := lowerSource(src, p.opts)
+	var stage *exprStage
+	if err == nil {
+		stage, err = p.compileExprs(src, p.opts)
+	}
 	if err == nil {
 		written := writtenOf(prog)
 		p.mu.Lock()
@@ -222,6 +251,9 @@ func (p *Program) Swap(src string) error {
 			return err
 		}
 		p.prog, p.frame = prog, ir.NewFrame(prog)
+		if p.ex != nil {
+			p.ex.stage, p.ex.prev = stage, nil
+		}
 		p.written.Store(written)
 		p.carryIdx = p.carry.idxOf(*written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
@@ -302,6 +334,10 @@ type SwapReport struct {
 // one Rollback. On a compile error the running program is untouched.
 func (p *Program) SwapWarm(src string) (SwapReport, error) {
 	prog, err := lowerSource(src, p.opts)
+	var stage *exprStage
+	if err == nil {
+		stage, err = p.compileExprs(src, p.opts)
+	}
 	if err == nil {
 		written := writtenOf(prog)
 		p.mu.Lock()
@@ -312,6 +348,9 @@ func (p *Program) SwapWarm(src string) (SwapReport, error) {
 		frame, resets := ir.MigrateFrame(prog, p.prog, p.frame)
 		p.prevSource, p.prevProg, p.prevFrame = p.source, p.prog, p.frame
 		p.prog, p.frame = prog, frame
+		if p.ex != nil {
+			p.ex.prev, p.ex.stage = p.ex.stage, stage
+		}
 		p.written.Store(written)
 		p.carryIdx = p.carry.idxOf(*written)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
@@ -338,6 +377,9 @@ func (p *Program) Rollback() (SwapReport, error) {
 		return SwapReport{}, errors.New("runtime: nothing to roll back")
 	}
 	p.source, p.prog, p.frame = p.prevSource, p.prevProg, p.prevFrame
+	if p.ex != nil {
+		p.ex.stage, p.ex.prev = p.ex.prev, nil // compiled with the program it goes back to
+	}
 	p.written.Store(writtenOf(p.prog))
 	p.carryIdx = p.carry.idxOf(p.writtenKeys())
 	p.prevSource, p.prevProg, p.prevFrame = "", nil, nil
