@@ -118,6 +118,9 @@ type exprStage struct {
 	unitRoot  []int // each unit's root read slot
 	tagReads  [][]int
 	zeros     []ir.Value // each member's zero: what it holds while not computed
+	// wrefs are the leaves the units' WRITTEN() calls ask about, by id
+	// (exprwritten.go).
+	wrefs []writtenRef
 }
 
 // exprHost is what the units' VM reads: the scan's snapshot of every tag the
@@ -130,7 +133,13 @@ type exprHost struct {
 	have    []bool
 	own     []bool     // vals[i] is bufs[i] this scan
 	bufs    []ir.Value // a private copy of a root the stage writes
+	written []bool     // each WRITTEN() leaf's flag, by id, as of the snapshot
 	divZero bool
+}
+
+// LeafWritten answers WRITTEN(<path>) from the scan's snapshot.
+func (h *exprHost) LeafWritten(id int) bool {
+	return id >= 0 && id < len(h.written) && h.written[id]
 }
 
 func (h *exprHost) ReadGlobal(name string) (ir.Value, error) {
@@ -258,6 +267,9 @@ func newExprSet(t *Tags, defs []TagDef) (*exprSet, error) {
 			}
 			var rs []string
 			for _, r := range refs {
+				if r.Written {
+					continue // WRITTEN's path: the push state is read, not the value
+				}
 				rs = append(rs, r.Full(in.name))
 			}
 			ex.units = append(ex.units, exprUnit{in: in, node: node, idx: idx, full: in.name + addrSuffix(node.path), text: text})
@@ -376,6 +388,8 @@ func (ex *exprSet) compile(src string, opts st.LowerOpts, t *Tags) (*exprStage, 
 		Name: eprog.Name, TopKeyword: eprog.TopKeyword, Statements: eprog.Statements,
 		TypeDecls: ast.TypeDecls, FBDecls: ast.FBDecls, FuncDecls: ast.FuncDecls, GlobalConsts: ast.GlobalConsts,
 	}
+	var wrefs []writtenRef
+	opts.Written = writtenResolver(func(root string) (*instInfo, error) { return t.instanceOf(root), nil }, &wrefs)
 	low, err := st.LowerWithOpts(combined, opts)
 	if err != nil {
 		if le, ok := st.AsLowerError(err); ok {
@@ -390,7 +404,7 @@ func (ex *exprSet) compile(src string, opts st.LowerOpts, t *Tags) (*exprStage, 
 	}
 	shared := *low
 	shared.Slots = append([]ir.VarSlot(nil), low.Slots...)
-	s := &exprStage{units: make([]*ir.Program, len(ex.units)), slots: make([]int, len(ex.units)), unitRoot: make([]int, len(ex.units)), tagReads: make([][]int, len(ex.units)), zeros: make([]ir.Value, len(ex.units))}
+	s := &exprStage{units: make([]*ir.Program, len(ex.units)), slots: make([]int, len(ex.units)), unitRoot: make([]int, len(ex.units)), tagReads: make([][]int, len(ex.units)), zeros: make([]ir.Value, len(ex.units)), wrefs: wrefs}
 	assigns := make([]*ir.Assign, len(ex.units))
 	for i, stmt := range low.Body {
 		a, ok := stmt.(*ir.Assign)
@@ -446,6 +460,7 @@ func (ex *exprSet) compile(src string, opts st.LowerOpts, t *Tags) (*exprStage, 
 	}
 	n := len(h.keys)
 	h.vals, h.have, h.own, h.bufs = make([]ir.Value, n), make([]bool, n), make([]bool, n), make([]ir.Value, n)
+	h.written = make([]bool, len(wrefs))
 	at := map[int]int{}
 	for i, ri := range s.unitRoot {
 		k, ok := at[ri]
@@ -485,6 +500,9 @@ func (ex *exprSet) run(t *Tags, now time.Time, events []exprEvent) []exprEvent {
 		} else {
 			h.vals[i] = ir.Value{}
 		}
+	}
+	for i, w := range s.wrefs {
+		h.written[i] = w.in.push[w.leaf].written
 	}
 	for i := range ex.units {
 		u := &ex.units[i]

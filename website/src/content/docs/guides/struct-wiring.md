@@ -91,7 +91,9 @@ is sent again (a level). On top of that:
 - **`readback: <member>`** names the `from:` member that shows what the
   device did. A command of the same type that nothing has written yet takes
   the read-back's value when it first arrives. That is no command; it only
-  means "commanded, not reached" does not show after every restart.
+  means "commanded, not reached" does not show after every restart. A
+  read-back of another type is not adopted: guard the expression with
+  `WRITTEN()` instead (see [Expression members](#expression-members)).
 
 ## A block that takes an instance
 
@@ -176,6 +178,25 @@ members:
 - **An online edit** that changes a `FUNCTION` an expression calls compiles
   the expressions with it, and is refused whole if one no longer compiles,
   naming the member.
+- **`WRITTEN(<path>)`** is TRUE once the `to:` member at path has been
+  written since the start or the takeover, by the program, an API, OPC UA
+  or Sparkplug write, or a force (while the force holds). An adopted
+  read-back is no write. It is for a read-back of another type, which is
+  not adopted:
+
+  ```yaml
+  Cmd.Power: { to: drive, table: holding, address: 4, format: int16, readback: PowerOn }
+  PowerOff:  { expr: "WRITTEN(Cmd.Power) AND Cmd.Power <> 0 AND NOT PowerOn" }
+  ```
+
+  The path names one `to:` leaf, of this instance or another
+  (`WRITTEN(P102.Cmd.Start)`), with constant indices. It reads no value, so
+  it waits for nothing and its quality is good. The expressions run before
+  the program, so a write the program makes shows on the next scan.
+  `WRITTEN` belongs to expressions only: a program or a `FUNCTION` has no
+  `WRITTEN`, and a `FUNCTION`, block or tag of that name keeps working
+  everywhere, except that an expression calling `WRITTEN` while one is in
+  scope is refused until it is renamed.
 
 An expression never writes, and nothing writes it: an API, OPC UA or
 Sparkplug write to it is refused, as for a `from:` member.

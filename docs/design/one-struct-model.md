@@ -738,9 +738,12 @@ device did with it: `Cmd.SpeedRef: { to: drive, ..., readback: Speed }`.
   value at the first delivery (§2.3, Q23), so the alarm does not fire
   merely because the controller restarted while the drive kept running.
   Where the types differ and nothing is adopted, the built-in function
-  `WRITTEN(Cmd.SpeedRef)` (in a program, `WRITTEN(P101.Cmd.SpeedRef)`) says
-  whether the leaf has been written in this leadership, and the expression
-  guards on it. It only reads, so §6 allows it. A shorthand that
+  `WRITTEN(Cmd.SpeedRef)` says whether the leaf has been written in this
+  leadership, and the expression guards on it. It only reads, so §6 allows
+  it. As built (slice 8c), it belongs to `expr:` members only and takes a
+  `to:` leaf; it is no name a program loses (a project FUNCTION, block or tag
+  `WRITTEN` is refused only by an expression that calls it). A program's
+  `WRITTEN` would reserve the name everywhere, so it waits for a need. A shorthand that
   generates the pair is Q16.
 
 ## 11. Sparkplug B Templates, both ways
