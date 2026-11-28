@@ -346,16 +346,48 @@ func opcuaManifest(fsys fs.FS, d DriverConfig) (opcua.Manifest, error) {
 		}
 		return opcua.Manifest{}, fmt.Errorf("driver opcua-client: no OPC UA device %s", d.opcuaDevice)
 	}
-	if d.Manifest == "" {
+	var conns []wirebind.OPCUAConn
+	if d.wired != nil {
+		var problems []wiring.Problem
+		conns, problems = d.wired.OPCUAConns()
+		if err := wiring.Err(problems); err != nil {
+			return opcua.Manifest{}, err
+		}
+	}
+	if d.wiredConn != "" {
+		// An instance's own session: its bindings are the manifest.
+		for _, oc := range conns {
+			if !oc.Conn.Shared && oc.Conn.ID == d.wiredConn {
+				return opcua.Manifest{Namespaces: []string{"http://opcfoundation.org/UA/"}, Tags: oc.Tags}, nil
+			}
+		}
+		return opcua.Manifest{}, fmt.Errorf("driver opcua-client: no instance connection %s", d.wiredConn)
+	}
+	om := opcua.Manifest{Namespaces: []string{"http://opcfoundation.org/UA/"}}
+	if d.Manifest == "" && d.wired == nil {
 		return opcua.Manifest{}, fmt.Errorf("driver opcua-client: manifest (the opcua_manifest.yaml `naut opcua import` writes) is required")
 	}
-	raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
-	if err != nil {
-		return opcua.Manifest{}, fmt.Errorf("driver opcua-client: %w", err)
+	if d.Manifest != "" {
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return opcua.Manifest{}, fmt.Errorf("driver opcua-client: %w", err)
+		}
+		if om, err = opcua.ParseManifest(raw); err != nil {
+			return opcua.Manifest{}, fmt.Errorf("driver opcua-client: %s: %w", d.Manifest, err)
+		}
 	}
-	om, err := opcua.ParseManifest(raw)
-	if err != nil {
-		return opcua.Manifest{}, fmt.Errorf("driver opcua-client: %s: %w", d.Manifest, err)
+	// The instances that share this driver's session: their bindings join
+	// its manifest, so check, run and a live I/O apply see one manifest.
+	owns := wiredOwns(d, d.Name)
+	for _, oc := range conns {
+		if !oc.Conn.Shared || !owns(oc.Conn.Driver) {
+			continue
+		}
+		merged, err := wirebind.MergeOPCUA(om, oc.Tags)
+		if err != nil {
+			return opcua.Manifest{}, fmt.Errorf("driver %s: instance %s: %w", d.Name, oc.Instance, err)
+		}
+		om = merged
 	}
 	return om, nil
 }

@@ -286,20 +286,7 @@ func hashOf(v any) string {
 // driverConfigs resolves a manifest's driver:/drivers: (and devices:) into
 // the named entries Load builds. It mirrors buildDrivers, which a test pins.
 func driverConfigs(m *Manifest) ([]DriverConfig, error) {
-	configs := m.Drivers
-	if !reflect.DeepEqual(m.Driver, DriverConfig{}) {
-		if len(configs) > 0 {
-			return nil, fmt.Errorf("%s: driver: and drivers: are both set — drivers: is the plural of the same section, so move the single driver into the list", ManifestName)
-		}
-		configs = []DriverConfig{m.Driver}
-	}
-	if m.devices.Len() > 0 {
-		var err error
-		if configs, err = withDevices(configs, m.devices); err != nil {
-			return nil, err
-		}
-	}
-	configs, err := withWired(configs, m.wired)
+	configs, err := composeDriverConfigs(m)
 	if err != nil {
 		return nil, err
 	}

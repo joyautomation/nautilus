@@ -24,7 +24,12 @@
 # #1458 8a: expr: check (purity/cycles/compile), shared check/load code the
 # playground runs; deps = main: naut-wasm 4,964,636 in CI, +26,301 over the old
 # limit (purity about 9 KB, cycles 4, compile 3, parse/rewrite the rest).
+# #1458 9a-1 (#1499): OPC UA client sources; the validation, templates and
+# warnings are !js (that cut +8.4 KB to +2.5 KB local); what stays is the
+# shared session's companion name (onlineTagFor, which must match native so
+# a program compiles in both). deps = main: naut-wasm 5,016,656 in CI, +2,374
+# over the old limit; set to CI + 1% (naut-lead OK, budget-only commit).
 #
 # One line per module: <target under ./cmd> <bytes>.
-naut-wasm 5014282
+naut-wasm 5066822
 naut-wasm-hmi 3863413

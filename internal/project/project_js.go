@@ -18,6 +18,7 @@ import (
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/wirebind"
 )
 
 // simulated stands in for a field driver: a loopback that is always
@@ -129,7 +130,7 @@ func platformNotices(m Manifest) []string {
 		out = append(out, fmt.Sprintf("channel %s (%s) reaches no peer in the browser: its READ and WRITE blocks report ERROR with STATUS -2. Install naut to run them against real equipment.", c.Name, strings.ToLower(c.Type)))
 	}
 	if m.wired != nil && len(m.wired.Instances) > 0 {
-		out = append(out, "instances: their Modbus connections are simulated, so a device member reads as not connected until a test gives it, and each member's Modbus address is checked by naut check, not here. Install naut to run them against real equipment.")
+		out = append(out, "instances: their Modbus and OPC UA connections are simulated, so a device member reads as not connected until a test gives it, and each member's address (a Modbus register, an OPC UA node) is checked by naut check, not here. Install naut to run them against real equipment.")
 	}
 	if m.OPCUA != nil {
 		out = append(out, "opcua: the OPC UA server is off in the browser (nothing can connect to a tab). Install naut to serve this project's tags over OPC UA.")
@@ -139,6 +140,24 @@ func platformNotices(m Manifest) []string {
 	}
 	return out
 }
+
+// withWiredOPCUA: in the browser every driver is simulated and an
+// address is checked by naut check, not here, so an instance's own OPC UA
+// connection only needs a driver of its name for its inputs and companion.
+func withWiredOPCUA(configs, _ []DriverConfig, set *wirebind.Set) ([]DriverConfig, error) {
+	for _, in := range set.InstancesList() {
+		for _, c := range in.Conns {
+			if c.DriverType == "opcua-client" && !c.Shared {
+				configs = append(configs, DriverConfig{Type: "opcua-client", Name: c.ID})
+			}
+		}
+	}
+	return configs, nil
+}
+
+// wiredWarnings: the playground simulates the instances' connections, so
+// it has nothing to say about how they connect (naut check does).
+func wiredWarnings(*Manifest) []string { return nil }
 
 func checkTakeoverHold(*TakeoverHoldConfig, []TagConfig, []nio.NamedDriver) error { return nil }
 

@@ -126,10 +126,13 @@ type Manifest struct {
 	wired *wirebind.Set `yaml:"-"`
 	// exprShadows are the expr: members that read a sibling where a
 	// project tag of the same name exists (composeWiring): warnings.
-	exprShadows []string         `yaml:"-"`
-	plant       *plant.Plant     `yaml:"-"`
-	Sparkplug   *SparkplugConfig `yaml:"sparkplug"`
-	OPCUA       *OPCUAConfig     `yaml:"opcua"`
+	exprShadows []string `yaml:"-"`
+	// wiringWarnings: what naut check says about the instances'
+	// connections (wiredWarnings).
+	wiringWarnings []string         `yaml:"-"`
+	plant          *plant.Plant     `yaml:"-"`
+	Sparkplug      *SparkplugConfig `yaml:"sparkplug"`
+	OPCUA          *OPCUAConfig     `yaml:"opcua"`
 	// Channels are the communication channels the programs' READ and
 	// WRITE blocks name by ID (IEC 61131-5): one peer each, reached by one
 	// protocol. A driver moves the same tags every scan; a channel moves
@@ -1228,9 +1231,15 @@ type DriverConfig struct {
 	// wired are the project's instances; the Modbus driver their sources
 	// name carries their bindings (withWired). Not a manifest key.
 	wired *wirebind.Set `yaml:"-"`
-	// wiredByType: this is the Modbus driver a source's driver: modbus
-	// (the type, not an entry's name) resolves to.
+	// wiredByType: this is the driver a source's driver: modbus or
+	// opcua-client (the type, not an entry's name) resolves to.
 	wiredByType bool `yaml:"-"`
+	// wiredConn is the instance connection an opcua-client driver Load made
+	// for a source with its own endpoint (wirebind.Conn.ID), and
+	// wiredFrom names the drivers: section it was made from ("" for none);
+	// not manifest keys.
+	wiredConn string `yaml:"-"`
+	wiredFrom string `yaml:"-"`
 	// opcuaDevice is the OPC UA device an opcua-client driver Load made
 	// for a devices: row is; not a manifest key.
 	opcuaDevice string `yaml:"-"`
@@ -1322,6 +1331,8 @@ type Project struct {
 	wired     *wirebind.Set     // struct wiring resolved; nil when none
 	// exprShadows: an expr: member's sibling hides a project tag (warnings).
 	exprShadows []string
+	// wiringWarnings: how the instances' connections connect (warnings).
+	wiringWarnings []string
 	// Plant is the plant model (plant:), nil when the manifest has none.
 	Plant *plant.Plant
 
@@ -1467,6 +1478,10 @@ func (p *Project) Wired() *wirebind.Set { return p.wired }
 // sibling member where a project tag of the same name exists: the sibling
 // wins (one-struct-model §6), as a local does over a tag.
 func (p *Project) ExprShadows() []string { return p.exprShadows }
+
+// WiringWarnings are what naut check says about the instances'
+// connections: security None, a node read by namespace index alone.
+func (p *Project) WiringWarnings() []string { return p.wiringWarnings }
 
 func (p *Project) RetainNames() (configMap, file string) {
 	configMap, file = p.Name+"-retain", "retain.json"
@@ -2133,6 +2148,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		devices:         m.devices,
 		wired:           m.wired,
 		exprShadows:     m.exprShadows,
+		wiringWarnings:  m.wiringWarnings,
 		Plant:           m.plant,
 		OPCUA:           m.OPCUA,
 		Retain:          m.Retain,
@@ -2613,20 +2629,7 @@ func normalize(v any) any {
 // included, since a Sparkplug device is named after its driver — and
 // none for the implicit memory loopback.
 func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error) {
-	configs := m.Drivers
-	if !reflect.DeepEqual(m.Driver, DriverConfig{}) {
-		if len(configs) > 0 {
-			return nil, nil, fmt.Errorf("%s: driver: and drivers: are both set — drivers: is the plural of the same section, so move the single driver into the list", ManifestName)
-		}
-		configs = []DriverConfig{m.Driver}
-	}
-	if m.devices.Len() > 0 {
-		var err error
-		if configs, err = withDevices(configs, m.devices); err != nil {
-			return nil, nil, err
-		}
-	}
-	configs, err := withWired(configs, m.wired)
+	configs, err := composeDriverConfigs(&m)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2665,6 +2668,30 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		return nil, nil, fmt.Errorf("drivers: %w", err)
 	}
 	return multi, named, nil
+}
+
+// composeDriverConfigs is the drivers the manifest builds, before naming:
+// its driver:/drivers: entries, with the devices: rows' drivers and the
+// instances' connections composed in (an instance's own OPC UA session
+// finds its template in the entries as written). buildDrivers builds from
+// it and driverConfigs (the live I/O view, naut check's warnings) reads it,
+// so the two cannot drift apart.
+func composeDriverConfigs(m *Manifest) ([]DriverConfig, error) {
+	configs := m.Drivers
+	if !reflect.DeepEqual(m.Driver, DriverConfig{}) {
+		if len(configs) > 0 {
+			return nil, fmt.Errorf("%s: driver: and drivers: are both set — drivers: is the plural of the same section, so move the single driver into the list", ManifestName)
+		}
+		configs = []DriverConfig{m.Driver}
+	}
+	raw := configs
+	if m.devices.Len() > 0 {
+		var err error
+		if configs, err = withDevices(configs, m.devices); err != nil {
+			return nil, err
+		}
+	}
+	return withWired(configs, raw, m.wired)
 }
 
 // labelCuts tells a driver its name for the writes-cut counter (#710,

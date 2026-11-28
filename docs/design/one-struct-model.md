@@ -221,9 +221,12 @@ The scan becomes: read inputs, merge `from:`/`both:`, evaluate `expr:`, run
 the programs, commit, then push the changed `to:`/`both:` leaves.
 
 **Each driver keeps its own write rules.** A `to:` member is that driver's
-output, so it keeps the driver's first-value rule and gate mode. Modbus,
-OPC UA and EtherNet/IP compare the first value with what the device holds.
-The Sparkplug host takes it as a baseline and sends nothing. The driver
+output, so it keeps the driver's first-value rule and gate mode. Modbus
+and EtherNet/IP compare the first value with what the device holds. The
+OPC UA client never reads a command's node (its read-back is a `from:`
+member), so it sends the first written value once the session is live, as
+it does for a `devices:` command. The Sparkplug host takes it as a baseline
+and sends nothing. The driver
 conformance suite gets a wired-instance row per driver, so the adapter
 cannot quietly change a mode. There are three gate modes
 (`internal/driverconformance`):

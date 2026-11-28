@@ -10,7 +10,8 @@ type with the values that wiring needs (an endpoint, a unit id). A program,
 an operator screen and a function block then see one struct per device: its
 readings, its commands and the program's own values together.
 
-This build runs struct wiring on **Modbus**. The rest of the design arrives
+This build runs struct wiring on **Modbus** and the **OPC UA client**
+([OPC UA sources](#opc-ua-sources)). The rest of the design arrives
 slice by slice (issue #1458), and what is not here yet is refused at load,
 naming when it arrives (see [Not yet](#not-yet)). Nothing is run half-way.
 
@@ -205,6 +206,52 @@ members:
 An expression never writes, and nothing writes it: an API, OPC UA or
 Sparkplug write to it is refused, as for a `from:` member.
 
+## OPC UA sources
+
+An OPC UA source names an `opcua-client` driver. A member's address keys
+are the OPC UA manifest's: `node` (the node id), `namespace` (the
+namespace's URI), `type` (the node's built-in type, when the member's IEC
+type does not say it: a `REAL` member reads `Float` unless `type: Double`)
+and `scan-class`.
+
+```yaml
+wirings:
+  - type: Pump
+    params: { endpoint: null }
+    sources:
+      drive: { driver: ua, endpoint: "{endpoint}" }
+    members:
+      Running:      { from: drive, node: "ns=2;s={name}/Running", namespace: "urn:acme:drives" }
+      Speed:        { from: drive, node: "ns=2;s={name}/Speed", namespace: "urn:acme:drives", type: Double }
+      Cmd.Start:    { to: drive, node: "ns=2;s={name}/Start", namespace: "urn:acme:drives", event: true }
+      Cmd.SpeedRef: { to: drive, node: "ns=2;s={name}/SpeedRef", namespace: "urn:acme:drives", type: Double, readback: Speed }
+```
+
+- **A source with its own `endpoint`** is a session of the instance's own:
+  an `opcua-client` driver named after the instance, so its companion is
+  `<Instance>__Online`. The `drivers:` section the source names is a
+  template for how it connects (`security`, `security-mode`, `pki-dir`,
+  `username`, `read-mode`, `scan-rate`, `reassert-on-reconnect`) and is not
+  built itself. A source that names only the type `opcua-client`, with no
+  section, connects with security None, and `naut check` says so.
+- **A source with no `endpoint`** shares the one session of the `drivers:`
+  entry it names, with its own endpoint and manifest (or none): every
+  instance on it adds its bindings to that driver, and the companion is
+  the driver's own `<name>__Online`, so one server outage is one companion
+  going false.
+- **A command needs `namespace:`**. A `to:` member addressed by namespace
+  index alone (`ns=2;...` with no URI) is refused: a server that renumbers
+  its namespaces would take the command at another node. A `from:` member
+  read that way gets a `naut check` warning.
+- A command's node is never read (its read-back is a `from:` member), so
+  its first written value goes out once the session is live. A level
+  command is commanded again when a session is re-established (unless the
+  section sets `reassert-on-reconnect: false`); an `event:` command is not,
+  and one raised while the server could not be reached is dropped, never
+  sent late ([OPC UA client](/guides/opcua-client/)).
+- Two commands on one node are refused, within an instance and across the
+  instances on a shared session.
+
 ## Params and overrides
 
 `{param}` substitutes into a source's keys and a member's address keys. A
@@ -226,8 +273,9 @@ instances and tags share one namespace across every file.
 
 ## Companions and quality
 
-An instance on its own connection gets `<Instance>__Online` and
-`<Instance>__Outages`, as a `devices:` row does. Quality is per member: the
+An instance on its own connection gets `<Instance>__Online` (and
+`<Instance>__Outages` on Modbus), as a `devices:` row does; one on a shared
+OPC UA session uses that driver's own companion. Quality is per member: the
 root shows the worst of its device members, and a screen bound to
 `P101.Speed` greys only that member.
 
@@ -244,7 +292,8 @@ of a multi-driver set do not claim is logged once, naming its key.
 |---|---|
 | `memory:` retained across a restart (accepted, but `naut check` warns: it starts from its initial value) | slice 6 |
 | `set:` on an instance | slice 6 |
-| an instance on more than one connection, OPC UA sources, wiring `alarms:`, instance `alarms:` and `offline-alarm:` | slice 9 |
+| an instance on more than one connection | slice 9a-2 |
+| wiring `alarms:`, instance `alarms:` and `offline-alarm:` | slice 9b |
 | `fill:` and `both:` (EtherNet/IP) | slice 12 |
 | the Sparkplug host | slice 14 |
 | the IT drivers | slice 15 |
