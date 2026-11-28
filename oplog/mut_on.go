@@ -151,6 +151,29 @@ import "os"
 //     what the request proved, so a stale tail counts as holding the
 //     leader's write (#1472).
 //
+// Compaction carried out (#1455 PR 2a-1):
+//
+//   - compact_digest_unchecked: a committed compaction is carried out without checking its (seq, term) digest against this copy's log;
+//   - diverged_counts: a diverged copy keeps counting, taking and committing;
+//   - diverged_not_reset: a diverged controller's next start replays its log instead of moving it aside;
+//   - reset_answers_request: the witness, started over by the commit that found it diverged, answers the request as proved and is marked synced;
+//   - compact_floor_ignored: a held compaction does not raise the commit floor, so a copy below its Through replays short of it and a new leader lapses committed entries;
+//   - compact_carrier_lapses: a new leader's lapse may name a compaction or an entry at or below the commit floor;
+//   - compact_splits_lapse: a compaction may end between a KindLapse and the entries it names;
+//   - compact_page_served: a page after a seq below the base is served sparse, as if it were the log;
+//   - compact_resend_below_base: a resend to a peer behind the base sends the sparse base as if it were the log;
+//   - compact_prev_unmatched: replication whose previous entry is below the base is refused as a mismatch;
+//   - compact_accept_below_base: entries at or below the base are compared with the sparse log and refused as a conflict;
+//   - compact_lost_rule_off: a file put back from before the last compaction opens as the log;
+//   - compact_header_unchecked: a header that does not match the base the file holds is taken as it says;
+//   - compact_gen_unchecked: a rewrite overtaken by a log replaced wholesale is renamed in over it;
+//   - compact_precompact_renamed: the copy from before a compaction is kept by renaming the live file, so a crash leaves a held log missing;
+//   - compact_disk_unchecked: the rewrite goes ahead with too little free disk for the new file and the old one;
+//   - diverged_at_open_dropped: a compaction found not to fit during the replay at start is forgotten by the start's own mark;
+//   - compact_over_uncommitted: a compaction is proposed while entries (an earlier compaction among them) are uncommitted, so every copy that commits both diverges;
+//   - compact_drops_named_lapse: the keep list may keep an entry and drop the lapse that names it;
+//   - witness_diverged_waits: the witness that finds at start a compaction its log does not fit waits for a second start to start over.
+//
 // Peer TLS (#710):
 //
 //   - peer_tls_log_plain: the log's calls ignore Options.TLS and go out

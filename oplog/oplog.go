@@ -491,6 +491,13 @@ type Options struct {
 	lim           limits               // tests: smaller chunks and bounds
 	markWrite     func(Mark) error     // tests: fails a mark write
 	fileSync      func(*os.File) error // tests: observes or fails a log file sync
+	// compactRules is this build's compaction keep-rules version (#1455):
+	// 0, compaction is off (nothing proposes K). Set by tests only until the
+	// decision is built (PR 2b), so no build advertises a version whose
+	// decision it lacks.
+	compactRules int
+	compactCrash func(step string) bool          // tests: a crash point in a physical compaction
+	freeDisk     func(dir string) (int64, error) // tests: the free disk a compaction checks
 }
 
 // Mark is a replica's log mark, kept in Options.Mark.
@@ -549,6 +556,14 @@ type Mark struct {
 	// not yet dropped (RetainedDropped): set in the same write, so a crash
 	// in between drops them at the next start.
 	DropRetained bool `json:"dropRetained,omitempty"`
+	// Base is the compacted base the log file was last rewritten to
+	// (#1455): a file whose base is lower was put back from before it, and
+	// is a lost log.
+	Base *MarkBase `json:"base,omitempty"`
+	// Diverged says why this copy's log is not the others' (a committed
+	// compaction did not fit it): it counts for nothing, and its next start
+	// moves it aside as File+".diverged-<unix>" and starts empty.
+	Diverged string `json:"diverged,omitempty"`
 }
 
 // Lineage is a log history (Mark.Lineage): its number, the random id it
@@ -650,6 +665,8 @@ const (
 type limits struct {
 	chunkEntries, chunkBytes, rounds int
 	body, resp                       int64
+	compactDelay                     func() time.Duration // before a physical compaction (default: random, up to a minute)
+	compactRetry                     time.Duration        // after one fails (default an hour)
 }
 
 // ErrTooLarge refuses a proposal whose entry is over maxEntryBytes. It was
@@ -694,6 +711,23 @@ type Node struct {
 	// spendOwed: a vouch's one-shot was spent in memory but the mark that
 	// records it could not be written (usedVouchLocked retries).
 	spendOwed bool
+
+	// Compaction (compact.go): cut is the newest committed base, carried
+	// out logically; disk the one the file (and memory's entries) hold.
+	// floor: every entry up to it is committed (a held K's Through). gen
+	// counts the file's rewrites. The worker rewrites the file to cut.
+	cut, disk      baseState
+	floor          uint64
+	gen            uint64
+	kick, done     chan struct{}
+	closeOnce      sync.Once
+	worker         sync.WaitGroup
+	workerOn       bool
+	closed         bool
+	compactRefused string
+	resets         uint64 // in-place starts over (resetDivergedLocked)
+	built          bool   // New is done: the worker may start
+	kickOwed       bool   // a kick from before then
 }
 
 // peerInfo is what a peer's last answer said of its log.
@@ -742,6 +776,13 @@ type Status struct {
 	// another override): neither counts the other until a person chooses
 	// one (naut redundancy vouch).
 	Forked []Fork `json:"forked,omitempty"`
+	// Compaction (#1455): CompactThrough is the base (0: none), Pending
+	// that the file is not rewritten to it yet, Refused why it waits (too
+	// little free disk); Diverged why this copy's log is not the others'.
+	CompactThrough uint64 `json:"compactThrough,omitempty"`
+	CompactPending bool   `json:"compactPending,omitempty"`
+	CompactRefused string `json:"compactRefused,omitempty"`
+	Diverged       string `json:"diverged,omitempty"`
 }
 
 // ErrReadOnly says this instance cannot commit a write right now.
@@ -823,18 +864,31 @@ func New(o Options) (*Node, error) {
 			}}}
 	}
 	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout, Transport: rt}, log: o.Log,
-		lastContact: map[string]time.Time{}, peers: map[string]peerInfo{}, pending: o.Pending}
+		lastContact: map[string]time.Time{}, peers: map[string]peerInfo{}, pending: o.Pending,
+		kick: make(chan struct{}, 1), done: make(chan struct{})}
 	if o.Mark != "" {
 		if err := n.openMarked(); err != nil {
 			return nil, err
 		}
-		return n, nil
-	}
-	if o.File != "" {
+	} else if o.File != "" {
 		if _, err := n.open(); err != nil {
 			return nil, err
 		}
 	}
+	if o.File != "" {
+		// A compaction's temp file a crash left (compactOnce): the log is
+		// whole without it, and it is as large as the log.
+		stray, _ := filepath.Glob(o.File + ".*.compact")
+		for _, f := range stray {
+			os.Remove(f)
+		}
+	}
+	n.mu.Lock()
+	n.built = true
+	if n.kickOwed {
+		n.kickCompact() // a committed compaction the file is not rewritten to
+	}
+	n.mu.Unlock()
 	return n, nil
 }
 
@@ -889,14 +943,49 @@ func (n *Node) openMarked() error {
 			return err
 		}
 		n.supersededAtStart = true
+	case m.Diverged != "" && !mutOplog("diverged_not_reset"):
+		// A committed compaction did not fit this log (divergeLocked):
+		// moved aside before it is replayed, started empty and unsynced, as
+		// a superseded one is; what the runtime retained of it is dropped.
+		kept, err := n.moveAside(".diverged-")
+		if err != nil {
+			return err
+		}
+		n.log.Error("oplog: this copy's operator-intent log DIVERGED from the others' and is moved aside: starting empty; it syncs from the leader", "kept", kept, "why", m.Diverged)
+		m, write = Mark{Identity: m.Identity, Term: m.Term, Lineage: m.Lineage, Lost: cmp(kept, "(missing)"), Superseded: m.Superseded, DropRetained: !n.o.ResetInPlace}, true
 	}
 	_, statErr := os.Stat(n.o.File)
 	missing := errors.Is(statErr, os.ErrNotExist)
+	// The replay may carry out a committed compaction that does not fit
+	// this log (divergeLocked), which records it in the mark: held in
+	// memory first, so it records it in this one.
+	n.mark = m
 	damaged, err := n.open()
 	if err != nil {
 		return err
 	}
-	if damaged || m.Held && (missing || len(n.entries) == 0) && !mutOplog("log_loss_silent") {
+	if d := n.mark.Diverged; d != "" && !mutOplog("diverged_at_open_dropped") {
+		m.Diverged, m.Synced, m.Alone, m.Accept, write = d, false, false, nil, true
+		if n.o.ResetInPlace && !mutOplog("witness_diverged_waits") {
+			// The witness applies nothing: it starts over now, not at a
+			// second start.
+			n.file.Close()
+			n.file, n.entries, n.commit, n.term = nil, nil, 0, 0
+			kept, err := n.moveAside(".diverged-")
+			if err != nil {
+				return err
+			}
+			if _, err := n.open(); err != nil {
+				return err
+			}
+			n.log.Error("oplog: this copy's operator-intent log DIVERGED from the others' and is moved aside: starting empty; it syncs from the leader", "kept", kept, "why", d)
+			m = Mark{Identity: m.Identity, Term: m.Term, Lineage: m.Lineage, Lost: cmp(kept, "(missing)"), Superseded: m.Superseded}
+		}
+	}
+	// A file put back from before its last compaction (its base lower than
+	// the mark's) is lost too: the entries since were acknowledged.
+	behind := m.Base != nil && n.disk.Through < m.Base.Through && !mutOplog("compact_lost_rule_off")
+	if damaged || m.Held && (missing || len(n.entries) == 0 && n.disk.Through == 0 || behind) && !mutOplog("log_loss_silent") {
 		// Lost under the held mark (or damaged, which loses its tail):
 		// this replica acknowledged entries it no longer has. Keep what
 		// is there, start empty, count for nothing until a synced leader
@@ -905,6 +994,7 @@ func (n *Node) openMarked() error {
 			n.file.Close()
 		}
 		n.file, n.entries, n.commit, n.term = nil, nil, 0, 0
+		n.cut, n.disk, n.floor = baseState{}, baseState{}, 0
 		kept := "(missing)"
 		if !missing {
 			if kept, err = n.moveAside(".lost-"); err != nil {
@@ -1149,7 +1239,7 @@ func (n *Node) writeMarkFile(m Mark) error {
 // syncedLocked: this replica's log is known to hold every committed entry
 // (always, without a mark). Caller holds mu.
 func (n *Node) syncedLocked() bool {
-	return n.o.Mark == "" || n.mark.Synced && !n.pending && !n.supersedingLocked()
+	return !n.stoppedLocked() && (n.o.Mark == "" || n.mark.Synced && !n.pending)
 }
 
 // supersedingLocked: this copy heard a higher log history and moves its
@@ -1271,7 +1361,7 @@ func (n *Node) RetainedStale() bool {
 // review). Caller holds mu, or is New.
 func (n *Node) setMarkMem(m Mark) {
 	n.mark = m
-	n.stale.Store(n.supersedingLocked() || m.DropRetained)
+	n.stale.Store(n.stoppedLocked() || m.DropRetained)
 }
 
 // RetainedDropped records that the caller dropped what the runtime
@@ -1442,8 +1532,9 @@ func (n *Node) countsLocked(peer string) bool {
 
 // fileLine is one line of the local copy: an entry, or a commit mark.
 type fileLine struct {
-	E *Entry  `json:"e,omitempty"`
-	C *uint64 `json:"c,omitempty"`
+	E *Entry      `json:"e,omitempty"`
+	C *uint64     `json:"c,omitempty"`
+	B *baseHeader `json:"b,omitempty"` // a compacted log's first line
 }
 
 // open reads the file, dropping a torn final line, and replays the
@@ -1456,13 +1547,34 @@ func (n *Node) open() (damaged bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	n.gen++
+	n.cut, n.disk, n.floor = baseState{}, baseState{}, 0
+	first := true
+	var hdr baseHeader
+	var kept []uint64
 	good, size, damaged, err := scanLines(f, func(line []byte) (bool, error) {
+		if first {
+			// A compacted log's header, only ever its first line (#1455).
+			first = false
+			h, is, err := readHeader(line)
+			if err != nil {
+				return false, fmt.Errorf("oplog: %s: %w", n.o.File, err)
+			}
+			if is {
+				hdr = h
+				return true, nil
+			}
+		}
 		e, c, old, ok := storedLine(line)
 		switch {
 		case !ok:
 			return false, nil // a torn last line: keep what parsed, drop the rest
 		case e != nil:
+			if hdr.Through > 0 && e.Seq <= hdr.Through {
+				kept = append(kept, e.Seq)
+			}
 			n.entries = append(n.entries, *e)
+			n.noteFloorLocked(*e)
 			n.term = max(n.term, e.Term)
 			if old {
 				// The first format wrote one bare Entry per line, every
@@ -1478,8 +1590,25 @@ func (n *Node) open() (damaged bool, err error) {
 	})
 	if err != nil {
 		f.Close()
-		n.entries, n.commit, n.term = nil, 0, 0
+		n.entries, n.commit, n.term, n.floor = nil, 0, 0, 0
 		return false, err
+	}
+	if hdr.Through > 0 {
+		// The base the header names must be the kept entries the file
+		// holds: else the file is damaged (a lost log, with a mark).
+		b := baseState{Through: hdr.Through, ThroughTerm: hdr.ThroughTerm, Compact: hdr.Compact, Kept: kept, Digest: hdr.Digest, Rules: hdr.Rules}
+		n.disk, n.cut = b, b
+		if dg := pairDigest(kept, n.termLocked); (len(kept) != hdr.Kept || dg != hdr.Digest) && !mutOplog("compact_header_unchecked") {
+			why := fmt.Errorf("oplog: %s: the compacted base holds %d entries (digest %.12s), its header names %d (%.12s)", n.o.File, len(kept), dg, hdr.Kept, hdr.Digest)
+			f.Close()
+			n.entries, n.commit, n.term, n.floor = nil, 0, 0, 0
+			n.cut, n.disk = baseState{}, baseState{}
+			if n.o.Mark != "" {
+				n.log.Error("oplog: the log file is damaged", "error", why)
+				return true, nil
+			}
+			return false, why
+		}
 	}
 	if good < size {
 		// A torn write is only ever at the end: lines go out in one write
@@ -1503,6 +1632,11 @@ func (n *Node) open() (damaged bool, err error) {
 		return false, err
 	}
 	n.file = f
+	// Everything up to the base, and up to any held K's Through, is
+	// committed (the commit floor): a catch-up commits only at its last
+	// page, and a failed commit line only warns, so the file's own commit
+	// line may say less.
+	n.commit = min(max(n.commit, n.disk.Through, n.floor), n.lastLocked())
 	n.applyRange(n.entries, n.commit)
 	return damaged, nil
 }
@@ -1519,9 +1653,20 @@ func ReadCommitted(path string) ([]Entry, error) {
 	}
 	defer f.Close()
 	var es []Entry
-	var commit uint64
+	var commit, floor uint64
 	var bad string
+	first := true
 	_, _, damaged, err := scanLines(f, func(line []byte) (bool, error) {
+		if first {
+			first = false
+			if h, is, err := readHeader(line); is {
+				if err != nil {
+					return false, fmt.Errorf("oplog: %s: %w", path, err)
+				}
+				floor = h.Through // a compacted log: its base is committed
+				return true, nil
+			}
+		}
 		var l fileLine
 		if err := json.Unmarshal(line, &l); err != nil {
 			bad = truncateStr(string(line), 80)
@@ -1529,6 +1674,12 @@ func ReadCommitted(path string) ([]Entry, error) {
 		}
 		switch {
 		case l.E != nil:
+			if l.E.Kind == KindCompact {
+				var b compactBody
+				if json.Unmarshal(l.E.Value, &b) == nil {
+					floor = max(floor, b.Through) // a held K's Through is committed
+				}
+			}
 			es = append(es, *l.E)
 		case l.C != nil:
 			commit = *l.C
@@ -1550,6 +1701,9 @@ func ReadCommitted(path string) ([]Entry, error) {
 		}
 		return nil, fmt.Errorf("oplog: %s: unrecognised line %q", path, bad)
 	}
+	if len(es) > 0 {
+		commit = min(max(commit, floor), es[len(es)-1].Seq)
+	}
 	out := es[:0]
 	for _, e := range es {
 		if e.Seq <= commit {
@@ -1559,8 +1713,17 @@ func ReadCommitted(path string) ([]Entry, error) {
 	return out, nil
 }
 
-// Close releases the file.
+// Close stops the compaction worker and releases the file.
 func (n *Node) Close() error {
+	n.mu.Lock()
+	n.closed = true
+	n.mu.Unlock()
+	n.closeOnce.Do(func() {
+		if n.done != nil {
+			close(n.done)
+		}
+	})
+	n.worker.Wait()
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.file != nil {
@@ -1619,9 +1782,9 @@ func (n *Node) entriesForTest() []Entry {
 
 func (n *Node) lastLocked() uint64 {
 	if len(n.entries) == 0 {
-		return 0
+		return n.cut.Through
 	}
-	return n.entries[len(n.entries)-1].Seq
+	return max(n.entries[len(n.entries)-1].Seq, n.cut.Through)
 }
 
 // After returns the entries after seq.
@@ -1715,6 +1878,13 @@ func (n *Node) rewrite() error {
 		return err
 	}
 	w := bufio.NewWriter(tmp)
+	n.gen++
+	if d := n.disk; d.Compact > 0 {
+		if _, err := w.Write(appendLine(nil, fileLine{B: &baseHeader{Why: compactWhy, Through: d.Through, ThroughTerm: d.ThroughTerm,
+			Compact: d.Compact, Kept: len(d.Kept), Digest: d.Digest, Rules: d.Rules, Lineage: n.mark.Lineage}})); err != nil {
+			return fail(err)
+		}
+	}
 	var line []byte
 	for _, s := range n.entries {
 		line = s.line(line[:0])
@@ -1829,6 +1999,9 @@ func (n *Node) acceptLocked(es []Entry) (fresh int, err error) {
 		}
 	}()
 	for _, e := range es {
+		if e.Seq <= n.cut.Through && !mutOplog("compact_accept_below_base") {
+			continue // committed, and compacted here: what the base holds of it is the log's
+		}
 		last := n.lastLocked()
 		switch {
 		case e.Seq > last+1:
@@ -1836,6 +2009,7 @@ func (n *Node) acceptLocked(es []Entry) (fresh int, err error) {
 		case e.Seq == last+1:
 			s := storedOf(e)
 			n.entries = append(n.entries, s)
+			n.noteFloorLocked(s)
 			buf = s.line(buf)
 			fresh++
 		default:
@@ -1861,6 +2035,7 @@ func (n *Node) acceptLocked(es []Entry) (fresh int, err error) {
 			// so must memory (Fable, #1455 review).
 			before := n.entries
 			n.entries = append(n.entries[:i:i], storedOf(e))
+			n.noteFloorLocked(n.entries[i])
 			if err := n.rewrite(); err != nil {
 				if !errors.Is(err, errRewritten) && !mutOplog("rewrite_failure_kept") {
 					n.entries = before
@@ -1879,19 +2054,33 @@ func (n *Node) acceptLocked(es []Entry) (fresh int, err error) {
 
 // commitTo applies entries up to seq (bounded by what is stored) and
 // records the mark. Caller holds mu.
-func (n *Node) commitTo(seq uint64) {
+func (n *Node) commitTo(seq uint64) error {
+	if n.mark.Diverged != "" && !mutOplog("diverged_counts") {
+		return errDiverged // it commits and applies nothing more
+	}
 	if seq > n.lastLocked() {
 		seq = n.lastLocked()
 	}
 	if seq <= n.commit {
-		return
+		return nil
 	}
 	n.applyRange(n.entries[n.indexAfterLocked(n.commit):], seq)
+	if n.mark.Diverged != "" {
+		// A compaction in the range did not fit this log: nothing more is
+		// committed here. The witness's copy starts over at once.
+		if n.o.ResetInPlace {
+			if err := n.resetDivergedLocked(); err != nil {
+				n.log.Error("oplog: moving the diverged log aside", "error", err)
+			}
+		}
+		return errDiverged
+	}
 	n.commit = seq
 	c := seq
 	if err := n.writeLine(fileLine{C: &c}); err != nil {
 		n.log.Warn("oplog: commit mark", "error", err)
 	}
+	return nil
 }
 
 // applyRange applies the entries of es up to seq, the range being
@@ -1920,13 +2109,21 @@ func (n *Node) applyRange(es []stored, seq uint64) {
 			break
 		}
 		e := s.entry()
+		if e.Kind == KindCompact {
+			// Carried out by the log, never applied (compact.go).
+			n.carryOutLocked(e)
+			if n.mark.Diverged != "" {
+				return
+			}
+			continue
+		}
 		e.Lapsed = lapsed[e.Seq] && e.Kind != KindLapse
 		n.apply(e)
 	}
 }
 
 func (n *Node) apply(e Entry) {
-	if n.o.Apply == nil || e.Kind == KindNoop {
+	if n.o.Apply == nil || e.Kind == KindNoop || e.Kind == KindCompact {
 		return
 	}
 	if err := n.o.Apply(e); err != nil {
@@ -2055,9 +2252,10 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		n.mu.Unlock()
 		return nil
 	}
-	if n.supersedingLocked() {
+	if n.stoppedLocked() {
+		err := n.stopErrLocked()
 		n.mu.Unlock()
-		return fmt.Errorf("%w: %w", ErrReadOnly, errSuperseded)
+		return fmt.Errorf("%w: %w", ErrReadOnly, err)
 	}
 	// From the COMMIT index, not the last entry: an uncommitted suffix of
 	// this leader's own may be stale (stored, never replicated, and since
@@ -2243,7 +2441,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	take := func(es []Entry) error {
 		n.mu.Lock()
 		defer n.mu.Unlock()
-		if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
+		if !n.mark.Lineage.same(hist) || n.stoppedLocked() {
 			return moved // a newer history was heard while the peers were asked
 		}
 		if err := deposed(); err != nil {
@@ -2278,7 +2476,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
+	if !n.mark.Lineage.same(hist) || n.stoppedLocked() {
 		return moved
 	}
 	if err := deposed(); err != nil {
@@ -2307,8 +2505,11 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		}
 	}
 	// The best log a majority answered with holds every committed entry,
-	// so any commit index one of them reported is safe here.
-	n.commitTo(commit)
+	// so any commit index one of them reported is safe here, and so is the
+	// commit floor (a held K's Through, compact.go).
+	if err := n.commitTo(max(commit, n.floor)); err != nil {
+		return fmt.Errorf("%w: %w", ErrReadOnly, err)
+	}
 	n.syncedTerm = term
 	n.becomeSyncedLocked("caught up from a majority as leader")
 	if useVouch && overrides && mutOplog("history_after_write") {
@@ -2358,7 +2559,12 @@ func (n *Node) carrierLocked(term uint64) Entry {
 	if n.o.Lapse != nil {
 		now := n.o.Now()
 		for _, e := range n.afterLocked(n.commit) {
-			if e.Term >= term || e.Kind == KindNoop || e.Kind == KindLapse {
+			// Nor a K (dead stays dead), nor anything up to the commit
+			// floor: a held K's Through was committed (compact.go).
+			if e.Term >= term || e.Kind == KindNoop || e.Kind == KindLapse || e.Kind == KindCompact && !mutOplog("compact_carrier_lapses") {
+				continue
+			}
+			if e.Seq <= n.floor && !mutOplog("compact_carrier_lapses") {
 				continue
 			}
 			if n.o.Lapse(e, now) {
@@ -2577,9 +2783,10 @@ func (n *Node) Vouch(ctx context.Context, by string, counts func(peer, identity 
 	n.seqMu.Lock()
 	defer n.seqMu.Unlock()
 	n.mu.Lock()
-	if n.supersedingLocked() {
+	if n.stoppedLocked() {
+		err := n.stopErrLocked()
 		n.mu.Unlock()
-		return Vouch{}, Picture{}, fmt.Errorf("%w: %w", ErrVouchRefused, errSuperseded)
+		return Vouch{}, Picture{}, fmt.Errorf("%w: %w", ErrVouchRefused, err)
 	}
 	synced, alone, lost, last := n.syncedLocked(), n.mark.Alone, n.mark.Lost, n.lastLocked()
 	setAside := n.mark.SetAside != ""
@@ -2720,7 +2927,7 @@ func (n *Node) Vouch(ctx context.Context, by string, counts func(peer, identity 
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
+	if !n.mark.Lineage.same(hist) || n.stoppedLocked() {
 		return Vouch{}, pic, fmt.Errorf("%w: the log history moved during the vouch: run it again", ErrVouchRefused)
 	}
 	if !synced && n.syncedLocked() {
@@ -2802,9 +3009,10 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	}
 	term := n.currentTerm()
 	n.mu.Lock()
-	if n.supersedingLocked() {
+	if n.stoppedLocked() {
+		err := n.stopErrLocked()
 		n.mu.Unlock()
-		return Entry{}, fmt.Errorf("%w: %w", ErrReadOnly, errSuperseded)
+		return Entry{}, fmt.Errorf("%w: %w", ErrReadOnly, err)
 	}
 	hist := n.mark.Lineage
 	e.Seq = n.lastLocked() + 1
@@ -2854,12 +3062,13 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	// otherwise let a superseded leader apply an old-history entry (#1177
 	// review).
 	n.mu.Lock()
-	moved := !n.mark.Lineage.same(hist) || n.supersedingLocked()
+	moved := !n.mark.Lineage.same(hist) || n.stoppedLocked()
 	if moved && !mutOplog("history_moved_commits") {
 		// A newer log history was heard while replicating: this copy is
-		// superseded, and what it stored is the old history's.
+		// superseded, and what it stored is the old history's (or it
+		// diverged meanwhile).
 		stored = 0
-		errs = append(errs, errSuperseded.Error())
+		errs = append(errs, n.stopErrLocked().Error())
 	}
 	if stored < n.majority() {
 		// Kept, not truncated: a follower whose reply was lost may hold
@@ -2871,7 +3080,13 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 		n.mu.Unlock()
 		return Entry{}, fmt.Errorf("%w: %w: %d of %d stored (%s)", ErrReadOnly, ErrUnconfirmed, stored, len(n.o.Peers), strings.Join(errs, "; "))
 	}
-	n.commitTo(e.Seq)
+	if err := n.commitTo(e.Seq); err != nil {
+		// A majority holds it, but this copy found it can't commit (its log
+		// diverged): the outcome is the next leader's.
+		n.syncedTerm = 0
+		n.mu.Unlock()
+		return Entry{}, fmt.Errorf("%w: %w: %w", ErrReadOnly, ErrUnconfirmed, err)
+	}
 	n.mu.Unlock()
 	// The followers stored the entry under the commit index from before
 	// it: tell those that hold it that it is committed before the proposer
@@ -2912,7 +3127,7 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 		pt := n.termAtLocked(prev)
 		commit := n.commit
 		synced := n.syncedLocked() && n.syncedTerm == term
-		termSynced := n.syncedTerm == term && !n.supersedingLocked()
+		termSynced := n.syncedTerm == term && !n.stoppedLocked()
 		hist := n.mark.Lineage
 		n.mu.Unlock()
 		// Nothing leaves a leader that has not caught up for this term
@@ -2976,6 +3191,13 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 			return resp, err
 		}
 		n.mu.Lock()
+		if from < n.cut.Through && !mutOplog("compact_resend_below_base") {
+			// The peer needs entries this copy compacted away: never a
+			// sparse page as if it were the log (an install refills it).
+			through := n.cut.Through
+			n.mu.Unlock()
+			return resp, fmt.Errorf("%w: it has %d, the base is at %d", errBehindBase, from, through)
+		}
 		var missing []Entry
 		if mutOplog("resend_unchunked") {
 			missing = n.afterLocked(from)
@@ -3138,6 +3360,9 @@ func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64, take f
 func (n *Node) termAtLocked(seq uint64) uint64 {
 	i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq >= seq })
 	if seq == 0 || i >= len(n.entries) || n.entries[i].Seq != seq {
+		if seq != 0 && seq == n.cut.Through {
+			return n.cut.ThroughTerm // compacted away; the base keeps its term
+		}
 		return 0
 	}
 	return n.entries[i].Term
@@ -3196,8 +3421,8 @@ func (n *Node) CatchUp(ctx context.Context) error {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		switch {
-		case n.supersedingLocked():
-			return errSuperseded
+		case n.stoppedLocked():
+			return n.stopErrLocked()
 		case !got.Lineage.same(n.mark.Lineage) && !mutOplog("history_lower_counted") && !mutOplog("history_fork_counted"):
 			// A lower history's leader (its log is one a person accepted
 			// to lose; a higher one superseded this copy in fetchPage),
@@ -3212,9 +3437,9 @@ func (n *Node) CatchUp(ctx context.Context) error {
 		}
 		switch {
 		case !got.More || len(got.Entries) == 0:
-			n.commitTo(got.Commit)
+			return n.commitTo(got.Commit)
 		case mutOplog("catchup_commit_per_page"):
-			n.commitTo(min(got.Commit, got.Entries[len(got.Entries)-1].Seq))
+			return n.commitTo(min(got.Commit, got.Entries[len(got.Entries)-1].Seq))
 		}
 		return nil
 	})
@@ -3255,6 +3480,7 @@ func (n *Node) Status() Status {
 	s := Status{Self: n.o.Self, Leader: leader, IsLeader: n.isLeader(), Term: n.term, Peers: n.o.Peers, Reached: reached, LastSeq: n.lastLocked(), Commit: n.commit,
 		Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lost: n.mark.Lost, Synced: synced, Vouch: n.mark.Vouch,
 		Lineage: n.mark.Lineage, SupersedeTo: n.mark.SupersedeTo, Superseded: n.mark.Superseded, Forked: forked}
+	n.compactStatusLocked(&s)
 	n.mu.Unlock()
 	switch {
 	case n.standalone():
@@ -3401,6 +3627,14 @@ func (n *Node) Handler() http.Handler {
 		var after uint64
 		_, _ = fmt.Sscanf(r.URL.Query().Get("after"), "%d", &after)
 		n.mu.Lock()
+		if after < n.cut.Through && !mutOplog("compact_page_served") {
+			// Compacted away: never a sparse page, which a reader would take
+			// for the log (an install refills a copy this far behind).
+			c := n.cut
+			n.mu.Unlock()
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "compacted", "through": c.Through, "throughTerm": c.ThroughTerm})
+			return
+		}
 		last := n.lastLocked()
 		resp := afterResp{Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
 			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lineage: n.mark.Lineage, Lost: n.mark.Lost != "", SetAside: n.mark.SetAside != ""}
@@ -3487,6 +3721,10 @@ func (n *Node) Handler() http.Handler {
 				}
 			}
 			switch {
+			case n.mark.Diverged != "" && !n.supersedingLocked() && !mutOplog("diverged_counts"):
+				n.mu.Unlock()
+				writeJSON(w, http.StatusConflict, map[string]any{"error": "diverged", "detail": errDiverged.Error()})
+				return
 			case n.supersedingLocked():
 				h := n.mark.Lineage
 				n.mu.Unlock()
@@ -3522,7 +3760,12 @@ func (n *Node) Handler() http.Handler {
 		// would stay under the leader's next ones and be applied once the
 		// commit index passed it.
 		var err error
+		base := n.cut.Through
 		switch {
+		case req.PrevSeq <= base && base > 0 && !mutOplog("compact_prev_unmatched"):
+			// At or below this copy's base: committed, so the leader's own
+			// (it holds every committed entry) and matched up to the base.
+			_, err = n.acceptLocked(req.Entries)
 		case req.PrevSeq > n.lastLocked():
 			err = fmt.Errorf("%w: have %d, the leader's previous entry is %d", errGap, n.lastLocked(), req.PrevSeq)
 		case n.termAtLocked(req.PrevSeq) != req.PrevTerm:
@@ -3540,16 +3783,26 @@ func (n *Node) Handler() http.Handler {
 			// carried out here, while the leader and this replica's own
 			// replay record them as lapsed.
 			proved := req.PrevSeq + uint64(len(req.Entries))
+			if req.PrevSeq <= base {
+				proved = max(proved, base) // the base is committed: the leader's
+			}
+			resets := n.resets
+			var cerr error
 			switch {
 			case proved >= req.Commit:
-				n.commitTo(req.Commit)
+				cerr = n.commitTo(req.Commit)
 			case mutOplog("follower_commit_mid_range"):
-				n.commitTo(proved)
+				cerr = n.commitTo(proved)
 			}
 			// A synced leader's log holds every committed entry, and this
 			// request proved ours equal to it up to its commit index:
 			// ours holds them too.
-			if (req.Synced || mutOplog("synced_by_unsynced_leader")) && (proved >= req.Commit || mutOplog("synced_before_commit")) {
+			if (n.resets != resets || cerr != nil) && !mutOplog("reset_answers_request") {
+				// The commit found a compaction that does not fit: this copy
+				// diverged (the witness's started over, empty), and the
+				// request proved nothing it may answer for.
+				err = errDiverged
+			} else if (req.Synced || mutOplog("synced_by_unsynced_leader")) && (proved >= req.Commit || mutOplog("synced_before_commit")) {
 				n.becomeSyncedLocked("replicated from a synced leader")
 				n.usedVouchLocked()
 			}
@@ -3565,6 +3818,9 @@ func (n *Node) Handler() http.Handler {
 			// entries. Answering them made a write count on a copy that
 			// did not hold it, and kept a resend from reaching them.
 			have = req.PrevSeq + uint64(len(req.Entries))
+			if req.PrevSeq <= base {
+				have = max(have, base)
+			}
 		}
 		commit := n.commit
 		if l := n.leaderAddr(); l != "" {
@@ -3581,6 +3837,8 @@ func (n *Node) Handler() http.Handler {
 				kind = "gap"
 			case errors.Is(err, errMismatch):
 				kind = "mismatch"
+			case errors.Is(err, errDiverged):
+				kind = "diverged"
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{"error": kind, "detail": err.Error(), "have": have, "commit": commit})
 			return
