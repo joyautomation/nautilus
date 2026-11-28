@@ -14,7 +14,11 @@
 # 6,769,640 -> 4,692,713 in CI, and naut-hmi.wasm 3,825,162 in CI (it carries
 # its own Go runtime and standard library, so the two sum to more than one
 # module did). Each limit is the CI number + 1%.
+# after the struct wiring format and its checker (#1458 slice 2, package wiring,
+# read by the manifest the playground also loads): naut-wasm 4,833,340 in CI,
+# +40,919 over the old limit; the deps differ by that one leaf package, nothing
+# controller-only leaked. The playground will run wirings, so it stays in.
 #
 # One line per module: <target under ./cmd> <bytes>.
-naut-wasm 4792421
+naut-wasm 4881673
 naut-wasm-hmi 3863413
