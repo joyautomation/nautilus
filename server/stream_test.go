@@ -629,6 +629,9 @@ func TestMetaAdvertisesQualityAndDeltas(t *testing.T) {
 	if !m.Deltas {
 		t.Error("meta.deltas = false")
 	}
+	if !m.BlockDeltas {
+		t.Error("meta.blockDeltas = false: a client would not ask for ?blocks=delta (STR-023)")
+	}
 
 	// A controller with no driver and no inputs cannot report quality, and
 	// meta must say so rather than hard-code true.

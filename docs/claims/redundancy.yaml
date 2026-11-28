@@ -147,8 +147,13 @@ claims:
       configmap named after the project with -retain suffix in a cluster; and
       redundancy lease defaults to the project name.
     source: "#retained-state"
-    tests: []
-    note: No test asserts the default names.
+    tests:
+      - go ./internal/project TestRetainAndLeaseNameDefaults
+    note: >-
+      The names are asserted (default and set) where the manifest resolves
+      them. Which of the file or the ConfigMap is used in a cluster is chosen
+      in cmd/naut/runcmd.go and is not asserted.
+    partial: true
 
   - id: RED-013
     claim: >-
