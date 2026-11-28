@@ -40,3 +40,46 @@ func TestMultiPartialWrite(t *testing.T) {
 		t.Errorf("a push every child takes: %v", err)
 	}
 }
+
+// failingOut is a child that owns the given outputs and fails every write.
+type failingOut struct {
+	failing
+	outs []string
+}
+
+func (f failingOut) WriteOutputs(Values) error { return errSocket }
+func (f failingOut) OutputNames() []string     { return f.outs }
+
+// Two children failing: neither's keys are taken, both healthy ones' are.
+// A key no child claims, and every key of the zero value, is not taken
+// either: a composite that cannot tell fails safe.
+func TestMultiPartialWriteTwoFail(t *testing.T) {
+	a := named{Memory: NewMemory(), outs: []string{"Acmd"}}
+	d := named{Memory: NewMemory(), outs: []string{"Dcmd"}}
+	m, err := NewMulti(
+		NamedDriver{Name: "a", Driver: a},
+		NamedDriver{Name: "d", Driver: d},
+		NamedDriver{Name: "b", Driver: failingOut{outs: []string{"Bcmd"}}},
+		NamedDriver{Name: "c", Driver: failingOut{outs: []string{"Ccmd"}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = m.WriteOutputs(Values{"Acmd": int64(1), "Dcmd": int64(5), "Bcmd": int64(2), "Ccmd": int64(3), "Nobody": int64(4)})
+	var p *PartialWriteError
+	if !errors.As(err, &p) {
+		t.Fatalf("WriteOutputs = %v (%T), want a *PartialWriteError", err, err)
+	}
+	for k, want := range map[string]bool{"Acmd": true, "Dcmd": true, "Bcmd": false, "Ccmd": false, "Nobody": false} {
+		if got := p.Taken(k); got != want {
+			t.Errorf("Taken(%s) = %v, want %v", k, got, want)
+		}
+	}
+	if !strings.Contains(err.Error(), `driver "b"`) || !strings.Contains(err.Error(), `driver "c"`) {
+		t.Errorf("the error does not name both failing children: %v", err)
+	}
+	var zero PartialWriteError
+	if zero.Taken("Acmd") || zero.Error() == "" {
+		t.Errorf("the zero value: Taken = %v, Error = %q; want false and a message", zero.Taken("Acmd"), zero.Error())
+	}
+}

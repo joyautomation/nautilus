@@ -97,3 +97,64 @@ func TestPushEventOfTheFailingChildIsRetried(t *testing.T) {
 		t.Fatalf("the event command its driver failed was not handed again: %v", got)
 	}
 }
+
+// bothMulti is a tank whose peer P (echo: it takes what it is handed) owns
+// the both: member Valve, beside a sibling S that owns a plain output and
+// fails on cue. Valve is delivered at 12.
+func bothMulti(t *testing.T) (*Runtime, *pushDriver, *pushDriver) {
+	t.Helper()
+	p := &pushDriver{echo: true}
+	s := &pushDriver{}
+	multi, err := nio.NewMulti(
+		nio.NamedDriver{Name: "p", Driver: declPush{p, []string{"T1.Valve", "T1.Levels[1]", "T1.Sensor"}, []string{"T1.Valve"}}},
+		nio.NamedDriver{Name: "s", Driver: declPush{s, nil, []string{"Lamp"}}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, _ := newTankRuntime(t, func(o *Options) {
+		o.Program = "PROGRAM Main\nVAR_EXTERNAL T1 : Tank; Lamp : BOOL; END_VAR\nLamp := T1.Note > 0;\nEND_PROGRAM"
+		o.Driver = multi
+		o.Tags = append(o.Tags, Typed("Lamp", RoleOutput, "BOOL"))
+	})
+	p.set("T1.Valve", 12.0)
+	r.Scan()
+	return r, p, s
+}
+
+// A both: command whose own driver failed its share is still pending: the
+// peer's next delivery (still the old value) does not un-write it, and it
+// goes out once the driver takes it.
+func TestPushBothOfTheFailingChildStaysPending(t *testing.T) {
+	r, p, _ := bothMulti(t)
+	write(t, r, "T1.Valve", 20.0)
+	p.fail = true
+	r.Scan() // P fails the push; the peer still shows 12
+	p.fail = false
+	n := p.count()
+	r.Scan()
+	if got := p.since(n, "T1.Valve"); len(got) == 0 || got[0] != 20.0 {
+		t.Fatalf("the both: command its driver failed was not handed again: %v", got)
+	}
+}
+
+// A both: command its driver took while a sibling failed is handed over:
+// once the peer moves off it (another client wrote it), the stale copy is
+// not written back on the driver's next ask.
+func TestPushBothTakenByOneChildWhileASiblingFailsIsHanded(t *testing.T) {
+	r, p, s := bothMulti(t)
+	write(t, r, "T1.Valve", 20.0)
+	write(t, r, "T1.Note", 1) // Lamp moves, so S has a share to fail
+	s.fail = true
+	r.Scan() // P takes 20 (and echoes it), S fails
+	s.fail = false
+	r.Scan() // the peer shows 20
+	n := p.count()
+	p.set("T1.Valve", 30.0) // another client of the peer wrote it
+	r.Scan()
+	p.ask()
+	r.Scan()
+	if got := p.since(n, "T1.Valve"); len(got) != 0 {
+		t.Errorf("the stale 20 was written over the peer's 30: %v", got)
+	}
+}
