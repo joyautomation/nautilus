@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nautilus wiring file",
+  "description": "A wiring file, composed into a project by naming it under `wiring-files:` in nautilus.yaml: `wirings:` and `instances:`, the same entries as in the manifest. A wiring or instance declared in two sources is an error, not an override.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "wirings": {
+      "type": "array",
+      "items": {
+        "$ref": "nautilus.schema.json#/definitions/wiring"
+      }
+    },
+    "instances": {
+      "type": "array",
+      "items": {
+        "$ref": "nautilus.schema.json#/definitions/wiring-instance"
+      }
+    }
+  }
+}

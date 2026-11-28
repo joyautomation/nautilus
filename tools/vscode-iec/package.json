@@ -982,6 +982,10 @@
       {
         "fileMatch": "alarms/*.yaml",
         "url": "./schemas/nautilus-alarms.schema.json"
+      },
+      {
+        "fileMatch": "wiring/*.yaml",
+        "url": "./schemas/nautilus-wiring.schema.json"
       }
     ],
     "jsonValidation": [

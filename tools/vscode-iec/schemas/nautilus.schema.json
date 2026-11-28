@@ -43,6 +43,28 @@
       },
       "description": "Files holding additional tags, each a bare YAML list of the same entries as `tags`. This is where a GENERATED tag set lives, so it stays a separate reviewable artifact instead of a 500-line smear through the file you edit \u2014 and how one project ships to several sites, by choosing which tag files a site's manifest composes. Read in order, then `tags` last. A tag declared twice in any two sources is an error: fix the generator, or narrow its scope."
     },
+    "wirings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/wiring"
+      },
+      "description": "Struct wiring: how each member of a plain TYPE is filled, beside the type (from a device, a command to one, memory, or an expression). Read and checked, but not run by this build yet."
+    },
+    "instances": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/wiring-instance"
+      },
+      "description": "Tags of a wired type, with per-instance params and overrides. Not run by this build yet."
+    },
+    "wiring-files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Files holding more wirings and instances, each a mapping with `wirings:` and `instances:`. Resolved inside the project, as `tag-files:` is. A name declared twice across them is an error."
+    },
     "tags": {
       "type": "array",
       "items": {
@@ -1000,6 +1022,282 @@
           "description": "A person may choose the value at start."
         }
       }
+    },
+    "wiring": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "The plain IEC TYPE this wires."
+        },
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "The wiring's name; defaults to the type. An instance names a wiring only when its type has more than one."
+        },
+        "version": {
+          "type": [
+            "string",
+            "number"
+          ],
+          "description": "The Sparkplug Template version the type publishes; left out, a hash of its definition. One per type."
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/wiring-param"
+          },
+          "description": "Values each instance gives, substituted as `{name}` into source keys, addresses and expressions. null: every instance must give it. `name` and `desc` are built in."
+        },
+        "sources": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/wiring-source"
+          },
+          "description": "The connections the members read and write, by name."
+        },
+        "fill": {
+          "$ref": "#/definitions/wiring-fill"
+        },
+        "members": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/wiring-member"
+          },
+          "description": "One entry per member path (`Speed`, `Cmd.Start`, `Levels[1]`). A member left out is retained memory."
+        },
+        "alarms": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/wiring-alarm"
+          },
+          "description": "Alarms over BOOL members of this wiring."
+        }
+      }
+    },
+    "wiring-param": {
+      "description": "A default (a scalar), null for required, or a mapping with `default` and `publish`.",
+      "anyOf": [
+        {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            },
+            "publish": {
+              "type": "boolean",
+              "description": "Publish this param as a Sparkplug Template parameter (default: yes, except a param that feeds an endpoint)."
+            }
+          }
+        }
+      ]
+    },
+    "wiring-source": {
+      "type": "object",
+      "required": [
+        "driver"
+      ],
+      "properties": {
+        "driver": {
+          "type": "string",
+          "description": "A `drivers:` entry's name, or a driver type when the project has exactly one of it."
+        }
+      },
+      "additionalProperties": true,
+      "description": "A connection. `driver` names the driver; every other key (endpoint, unit-id, ...) is that driver's own and may use `{param}`."
+    },
+    "wiring-fill": {
+      "type": "object",
+      "required": [
+        "from"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "The source that fills the type whole (EtherNet/IP, a Sparkplug host)."
+        },
+        "member": {
+          "type": "string",
+          "description": "The member the imported type is wrapped in; left out, the wiring's type extends it."
+        }
+      },
+      "additionalProperties": true,
+      "description": "A type a driver fills whole. Other keys are the driver's own and may use `{param}`."
+    },
+    "wiring-member": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "One kind key (from, to, both, memory or expr), then the driver's own address keys, which may use `{param}`.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "Read from this source. Never writable."
+        },
+        "to": {
+          "type": "string",
+          "description": "A command, sent to this source on change. Writable."
+        },
+        "both": {
+          "type": "string",
+          "description": "Read and written, on a peer controller's driver only (eip, sparkplug-host)."
+        },
+        "memory": {
+          "enum": [
+            "retained",
+            "initial"
+          ],
+          "description": "A value kept by the program, operators and clients. Retained (the default for a member left out) survives a restart; initial does not."
+        },
+        "expr": {
+          "type": "string",
+          "description": "An ST expression evaluated once per scan before programs. Never writable."
+        },
+        "readback": {
+          "type": "string",
+          "description": "On a `to:`: the member that shows what the device did with it."
+        },
+        "event": {
+          "type": "boolean",
+          "description": "On a `to:`: a command that must never be sent twice; the first value after a gate reopen, takeover or reconnect is a baseline."
+        },
+        "unit": {
+          "type": "string"
+        },
+        "desc": {
+          "type": "string"
+        }
+      }
+    },
+    "wiring-alarm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "member"
+      ],
+      "properties": {
+        "member": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string"
+        },
+        "on-delay": {
+          "type": "string"
+        },
+        "class": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "wiring-instance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "The instance's tag name."
+        },
+        "type": {
+          "type": "string"
+        },
+        "wiring": {
+          "type": "string",
+          "description": "Which wiring, when the type has more than one."
+        },
+        "desc": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "description": "Values for the wiring's params."
+        },
+        "set": {
+          "type": "object",
+          "description": "Initial values for memory members, by path, nested like a tag's `init:`."
+        },
+        "wire": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/wiring-member"
+          },
+          "description": "Per-member override of an address or source for this instance only. Never a kind."
+        },
+        "alarms": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/wiring-tuning"
+          },
+          "description": "Tune the wiring's alarm for a member, or `false` to turn it off."
+        },
+        "offline-alarm": {
+          "description": "Tune the comms-loss alarm of the connections this instance owns: `false`, `{priority, on-delay}`, or a mapping of source to either.",
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "type": "object"
+            }
+          ]
+        }
+      }
+    },
+    "wiring-tuning": {
+      "anyOf": [
+        {
+          "const": false
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "priority": {
+              "type": "string"
+            },
+            "on-delay": {
+              "type": "string"
+            },
+            "class": {
+              "type": "string"
+            },
+            "notes": {
+              "type": "string"
+            }
+          }
+        }
+      ]
     },
     "device": {
       "type": "object",

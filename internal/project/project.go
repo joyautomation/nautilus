@@ -46,6 +46,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
+	"github.com/joyautomation/nautilus/wiring"
 )
 
 // ManifestName is the file that marks a directory as a manifest project.
@@ -91,6 +92,15 @@ type Manifest struct {
 	// server, check) sees one composed tag list.
 	TagFiles []string    `yaml:"tag-files"`
 	Tags     []TagConfig `yaml:"tags"`
+	// Wirings, Instances and WiringFiles are struct wiring (#1458,
+	// docs/design/one-struct-model.md): where each member of a plain TYPE
+	// comes from, and the tags of those types. They are read and checked,
+	// and then refused until a build runs them (composeWiring). WiringFiles
+	// is the include file: each holds wirings: and instances: and is
+	// resolved inside the project like tag-files:.
+	Wirings     []wiring.Wiring   `yaml:"wirings"`
+	Instances   []wiring.Instance `yaml:"instances"`
+	WiringFiles []string          `yaml:"wiring-files"`
 	// TagMeta layers HMI documentation onto tags declared elsewhere — keyed
 	// by tag name, or by a dotted path (`P101.Speed`) for one field of a
 	// UDT tag. Documentation only; it cannot change a tag's role or seed.
@@ -1578,6 +1588,9 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 		}
 	}
 	if err := composeTags(fsys, &m, name); err != nil {
+		return nil, err
+	}
+	if err := composeWiring(fsys, &m, name, raw); err != nil {
 		return nil, err
 	}
 	if err := composeAlarms(fsys, &m); err != nil {
