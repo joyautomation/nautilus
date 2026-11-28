@@ -63,8 +63,9 @@ trap 'rm -f "$body"' EXIT
     # nothing), with a count of the caught.
     rows=$(log "${MUTANTS_LOG:-}" | grep -E '^\| ' | grep -vE '^\| mutation \| result \|$|\| caught \(|\| (green|done) \|$' || true)
     legs=${MUTANTS_LEGS:-0}
+    all=$(log "${MUTANTS_LOG:-}") # read once: grep -q quitting early would SIGPIPE a cat under pipefail
     for ((k = 0; k < legs; k++)); do
-      if ! log "${MUTANTS_LOG:-}" | grep -qF "| (shard $k/$legs: "; then
+      if ! grep -qF "| (shard $k/$legs: " <<<"$all"; then
         rows+=${rows:+$'\n'}"| (shard $k/$legs) | never finished: timed out, cancelled, red baseline or never started; see the run |"
       fi
     done
