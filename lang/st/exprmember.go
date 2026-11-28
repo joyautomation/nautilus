@@ -1,8 +1,10 @@
 package st
 
 import (
+	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -52,6 +54,10 @@ type ExprRef struct {
 	// Sibling is set when Root is a member of the expression's own
 	// instance (RewriteExpr rewrote it onto the instance).
 	Sibling bool
+	// Written marks the path WRITTEN(<path>) asks about: RewriteExpr
+	// rewrites it as any name, but its value is never read, so the
+	// dependency order, the input gate and quality leave it out.
+	Written bool
 	Pos     Pos
 }
 
@@ -93,6 +99,14 @@ func ExprRefs(e Expression) []ExprRef {
 			if v.Callee != nil {
 				walk(v.Callee)
 			}
+			if isWrittenCall(v) {
+				from := len(out)
+				walk(v.Args[0])
+				for i := from; i < len(out); i++ {
+					out[i].Written = true
+				}
+				return
+			}
 			for _, a := range v.Args {
 				walk(a)
 			}
@@ -103,6 +117,56 @@ func ExprRefs(e Expression) []ExprRef {
 	}
 	walk(e)
 	return out
+}
+
+// WrittenName is the expression stage's built-in WRITTEN(<path>): TRUE once
+// the to: leaf at path has been written in this leadership (one-struct-model
+// §10). It is no name a program loses (LowerOpts.Written).
+const WrittenName = "WRITTEN"
+
+// isWrittenCall: the call is WRITTEN with one positional argument, the shape
+// lowering takes (any other shape is refused there).
+func isWrittenCall(v *CallExpr) bool {
+	return v.Callee == nil && strings.EqualFold(v.Name, WrittenName) && len(v.Args) == 1 && len(v.NamedArgs) == 0
+}
+
+// WrittenPath is the path WRITTEN's argument names ("P101.Cmd.Start",
+// "P101.Vals[2]"): a member chain with constant indices only.
+func WrittenPath(e Expression) (string, bool) {
+	root, path, ok := refChain(e)
+	if !ok || root == nil || strings.Contains(path, wholeMark) {
+		return "", false
+	}
+	return ExprRef{Root: root.Name, Path: path}.Full(""), true
+}
+
+// lowerWritten lowers WRITTEN(<path>) in a program body that has it
+// (LowerOpts.Written): the path resolves now, to the id the host answers.
+func (l *lowerer) lowerWritten(n *CallExpr) (ir.Expr, error) {
+	clash, name := "", ""
+	if _, k, ok := ir.Lookup(l.userFuncs, n.Name); ok {
+		clash, name = "FUNCTION", k
+	} else if _, k, ok := ir.Lookup(l.userFBs, n.Name); ok {
+		clash, name = "FUNCTION_BLOCK", k
+	} else if _, k, ok := ir.Lookup(l.implicitGlobals, n.Name); ok {
+		clash, name = "tag", k
+	}
+	if clash != "" {
+		return nil, errName(n.Pos, n.Name, fmt.Errorf("the project's %s %s hides the built-in WRITTEN(<path>) this expression calls: rename it", clash, name))
+	}
+	const shape = "WRITTEN takes one argument, the path of a to: member with integer literal indices, one per bracket (Grid[0][1]), such as WRITTEN(Cmd.SpeedRef)"
+	if len(n.Args) != 1 || len(n.NamedArgs) > 0 || len(n.OutputBindings) > 0 || hasExecControl(n) {
+		return nil, errName(n.Pos, n.Name, errors.New(shape))
+	}
+	path, ok := WrittenPath(n.Args[0])
+	if !ok {
+		return nil, errNode(n.Args[0], errors.New(shape))
+	}
+	id, err := l.written(path)
+	if err != nil {
+		return nil, errNode(n.Args[0], fmt.Errorf("WRITTEN: %w", err))
+	}
+	return &ir.Call{Name: WrittenName, Args: []ir.Expr{&ir.Lit{V: ir.IntVal(int64(id)), T: ir.IntNamed("DINT")}}, HostFn: ir.WrittenFn, T: ir.BoolT}, nil
 }
 
 // refChain reads a member/index chain down to its root identifier. A
@@ -139,19 +203,67 @@ func refChain(e Expression) (*IdentExpr, string, bool) {
 // ExprRefs strips it.
 const wholeMark = "\x00"
 
+// constIndex is a one-dimension index that is an integer literal, as the
+// element number lowering gives it: Vals[01] is Vals[1], Vals[16#10] is
+// Vals[16], Vals[-1] is Vals[-1].
 func constIndex(v *IndexExpr) (string, bool) {
 	if len(v.Indices) != 1 {
 		return "", false
 	}
-	n, ok := v.Indices[0].(*NumberLit)
-	if !ok || strings.ContainsAny(n.Value, ".eE#") {
+	e, neg := v.Indices[0], false
+	if u, ok := e.(*UnaryExpr); ok && u.Op == "-" {
+		e, neg = u.Operand, true
+	}
+	n, ok := e.(*NumberLit)
+	if !ok {
 		return "", false
 	}
-	digits := strings.TrimLeft(n.Value, "0") // Vals[01] is Vals[1], as wiring spells it
-	if digits == "" {
-		digits = "0"
+	base := n.Base
+	if base == 0 {
+		base = 10
 	}
-	return digits, true
+	i, err := strconv.ParseInt(n.Value, base, 64)
+	if err != nil { // a REAL, too
+		return "", false
+	}
+	if neg {
+		i = -i
+	}
+	return strconv.FormatInt(i, 10), true
+}
+
+// CallsWritten reports whether e calls WRITTEN, in any shape.
+func CallsWritten(e Expression) bool {
+	found := false
+	var walk func(Expression)
+	walk = func(e Expression) {
+		switch v := e.(type) {
+		case *BinaryExpr:
+			walk(v.Left)
+			walk(v.Right)
+		case *UnaryExpr:
+			walk(v.Operand)
+		case *MemberExpr:
+			walk(v.Object)
+		case *IndexExpr:
+			walk(v.Array)
+			for _, ix := range v.Indices {
+				walk(ix)
+			}
+		case *CallExpr:
+			if v.Callee == nil && strings.EqualFold(v.Name, WrittenName) {
+				found = true
+			}
+			for _, a := range v.Args {
+				walk(a)
+			}
+			for _, a := range v.NamedArgs {
+				walk(a.Value)
+			}
+		}
+	}
+	walk(e)
+	return found
 }
 
 // indexExprs walks the index expressions inside a chain (they are reads
@@ -478,6 +590,16 @@ func (c *purity) call(v *CallExpr, via []string) []ExprProblem {
 	}
 	if v.Callee != nil {
 		return append(out, c.here(via, v.Pos, "calls a function block instance, which keeps state"))
+	}
+	if strings.EqualFold(v.Name, WrittenName) {
+		if len(via) == 0 {
+			// The stage's own built-in: it reads the push state only (§10).
+			// A FUNCTION, block or tag of the name is refused by lowering.
+			return out
+		}
+		if c.funcs[ir.NameKey(v.Name)] == nil {
+			return append(out, c.here(via, v.Pos, "calls WRITTEN(), which only an expr: itself may call: call WRITTEN in the expression and pass its result"))
+		}
 	}
 	if fd := c.funcs[ir.NameKey(v.Name)]; fd != nil {
 		if c.onStack[fd] {

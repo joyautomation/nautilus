@@ -3,6 +3,7 @@ package project
 import (
 	"fmt"
 	"io/fs"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -137,6 +138,7 @@ func checkExprs(fsys fs.FS, m *Manifest, set *wirebind.Set, types map[string]*ir
 	where := libLocator(libs)
 
 	exprCompile(units, prelude, preludeLines, m, &f)
+	exprMainClash(fsys, m, units, &f)
 	exprPurity(units, prelude, where, &f)
 	exprCycles(units, &f)
 	return shadows, f.problems()
@@ -170,7 +172,9 @@ func exprCompile(units []*exprUnit, prelude string, preludeLines int, m *Manifes
 		}
 		types, _ := st.Types(prog)
 		scope, _ := runtime.ResolveTagScope(defs, types)
-		_, err = st.LowerWithOpts(prog, scope.LowerOpts())
+		opts := scope.LowerOpts()
+		opts.Written = runtime.WrittenResolver(defs, types) // WRITTEN(<path>), as the stage resolves it
+		_, err = st.LowerWithOpts(prog, opts)
 		if err == nil {
 			return
 		}
@@ -191,6 +195,53 @@ func exprCompile(units []*exprUnit, prelude string, preludeLines int, m *Manifes
 		u := live[i]
 		f.add(u.mem.Pos, u.mem.Path, u.in.Name, fmt.Sprintf("%q does not compile: %s", u.mem.Expr, exprErrText(le.Err.Error())))
 		live = append(live[:i], live[i+1:]...)
+	}
+}
+
+// exprMainClash: the stage compiles with the main program's own source,
+// whose FUNCTIONs and blocks the check's prelude lacks, so one named WRITTEN
+// there is refused here as the stage refuses it, for each expression that
+// calls WRITTEN.
+func exprMainClash(fsys fs.FS, m *Manifest, units []*exprUnit, f *exprFindings) {
+	var calls []*exprUnit
+	for _, u := range units {
+		if st.CallsWritten(u.expr) {
+			calls = append(calls, u)
+		}
+	}
+	if len(calls) == 0 || len(m.Tasks) == 0 {
+		return
+	}
+	src, err := fs.ReadFile(fsys, path.Clean(m.Tasks[0].Program))
+	if err != nil {
+		return
+	}
+	// By content, as the runtime reads it: a ladder or FBD main file
+	// declares its blocks in its own language.
+	text, err := stproject.LibraryST("main."+runtime.Language(string(src)), string(src))
+	if err != nil {
+		return // the program's own error
+	}
+	prog, err := st.Parse(text)
+	if err != nil {
+		return
+	}
+	what := ""
+	for _, fd := range prog.FuncDecls {
+		if strings.EqualFold(fd.Name, st.WrittenName) {
+			what = "FUNCTION " + fd.Name
+		}
+	}
+	for _, fb := range prog.FBDecls {
+		if strings.EqualFold(fb.Name, st.WrittenName) {
+			what = "FUNCTION_BLOCK " + fb.Name
+		}
+	}
+	if what == "" {
+		return
+	}
+	for _, u := range calls {
+		f.add(u.mem.Pos, u.mem.Path, u.in.Name, fmt.Sprintf("%q does not compile: the project's %s (%s) hides the built-in WRITTEN(<path>) this expression calls: rename it", u.mem.Expr, what, m.Tasks[0].Program))
 	}
 }
 
@@ -265,7 +316,9 @@ func exprCycles(units []*exprUnit, f *exprFindings) {
 	for i, u := range units {
 		targets[i] = u.full
 		for _, r := range u.refs {
-			reads[i] = append(reads[i], r.Full(u.in.Name))
+			if !r.Written { // WRITTEN's path reads the push state, not the value
+				reads[i] = append(reads[i], r.Full(u.in.Name))
+			}
 		}
 	}
 	edges := st.ExprEdges(targets, reads)

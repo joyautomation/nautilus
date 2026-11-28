@@ -218,9 +218,10 @@ func (n *knode) takes(p pick) bool {
 
 // instInfo is one instance as the store uses it.
 type instInfo struct {
-	name string // the stored spelling
-	typ  *ir.Type
-	root knode
+	name    string // the stored spelling
+	typName string // its TYPE, as the tag names it
+	typ     *ir.Type
+	root    knode
 	// keys are the delivery keys a driver may use, one per delivered entry
 	// ("P101.Speed"); got says whether each has been delivered yet.
 	keys []instKey
@@ -323,7 +324,7 @@ func newInstInfo(d TagDef, types map[string]*ir.Type) (*instInfo, error) {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
-	in := &instInfo{name: d.Name, typ: t}
+	in := &instInfo{name: d.Name, typName: d.Type, typ: t}
 	in.root = buildShape(t, "", "")
 	declared := map[*knode]string{}
 	for _, p := range paths {

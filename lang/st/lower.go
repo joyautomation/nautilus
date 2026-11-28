@@ -63,6 +63,15 @@ type LowerOpts struct {
 	// an undeclared identifier that names another program's variable say
 	// that programs share only tags (#327). See PeerProgram.
 	Peers []PeerProgram
+	// Written, when set, gives the program body WRITTEN(<path>), the
+	// expression stage's built-in (#1458; one-struct-model §10): the call
+	// lowers to the id Written returns for the path, which the host answers
+	// through ir.LeafWritten, and the argument is never read as a value.
+	// Only the expr: members' compile sets it, so WRITTEN is no name a
+	// program loses: a FUNCTION, block or tag of that name is refused only
+	// by an expression that calls WRITTEN. FUNCTION and block bodies never
+	// have it.
+	Written func(path string) (int, error)
 }
 
 // Lower converts a parsed ST program into typed IR.
@@ -149,6 +158,7 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	}
 	l.peers = opts.Peers
 	l.warn = dedupWarn(opts.Warn)
+	l.written = opts.Written
 	// Seed the file's TYPE table with any the caller supplies (a separately
 	// compiled library), then resolve this file's own TYPE block. Both are
 	// in scope for the POUs below — a FUNCTION_BLOCK pin may name a UDT.
@@ -467,14 +477,15 @@ type lowerer struct {
 	// each symbol carries its declared spelling; use lookup, not an index.
 	scope           map[string]symbol
 	types           map[string]*ir.Type
-	userFBs         map[string]*ir.FBDef   // optional; consulted for FB type resolution
-	userFuncs       map[string]*ir.FuncDef // optional; consulted at call sites for bare-name lookup
-	implicitGlobals map[string]*ir.Type    // optional; PLC project vars surfaced as globals
-	tagTypes        map[string]*ir.Type    // optional; tags whose type the project states
-	untypedTags     map[string]string      // NameKey → spelling: project tags with no knowable type
-	tagTypeErrs     map[string]error       // NameKey → why the tag's stated type: did not resolve
-	warn            func(LowerWarning)     // optional; see LowerOpts.Warn
-	peers           []PeerProgram          // optional; the project's other programs, for diagnostics only
+	userFBs         map[string]*ir.FBDef      // optional; consulted for FB type resolution
+	userFuncs       map[string]*ir.FuncDef    // optional; consulted at call sites for bare-name lookup
+	implicitGlobals map[string]*ir.Type       // optional; PLC project vars surfaced as globals
+	tagTypes        map[string]*ir.Type       // optional; tags whose type the project states
+	untypedTags     map[string]string         // NameKey → spelling: project tags with no knowable type
+	tagTypeErrs     map[string]error          // NameKey → why the tag's stated type: did not resolve
+	warn            func(LowerWarning)        // optional; see LowerOpts.Warn
+	peers           []PeerProgram             // optional; the project's other programs, for diagnostics only
+	written         func(string) (int, error) // optional; LowerOpts.Written, this POU only (child never copies it)
 	// returnSlot, when >= 0, marks the slot the bare function-name
 	// identifier should bind to inside a FUNCTION body so `Name := value`
 	// assigns the return value rather than failing as undeclared.
@@ -1943,6 +1954,9 @@ func (l *lowerer) lowerExpr(e Expression) (ir.Expr, error) {
 }
 
 func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
+	if l.written != nil && n.Callee == nil && strings.EqualFold(n.Name, WrittenName) {
+		return l.lowerWritten(n)
+	}
 	// User-defined FUNCTION dispatch — preferred over the (case-insensitive)
 	// builtin table so a user can shadow nothing accidentally with mixed
 	// case while still binding by bare name.
@@ -1967,7 +1981,11 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 			}
 			return nil, errName(n.Pos, n.Name, fmt.Errorf("FB instance %q can't be used as an expression — invoke it as a statement and read outputs (e.g. %s.Q)%s", n.Name, n.Name, hides))
 		}
-		return nil, errName(n.Pos, n.Name, fmt.Errorf("unknown function %q%s", n.Name, ir.ConversionHint(n.Name)))
+		hint := ir.ConversionHint(n.Name)
+		if strings.EqualFold(n.Name, WrittenName) {
+			hint = ": WRITTEN(<path>) is an expr: member's built-in, not a program's or a FUNCTION's"
+		}
+		return nil, errName(n.Pos, n.Name, fmt.Errorf("unknown function %q%s", n.Name, hint))
 	}
 	if hasExecControl(n) {
 		return nil, errExecInExpr(n)

@@ -108,6 +108,20 @@ func IsSystemFunction(name string) bool {
 	return false
 }
 
+// LeafWritten is an optional Host extension: the expression stage's answer
+// to WRITTEN(<path>), by the leaf id the path resolved to when the
+// expression compiled (st.LowerOpts.Written).
+type LeafWritten interface {
+	LeafWritten(id int) bool
+}
+
+// WrittenFn is the HostFn of an expression's WRITTEN(<path>): args[0] is the
+// leaf id. It is no entry of Builtins, so a program never has WRITTEN.
+func WrittenFn(host Host, args []Value) (Value, error) {
+	lw, ok := host.(LeafWritten)
+	return BoolVal(ok && lw.LeafWritten(int(args[0].I))), nil
+}
+
 func registerHostBuiltins() {
 	RegisterBuiltin(BuiltinSig{
 		Name:   "FIRST_SCAN",
