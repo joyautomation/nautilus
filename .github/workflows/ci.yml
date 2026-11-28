@@ -361,11 +361,23 @@ jobs:
       - name: naut test -json (runtime evidence)
         if: env.FULL == 'true'
         run: |
+          # A failing test is reported as evidence, not here (the suites run
+          # in their own steps). A project that does not compile gives no
+          # events at all: that is an error, or its claims would just read
+          # "missing" (#1461: the division conformance project).
+          broken=0
           while IFS= read -r -d '' m; do
             root=$(dirname "$m")
             ls "$root"/*_test.yaml >/dev/null 2>&1 || continue
-            "$RUNNER_TEMP/naut" test -json "$root" | jq -c --arg root "$root" '. + {root: $root}' >> evidence/naut-tests.ndjson || true
+            "$RUNNER_TEMP/naut" test -json "$root" > "$RUNNER_TEMP/naut-events.json" 2> "$RUNNER_TEMP/naut-stderr.txt" || true
+            if [ ! -s "$RUNNER_TEMP/naut-events.json" ]; then
+              echo "::error::naut test produced no results for $root: $(head -c 300 "$RUNNER_TEMP/naut-stderr.txt")"
+              broken=1
+              continue
+            fi
+            jq -c --arg root "$root" '. + {root: $root}' < "$RUNNER_TEMP/naut-events.json" >> evidence/naut-tests.ndjson
           done < <(find examples testdata/projects logix/writer/testdata/conformance -name nautilus.yaml -print0 | sort -z)
+          exit $broken
       - name: Keep the results as runtime evidence
         if: env.FULL == 'true'
         uses: actions/upload-artifact@v4
