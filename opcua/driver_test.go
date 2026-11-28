@@ -85,6 +85,7 @@ func startServerHooked(t *testing.T, port int, nsURI string, speed float64, befo
 	add("Run", true, id.Boolean, rd)
 	add("Name", "pump-1", id.String, rd)
 	add("Setpoint", 0.0, id.Double, rw)
+	add("Start", false, id.Boolean, rw) // an event command's node (event_outage_test.go)
 	if before != nil {
 		before(srv)
 	}

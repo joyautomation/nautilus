@@ -200,6 +200,19 @@ otherwise never be written again. It goes through the write gate, so on a
 pair only the leader sends it. `reassert-on-reconnect: false` turns it
 off, for a server where a repeated write has a side effect.
 
+An **event** command is the exception to both: a BOOL struct-wiring member
+with `event: true` (a reset, a start pulse) is never commanded again on a
+reconnect, and one raised while the session is down is dropped when a
+session is established, never sent late, so a Start pressed while the server could
+not be reached does not fire minutes later. The drop is logged once per
+command per outage, naming it, and counted as `droppedEvents` in the
+driver's status (the metric "late commands dropped"). Press it again once
+the server answers. A release (FALSE) raised while the session is down
+still goes out when it is established, so a node that took the press
+before the session broke is released. A press within one scan of a
+reconnect or of the write gate reopening is taken as the baseline and not
+sent: press again.
+
 ## Security
 
 `security:` names the policy, `security-mode:` the mode. Leave both out and

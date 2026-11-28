@@ -66,6 +66,17 @@ type TagBinding struct {
 	// here so `naut opcua tags` can re-derive the tag file, descriptions
 	// included, without a server.
 	Desc string
+	// Event marks a command that is a trigger, not a level. Struct wiring
+	// sets it for an `event: true` member (#1458); it has no manifest key,
+	// because the runtime's event rules (a baseline after a start, a gate
+	// reopen, a re-established session or a takeover) are what keep a
+	// trigger from going out twice on the driver's other paths. The
+	// driver's part: one raised while the session is down is dropped when
+	// the session is re-established, never sent late, and the drop is
+	// logged and counted (Health.DroppedEvents). It is a Boolean: FALSE is
+	// the trigger's release and still goes out, so the node is never left
+	// asserted. A level command queued meanwhile goes out, as ever.
+	Event bool `yaml:"-"`
 }
 
 // ── scan classes ─────────────────────────────────────────────────────────
@@ -150,6 +161,12 @@ func (m Manifest) Validate() error {
 			errs = append(errs, fmt.Errorf("tag %s: missing type (one of %s)", t.Name, strings.Join(TypeNames, " ")))
 		} else if !typeByName[t.Type] {
 			errs = append(errs, fmt.Errorf("tag %s: unknown type %q%s", t.Name, t.Type, didYouMean(t.Type, TypeNames)))
+		}
+		if t.Event && t.Type != "Boolean" {
+			errs = append(errs, fmt.Errorf("tag %s: event on a %s binding: an event command is a Boolean, whose release FALSE is safe to send late", t.Name, t.Type))
+		}
+		if t.Event && !t.Writable {
+			errs = append(errs, fmt.Errorf("tag %s: event without writable (event marks a command that is a trigger)", t.Name))
 		}
 	}
 	if len(errs) == 0 {

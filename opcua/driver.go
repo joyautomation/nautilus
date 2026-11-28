@@ -180,6 +180,9 @@ type Driver struct {
 	readMode  string
 	// reassert: a session after the first re-sends every output (#1061).
 	reassert bool
+	// droppedEvents counts the event commands dropped at a reconnect
+	// (TagBinding.Event). Under mu.
+	droppedEvents uint64
 	// refreshFloor is refreshEvery's floor (defaultRefreshFloor; tests
 	// lower it).
 	refreshFloor time.Duration
@@ -858,11 +861,25 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	if !d.gateOpen() {
 		return nil
 	}
+	// The driver has asked for every output (the gate reopened, a session
+	// was re-established, a write was lost) and the runtime has not taken
+	// the ask yet: this push was built before it, so its event leaves are
+	// not rebased. An event command asserting in it (TRUE) is recorded,
+	// never sent: the first value after a reopen or a reconnect is a
+	// baseline (design §2.3), and the runtime's rebase on the ask agrees
+	// with it. A release (FALSE) goes out as any command: dropping it would
+	// leave the node asserted.
+	asked := d.wanted.Load()
 	kicked := false
 	d.mu.Lock()
 	for name, v := range vals {
 		b, ok := d.byName[name]
 		if !ok || !b.Writable {
+			continue
+		}
+		if asked && b.Event && !atRest(v) {
+			d.written[name] = v
+			delete(d.undecided, name)
 			continue
 		}
 		if _, waiting := d.undecided[name]; waiting {
@@ -1178,9 +1195,31 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 			remapped++
 		}
 	}
+	// An event command still queued (or waiting to be decided) here was
+	// raised before this session existed (while there was none, or its
+	// write did not complete before the last one broke): it is a trigger,
+	// and one sent now would fire late, so it is dropped, said and counted,
+	// before the session can flush it. A queued FALSE is the
+	// trigger's release and stays queued: dropping it would leave the
+	// server's node asserted. A level command stays queued.
+	var dropped []string
+	for _, queue := range []map[string]any{d.pending, d.undecided} {
+		for name, v := range queue {
+			if b := d.byName[name]; b != nil && b.Event && !atRest(v) {
+				delete(queue, name)
+				d.droppedEvents++
+				dropped = append(dropped, name)
+			}
+		}
+	}
 	d.server = info
 	d.online, d.answered, d.primed = true, false, false
 	d.mu.Unlock()
+	sort.Strings(dropped)
+	for _, name := range dropped {
+		d.log.Warn("opcua-client: event command dropped as the session was established: it was raised before the session (while the server could not be reached, or its write did not complete), and a trigger is never sent late",
+			"driver", d.name, "tag", name)
+	}
 	d.setState("connected", nil)
 	if d.connected.Add(1) > 1 && d.reassert {
 		// The server may have restarted with its state reset: forget what
@@ -1188,8 +1227,18 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 		// gate that is closed drops that push (WriteOutputs), as ever.
 		// Commands queued during the outage stay queued: they flush now,
 		// and the push replaces them with the program's current value.
+		// An event command's written value stays: a trigger is never
+		// re-commanded, and a push that hands the held value again (one
+		// built before the runtime takes the ask below, or one the runtime
+		// re-hands because a sibling driver's error kept it from counting
+		// the last push as handed) must find it no change. Its next change
+		// still differs and goes out.
 		d.mu.Lock()
-		clear(d.written)
+		for name := range d.written {
+			if b := d.byName[name]; b == nil || !b.Event {
+				delete(d.written, name)
+			}
+		}
 		d.mu.Unlock()
 		d.wanted.Store(true)
 		d.log.Info("opcua-client: session re-established; every output goes out with the next push", "driver", d.name)
@@ -1656,3 +1705,11 @@ var (
 	_ nio.QualityReporter  = (*Driver)(nil)
 	_ nio.OutputsRequester = (*Driver)(nil)
 )
+
+// atRest says whether an event command's value is its rest, FALSE (as the
+// value would be written: toBool): its release, which is safe to send late.
+// An event command is a Boolean (Validate), so nothing else is at rest.
+func atRest(v any) bool {
+	b, err := toBool(v)
+	return err == nil && !b
+}

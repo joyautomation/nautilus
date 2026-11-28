@@ -1,0 +1,328 @@
+package opcua
+
+import (
+	"bytes"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	nio "github.com/joyautomation/nautilus/io"
+	"gopkg.in/yaml.v3"
+)
+
+// syncLog is a log sink the driver's goroutines may write while the test
+// reads it.
+type syncLog struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncLog) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncLog) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// eventManifest is manifest(2) with Start, a writable Boolean node, as an
+// event command (event true) or a level one.
+func eventManifest(event bool) Manifest {
+	m := manifest(2)
+	m.Tags = append(m.Tags, TagBinding{Name: "Start", NodeID: "ns=2;s=Start", Namespace: "urn:nautilus:test", Type: "Boolean", Writable: true, Event: event})
+	return m
+}
+
+// An event command (TagBinding.Event: a struct-wiring `event: true`
+// member, #1458) raised while the session is down is dropped when the
+// session is re-established, never sent late: a Start pressed while the
+// server was unreachable must not fire on the reconnect. The drop is logged
+// once, naming the binding, and counted in Health. A level command queued
+// the same way (Setpoint, the control) still goes out on the reconnect.
+func TestEventCommandQueuedOfflineIsDroppedAtReconnect(t *testing.T) {
+	port := freePort(t)
+	ts := startServer(t, port)
+	logs := &syncLog{}
+	d := startDriver(t, ts.url, eventManifest(true), WithLogger(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))))
+	waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 0.0}) // baseline
+	waitFor(t, "nothing queued", func() bool { return d.Health().QueuedWrites == 0 })
+
+	_ = ts.srv.Close()
+	waitFor(t, "offline", func() bool { return read(t, d)["plant__Online"] == false })
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 5.0}) // raised during the outage
+	waitFor(t, "both queued", func() bool { return d.Health().QueuedWrites == 2 })
+
+	ts2 := startServer(t, port) // fresh state: Start FALSE, Setpoint 0
+	waitFor(t, "reconnect", func() bool { return read(t, d)["plant__Online"] == true })
+	waitFor(t, "the level command queued during the outage goes out", func() bool { return ts2.get(t, "Setpoint") == 5.0 })
+	time.Sleep(300 * time.Millisecond) // several flush rounds
+	if ts2.get(t, "Start") == true {
+		t.Fatal("the event command raised during the outage went out late on the reconnect")
+	}
+	if got := d.Health().DroppedEvents; got != 1 {
+		t.Errorf("DroppedEvents = %d, want 1", got)
+	}
+	if q := d.Health().QueuedWrites; q != 0 {
+		t.Errorf("QueuedWrites = %d after the reconnect, want 0", q)
+	}
+	if n := strings.Count(logs.String(), "event command dropped"); n != 1 {
+		t.Errorf("logged the drop %d times, want once:\n%s", n, logs.String())
+	}
+	if !strings.Contains(logs.String(), "tag=Start") {
+		t.Errorf("the drop's log line does not name the binding:\n%s", logs.String())
+	}
+
+	// The binding's next change goes out as usual, once the runtime has
+	// taken the driver's ask (its scan reads OutputsWanted before a push).
+	d.OutputsWanted()
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 5.0})
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 5.0})
+	waitFor(t, "the next change of the event command", func() bool { return ts2.get(t, "Start") == true })
+}
+
+// A held event command is not re-sent on a re-established session even by a
+// push the runtime built before it saw the driver ask for its outputs: the
+// session's reassert forgets what was written for level commands only, so
+// the held TRUE is still no change. (The runtime rebases an event leaf when
+// it sees the ask; this is the push already on its way.)
+func TestEventHeldTrueNotResentOnReconnectByAnEarlyPush(t *testing.T) {
+	port := freePort(t)
+	ts := startServer(t, port)
+	d := startDriver(t, ts.url, eventManifest(true))
+	waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 0.0}) // baseline
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 0.0})
+	waitFor(t, "the press", func() bool { return ts.get(t, "Start") == true })
+
+	_ = ts.srv.Close()
+	waitFor(t, "offline", func() bool { return read(t, d)["plant__Online"] == false })
+	ts2 := startServer(t, port) // fresh state: Start FALSE
+	waitFor(t, "reconnect", func() bool { return read(t, d)["plant__Online"] == true })
+	// The push already on its way: the program still holds Start TRUE, and
+	// another output (Setpoint) moved, so the whole map goes out.
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 1.0})
+	waitFor(t, "the level command goes out", func() bool { return ts2.get(t, "Setpoint") == 1.0 })
+	time.Sleep(200 * time.Millisecond)
+	if ts2.get(t, "Start") == true {
+		t.Fatal("the held event command was re-sent on the re-established session")
+	}
+}
+
+// A held event command is not re-sent by the push that finds the write gate
+// reopened either: the driver forgot what it wrote and asked for every
+// output, and a push built before the runtime took that ask carries the
+// held TRUE, which is recorded, not sent. A level command in the same push
+// goes out (it is re-asserted, as ever).
+func TestEventHeldTrueNotResentOnGateReopenByAnEarlyPush(t *testing.T) {
+	ts := startServer(t, freePort(t))
+	d := startDriver(t, ts.url, eventManifest(true))
+	var open atomic.Bool
+	open.Store(true)
+	d.SetWriteGate(open.Load)
+	waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 0.0}) // baseline
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 0.0})
+	waitFor(t, "the press", func() bool { return ts.get(t, "Start") == true })
+	waitFor(t, "nothing queued", func() bool { return d.Health().QueuedWrites == 0 })
+	ts.set(t, "Start", false) // the device finished its start and reset the node
+
+	open.Store(false)
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 0.0}) // finds it shut
+	open.Store(true)
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 2.0}) // finds it reopened
+	waitFor(t, "the level command goes out", func() bool { return ts.get(t, "Setpoint") == 2.0 })
+	time.Sleep(200 * time.Millisecond)
+	if ts.get(t, "Start") == true {
+		t.Fatal("the held event command was re-sent by the push that found the gate reopened")
+	}
+	if !d.OutputsWanted() {
+		t.Error("the driver no longer asks for its outputs after the reopen")
+	}
+	// After the runtime's rebase, the next change goes out.
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 2.0})
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 2.0})
+	waitFor(t, "the next press", func() bool { return ts.get(t, "Start") == true })
+}
+
+// A held event command the runtime hands again after a reconnect, having
+// already taken the driver's ask (it re-hands a leaf it did not count as
+// handed, when a sibling driver's error failed the last push), is not sent:
+// the reconnect forgets what was written for level commands only. Its next
+// change goes out.
+func TestEventHeldTrueReHandedAfterTheAskIsNotSent(t *testing.T) {
+	port := freePort(t)
+	ts := startServer(t, port)
+	d := startDriver(t, ts.url, eventManifest(true))
+	waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 0.0}) // baseline
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 0.0})
+	waitFor(t, "the press", func() bool { return ts.get(t, "Start") == true })
+
+	_ = ts.srv.Close()
+	waitFor(t, "offline", func() bool { return read(t, d)["plant__Online"] == false })
+	ts2 := startServer(t, port) // fresh state: Start FALSE
+	waitFor(t, "reconnect", func() bool { return read(t, d)["plant__Online"] == true })
+	waitFor(t, "the driver asks for its outputs", d.OutputsWanted) // the runtime takes the ask
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 1.0})
+	waitFor(t, "the level command goes out", func() bool { return ts2.get(t, "Setpoint") == 1.0 })
+	time.Sleep(200 * time.Millisecond)
+	if ts2.get(t, "Start") == true {
+		t.Fatal("the held event command, handed again after the reconnect, was sent")
+	}
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 1.0})
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 1.0})
+	waitFor(t, "the next press", func() bool { return ts2.get(t, "Start") == true })
+}
+
+// An event command waiting to be decided (handed in the start-up baseline
+// push before any session) is swept too when the first session is
+// established: it was raised before the session and is never sent late.
+// (The runtime never hands an event leaf in the baseline push; this is the
+// driver's own cover.)
+func TestEventUndecidedBeforeTheFirstSessionIsDropped(t *testing.T) {
+	port := freePort(t)
+	d := startDriver(t, fmt.Sprintf("opc.tcp://127.0.0.1:%d", port), eventManifest(true))
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 0.0}) // baseline, no server yet
+	ts := startServer(t, port)
+	waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+	d.OutputsWanted() // the runtime takes any ask
+	time.Sleep(300 * time.Millisecond)
+	if ts.get(t, "Start") == true {
+		t.Fatal("an event command from before the first session was sent once it connected")
+	}
+	if got := d.Health().DroppedEvents; got != 1 {
+		t.Errorf("DroppedEvents = %d, want 1", got)
+	}
+}
+
+// atRest reads a value as it would be written: a release handed as 0 is
+// FALSE, not an asserting value to drop.
+func TestEventAtRest(t *testing.T) {
+	for v, want := range map[any]bool{false: true, true: false, int64(0): true, int64(1): false, 0: true, 0.0: true, 1.0: false, "x": false} {
+		if got := atRest(v); got != want {
+			t.Errorf("atRest(%#v) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+// A release (FALSE) in the push that finds the gate reopened goes out: only
+// an asserting value is recorded while the ask is untaken, so a node that
+// took the press is never left asserted.
+func TestEventReleaseOnGateReopenGoesOut(t *testing.T) {
+	ts := startServer(t, freePort(t))
+	d := startDriver(t, ts.url, eventManifest(true))
+	var open atomic.Bool
+	open.Store(true)
+	d.SetWriteGate(open.Load)
+	waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 0.0}) // baseline
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 0.0})
+	waitFor(t, "the press", func() bool { return ts.get(t, "Start") == true })
+	waitFor(t, "nothing queued", func() bool { return d.Health().QueuedWrites == 0 })
+
+	open.Store(false)
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 0.0}) // finds it shut
+	open.Store(true)
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 0.0}) // finds it reopened, and releases
+	waitFor(t, "the release goes out", func() bool { return ts.get(t, "Start") == false })
+}
+
+// Validate refuses event without writable, and event on anything but a
+// Boolean: a trigger's release is FALSE, the one value always safe to send
+// late.
+func TestEventValidate(t *testing.T) {
+	m := manifest(2)
+	m.Tags[2].Event = true // Run, a read-only Boolean
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "event without writable") {
+		t.Errorf("Validate = %v, want event without writable", err)
+	}
+	m = manifest(2)
+	m.Tags[4].Event = true // Setpoint, a writable Double
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "event on a Double binding") {
+		t.Errorf("Validate = %v, want event on a Double binding", err)
+	}
+	if err := eventManifest(true).Validate(); err != nil {
+		t.Errorf("a writable Boolean event command: %v", err)
+	}
+}
+
+// event is no manifest key: struct wiring sets it, and the runtime's event
+// rules in front of the driver are what close its other late paths. A
+// hand-written manifest naming it is refused, not half-protected, and a
+// generated manifest never writes it.
+func TestEventIsNoManifestKey(t *testing.T) {
+	_, err := ParseManifest([]byte("namespaces: [\"http://opcfoundation.org/UA/\"]\ntags:\n  - {name: S, nodeid: \"ns=0;i=1\", type: Boolean, writable: true, event: true}\n"))
+	if err == nil || !strings.Contains(err.Error(), "event") {
+		t.Fatalf("ParseManifest = %v, want the event key refused", err)
+	}
+	raw, err := yaml.Marshal(eventManifest(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "event") {
+		t.Errorf("a manifest wrote the event key:\n%s", raw)
+	}
+}
+
+// The release of a trigger is not dropped. An event command that went out
+// (TRUE) and was then released (FALSE) while the server could not be
+// reached sends the release on the reconnect: dropping it would leave the
+// node asserted. And a press and its release both raised during one outage
+// send no late press: the queue holds the latest value, the release, and it
+// is the one write that goes out. (The restarted server starts FALSE, so the
+// write counter, not the node, shows what went out.)
+func TestEventReleaseQueuedOfflineStillGoesOut(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		outage []bool
+	}{
+		{"release", []bool{false}},
+		{"press and release", []bool{true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			port := freePort(t)
+			ts := startServer(t, port)
+			d := startDriver(t, ts.url, eventManifest(true))
+			waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+			_ = d.WriteOutputs(nio.Values{"Start": false}) // baseline
+			_ = d.WriteOutputs(nio.Values{"Start": true})
+			waitFor(t, "the press", func() bool { return ts.get(t, "Start") == true })
+			if tc.name == "press and release" {
+				_ = d.WriteOutputs(nio.Values{"Start": false})
+				waitFor(t, "the release", func() bool { return ts.get(t, "Start") == false })
+			}
+
+			_ = ts.srv.Close()
+			waitFor(t, "offline", func() bool { return read(t, d)["plant__Online"] == false })
+			for _, v := range tc.outage {
+				_ = d.WriteOutputs(nio.Values{"Start": v})
+			}
+			waitFor(t, "queued", func() bool { return d.Health().QueuedWrites == 1 })
+			before := d.Health().Writes
+
+			ts2 := startServer(t, port)
+			waitFor(t, "reconnect", func() bool { return read(t, d)["plant__Online"] == true })
+			waitFor(t, "the release goes out", func() bool { return d.Health().Writes == before+1 && d.Health().QueuedWrites == 0 })
+			time.Sleep(200 * time.Millisecond)
+			if got := d.Health().Writes; got != before+1 {
+				t.Errorf("%d writes after the reconnect, want exactly the release", got-before)
+			}
+			if ts2.get(t, "Start") != false {
+				t.Errorf("Start %v after the reconnect, want FALSE (at rest)", ts2.get(t, "Start"))
+			}
+			if got := d.Health().DroppedEvents; got != 0 {
+				t.Errorf("DroppedEvents = %d, want 0: a release is never dropped", got)
+			}
+		})
+	}
+}

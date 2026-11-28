@@ -587,6 +587,12 @@ func opcuaClientStatus(h opcua.Health) server.DriverStatus {
 	if h.QueuedWrites > 0 {
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "queued writes", Value: float64(h.QueuedWrites)})
 	}
+	if h.DroppedEvents > 0 {
+		// Event commands written while the server was unreachable and
+		// dropped at the reconnect rather than sent late (opcua
+		// TagBinding.Event). It moves only on a reconnect: no free-runner.
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "late commands dropped", Value: float64(h.DroppedEvents)})
+	}
 	s.Devices = []server.DriverDevice{{ID: h.Name, Online: h.State == "connected", Detail: opcuaClientDetail(h)}}
 	s.Extra = map[string]any{"policy": h.Policy, "mode": h.Mode, "maxNodes": h.MaxNodes, "retries": h.Retries, "readMode": h.ReadMode}
 	if len(h.RevisedMs) > 0 {
