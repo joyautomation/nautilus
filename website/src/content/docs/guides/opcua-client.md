@@ -202,14 +202,14 @@ off, for a server where a repeated write has a side effect.
 
 An **event** command is the exception to both: a BOOL struct-wiring member
 with `event: true` (a reset, a start pulse) is never commanded again on a
-reconnect, and one raised while the session is down is dropped when it is
-re-established, never sent late, so a Start pressed while the server could
+reconnect, and one raised while the session is down is dropped when a
+session is established, never sent late, so a Start pressed while the server could
 not be reached does not fire minutes later. The drop is logged once per
 command per outage, naming it, and counted as `droppedEvents` in the
 driver's status (the metric "late commands dropped"). Press it again once
-the server answers. Its release (FALSE) still goes out on the
-reconnect, so a node that took the press before the session broke is never
-left asserted.
+the server answers. A release (FALSE) raised while the session is down
+still goes out when it is established, so a node that took the press
+before the session broke is released.
 
 ## Security
 
