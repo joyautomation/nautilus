@@ -193,7 +193,6 @@ func TestWiredLoadRefusals(t *testing.T) {
 ` + members + inst
 	}
 	for name, tc := range map[string]struct{ manifest, want string }{
-		"expr": {wire("      Running: { expr: \"TRUE\" }\n"), `member "Running": expr: checks clean, but this build does not evaluate expressions yet: they run from slice 8b of struct wiring (#1458)`},
 		"opcua source": {base + `wirings:
   - type: Pump
     sources: { ua: { driver: opcua-client } }

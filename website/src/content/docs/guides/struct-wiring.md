@@ -136,6 +136,50 @@ type has a `from:` member: assign the writable members one at a time.
 Ladder and function-block-diagram programs get the same check, on the rung or
 block that writes.
 
+## Expression members
+
+An `expr:` member is one ST expression, computed every scan of the main
+task:
+
+```yaml
+members:
+  Healthy: { expr: "Running AND NOT Fault" }
+  FlowM3h: { expr: "FlowFromDp(DiffPress, {k})" }   # a FUNCTION of the project, a param
+```
+
+- A bare name is a member of the same instance first, then a project tag.
+  `naut check` warns when a member hides a tag of the same name.
+- It may call the standard functions and the project's own `FUNCTION`s, as
+  long as they only compute: no `VAR_EXTERNAL`, no `VAR_IN_OUT`, no
+  function block, no loop, no system function. `naut check` and the editor
+  name the function, its line and the rule.
+- **When:** after the inputs are read and before the main task's program,
+  in dependency order (an expression reading another reads this scan's
+  value). The other tasks read what the last main scan computed. A standby
+  does not compute: the new leader does on its first scan, and a takeover's
+  image never carries an expression's value.
+- **Until what it reads has arrived** it is not computed: a BOOL is FALSE,
+  and its quality is `notConnected`. Then its quality is the worst of what it
+  reads. In `naut test` without virtual devices the test is the device: an
+  instance's device members count as arrived from the first scan, holding
+  what `given:` sets (their zero until then).
+- **A fault** (an index out of range, a division by zero, a REAL result
+  that is not a number or infinite) keeps its last
+  value with quality `bad`. The log says when the fault starts and when it
+  clears, the scan diagnostics (`scan.exprs.faulting` in `/api/state`) list
+  the members faulting now,
+  and the programs keep running.
+- **A force** on an expression, or on a part of one of a struct type, holds
+  it: the expression is not computed, and everything that reads it sees
+  the force, so an alarm can be tried. When the force goes, so does the
+  value it left: until its inputs arrive the expression is FALSE again.
+- **An online edit** that changes a `FUNCTION` an expression calls compiles
+  the expressions with it, and is refused whole if one no longer compiles,
+  naming the member.
+
+An expression never writes, and nothing writes it: an API, OPC UA or
+Sparkplug write to it is refused, as for a `from:` member.
+
 ## Params and overrides
 
 `{param}` substitutes into a source's keys and a member's address keys. A
@@ -175,7 +219,6 @@ of a multi-driver set do not claim is logged once, naming its key.
 |---|---|
 | `memory:` retained across a restart (accepted, but `naut check` warns: it starts from its initial value) | slice 6 |
 | `set:` on an instance | slice 6 |
-| `expr:` members | slice 8 |
 | an instance on more than one connection, OPC UA sources, wiring `alarms:`, instance `alarms:` and `offline-alarm:` | slice 9 |
 | `fill:` and `both:` (EtherNet/IP) | slice 12 |
 | the Sparkplug host | slice 14 |

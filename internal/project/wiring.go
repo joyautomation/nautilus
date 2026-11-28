@@ -82,14 +82,13 @@ func composeWiring(fsys fs.FS, m *Manifest, manifestName string, raw []byte) err
 		return err
 	}
 	m.Tags = append(m.Tags, tags...)
-	// expr: members (slice 8a): checked in the project's scope, then
-	// refused while this build does not evaluate them (slice 8b).
-	if problems := checkExprs(fsys, m, set, types); len(problems) > 0 {
+	// expr: members: checked in the project's scope (§6); the runtime
+	// evaluates them each main scan (runtime/exprstage.go).
+	shadows, problems := checkExprs(fsys, m, set, types)
+	if len(problems) > 0 {
 		return wiring.Err(sortedFindings(problems))
 	}
-	if err := wiring.Err(exprFence(set)); err != nil {
-		return err
-	}
+	m.exprShadows = shadows
 	// A member's unit: and desc: are its tag meta, under its path, as a
 	// tag-meta: entry on a UDT member is; the project's own tag-meta: wins.
 	for _, in := range set.Instances {
@@ -245,7 +244,7 @@ func wiredTags(set *wirebind.Set, m *Manifest) ([]TagConfig, error) {
 	for _, in := range set.Instances {
 		def := runtime.InstanceDef{Members: map[string]runtime.MemberDef{}}
 		for _, mem := range in.Members {
-			def.Members[mem.Path] = runtime.MemberDef{Kind: memberKind(mem.Kind), Readback: mem.Readback, Event: mem.Event}
+			def.Members[mem.Path] = runtime.MemberDef{Kind: memberKind(mem.Kind), Readback: mem.Readback, Event: mem.Event, Expr: mem.Expr}
 		}
 		out = append(out, TagConfig{Name: in.Name, Role: "state", Type: in.Type, Desc: in.Desc, instance: &def})
 		for _, c := range in.Conns {

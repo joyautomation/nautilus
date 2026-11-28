@@ -254,5 +254,10 @@ func (p *Program) layoutOf(src string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// The edit's expressions must compile too, or the swap after the
+	// image's values are in would fail.
+	if _, err := p.compileExprs(src, opts); err != nil {
+		return "", err
+	}
 	return prog.Layout(), nil
 }

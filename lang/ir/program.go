@@ -141,6 +141,9 @@ type Frame struct {
 	// inout is the record of what this frame's body assigns into its
 	// VAR_IN_OUT slots, while a call steps it (inout.go); nil otherwise.
 	inout *inOutRec
+	// idxErr is the last index-out-of-bounds error a read in this frame
+	// returned (indexerr.go).
+	idxErr *IndexError
 }
 
 // NewFuncFrame allocates a fresh per-call frame for a user FUNCTION,

@@ -450,6 +450,10 @@ type Runtime struct {
 
 	// live is what Liveness reads: Run's loops' scan edges and lifecycle.
 	live liveness
+
+	// exprEvents is the expression stage's scratch for the fault
+	// transitions of one main scan (exprstage.go), under mainMu.
+	exprEvents []exprEvent
 }
 
 // onScanEntry is one registered OnScan observer, identified by an id so
@@ -536,6 +540,10 @@ type ScanStats struct {
 
 	// Additional tasks' health (empty when the resource runs one program).
 	Tasks []TaskStats `json:"tasks,omitempty"`
+
+	// Exprs is the main task's expression stage (struct wiring's expr:
+	// members), nil when it has none.
+	Exprs *ExprStats `json:"exprs,omitempty"`
 }
 
 // New compiles the programs and prepares the runtime.
@@ -675,6 +683,20 @@ func New(o Options) (*Runtime, error) {
 	}
 	if err := tags.instanceKeysClaimed(o.Driver); err != nil {
 		return nil, err
+	}
+	// The expr: members (exprstage.go): the main task evaluates them, from
+	// its own source, so every install of it compiles them too.
+	ex, err := newExprSet(tags, o.Tags)
+	if err != nil {
+		return nil, err
+	}
+	if ex != nil {
+		prog.ex, prog.store = ex, tags
+		stage, err := prog.compileExprs(prog.source, prog.opts)
+		if err != nil {
+			return nil, err
+		}
+		ex.stage = stage
 	}
 	// Set before any scan or goroutine can observe it, so the store's NowMs
 	// and the scan's dt always read the same clock.
@@ -1612,6 +1634,10 @@ func (r *Runtime) scanAt(due time.Time) {
 	r.expireSubstitutes()
 	t1 := time.Now()
 
+	// The expr: members, before the program reads them (exprstage.go):
+	// part of the logic's time.
+	r.runExprs(t1)
+
 	// 2. execute one scan
 	logicErr := r.prog.Run(r.tags)
 	r.pulseSeen()
@@ -1815,6 +1841,9 @@ func (r *Runtime) Stats() ScanStats {
 		ts.Lateness = tr.late.snapshot()
 		s.Tasks = append(s.Tasks, ts)
 		tr.mu.Unlock()
+	}
+	if ex := r.prog.ex; ex != nil {
+		s.Exprs = ex.stats()
 	}
 	return s
 }

@@ -581,7 +581,7 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 			return Value{}, err
 		}
 		if iv.I < 0 || int(iv.I) >= len(arr.Arr) {
-			return Value{}, fmt.Errorf("index %d out of bounds [0..%d]", iv.I, len(arr.Arr)-1)
+			return Value{}, ctx.Frame.indexErr(iv.I, len(arr.Arr)-1)
 		}
 		return arr.Arr[iv.I], nil
 	case *BitRef:

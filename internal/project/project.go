@@ -123,10 +123,13 @@ type Manifest struct {
 	devices *devbind.Set `yaml:"-"`
 	// wired is the struct wiring resolved (composeWiring); nil when the
 	// manifest has none.
-	wired     *wirebind.Set    `yaml:"-"`
-	plant     *plant.Plant     `yaml:"-"`
-	Sparkplug *SparkplugConfig `yaml:"sparkplug"`
-	OPCUA     *OPCUAConfig     `yaml:"opcua"`
+	wired *wirebind.Set `yaml:"-"`
+	// exprShadows are the expr: members that read a sibling where a
+	// project tag of the same name exists (composeWiring): warnings.
+	exprShadows []string         `yaml:"-"`
+	plant       *plant.Plant     `yaml:"-"`
+	Sparkplug   *SparkplugConfig `yaml:"sparkplug"`
+	OPCUA       *OPCUAConfig     `yaml:"opcua"`
 	// Channels are the communication channels the programs' READ and
 	// WRITE blocks name by ID (IEC 61131-5): one peer each, reached by one
 	// protocol. A driver moves the same tags every scan; a channel moves
@@ -1317,6 +1320,8 @@ type Project struct {
 	drivers   []nio.NamedDriver // the configured drivers, named; nil for the implicit memory loopback
 	devices   *devbind.Set      // devices: resolved; nil when none
 	wired     *wirebind.Set     // struct wiring resolved; nil when none
+	// exprShadows: an expr: member's sibling hides a project tag (warnings).
+	exprShadows []string
 	// Plant is the plant model (plant:), nil when the manifest has none.
 	Plant *plant.Plant
 
@@ -1457,6 +1462,11 @@ func (p *Project) Devices() *devbind.Set { return p.devices }
 // Wired is the project's struct wiring resolved: its instances; nil when it
 // has none.
 func (p *Project) Wired() *wirebind.Set { return p.wired }
+
+// ExprShadows are the warnings for expr: members whose bare name reads a
+// sibling member where a project tag of the same name exists: the sibling
+// wins (one-struct-model §6), as a local does over a tag.
+func (p *Project) ExprShadows() []string { return p.exprShadows }
 
 func (p *Project) RetainNames() (configMap, file string) {
 	configMap, file = p.Name+"-retain", "retain.json"
@@ -2122,6 +2132,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		drivers:         drivers,
 		devices:         m.devices,
 		wired:           m.wired,
+		exprShadows:     m.exprShadows,
 		Plant:           m.plant,
 		OPCUA:           m.OPCUA,
 		Retain:          m.Retain,
