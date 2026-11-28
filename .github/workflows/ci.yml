@@ -718,8 +718,23 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
-      - run: npm ci && npm test
+      - run: npm ci
         working-directory: hmi
+      # The output is kept as runtime evidence: claims cite kit tests as
+      # `npm hmi <describe> / <it>` (docs/claims/README.md).
+      - name: npm test
+        shell: bash
+        run: |
+          mkdir -p ../evidence
+          npm test | tee ../evidence/npm-hmi.txt
+        working-directory: hmi
+      - name: Keep the results as runtime evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-hmi
+          path: evidence/
+          retention-days: 14
   hmi-3d:
     name: HMI 3D package — test, check, package; build the examples
     runs-on: ubuntu-latest
@@ -1356,7 +1371,7 @@ jobs:
     # problem opens or updates the rolling "claims out of date" issue,
     # which a clean run closes.
     name: Runtime evidence — claims × test results
-    needs: [changes, go, examples, go-crossbuild, go-naut-rig, sparkplug-tck, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
+    needs: [changes, go, examples, hmi-kit, go-crossbuild, go-naut-rig, sparkplug-tck, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
     if: needs.changes.outputs.full != 'false'
     runs-on: ubuntu-latest
     continue-on-error: true

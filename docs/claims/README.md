@@ -80,6 +80,12 @@ claims:
     blackbox-release.yml (nightly on main and on each CLI release), not in
     the build: its verdict is that workflow's last run on main, with its
     date, and before one it reads `release-only`, which is not a problem.
+  - `npm <package dir> <describe> / <it>` — a test of the HMI kit's own
+    harness (`hmi/tests/*.test.ts`, run by `npm test` in the hmi-kit CI job,
+    whose output is kept as evidence). Write the describe and the it exactly
+    as their string literals read, joined by ` / `: `npm hmi DraftKeeper:
+    one person's unsent text is theirs / keeps a draft per principal and per
+    target`.
   - `naut <project root> <test name>` — a test in a project's
     `*_test.yaml`, which CI runs with `naut test -json` on nautilus: every
     project under `examples/`, `testdata/projects/` and

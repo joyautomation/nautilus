@@ -328,3 +328,51 @@ func TestSummarizeReleaseAge(t *testing.T) {
 		t.Errorf("stale release evidence not flagged:\n%s", stale)
 	}
 }
+
+// An npm reference (the kit's own harness) is checked against the test
+// sources and resolved against the text `npm test` prints.
+func TestNpmRefs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(root+"/hmi/tests", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := "describe('DraftKeeper: one person\\'s text', () => {\n  it('keeps a draft per target', () => {});\n});\n"
+	if err := os.WriteFile(root+"/hmi/tests/notes.test.ts", []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	good := "npm hmi DraftKeeper: one person's text / keeps a draft per target"
+	for ref, wantErr := range map[string]bool{
+		good: false,
+		"npm hmi DraftKeeper: one person's text / keeps a draft per person": true, // no such it
+		"npm hmi no such describe / keeps a draft per target":               true,
+		"npm hmi keeps a draft per target":                                  true, // no " / "
+	} {
+		r, err := parseRef(ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &checker{root: root, funcs: map[string]map[string]bool{}, suite: map[string]map[string]bool{}}
+		c.checkRef("t", r)
+		if got := len(c.errs) > 0; got != wantErr {
+			t.Errorf("%q: errors %v, want error=%v", ref, c.errs, wantErr)
+		}
+	}
+
+	res := newResults()
+	out := "\n> pkg@1 test\n> esbuild ...\n\nDraftKeeper: one person's text\n  ok   keeps a draft per target\n  FAIL drops a draft\n       boom\n"
+	if err := res.readNpmText("hmi", strings.NewReader(out)); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := parseRef(good)
+	if got := res.lookup(r).Status; got != "pass" {
+		t.Errorf("passing test = %q", got)
+	}
+	r, _ = parseRef("npm hmi DraftKeeper: one person's text / drops a draft")
+	if got := res.lookup(r).Status; got != "fail" {
+		t.Errorf("failing test = %q", got)
+	}
+	r, _ = parseRef("npm hmi DraftKeeper: one person's text / never ran")
+	if got := res.lookup(r).Status; got != "missing" {
+		t.Errorf("unreported test = %q", got)
+	}
+}
