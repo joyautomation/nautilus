@@ -1,3 +1,5 @@
+//go:build !js
+
 package oplog
 
 import (
@@ -545,14 +547,23 @@ func TestACompactionThatDoesNotFitDiverges(t *testing.T) {
 	if st.Diverged == "" || !st.Unsynced {
 		t.Fatalf("B, its log not A's: %+v; want diverged and unsynced", st)
 	}
-	if _, err := tr.propose(0, "AFTER"); err == nil {
-		t.Fatal("a write committed with B diverged and W reset; want it unconfirmed")
+	if aside, _ := filepath.Glob(tr.logFile(2) + ".diverged-*"); len(aside) != 1 {
+		t.Fatalf("W, diverged, should start over at once: aside %v", aside)
+	}
+	// W, started over empty, is refilled by the leader's push (#1455 PR
+	// 2a-2), within that same heartbeat's resend, and syncs from it; B
+	// takes nothing.
+	if _, err := tr.propose(0, "AFTER"); err != nil {
+		t.Fatalf("a write with W refilled by push: %v", err)
 	}
 	if seq, _ := tr.holds(1, "AFTER"); seq != 0 {
 		t.Fatal("B, diverged, took a write")
 	}
-	if w := tr.nodes[2].Status(); w.Diverged != "" || w.Lost == "" || w.LastSeq > 1 {
-		t.Fatalf("W, diverged, should start over at once: %+v", w)
+	if seq, _ := tr.holds(2, "AFTER"); seq == 0 {
+		t.Fatal("W, refilled, does not hold the write")
+	}
+	if w := tr.nodes[2].Status(); w.Diverged != "" || w.Unsynced || w.CompactThrough != 20 {
+		t.Fatalf("W refilled: %+v; want synced at the base", w)
 	}
 	tr.restart(1)
 	st = tr.nodes[1].Status()
@@ -596,18 +607,23 @@ func TestAnOlderOrDamagedCompactedFileIsLost(t *testing.T) {
 }
 
 // A copy behind the base gets neither a sparse page nor a sparse resend:
-// the page is refused (409 compacted) and so is the resend.
+// the page is refused (409 compacted), and so is the resend to a copy that
+// can't take an install (n2: no rules version, as a build from before).
 func TestNothingBelowTheBaseIsServedAsTheLog(t *testing.T) {
-	tr := compactTrio(t, nil)
+	tr := compactTrio(t, func(i int, o *Options) {
+		if i == 2 {
+			o.compactRules = 0
+		}
+	})
 	mustSync(t, tr.trio, 0)
 	full := tr.fill(0, 30, 10)
 	tr.compact(0, 20, toyKeep(full, 20, 0))
-	_, err := tr.nodes[1].fetchPage(tr.ctx(), tr.urls[0], 0)
+	_, err := tr.nodes[1].fetchPage(tr.ctx(), tr.urls[0], 0, false)
 	var he *httpError
 	if !errors.As(err, &he) || he.code != http.StatusConflict || !strings.Contains(he.body, "compacted") {
 		t.Fatalf("a page after 0 from a log compacted through 20: %v; want 409 compacted", err)
 	}
-	if _, err := tr.nodes[1].fetchPage(tr.ctx(), tr.urls[0], 20); err != nil {
+	if _, err := tr.nodes[1].fetchPage(tr.ctx(), tr.urls[0], 20, false); err != nil {
 		t.Fatalf("a page after the base: %v", err)
 	}
 	tr.wipe(2)

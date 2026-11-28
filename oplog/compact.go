@@ -44,6 +44,9 @@ type baseHeader struct {
 	Digest      string  `json:"digest"`
 	Rules       int     `json:"rules"` // the K's keep-rules version
 	Lineage     Lineage `json:"lineage"`
+	// K is the compaction itself, for a base installed from another copy
+	// (compact_wire.go) before its tail (which holds K) has come.
+	K *Entry `json:"k,omitempty"`
 }
 
 // compactBody is K's Value.
@@ -69,6 +72,7 @@ type baseState struct {
 	Kept                          []uint64 // sorted; never changed in place
 	Digest                        string
 	Rules                         int
+	K                             *Entry // an installed base's K (baseHeader.K)
 }
 
 // MarkBase is the base the log file was last rewritten to (Mark.Base): a
@@ -209,8 +213,14 @@ func readHeader(line []byte) (baseHeader, bool, error) {
 	if err := json.Unmarshal(line, &l); err != nil || l.B == nil {
 		return baseHeader{}, true, fmt.Errorf("a compacted log's header can't be read: %q", truncateStr(string(line), 80))
 	}
-	if l.B.Through == 0 || l.B.ThroughTerm == 0 || l.B.Compact <= l.B.Through {
+	if l.B.Through == 0 || l.B.ThroughTerm == 0 || l.B.Compact <= l.B.Through || l.B.K != nil && (l.B.K.Seq != l.B.Compact || l.B.K.Kind != KindCompact) {
 		return baseHeader{}, true, fmt.Errorf("a compacted log's header is not one: through %d at term %d, compact %d", l.B.Through, l.B.ThroughTerm, l.B.Compact)
+	}
+	if k := l.B.K; k != nil {
+		var b compactBody
+		if json.Unmarshal(k.Value, &b) != nil || b.Through != l.B.Through || b.ThroughTerm != l.B.ThroughTerm || b.Kept != l.B.Kept || b.Digest != l.B.Digest {
+			return baseHeader{}, true, fmt.Errorf("a compacted log's header names a compaction that did not make its base (at seq %d)", k.Seq)
+		}
 	}
 	return *l.B, true, nil
 }
@@ -221,6 +231,15 @@ func (n *Node) compactStatusLocked(s *Status) {
 	s.CompactPending = n.cut.Compact > n.disk.Compact
 	s.CompactRefused = n.compactRefused
 	s.Diverged = n.mark.Diverged
+	n.wireStatusLocked(s)
+}
+
+// DivergedAtStart: this process's start moved a diverged log aside, so it
+// does not restart itself for another (a person decides a second time).
+func (n *Node) DivergedAtStart() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.divergedAtStart
 }
 
 // compactedForTest waits until the file holds the newest committed base.

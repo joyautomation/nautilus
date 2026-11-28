@@ -174,6 +174,25 @@ import "os"
 //   - compact_drops_named_lapse: the keep list may keep an entry and drop the lapse that names it;
 //   - witness_diverged_waits: the witness that finds at start a compaction its log does not fit waits for a second start to start over.
 //
+// Compaction on the wire (#1455 PR 2a-2):
+//
+//   - rules_advertised_unwired: a node with compaction off still advertises a rules version and its clock;
+//   - rules_not_in_409: a 409 (a wiped copy's first answer, a gap) does not carry the copy's rules version, so it looks like a build from before and is never refilled;
+//   - install_to_old_build: an install is pushed to a copy that advertised no rules version, and resent every heartbeat;
+//   - install_not_pushed: a copy behind the base is never sent an install, so the witness (which never pulls) stays empty;
+//   - base_page_from_entries: a base page is served from the entries in memory, which stay dense until the file is rewritten, not from the base;
+//   - install_onto_applied: an install is taken by a copy that holds committed entries, replacing them under its consumers;
+//   - install_pages_unordered: install pages are staged as they come, a duplicate or one out of turn among them;
+//   - install_k_unchecked: an installed base is not checked against the compaction that made it;
+//   - install_digest_unchecked: an installed base's entries are not checked against its compaction's (seq, term) digest;
+//   - install_k_tail_unchecked: the compaction a base came from, met again in the tail, is not checked against that base;
+//   - reask_from_through_off: a copy that holds the base's Through, at its term, below its own commit index, is sent to an install instead of reading on from Through;
+//   - compacted_read_fails: a read that meets a compacted base fails, so a lost leader counts its compacted peers as silent and a wiped follower never refills;
+//   - install_have_unproved: an install page is answered with the copy's last entry, past what it proved, so an old term's suffix counts for a write;
+//   - staging_stale_kept: a staging from a term below the one this copy now runs at blocks every other install;
+//   - installed_k_not_kept: an installed base whose tail has not come is not served (its K is not kept), so a lost leader counts that copy silent;
+//   - install_refusal_silent: a copy behind the base that refuses its install is not named.
+//
 // Peer TLS (#710):
 //
 //   - peer_tls_log_plain: the log's calls ignore Options.TLS and go out

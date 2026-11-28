@@ -728,6 +728,10 @@ type Node struct {
 	resets         uint64 // in-place starts over (resetDivergedLocked)
 	built          bool   // New is done: the worker may start
 	kickOwed       bool   // a kick from before then
+	// divergedAtStart: this process's start moved a diverged log aside, so
+	// a restart for a later one is a person's call (as supersededAtStart).
+	divergedAtStart bool
+	wireNode        // compaction on the wire (compact_wire.go)
 }
 
 // peerInfo is what a peer's last answer said of its log.
@@ -783,6 +787,7 @@ type Status struct {
 	CompactPending bool   `json:"compactPending,omitempty"`
 	CompactRefused string `json:"compactRefused,omitempty"`
 	Diverged       string `json:"diverged,omitempty"`
+	wireStatus
 }
 
 // ErrReadOnly says this instance cannot commit a write right now.
@@ -952,6 +957,7 @@ func (n *Node) openMarked() error {
 			return err
 		}
 		n.log.Error("oplog: this copy's operator-intent log DIVERGED from the others' and is moved aside: starting empty; it syncs from the leader", "kept", kept, "why", m.Diverged)
+		n.divergedAtStart = true
 		m, write = Mark{Identity: m.Identity, Term: m.Term, Lineage: m.Lineage, Lost: cmp(kept, "(missing)"), Superseded: m.Superseded, DropRetained: !n.o.ResetInPlace}, true
 	}
 	_, statErr := os.Stat(n.o.File)
@@ -1596,7 +1602,7 @@ func (n *Node) open() (damaged bool, err error) {
 	if hdr.Through > 0 {
 		// The base the header names must be the kept entries the file
 		// holds: else the file is damaged (a lost log, with a mark).
-		b := baseState{Through: hdr.Through, ThroughTerm: hdr.ThroughTerm, Compact: hdr.Compact, Kept: kept, Digest: hdr.Digest, Rules: hdr.Rules}
+		b := baseState{Through: hdr.Through, ThroughTerm: hdr.ThroughTerm, Compact: hdr.Compact, Kept: kept, Digest: hdr.Digest, Rules: hdr.Rules, K: hdr.K}
 		n.disk, n.cut = b, b
 		if dg := pairDigest(kept, n.termLocked); (len(kept) != hdr.Kept || dg != hdr.Digest) && !mutOplog("compact_header_unchecked") {
 			why := fmt.Errorf("oplog: %s: the compacted base holds %d entries (digest %.12s), its header names %d (%.12s)", n.o.File, len(kept), dg, hdr.Kept, hdr.Digest)
@@ -1881,7 +1887,7 @@ func (n *Node) rewrite() error {
 	n.gen++
 	if d := n.disk; d.Compact > 0 {
 		if _, err := w.Write(appendLine(nil, fileLine{B: &baseHeader{Why: compactWhy, Through: d.Through, ThroughTerm: d.ThroughTerm,
-			Compact: d.Compact, Kept: len(d.Kept), Digest: d.Digest, Rules: d.Rules, Lineage: n.mark.Lineage}})); err != nil {
+			Compact: d.Compact, Kept: len(d.Kept), Digest: d.Digest, Rules: d.Rules, Lineage: n.mark.Lineage, K: d.K}})); err != nil {
 			return fail(err)
 		}
 	}
@@ -2109,8 +2115,9 @@ func (n *Node) applyRange(es []stored, seq uint64) {
 			break
 		}
 		e := s.entry()
-		if e.Kind == KindCompact {
-			// Carried out by the log, never applied (compact.go).
+		if e.Kind == KindCompact || e.Seq == n.cut.Compact && e.Seq != 0 && !mutOplog("install_k_tail_unchecked") {
+			// Carried out by the log, never applied (compact.go); an entry
+			// at the seq of the compaction that made the base must be it.
 			n.carryOutLocked(e)
 			if n.mark.Diverged != "" {
 				return
@@ -2156,6 +2163,9 @@ type replicateReq struct {
 	// "forked"); one at a lower one is superseded (#1029 3c-3c-2a).
 	// Omitted (0) by a build from before.
 	Lineage
+	// Install: a page of the sender's compacted base, for a copy behind it
+	// that advertised a rules version (compact_wire.go).
+	Install *installReq `json:"install,omitempty"`
 }
 
 type replicateResp struct {
@@ -2169,6 +2179,7 @@ type replicateResp struct {
 	// Lineage is the follower's log history; on a 409 "history",
 	// "forked" or "superseded" it says which.
 	Lineage
+	compactWire
 }
 
 type proposeResp struct {
@@ -2200,6 +2211,7 @@ type afterResp struct {
 	// SetAside: it started over another identity's log that held entries
 	// and has not synced since (Mark.SetAside).
 	SetAside bool `json:"setAside,omitempty"`
+	compactWire
 }
 
 // Propose takes an operator event from this instance's client: sequenced
@@ -2231,300 +2243,6 @@ func (n *Node) Propose(ctx context.Context, e Entry) (Entry, error) {
 		n.log.Warn("oplog: catch-up after propose", "error", err)
 	}
 	return out.Entry, nil
-}
-
-// leaderCatchUp is what a new leader does before its first write of a
-// term: fetch from every peer whatever is after our last entry and take
-// the most advanced answer, so an instance that lost its file (a
-// reschedule) and then took the lease does not number its first write
-// over entries its peers already committed. Raft restricts votes to the
-// most advanced log; here the leader is elected elsewhere, so it catches
-// up instead. Caller holds seqMu.
-//
-// It succeeds only when the peers that answered and this instance make a
-// majority: a committed entry is stored on a majority, and any majority
-// meets it, so then the most advanced answer holds every committed entry.
-// Fewer answers and it returns ErrReadOnly and the term stays unsynced, so
-// the next call asks again.
-func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
-	n.mu.Lock()
-	if n.syncedTerm == term {
-		n.mu.Unlock()
-		return nil
-	}
-	if n.stoppedLocked() {
-		err := n.stopErrLocked()
-		n.mu.Unlock()
-		return fmt.Errorf("%w: %w", ErrReadOnly, err)
-	}
-	// From the COMMIT index, not the last entry: an uncommitted suffix of
-	// this leader's own may be stale (stored, never replicated, and since
-	// overtaken by a committed entry at the same seq), and only answers
-	// from its commit on carry the entries that replace it. Its own suffix
-	// is one of the candidates, when it counts.
-	from := n.commit
-	last := n.lastLocked()
-	own := afterResp{Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
-	selfCounts := n.syncedLocked() || mutOplog("unsynced_self_counted")
-	// A vouched log's first catch-up as leader (Vouch): it waits for every
-	// peer, and only when EVERY peer answered, takes the most up-to-date
-	// log among itself and those that count, even when that is itself
-	// alone. Once. A silent peer may hold a write a majority committed
-	// without this log (#1053 review: two vouched controllers, one silent
-	// witness): then it fails, and the vouch is kept for when it answers,
-	// unless the person accepted that peer's loss (Mark.Accept).
-	alone := selfCounts && n.mark.Alone
-	accept := n.mark.Accept
-	hist := n.mark.Lineage
-	n.mu.Unlock()
-	// The most advanced log is Raft's "up to date", compared on each WHOLE
-	// log's last entry: the higher term wins, then the higher seq, so an
-	// older term's uncommitted leftovers never outrank a newer term's
-	// committed log, even one that ends at the commit index (and so sends
-	// no entries). This leader's own log wins a tie.
-	better := func(a, b afterResp) bool {
-		return a.LastTerm > b.LastTerm || a.LastTerm == b.LastTerm && a.LastSeq > b.LastSeq
-	}
-	// Only a replica that counts is a candidate, or counts toward the
-	// majority: one whose log is not synced (lost, rebuilt, another
-	// identity) may lack committed entries, and a majority that counted
-	// it might hold them nowhere (#710 3b-4).
-	var best afterResp
-	var bestPeer string
-	bestSelf, answered, commit := false, 0, uint64(0)
-	if selfCounts {
-		best, bestSelf = own, true
-		answered, commit = 1, own.Commit
-	}
-	var errs []string
-	var newer error
-	var silent []string
-	type ahead struct {
-		p   string
-		got afterResp
-	}
-	var uncounted []ahead // answers that don't count, at this history
-	var forked []string   // copies whose log forked from this one
-	type answer struct {
-		got afterResp
-		err error
-	}
-	// Every peer at once; decided once a majority that counts answered
-	// (any majority meets the commit majority, so its most advanced log
-	// holds every committed entry), after a short wait for the rest. A
-	// straggler that has seen a newer term is not waited for: this
-	// leader's own lease ends it, and its replication is refused by term.
-	// Each peer's first page decides: every page names its whole log (its
-	// last entry, commit, term, history). Only the chosen log's further
-	// pages are read, after the choice (#1455).
-	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) answer {
-		got, err := n.fetchPage(ctx, p, from)
-		return answer{got, err}
-	}, func(p string, a answer) bool {
-		switch {
-		case a.err != nil:
-			errs = append(errs, p+": "+a.err.Error())
-			silent = append(silent, p)
-		case a.got.History > hist.History:
-			// A newer log history (a person accepted a loss elsewhere):
-			// this copy's log is superseded (fetchAfter has learnt it).
-			newer = fmt.Errorf("%w: %s holds a newer log history (%d; this copy %d): %w", ErrReadOnly, n.name(p), a.got.History, hist.History, errSuperseded)
-			return true
-		case a.got.Term > term:
-			// A peer has seen a newer term: this leadership is over.
-			newer = fmt.Errorf("%w: a peer is at term %d, this leader at %d", ErrReadOnly, a.got.Term, term)
-			return true
-		case a.got.History < hist.History && !mutOplog("history_lower_counted"):
-			// An older history's copy: its loss was accepted when this one
-			// started; it neither counts nor holds anything to wait for.
-			errs = append(errs, p+": its log is an older history's (superseded)")
-		case a.got.Lineage.forks(hist) && !mutOplog("history_fork_counted"):
-			// Another override's log at the same number: it never counts,
-			// and only a person's choice (a vouch here, its catch-up
-			// overriding it) ends the fork.
-			errs = append(errs, fmt.Sprintf("%s: its log forked from this one at history %d (accepted by %s)", p, a.got.History, a.got.HistoryBy))
-			forked = append(forked, p)
-		case !n.counts(p, a.got.Unsynced, a.got.Identity, a.got.Lineage, hist):
-			errs = append(errs, p+": its log is not synced")
-			uncounted = append(uncounted, ahead{p, a.got})
-		default:
-			answered++
-			commit = max(commit, a.got.Commit)
-			if better(a.got, best) {
-				best, bestSelf, bestPeer = a.got, false, p
-			}
-		}
-		return !alone && answered >= n.majority()
-	})
-	if newer != nil {
-		return newer
-	}
-	// What going ahead alone would override: a silent peer (it may hold a
-	// write a majority committed without this log), and a copy that
-	// answers but doesn't count yet with a later log (a witness in its
-	// quiet period after a re-commission, #1053), whose entries would be
-	// lost. Each only as the person accepted (Mark.Accept), else it waits.
-	var outside []string
-	for _, p := range silent {
-		if !accept.covers(p, true, false, 0, 0) && !mutOplog("vouch_alone_partial") {
-			outside = append(outside, n.name(p)+" does not answer")
-		}
-	}
-	overrides := len(silent) > 0
-	waitAhead := ""
-	for _, u := range uncounted {
-		if !better(u.got, best) {
-			continue
-		}
-		overrides = true
-		if accept.covers(u.p, false, false, u.got.LastTerm, u.got.LastSeq) || mutOplog("vouch_alone_ignores_ahead") {
-			continue
-		}
-		if accept == nil {
-			waitAhead = fmt.Sprintf("%s holds a later log (term %d, seq %d) but does not count yet", n.name(u.p), u.got.LastTerm, u.got.LastSeq)
-		}
-		outside = append(outside, fmt.Sprintf("%s holds a later log (term %d, seq %d) that does not count", n.name(u.p), u.got.LastTerm, u.got.LastSeq))
-	}
-	// A fork the person accepted at the vouch is overridden by this
-	// catch-up even with a majority that counts: the only case a vouch
-	// acts on a synced copy whose majority counts, since choosing one side
-	// of a fork is what it is for. A fork not accepted waits.
-	resolves := false
-	for _, p := range forked {
-		switch {
-		case alone && accept.covers(p, false, true, 0, 0):
-			resolves = !mutOplog("fork_resolved_without_bump")
-		case alone:
-			outside = append(outside, n.name(p)+"'s log forked from this one")
-		}
-	}
-	useVouch := answered < n.majority() && alone
-	if (useVouch || alone && len(forked) > 0) && len(outside) > 0 {
-		if waitAhead != "" && len(outside) == 1 {
-			return fmt.Errorf("%w: a vouched catch-up waits: %s", ErrReadOnly, waitAhead)
-		}
-		if accept == nil {
-			return fmt.Errorf("%w: catch-up heard from %d of %d that count (%s); a vouched catch-up needs every copy to answer", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "))
-		}
-		sort.Strings(outside)
-		return fmt.Errorf("%w: a vouched catch-up waits: not what was accepted (%s): naut redundancy vouch again", ErrReadOnly, strings.Join(outside, "; "))
-	}
-	if useVouch && overrides && len(silent) == len(n.others()) && !mutOplog("override_all_silent") {
-		// Every other copy silent (naut-lead, 3c-3c-2a (i)): the new
-		// history would sit on this copy alone, and the other two, back at
-		// the old one, could commit there and lose it all at first contact.
-		// Alone this copy commits nothing anyway.
-		return fmt.Errorf("%w: a loss accepted with every other copy silent would leave the new history on this copy alone: bring one back or rebuild it (a rebuilt witness answers), then naut redundancy vouch again", ErrReadOnly)
-	}
-	if answered < n.majority() && !useVouch {
-		why := ""
-		switch {
-		case !selfCounts:
-			why = "; this replica's own log is not synced"
-		case alone:
-			why = "; a vouched catch-up needs every copy to answer"
-		}
-		return fmt.Errorf("%w: catch-up heard from %d of %d that count (%s)%s", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "), why)
-	}
-	// A counting copy's entries (the same history's) are taken first: a
-	// crash before the bump below then leaves this copy at the old history
-	// with them and its one-shot pending, never at the new one without
-	// them (#1177 review nit). Page by page, each synced as it is taken
-	// (#1455); nothing is committed until the last.
-	moved := fmt.Errorf("%w: the log history moved during the catch-up", ErrReadOnly)
-	deposed := func() error {
-		if n.term > term && !mutOplog("leader_catchup_term_unchecked") {
-			return fmt.Errorf("%w: a newer term (%d) was seen during the catch-up for term %d", ErrReadOnly, n.term, term)
-		}
-		return nil
-	}
-	take := func(es []Entry) error {
-		n.mu.Lock()
-		defer n.mu.Unlock()
-		if !n.mark.Lineage.same(hist) || n.stoppedLocked() {
-			return moved // a newer history was heard while the peers were asked
-		}
-		if err := deposed(); err != nil {
-			return err
-		}
-		if _, err := n.acceptLocked(es); err != nil {
-			n.log.Warn("oplog: leader catch-up", "error", err)
-			return err
-		}
-		return nil
-	}
-	if !bestSelf && len(best.Entries) > 0 {
-		if err := take(best.Entries); err != nil {
-			return err
-		}
-		if best.More {
-			// Every page from the log that was chosen, still the same and
-			// still counting (Fable, #1455 review: a copy that lost its log
-			// mid-read comes back empty at the same term and history, and
-			// its empty page would end the read short of what was chosen).
-			_, err := n.fetchAfter(ctx, bestPeer, best.Entries[len(best.Entries)-1].Seq, func(p afterResp) error {
-				same := p.Term == best.Term && p.Lineage.same(best.Lineage) && p.LastSeq == best.LastSeq && p.LastTerm == best.LastTerm
-				if !mutOplog("leader_catchup_pages_unchecked") && (!same || !n.counts(bestPeer, p.Unsynced, p.Identity, p.Lineage, hist)) {
-					return fmt.Errorf("%w: %s's log moved while it was read page by page", ErrReadOnly, n.name(bestPeer))
-				}
-				return take(p.Entries)
-			})
-			if err != nil {
-				return err
-			}
-		}
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if !n.mark.Lineage.same(hist) || n.stoppedLocked() {
-		return moved
-	}
-	if err := deposed(); err != nil {
-		return err
-	}
-	if useVouch || resolves {
-		// Spent before it is used: a mark that can't record that never
-		// leaves a second use. An override starts a new log history in
-		// the same write, durable before this copy is synced or takes or
-		// sequences anything at it: the copies it overrides then count for
-		// nothing, and are moved aside when they meet it.
-		m := n.mark
-		if !mutOplog("vouch_alone_kept") {
-			m.Alone = false
-		}
-		m.Accept = nil
-		bump := (overrides && useVouch || resolves) && !mutOplog("history_not_bumped") && !mutOplog("history_after_write")
-		if bump {
-			m.Lineage = newLineage(hist, accept)
-		}
-		if err := n.setMarkLocked(m); err != nil {
-			return fmt.Errorf("oplog: recording that the vouch's catch-up is used: %w", err)
-		}
-		if bump {
-			n.log.Warn("oplog: a vouched catch-up overrode a copy, as a person accepted: a new log history starts; the overridden copies count for nothing and are moved aside when they meet it", "history", m.History)
-		}
-	}
-	// The best log a majority answered with holds every committed entry,
-	// so any commit index one of them reported is safe here, and so is the
-	// commit floor (a held K's Through, compact.go).
-	if err := n.commitTo(max(commit, n.floor)); err != nil {
-		return fmt.Errorf("%w: %w", ErrReadOnly, err)
-	}
-	n.syncedTerm = term
-	n.becomeSyncedLocked("caught up from a majority as leader")
-	if useVouch && overrides && mutOplog("history_after_write") {
-		m := n.mark
-		m.Lineage = newLineage(hist, accept)
-		if err := n.setMarkLocked(m); err != nil {
-			n.syncedTerm = 0
-			return fmt.Errorf("oplog: recording the new log history: %w", err)
-		}
-	}
-	if useVouch {
-		n.log.Warn("oplog: caught up on a vouched log, without a majority that counts", "answered", answered, "commit", n.commit)
-	}
-	n.usedVouchLocked()
-	return nil
 }
 
 // newLineage is the history an override starts after hist: the next
@@ -3118,7 +2836,7 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 // against an older one. A new entry is sent before it is committed, so
 // it goes out under the commit index from before it.
 func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term uint64) (replicateResp, error) {
-	send := func(es []Entry) (replicateResp, error) {
+	send := func(es []Entry, in *installReq) (replicateResp, error) {
 		n.mu.Lock()
 		prev := n.lastLocked() // a heartbeat: the leader's last entry
 		if len(es) > 0 {
@@ -3139,8 +2857,13 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 		}
 		var resp replicateResp
 		err := n.call(ctx, peer, "/api/oplog/replicate",
-			replicateReq{From: n.o.Self, Node: n.o.Node, Synced: synced, Term: term, Commit: commit, PrevSeq: prev, PrevTerm: pt, Entries: es, Lineage: hist}, &resp)
+			replicateReq{From: n.o.Self, Node: n.o.Node, Synced: synced, Term: term, Commit: commit, PrevSeq: prev, PrevTerm: pt, Entries: es, Lineage: hist, Install: in}, &resp)
 		var he *httpError
+		if err == nil || errors.As(err, &he) && he.code == http.StatusConflict {
+			n.mu.Lock()
+			n.notePeerWireLocked(peer, resp.compactWire, resp.Commit, resp.Have)
+			n.mu.Unlock()
+		}
 		switch {
 		case err == nil:
 			n.mu.Lock()
@@ -3161,7 +2884,7 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 		}
 		return resp, err
 	}
-	resp, err := send(es)
+	resp, err := send(es, nil)
 	// The peer is behind (a gap: Have is its last entry) or its entry
 	// before these is not ours (a mismatch: Have is its commit index), or
 	// it took a chunk that stops short of our last entry (Have is as far
@@ -3193,10 +2916,14 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 		n.mu.Lock()
 		if from < n.cut.Through && !mutOplog("compact_resend_below_base") {
 			// The peer needs entries this copy compacted away: never a
-			// sparse page as if it were the log (an install refills it).
-			through := n.cut.Through
+			// sparse page as if it were the log, but an install, a page a
+			// round (compact_wire.go).
 			n.mu.Unlock()
-			return resp, fmt.Errorf("%w: it has %d, the base is at %d", errBehindBase, from, through)
+			var stop bool
+			if resp, err, stop = n.installStep(ctx, peer, resp, send); stop {
+				return resp, err
+			}
+			continue
 		}
 		var missing []Entry
 		if mutOplog("resend_unchunked") {
@@ -3208,7 +2935,7 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 		if len(missing) == 0 {
 			return resp, err
 		}
-		resp, err = send(missing)
+		resp, err = send(missing, nil)
 	}
 	if err == nil && !mutOplog("behind_counted") {
 		// Out of rounds with the peer still short of our last entry
@@ -3310,51 +3037,6 @@ func fanOut[T any](ctx context.Context, n *Node, peers []string, f func(context.
 	}
 }
 
-// fetchPage reads one page of a peer's log after seq and notes what it
-// says of itself (its sync, identity and history).
-func (n *Node) fetchPage(ctx context.Context, peer string, after uint64) (afterResp, error) {
-	var got afterResp
-	if err := n.call(ctx, peer, fmt.Sprintf("/api/oplog?after=%d&page=1", after), nil, &got); err != nil {
-		return afterResp{}, err
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.notePeerLocked(peer, got.Unsynced, got.Identity, got.Lineage)
-	if err := n.learnHistoryLocked(got.Lineage); err != nil {
-		return afterResp{}, err
-	}
-	return got, nil
-}
-
-// fetchAfter reads a peer's log after seq page by page, handing each page
-// to take as it arrives: it holds one page at a time, and a log of any
-// length is read (#1455: it gathered every page first, so a replacement
-// held the log twice, and refused one over 16,384 pages). The pages must
-// come from one log: the same term and history, each starting where the
-// last ended. It returns the last page, its entries dropped.
-func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64, take func(afterResp) error) (afterResp, error) {
-	var first afterResp
-	for page := 0; ; page++ {
-		got, err := n.fetchPage(ctx, peer, after)
-		if err != nil {
-			return afterResp{}, err
-		}
-		if page == 0 {
-			first = got
-		} else if got.Term != first.Term || !got.Lineage.same(first.Lineage) || len(got.Entries) > 0 && got.Entries[0].Seq != after+1 {
-			return afterResp{}, fmt.Errorf("oplog: %s's log moved while it was read page by page", peer)
-		}
-		if err := take(got); err != nil {
-			return afterResp{}, err
-		}
-		if !got.More || len(got.Entries) == 0 {
-			got.Entries, got.More = nil, false
-			return got, nil
-		}
-		after = got.Entries[len(got.Entries)-1].Seq
-	}
-}
-
 // termAtLocked is the term of the entry at seq (0 for seq 0, or none).
 // Caller holds mu.
 func (n *Node) termAtLocked(seq uint64) uint64 {
@@ -3392,58 +3074,6 @@ func (n *Node) Heartbeat(ctx context.Context) {
 		}
 		return false
 	})
-}
-
-// CatchUp asks the leader for everything after our last entry and its
-// commit index: at startup, on a gap, and periodically from a follower.
-func (n *Node) CatchUp(ctx context.Context) error {
-	if n.standalone() || n.isLeader() {
-		return nil
-	}
-	leader := n.leaderAddr()
-	if leader == "" {
-		return ErrReadOnly
-	}
-	// From the commit index, not the last entry: an uncommitted entry this
-	// instance holds may be stale, and only the leader's entries from the
-	// commit on replace it (see acceptLocked). Each page is checked and
-	// taken as it arrives, synced with it (#1455); the commit index moves
-	// once, with the last page, so a lapse and the entries it names are
-	// applied in one range (see applyRange, #1466).
-	_, err := n.fetchAfter(ctx, leader, n.Commit(), func(got afterResp) error {
-		if !got.LeaderSynced && !mutOplog("unsynced_leader_writes") {
-			// Its entries past our commit index may be an earlier term's
-			// leftovers that would replace one a later term committed
-			// (#1050 review). Its heartbeat or a later pull brings them
-			// once it has caught up.
-			return errTermNotSynced
-		}
-		n.mu.Lock()
-		defer n.mu.Unlock()
-		switch {
-		case n.stoppedLocked():
-			return n.stopErrLocked()
-		case !got.Lineage.same(n.mark.Lineage) && !mutOplog("history_lower_counted") && !mutOplog("history_fork_counted"):
-			// A lower history's leader (its log is one a person accepted
-			// to lose; a higher one superseded this copy in fetchPage),
-			// or a forked one.
-			return fmt.Errorf("%w: the leader's log is at history %d (id %x), this copy's at %d (id %x)", errConflict, got.History, got.HistoryID, n.mark.History, n.mark.HistoryID)
-		}
-		if got.Term < n.term {
-			return fmt.Errorf("%w: leader at term %d, have seen %d", errConflict, got.Term, n.term)
-		}
-		if _, err := n.acceptLocked(got.Entries); err != nil {
-			return err
-		}
-		switch {
-		case !got.More || len(got.Entries) == 0:
-			return n.commitTo(got.Commit)
-		case mutOplog("catchup_commit_per_page"):
-			return n.commitTo(min(got.Commit, got.Entries[len(got.Entries)-1].Seq))
-		}
-		return nil
-	})
-	return err
 }
 
 // Status for /api/quorum.
@@ -3627,21 +3257,25 @@ func (n *Node) Handler() http.Handler {
 		var after uint64
 		_, _ = fmt.Sscanf(r.URL.Query().Get("after"), "%d", &after)
 		n.mu.Lock()
-		if after < n.cut.Through && !mutOplog("compact_page_served") {
-			// Compacted away: never a sparse page, which a reader would take
-			// for the log (an install refills a copy this far behind).
-			c := n.cut
-			n.mu.Unlock()
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "compacted", "through": c.Through, "throughTerm": c.ThroughTerm})
-			return
-		}
 		last := n.lastLocked()
 		resp := afterResp{Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
 			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lineage: n.mark.Lineage, Lost: n.mark.Lost != "", SetAside: n.mark.SetAside != ""}
 		resp.LeaderSynced = n.isLeader() && n.syncedTerm != 0 && n.syncedTerm == n.currentTerm()
-		// Pages only for a reader that asks (page=1): one from before
-		// pages would take the first page for the whole tail.
-		if r.URL.Query().Get("page") == "1" && !mutOplog("resend_unchunked") {
+		resp.compactWire = n.wireLocked()
+		if after < n.cut.Through && !mutOplog("compact_page_served") {
+			// Compacted away: never a sparse page, which a reader would take
+			// for the log; only the base's own pages, to a reader that asks
+			// (base=1: an install).
+			if !n.basePageLocked(&resp, after, r.URL.Query().Get("base") == "1") {
+				c := n.cut
+				body := n.with409(map[string]any{"error": "compacted", "through": c.Through, "throughTerm": c.ThroughTerm})
+				n.mu.Unlock()
+				writeJSON(w, http.StatusConflict, body)
+				return
+			}
+		} else if r.URL.Query().Get("page") == "1" && !mutOplog("resend_unchunked") {
+			// Pages only for a reader that asks (page=1): one from before
+			// pages would take the first page for the whole tail.
 			resp.Entries, resp.More = n.pageLocked(after)
 		} else {
 			resp.Entries = n.afterLocked(after)
@@ -3744,14 +3378,18 @@ func (n *Node) Handler() http.Handler {
 			}
 		}
 		if req.Term < n.term {
-			have := n.lastLocked()
+			body := n.with409(map[string]any{"error": "stale term", "have": n.lastLocked()})
 			n.mu.Unlock()
-			writeJSON(w, http.StatusConflict, map[string]any{"error": "stale term", "have": have})
+			writeJSON(w, http.StatusConflict, body)
 			return
 		}
 		if err := n.raiseTermLocked(req.Term); err != nil {
 			n.mu.Unlock()
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if req.Install != nil {
+			n.takeInstallLocked(w, &req) // a page of a compacted base (unlocks)
 			return
 		}
 		// Raft's consistency check: take these entries, and the commit
@@ -3829,6 +3467,7 @@ func (n *Node) Handler() http.Handler {
 		if err == nil {
 			n.leaderHeard.Store(n.o.Now().UnixMilli())
 		}
+		wire := n.wireLocked()
 		n.mu.Unlock()
 		if err != nil {
 			kind := "conflict"
@@ -3840,13 +3479,16 @@ func (n *Node) Handler() http.Handler {
 			case errors.Is(err, errDiverged):
 				kind = "diverged"
 			}
-			writeJSON(w, http.StatusConflict, map[string]any{"error": kind, "detail": err.Error(), "have": have, "commit": commit})
+			n.mu.Lock()
+			body := n.with409(map[string]any{"error": kind, "detail": err.Error(), "have": have, "commit": commit})
+			n.mu.Unlock()
+			writeJSON(w, http.StatusConflict, body)
 			return
 		}
 		n.mu.Lock()
 		unsynced, identity, hist := !n.syncedLocked(), n.mark.Identity, n.mark.Lineage
 		n.mu.Unlock()
-		writeJSON(w, http.StatusOK, replicateResp{Have: have, Commit: commit, Unsynced: unsynced, Identity: identity, Lineage: hist})
+		writeJSON(w, http.StatusOK, replicateResp{Have: have, Commit: commit, Unsynced: unsynced, Identity: identity, Lineage: hist, compactWire: wire})
 	}))
 	return mux
 }

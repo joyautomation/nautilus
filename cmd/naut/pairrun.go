@@ -1124,6 +1124,7 @@ func (m *pairMember) driveLog(ctx context.Context) {
 		m.logConditions()
 		m.endSuperseded()
 		m.supersedeRestart()
+		m.divergedRestart()
 	}
 }
 
@@ -1187,12 +1188,13 @@ func (m *pairMember) supersedeWhy(to oplog.Lineage) string {
 	pl, ok := m.q.Node().PeerLog()
 	leading := m.q.IsLeader() || m.rt != nil && m.rt.Leading()
 	supervised := m.getenv("INVOCATION_ID") != "" || m.getenv("NOTIFY_SOCKET") != ""
-	return supersedeRule(leading, pl, ok, to, supervised, m.log.SupersededAtStart())
+	return supersedeRule(leading, pl, ok, to, supervised, m.log.SupersededAtStart(), "a superseded log")
 }
 
 // supersedeRule is supersedeWhy's decision (ruling 20d), "" when the
-// controller restarts itself.
-func supersedeRule(leading bool, pl node.PeerLog, heard bool, to oplog.Lineage, supervised, restartedForOne bool) string {
+// controller restarts itself; what names the log it restarts for (a
+// diverged one restarts under the same rule, divergedRestart).
+func supersedeRule(leading bool, pl node.PeerLog, heard bool, to oplog.Lineage, supervised, restartedForOne bool, what string) string {
 	switch {
 	case leading && !mutNaut("restart_while_leading"):
 		return "it leads: it never restarts itself while leading; restart naut on it once the other controller leads"
@@ -1201,7 +1203,7 @@ func supersedeRule(leading bool, pl node.PeerLog, heard bool, to oplog.Lineage, 
 	case !supervised && !mutNaut("restart_unsupervised"):
 		return "no supervisor would start it again (not run by systemd): restart naut on it"
 	case restartedForOne && !mutNaut("restart_loops"):
-		return "it already restarted once for a superseded log since it started: restart naut on it"
+		return "it already restarted once for " + what + " since it started: restart naut on it"
 	}
 	return ""
 }
@@ -1240,6 +1242,52 @@ func (m *pairMember) supersedeRestart() {
 		}
 		close(m.restart)
 	})
+}
+
+// divergedRestart raises the diverged condition and restarts this
+// controller once under the supersede rule (ruling 20d): standby, the
+// other controller leading synced at this log's own history, under a
+// supervisor, and not already restarted for a diverged log since it
+// started. A diverged log (a committed compaction did not fit it, #1455)
+// is moved aside only at a start, as a superseded one is. Journalled as
+// redundancy.oplog-diverged-restart.
+func (m *pairMember) divergedRestart() {
+	st := m.log.Status()
+	own, _ := m.log.History()
+	pl, ok := m.q.Node().PeerLog()
+	leading := m.q.IsLeader() || m.rt != nil && m.rt.Leading()
+	supervised := m.getenv("INVOCATION_ID") != "" || m.getenv("NOTIFY_SOCKET") != ""
+	msg, restart := divergedDecision(st.Diverged, own, pl, ok, leading, supervised, m.log.DivergedAtStart())
+	m.q.SetCondition("oplog-diverged", msg)
+	if !restart {
+		return
+	}
+	m.restartOnce.Do(func() {
+		slog.Error("redundancy: restarting naut to move the diverged operator-intent log aside and sync it again", "why", st.Diverged)
+		if j := m.journal.Load(); j != nil {
+			_, _ = (*j).Record(audit.Entry{
+				User: "system", Source: audit.SourceSystem,
+				Action: "redundancy.oplog-diverged-restart", Target: string(m.o.Self),
+				Detail: map[string]any{"diverged": st.Diverged,
+					"why": "standby, the other controller leads synced at this log's history, under a supervisor: exits for the supervisor to start it again, moving the diverged log aside before it is replayed"},
+				Result: audit.ResultOK,
+			})
+		}
+		close(m.restart)
+	})
+}
+
+// divergedDecision is divergedRestart's: the oplog-diverged condition
+// ("" when the log has not diverged) and whether to restart now.
+func divergedDecision(diverged string, own oplog.Lineage, pl node.PeerLog, heard, leading, supervised, atStart bool) (string, bool) {
+	if diverged == "" || mutNaut("diverged_condition_dropped") {
+		return "", false
+	}
+	msg := "this controller's operator-intent log diverged from the other copies' (" + diverged + "): it counts for nothing until naut restarts here, which moves the log aside and syncs it again"
+	if why := supersedeRule(leading, pl, heard, own, supervised, atStart && !mutNaut("diverged_restart_loops"), "a diverged log"); why != "" {
+		return msg + "; " + why, false
+	}
+	return msg + "; restarting now", true
 }
 
 // RestartRequested is closed when this controller asks naut run to exit
@@ -1289,13 +1337,7 @@ func (m *pairMember) stuck() bool {
 // the banner: a lost log, an unsynced one.
 func (m *pairMember) logConditions() {
 	st := m.log.Status()
-	lost, unsynced := "", ""
-	switch {
-	case st.Lost != "":
-		lost = "this controller's operator-intent log was lost (kept at " + st.Lost + "): it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness; if neither holds the log, a person accepts its loss: naut redundancy vouch, then naut redundancy vouch --accept-lost-log=<digest>"
-	case st.Unsynced && st.SupersedeTo == 0:
-		unsynced = "this controller's operator-intent log is not synced: it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness, or a person vouches for it (naut redundancy vouch)"
-	}
+	lost, unsynced := syncConditions(st)
 	m.q.SetCondition("oplog-lost", lost)
 	m.q.SetCondition("oplog-unsynced", unsynced)
 	forked := ""
@@ -1317,10 +1359,49 @@ func (m *pairMember) logConditions() {
 		}
 	}
 	m.q.SetCondition("oplog-read-only", readOnly)
+	disk, behind, blocked := compactConditions(st, time.Now())
+	m.q.SetCondition("oplog-compaction-disk", disk)
+	m.q.SetCondition("oplog-peer-behind-base", behind)
+	m.q.SetCondition("oplog-compaction-blocked", blocked)
 	if !st.Unsynced {
 		m.q.SetCondition("oplog-yield", "")
 		m.q.SetCondition("oplog-vouch-refused", "")
 	}
+}
+
+// syncConditions are oplog-lost and oplog-unsynced, "" each when clear. A
+// diverged log is unsynced too, but oplog-diverged says what to do there
+// (a restart), never a vouch.
+func syncConditions(st oplog.Status) (lost, unsynced string) {
+	switch {
+	case st.Lost != "":
+		lost = "this controller's operator-intent log was lost (kept at " + st.Lost + "): it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness; if neither holds the log, a person accepts its loss: naut redundancy vouch, then naut redundancy vouch --accept-lost-log=<digest>"
+	case st.Unsynced && st.SupersedeTo == 0 && (st.Diverged == "" || mutNaut("diverged_says_vouch")):
+		unsynced = "this controller's operator-intent log is not synced: it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness, or a person vouches for it (naut redundancy vouch)"
+	}
+	return lost, unsynced
+}
+
+// compactBlockedAfter is how long a wanted compaction may wait before
+// oplog-compaction-blocked is raised (#1455 §3).
+const compactBlockedAfter = 7 * 24 * time.Hour
+
+// compactConditions are the log compaction's conditions (#1455), "" each
+// when clear: too little free disk for the rewrite; a copy behind the base
+// on a build from before compaction; a wanted compaction waiting more than
+// 7 days.
+func compactConditions(st oplog.Status, now time.Time) (disk, behind, blocked string) {
+	if st.CompactRefused != "" {
+		disk = "this controller's operator-intent log can't be compacted on disk: " + st.CompactRefused
+	}
+	if len(st.BehindBase) > 0 {
+		behind = "the operator-intent log can't be sent to a copy: " + strings.Join(st.BehindBase, "; ")
+	}
+	since := time.UnixMilli(st.CompactBlockedSince)
+	if st.CompactBlocked != "" && (now.Sub(since) > compactBlockedAfter || mutNaut("blocked_at_once")) {
+		blocked = fmt.Sprintf("the operator-intent log has not been compacted for %d days: %s", int(now.Sub(since).Hours()/24), st.CompactBlocked)
+	}
+	return disk, behind, blocked
 }
 
 func nonEmpty(s, or string) string {

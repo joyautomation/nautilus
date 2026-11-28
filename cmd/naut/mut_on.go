@@ -52,6 +52,13 @@ func init() {
 //     superseded keeps running the old history's substitutes until a
 //     takeover.
 //
+// #1455 PR 2a-2, a diverged operator-intent log and the compaction's conditions:
+//
+//   - diverged_condition_dropped: a diverged controller raises no condition and never restarts itself;
+//   - diverged_restart_loops: a diverged controller restarts itself again after a start that moved a diverged log aside;
+//   - diverged_says_vouch: a diverged controller's unsynced condition tells a person to vouch;
+//   - blocked_at_once: oplog-compaction-blocked is raised as soon as a compaction waits, not after 7 days.
+//
 // Peer TLS (#710):
 //
 //   - peer_tls_default_off: a pair member and the witness run plain HTTP

@@ -326,7 +326,7 @@ consumer reset is needed.
 - **Push install, for a follower and the witness.** The witness never pulls;
   today it is filled only by the leader's resend.
   - When a peer's Have is below Through and it advertises a rules version,
-    `replicateTo` sends **install requests** (`replicateReq.Base`): the
+    `replicateTo` sends **install requests** (`replicateReq.Install`): the
     header, then the kept entries in pages.
   - The copy stages them; it neither stores them in its log nor answers
     Have for them.
@@ -336,19 +336,37 @@ consumer reset is needed.
     the leader's push and also runs its own pull every tick, and the newer
     term wins, the push on a tie. An install page from a stale term is
     refused by its term before it is staged, as replication is.
-  - **Before the base is applied**, the copy fetches K's body by the seq the
-    header names and checks the staged base against K's digest, so a wrong
-    base is never applied.
+  - **Before the base is applied**, the copy checks the staged base against
+    K's body: K comes with the install's last page (the witness never calls
+    a peer, so it can't fetch K), at the seq the header names, and its
+    Through, count and digest must be the header's and the staged
+    entries'. When K then arrives again in the tail, it must be that same
+    K, or the copy has diverged.
+  - **Pages are taken by position:** a duplicate, late or out-of-turn page
+    is ignored and the answer says where to go on; a page after the install
+    changes nothing.
+  - **Only onto nothing applied:** a copy with a commit index or a base of
+    its own refuses an install.
   - After the last page, it checks the staged keep list and the (seq, term)
     digest, atomically writes the base file, takes Have = Through, and
     commits to Through, applying the base as one range. The witness applies
     nothing.
   - Normal replication then goes on from PrevSeq = Through.
 - **Pull install, for a leader catching up** (`leaderCatchUp`, `CatchUp`):
-  `fetchAfter` with `base=1`, with the same staging and checks.
-- **Verification:** an install is checked against the serving copy's header
-  (against transfer damage), and against K's own body, which is committed
-  log content, before anything is applied (against a wrong serving copy).
+  `fetchAfter` with `base=1`, with the same staging and checks. A compacted
+  copy's 409 reaches the leader's choice as an answer (its base page), never
+  as silence. A reader that holds the entry at Through, at its term, reads
+  on from Through instead (its log is the same up to there).
+- **Verification:** before anything is applied, an install's (seq, term)
+  pairs, count and Through are checked against the serving copy's header
+  and against K's own body, which is committed log content. The digest
+  covers (seq, term) only, as K's does (§3): an entry's content rests on
+  log matching, as replication's does.
+- **An installed base before its tail:** the header keeps the K that came
+  with the install, so the copy serves its base before the tail (which
+  holds K) has come, and after a restart.
+- **A copy that refuses** (it holds committed entries behind the base) is
+  named in `oplog-peer-behind-base`, never resent to in a loop.
 - **Have and Synced:** `Have` is only what was proved (#1472). Synced comes
   as today, from a synced leader's replication proving the copy equal up to
   its commit.
@@ -368,7 +386,7 @@ consumer reset is needed.
   opt-in pattern is reused:
   - `afterResp`/`replicateResp` gain `compactRules: <n>`, `now`, and
     `base{through, throughTerm, compact, digest}` once a copy has one;
-  - `replicateReq.Base` (install) is sent only to a copy that advertised a
+  - `replicateReq.Install` (install) is sent only to a copy that advertised a
     rules version;
   - `GET /api/oplog?…&base=1` answers base pages; without it, an `after`
     below Through gets 409 `compacted`, never a sparse page.
@@ -379,7 +397,8 @@ consumer reset is needed.
   Only an old build that needs an install hits a gap repeatedly: the leader
   stops resending to it and raises `oplog-peer-behind-base` ("controller b
   runs a build from before log compaction and missed the compacted part:
-  update it").
+  update it"). A copy's rules version is read from each answer, the 409s
+  included (a wiped copy's first answer is a gap), never remembered.
 - **An old leader** reading a compacted copy without `base=1` gets 409 and
   stays read-only under the existing condition, so it fails closed.
 - **Downgrade after compaction is not supported,** and there is no back-out
@@ -432,7 +451,10 @@ rule, `.precompact` and the free-disk check, and the rules version from
 
 **PR 2a-2 (oplog, wire; dark).** `compactRules`/`now`/`base` on the wire,
 the 409, the push and pull installs, staging, the diverged refill,
-`oplog-peer-behind-base`, the conditions. Tests:
+`oplog-peer-behind-base`, the conditions. `oplog-compaction-blocked` is
+raised from `Status` (why and since); PR 2b's decision sets them, and
+derives "since" from the log's own timestamps, so a restart does not reset
+the 7 days. Tests:
 
 - the witness wiped after a compaction, refilled by push;
 - a controller wiped and refilled by push while the other leads;
