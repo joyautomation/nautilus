@@ -160,10 +160,14 @@ type DeployResult struct {
 	OutsideChanges *OutsideChangesRecord `json:"outsideChanges,omitempty"`
 	// Fingerprint is the read after the load, or nil with
 	// FingerprintError saying why: a failed read leaves the load as it
-	// is. DownloadID is its DownloadId item.
-	Fingerprint      *DeployFingerprint `json:"fingerprint"`
-	FingerprintError string             `json:"fingerprintError,omitempty"`
-	DownloadID       string             `json:"downloadId,omitempty"`
+	// is. FingerprintUnavailable, in place of FingerprintError, says the
+	// CPU has no fingerprint to read: its access control is on (#1336),
+	// so nothing was tried; verify is its reference. DownloadID is its
+	// DownloadId item.
+	Fingerprint            *DeployFingerprint `json:"fingerprint"`
+	FingerprintError       string             `json:"fingerprintError,omitempty"`
+	FingerprintUnavailable string             `json:"fingerprintUnavailable,omitempty"`
+	DownloadID             string             `json:"downloadId,omitempty"`
 	// BlindTrustAfter is the agent's TIA instance's blind trust once the
 	// read ended, read or failed (a failed read with the opt-in may have
 	// trusted): what a later download in it rides on.
@@ -223,10 +227,12 @@ type DeployOutcome struct {
 	UserManagementReset string             `json:"userManagementReset,omitempty"`
 	Fingerprint         *DeployFingerprint `json:"fingerprint,omitempty"`
 	FingerprintError    string             `json:"fingerprintError,omitempty"`
-	DownloadID          string             `json:"downloadId,omitempty"`
-	BlindTrustAfter     *BlindTrust        `json:"blindTrustAfter,omitempty"`
-	ActingAnswers       []string           `json:"actingAnswers,omitempty"`
-	BlindTrust          *BlindTrust        `json:"blindTrust"`
+	// FingerprintUnavailable: as DeployResult's.
+	FingerprintUnavailable string      `json:"fingerprintUnavailable,omitempty"`
+	DownloadID             string      `json:"downloadId,omitempty"`
+	BlindTrustAfter        *BlindTrust `json:"blindTrustAfter,omitempty"`
+	ActingAnswers          []string    `json:"actingAnswers,omitempty"`
+	BlindTrust             *BlindTrust `json:"blindTrust"`
 }
 
 // Deploy is one deploy record: its intent line, with its outcome (nil
@@ -378,9 +384,12 @@ type VerifyResult struct {
 	// broken archive, a record that is not loaded, or unreadable lines.
 	ChangedOutside *bool `json:"changedOutside"`
 	// Fingerprint is the read when the request asked one (nil with
-	// FingerprintError when it failed: the verdict stands).
-	Fingerprint      *VerifyFingerprint `json:"fingerprint,omitempty"`
-	FingerprintError string             `json:"fingerprintError,omitempty"`
+	// FingerprintError when it failed: the verdict stands; nil with
+	// FingerprintUnavailable when the CPU's access control is on, #1336:
+	// the verdict, from a logged-on compare, is the reference).
+	Fingerprint            *VerifyFingerprint `json:"fingerprint,omitempty"`
+	FingerprintError       string             `json:"fingerprintError,omitempty"`
+	FingerprintUnavailable string             `json:"fingerprintUnavailable,omitempty"`
 	// CloseError says the verify's session could not be closed: it is
 	// kept, broken; close it again. The verdict stands.
 	CloseError string `json:"closeError,omitempty"`

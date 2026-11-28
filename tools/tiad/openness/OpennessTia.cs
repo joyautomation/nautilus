@@ -2384,8 +2384,13 @@ namespace Tiad.Openness
         // the portal serves, asks TLS trust through its own callback (#789
         // stage 1b). The portal's service alone, with no project online,
         // never reached the bench CPU (stage 1), so the read goes online
-        // first. Every step fails the read; offline always.
-        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
+        // first. Every step fails the read; offline always. It never logs
+        // on (#1336): with access control on, the project's connection asks
+        // credentials, answered no (FingerprintRule.LockedWhy), and the
+        // service is never called; the service itself asks TLS trust with
+        // no certificate, then a password-only logon (OnlineReadAccessPassword),
+        // also through the address of the project's own connection.
+        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate)
         {
             return Tia(delegate
             {
@@ -2401,10 +2406,18 @@ namespace Tiad.Openness
                 ConfigurationAddress at = TargetInterface(PcInterface(op.Configuration)).Addresses.Create(address);
                 ConfigurationPcInterface fpc = PcInterface(fp.Configuration);
                 ConfigurationAddress fat = fpc.TargetInterfaces.Count > 0 ? TargetInterface(fpc).Addresses.Create(address) : fpc.Addresses.Create(address);
-                var use = new LoginUse(login, "fingerprint read", address);
+                var use = LoginUse.Refusing("fingerprint read", address, FingerprintRule.LockedWhy);
                 var online = new OnlineAsks(op.Configuration, Detached, trustUnverifiedCertificate, address, use);
                 var asks = OnlineAsks.ForCallback(Detached, trustUnverifiedCertificate, address, use);
                 var r = new FingerprintRead();
+                // locked marks a failure AccessControlOn when the CPU's
+                // access control showed (FingerprintRule.Mark).
+                Func<TiaException, TiaException> locked = delegate(TiaException e)
+                {
+                    var asked = new List<string>(online.Asked);
+                    asked.AddRange(asks.Asked);
+                    return FingerprintRule.Mark(e, use.RefusedAll, asked, online.TrustedBlindly.Count + asks.TrustedBlindly.Count);
+                };
                 try
                 {
                     OnlineState st = op.GoOnline(at);
@@ -2414,9 +2427,11 @@ namespace Tiad.Openness
                         if (st != OnlineState.Online)
                         {
                             if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
-                            if (online.LoggedIn) throw new TiaException(TiaNames.LoginFailed(address, "online state " + st));
                             throw new TiaException("fingerprint read: TIA could not go online to " + address + ": " + st);
                         }
+                        // TIA went on after its credentials question was
+                        // answered no: the service is never called.
+                        if (use.RefusedAll) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "TIA went on with the fingerprint read"));
                         FingerprintDataResult res = fp.GetFingerprintData(fat, asks.Handle);
                         if (res == null || res.FingerprintDataItems == null) throw new TiaException("fingerprint read: TIA returned no result");
                         foreach (FingerprintDataItem it in res.FingerprintDataItems)
@@ -2433,14 +2448,15 @@ namespace Tiad.Openness
                         else op.GoOffline();
                     }
                 }
-                catch (TiaException)
+                catch (TiaException e)
                 {
+                    locked(e);
                     throw;
                 }
                 catch (Exception e)
                 {
                     TiaException refused = asks.Explain(address, e) ?? online.Explain(address, e);
-                    if (refused != null) throw refused;
+                    if (refused != null) throw locked(refused);
                     throw;
                 }
                 finally

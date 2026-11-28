@@ -1255,7 +1255,7 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text, path?}]}`. Each message is a leaf of TIA's message tree; `path` is its parents, outermost first. For an error in an SCL block, `object` is the line in the block's body (1 is the `BEGIN` line) and the block is the last parent: `{object: "4", path: ["PLC_1", "Program blocks", "nautilus", "naut_Main (FB1)"]}` (measured on TIA V21, #789) |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
 | `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}, deviceAttestation?: {by, order, firmware}}` (§3.9, §3.8) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null`. A project opened as found, with no spec applied yet (an adopted one), compares with its own CPU at the address the project holds; still only a target. `address` is the CPU compared with, which naut checks is the deploy's |
-| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
+| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8). It never logs on: `secrets` are accepted and not used, and a CPU with access control on is refused `409 fingerprint_unavailable`, naming verify (#1336) |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
 | `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
@@ -1993,12 +1993,17 @@ get a record too, just as it must get the hardware opt-in (#1180 review).
     so the instance counts it as trust. `blindTrustAfter`, in the response
     and the outcome line, is the instance's trust once the read ended,
     whether it read or failed.
+  - A CPU with access control on has no fingerprint to read (§3.8, #1336):
+    the response and the outcome line say `fingerprintUnavailable` (why,
+    naming verify) in place of `fingerprintError`. It is not an error: the
+    load stands, nothing was trusted, no password was sent, and the
+    logged-on compare after the load is the reference.
 - **Retention.** Every attempt past tiad's own refusals keeps its archive,
   including one a TIA check cancels. Nothing prunes them yet. A full disk
   refuses every download, which is safe but is an outage. Pruning is a
   follow-up (#616).
 - **The response.** A successful download returns `deploy: {id, archive,
-  source, outsideChanges?, fingerprint, fingerprintError?, downloadId?, blindTrustAfter,
+  source, outsideChanges?, fingerprint, fingerprintError?, fingerprintUnavailable?, downloadId?, blindTrustAfter,
   recorded, recordError?}`. `GET /v1/deploys` lists the records.
 
 **Verifying a deploy (D1b).** `POST /v1/deploys/verify {deploy}` answers
@@ -2036,7 +2041,10 @@ an `audit verify ...` line says what it found or why it failed.
    trust path. `downloadIdSame` and `hardwareSame` say whether those items
    are the record's (`null` when either side has none). A `DownloadId`
    that differs means the CPU was loaded since, whatever the compare says.
-   A failed read is `fingerprintError` and leaves the verdict as it is.
+   A failed read is `fingerprintError` and leaves the verdict as it is. A
+   CPU with access control on is `fingerprintUnavailable` (#1336): no
+   read, no error, and the verdict, from a compare logged on as
+   `nautilus`, is that CPU's reference.
 7. **The close.** The session is closed, as a `DELETE` closes one (a
    blindly trusting instance is then retired), and then its staging is
    removed. A close that fails keeps the session, broken, with its staging;
@@ -2459,8 +2467,9 @@ user `nautilus`:
 
 | Call | Where the password goes |
 |---|---|
-| `POST …/compare`, `…/upload`, `…/fingerprint`, `POST /v1/deploys/verify` | `secrets.fullAccessPassword` (the only secret they take) |
-| `POST …/download` | its `secrets.fullAccessPassword`, also for the compare and fingerprint read after the load |
+| `POST …/compare`, `…/upload`, `POST /v1/deploys/verify` | `secrets.fullAccessPassword` (the only secret they take) |
+| `POST …/download` | its `secrets.fullAccessPassword`, also for the compare after the load |
+| `POST …/fingerprint`, and the fingerprint read of a download or verify | nowhere: a fingerprint read never logs on (#1336, below) |
 
 When TIA asks a project user's legitimation
 (`OnlineAuthenticationConfiguration`), tiad logs on as the project user
@@ -2484,7 +2493,8 @@ glue and tiad-fake run). It answers no, naming why, when:
   one twice, since a CPU may lock a user out after failed logons.
 
 Legacy access-level passwords (`OnlinePasswordConfiguration`,
-`OnlineReadAccessPassword`) and anything tiad does not know still cancel.
+`OnlineReadAccessPassword`, which TIA's fingerprint service asks, #1336)
+and anything tiad does not know still cancel.
 Every answer and refusal is an audit line (`audit online-login`) naming the
 call, address and user, never the password; the glue logs whether the
 connection is secure and which user types the CPU offers, never the
@@ -2504,13 +2514,45 @@ may have refused the password.
 **What a blind trust costs.** The refusal after a blind trust is the safe
 side, and it has a price on a CPU that asks credentials. TIA's fingerprint
 service asks TLS trust on the bench ("certificate not matching"), and an
-upload may. A read logs on through the project's connection first, then
-trusts the service: it goes through, if the service asks no credentials of
-its own, but from then on the instance sends no password until it is
-retired. An upload asked TLS before credentials cannot do both and is
+upload may. An upload asked TLS before credentials cannot do both and is
 refused. There is no opt-in to send a password after a blind trust, by
 decision (naut-lead, 2026-11-22): a customer who needs one is a security
 call for James.
+
+**A fingerprint read never logs on (#1336).** On the bench 1510SP with
+access control on (2026-11-28), the read logged on through the project's
+connection, then TIA's fingerprint service opened a connection of its own:
+it asked TLS trust with no certificate shown ("certificate not matching"),
+then a password-only logon, `OnlineReadAccessPassword` (an
+`OnlinePasswordConfiguration`: secure communication, `SetPassword` only, no
+user name). Reading through the address of the project's own connection
+asked the same TLS question twice, and Openness offers no certificate to
+check and no store to trust one in. Answering would send the Full access
+password over a connection tiad cannot verify, which this section refuses
+everywhere. So:
+
+- a fingerprint read answers every credentials question no
+  (`LoginUse.Refusing`, `FingerprintRule.LockedWhy`), before any other
+  reason, and writes no password; the request's `secrets` are read and not
+  used;
+- TIA asking credentials on the project's connection means the CPU's
+  access control is on: the service is never called, so nothing is
+  trusted, even with the opt-in, and the call answers `409
+  fingerprint_unavailable`, naming verify, the locked CPU's reference;
+- if the service asks the password-only logon anyway (a TIA that kept a
+  logon asks the project's connection nothing), it is answered no, and the
+  read is `fingerprint_unavailable` too; the trust it answered before stays
+  recorded, as for any read that failed after its opt-in;
+- the refusal holds no login, so it forgets no instance-logon evidence and
+  marks nothing answered;
+- a deploy's or a verify's read reports it as `fingerprintUnavailable`,
+  never as `fingerprintError`.
+
+A CPU with access control on can still show its fingerprint if a project
+ever needs one: a separate read-access credential, if FW 3.1 access
+control supports one, answered only to the password-only logon, so the
+Full access password never crosses that connection. Not built: research
+only.
 
 **What the fakes prove, and what they do not.** Both fakes model a CPU
 that asks credentials once a hardware load of a fullAccessUser station
@@ -2521,9 +2563,7 @@ password, and with a blind trust. tiad-fake answers through the core rule,
 so a mutant of it fails the suite. What only the bench can show: which
 configuration type the real CPU asks, whether an upload asks through the
 connection or through its own callback (`UploadPasswordConfiguration`,
-which tiad still refuses), whether TIA's fingerprint service asks
-credentials of its own after the project's connection logged on (tiad
-answers once per call, so it would refuse that read), whether TIA keeps a
+which tiad still refuses), whether TIA keeps a
 logon for later calls in the same instance, and how a refused password
 shows (the fakes ask again;
 TIA may fail going online instead, which tiad reports as a logon TIA

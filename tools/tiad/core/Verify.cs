@@ -313,14 +313,16 @@ namespace Tiad
                     {
                         run.Trust = trust;
                         run.Address = address;
-                        run.Password = password;
                     });
                 }
                 catch (TiadException e)
                 {
                     // The session or TIA gone is no read that failed.
                     if (e.Fatal) throw;
-                    o["fingerprintError"] = e.Message;
+                    // A CPU with access control on has no fingerprint to
+                    // read (#1336): the logged-on compare is the reference.
+                    if (e.Kind == Kinds.FingerprintUnavailable) o["fingerprintUnavailable"] = e.Message;
+                    else o["fingerprintError"] = e.Message;
                 }
                 if (fp != null)
                 {

@@ -40,10 +40,11 @@ func TestAgentLogsOnWithoutLoggingThePassword(t *testing.T) {
 	if _, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: wrong}); tiad.Kind(err) != tiad.KindOperationFailed {
 		t.Fatalf("compare with a wrong password: %v", err)
 	}
-	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: tiadtest.BenchLogin}); err != nil {
+	// A fingerprint read never logs on (#1336), whatever it carries.
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: tiadtest.BenchLogin}); tiad.Kind(err) != tiad.KindFingerprintUnavailable {
 		t.Fatalf("fingerprint read: %v", err)
 	}
-	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: wrong}); tiad.Kind(err) != tiad.KindOperationFailed {
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: wrong}); tiad.Kind(err) != tiad.KindFingerprintUnavailable {
 		t.Fatalf("fingerprint read with a wrong password: %v", err)
 	}
 	sw := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()},
@@ -77,7 +78,12 @@ func TestAgentLogsOnWithoutLoggingThePassword(t *testing.T) {
 	}
 
 	log := waitLog(t, p, `audit online-login call=upload address="192.0.2.10" user="nautilus": answering`)
-	for _, call := range []string{"compare", "fingerprint read", "download", "upload"} {
+	// The fingerprint reads answered no for the lock, never logged on.
+	if !strings.Contains(log, `audit online-login call=fingerprint read address="192.0.2.10" user="nautilus" refused: "a fingerprint read never logs on: `) ||
+		strings.Contains(log, `audit online-login call=fingerprint read address="192.0.2.10" user="nautilus": answering`) {
+		t.Errorf("the fingerprint reads' audit lines: want the lock's refusal and no logon")
+	}
+	for _, call := range []string{"compare", "download", "upload"} {
 		if !strings.Contains(log, "audit online-login call="+call+` address="192.0.2.10" user="nautilus": answering TIA's credentials question`) {
 			t.Errorf("no logon audit line for the %s", call)
 		}
@@ -111,21 +117,27 @@ func TestAgentLogsOnWithoutLoggingThePassword(t *testing.T) {
 }
 
 // TestAgentSendsNoPasswordAfterABlindTrust pins what a blind trust costs
-// on a CPU that asks credentials. A deploy whose fingerprint read trusts
-// blindly logs on first (the project's connection) and goes through, but
-// from then on the TIA instance sends no password until it is retired: a
-// compare is refused, and so is a download of a fullAccessUser station,
-// before anything reaches the CPU. An upload whose CPU asks TLS trust
-// before credentials, with the opt-in, is refused at the logon.
+// on a CPU that asks credentials. With a TIA that keeps the download's
+// logon, a deploy's fingerprint read reaches TIA's fingerprint service,
+// trusts its TLS question on the opt-in and is refused at its
+// password-only logon (#1336): the load stands, its fingerprint is
+// unavailable, and the trust stays. From then on the TIA instance sends no
+// password until it is retired: a compare is refused, and so is a download
+// of a fullAccessUser station, before anything reaches the CPU. An upload
+// whose CPU asks TLS trust before credentials, with the opt-in, is
+// refused at the logon.
 func TestAgentSendsNoPasswordAfterABlindTrust(t *testing.T) {
 	p, s := loggedOnBench(t)
-	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true})
+	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true, KeepsLogon: true})
 	sw := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
 		Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}, Fingerprint: &tiad.FingerprintRequest{TrustUnverifiedCertificate: true}}
 	r, err := s.Download(ctx, sw)
-	if err != nil || !r.Downloaded || !r.CompareEqual || r.Deploy == nil || r.Deploy.Fingerprint == nil {
-		t.Fatalf("a download whose read trusts blindly: %+v %v", r, err)
+	if err != nil || !r.Downloaded || !r.CompareEqual || r.Deploy == nil || r.Deploy.Fingerprint != nil || r.Deploy.FingerprintError != "" ||
+		!strings.Contains(r.Deploy.FingerprintUnavailable, "OnlineReadAccessPassword") || r.Deploy.BlindTrustAfter == nil {
+		t.Fatalf("a download whose read trusts blindly: %+v %v", r.Deploy, err)
 	}
+	// TIA asks credentials again from here.
+	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true})
 	const blocked = "password not sent: this agent's TIA instance trusted an unverified CPU certificate ("
 	if _, err := s.CompareWith(ctx, tiadtest.BenchCompare); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), blocked) {
 		t.Fatalf("a compare on the trusting instance: %v", err)

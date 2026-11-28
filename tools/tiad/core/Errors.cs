@@ -45,6 +45,12 @@ namespace Tiad
         // program block that exists outside the import's group: TIA would
         // replace it (Ownership.cs). Nothing was imported.
         public const string ForeignBlock = "foreign_block";
+        // FingerprintUnavailable refuses a fingerprint read of a CPU whose
+        // access control is on (FingerprintRule, #1336): TIA's fingerprint
+        // service would need a blind trust and a password-only logon, which
+        // tiad does not send. The message names verify. A deploy or verify
+        // reports it as fingerprintUnavailable, never as an error.
+        public const string FingerprintUnavailable = "fingerprint_unavailable";
     }
 
     // TiadException is a failure that becomes an error envelope: its HTTP

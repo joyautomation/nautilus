@@ -147,5 +147,58 @@ namespace Tiad.Test
             Eq(rec3.Asked.Count, 1, "no password: answered no");
             if (rec3.Asked.Count == 1) Contains(rec3.Asked[0], "secrets.fullAccessPassword", "names the secret");
         }
+
+        // FingerprintNeverLogsOn: a fingerprint read's LoginUse answers every
+        // credentials question no with FingerprintRule.LockedWhy, before any
+        // other reason, writes nothing, and runs no Lost/Took (#1336).
+        static void FingerprintNeverLogsOn()
+        {
+            const string type = "OnlineAuthenticationConfiguration";
+            var u = LoginUse.Refusing("fingerprint read", "192.0.2.10", FingerprintRule.LockedWhy);
+            True(!u.RefusedAll, "nothing refused before TIA asks");
+            var rec = new OnlineRecord { Use = u };
+            string wrote = null;
+            Exception e = Caught(delegate { rec.Handle(delegate { return type; }, delegate(string t, OnlineRecord.Call call) { u.Answer(call, t, true, LoginOffered, delegate(string pw) { wrote = pw; }); }); });
+            True(e is OperationCanceledException, "TIA gets Boundary.Fail's cancel");
+            Eq(wrote, null, "no password written");
+            True(u.RefusedAll, "TIA asked credentials: the access control is on");
+            True(!u.Answered && !u.LoggedOn, "never logged on");
+            Eq(rec.Asked.Count, 1, "answered no");
+            if (rec.Asked.Count == 1) Eq(rec.Asked[0], "credentials (OnlineAuthenticationConfiguration): " + FingerprintRule.LockedWhy, "with the lock's reason");
+            // Before every other reason: a password-only question, a trust.
+            var v = LoginUse.Refusing("fingerprint read", "192.0.2.10", FingerprintRule.LockedWhy);
+            v.Trusted();
+            Eq(v.Decide(true, new List<string> { "PasswordOnly" }), FingerprintRule.LockedWhy, "the lock's reason first");
+            True(v.RefusedAll, "and recorded");
+            // A plain LoginUse never refuses for the lock.
+            var plain = new LoginUse(null, "compare", "192.0.2.10");
+            plain.Decide(true, LoginOffered);
+            True(!plain.RefusedAll, "a compare's refusal is not the lock's");
+            True(FingerprintRule.LockedWhy.IndexOf(Pw, StringComparison.Ordinal) < 0, "the reason holds no password");
+        }
+
+        // FingerprintMarks: a fingerprint read's failure is marked
+        // AccessControlOn when the read answered credentials no for the
+        // lock or TIA's fingerprint service asked the password-only logon,
+        // TrustedNothing only when no certificate was trusted (#1336).
+        static void FingerprintMarks()
+        {
+            var a = FingerprintRule.Mark(new TiaException("x"), true, new List<string>(), 0);
+            True(a.AccessControlOn && a.TrustedNothing, "refused for the lock, nothing trusted");
+            var b = FingerprintRule.Mark(new TiaException("x"), false, new List<string> { "credentials (OnlineReadAccessPassword)" }, 1);
+            True(b.AccessControlOn && !b.TrustedNothing, "the password-only logon after a trust");
+            var c = FingerprintRule.Mark(new TiaException("x"), false, new List<string> { "credentials (OnlineAuthenticationConfiguration): no password", "trust the TLS certificate of PLC_1" }, 0);
+            True(!c.AccessControlOn && !c.TrustedNothing, "other refusals are not the lock");
+            var d = FingerprintRule.Mark(new TiaException("x"), true, new List<string>(), 2);
+            True(d.AccessControlOn && !d.TrustedNothing, "a trust is never nothing trusted");
+            string m = FingerprintRule.Unavailable("192.0.2.10", a);
+            Contains(m, "fingerprint unavailable: the CPU at 192.0.2.10 has access control on (TIA asked credentials going online)", "names the CPU and how it showed");
+            Contains(m, "Nothing was trusted and no password was sent", "says nothing was trusted");
+            Contains(m, FingerprintRule.UseVerify, "names verify");
+            var pw = FingerprintRule.Mark(new TiaException("going online to 192.0.2.10, TIA asked: credentials (OnlineReadAccessPassword). tiad ..."), false, new List<string> { "credentials (OnlineReadAccessPassword)" }, 1);
+            string n = FingerprintRule.Unavailable("192.0.2.10", pw);
+            Contains(n, "(TIA's fingerprint service asked a password-only logon (OnlineReadAccessPassword))", "names the service's question");
+            Contains(n, "No password was sent; " + FingerprintRule.UseVerify, "no claim that nothing was trusted");
+        }
     }
 }

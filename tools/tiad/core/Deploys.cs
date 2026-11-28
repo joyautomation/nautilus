@@ -608,7 +608,10 @@ namespace Tiad
         public bool Hardware;
         public List<string> Blocks = new List<string>();
         public FingerprintRun Fingerprint;
-        public string FingerprintError = "", DownloadId = "";
+        // FingerprintUnavailable is why the CPU has no fingerprint to read
+        // (fingerprint_unavailable: its access control is on, #1336), in
+        // place of FingerprintError: the read was not tried, nothing failed.
+        public string FingerprintError = "", FingerprintUnavailable = "", DownloadId = "";
         // TrustAfter is the instance's blind trust once the post-load read
         // ended, read or failed: a failed read with the opt-in may have
         // trusted (UnknownTrust).
@@ -732,6 +735,7 @@ namespace Tiad
                 if (run.Hardware) line["hardwareVerified"] = false;
                 line["fingerprint"] = run.Fingerprint == null ? null : run.Fingerprint.ToJson();
                 if (run.FingerprintError != "") line["fingerprintError"] = DeployStore.Bound(run.FingerprintError);
+                if (run.FingerprintUnavailable != "") line["fingerprintUnavailable"] = DeployStore.Bound(run.FingerprintUnavailable);
                 if (run.DownloadId != "") line["downloadId"] = run.DownloadId;
                 line["blindTrustAfter"] = run.TrustAfter == null ? null : run.TrustAfter.ToJson();
             }
@@ -795,8 +799,14 @@ namespace Tiad
                 {
                     r.Trust = req.FingerprintTrust;
                     r.Address = req.Address;
-                    r.Password = req.Secrets.FullAccessPassword;
                 });
+            }
+            catch (TiadException e)
+            {
+                // A CPU with access control on has no fingerprint to read
+                // (#1336): recorded as unavailable, never as an error.
+                if (e.Kind == Kinds.FingerprintUnavailable) run.FingerprintUnavailable = e.Message;
+                else run.FingerprintError = e.Message;
             }
             catch (Exception e)
             {
@@ -810,7 +820,8 @@ namespace Tiad
             d["source"] = req.Source == null ? null : req.Source.ToJson();
             if (req.OutsideChanges != null) d["outsideChanges"] = req.OutsideChanges.ToJson();
             d["fingerprint"] = fp == null ? null : fp.ToJson();
-            if (fp == null) d["fingerprintError"] = run.FingerprintError;
+            if (fp == null && run.FingerprintUnavailable != "") d["fingerprintUnavailable"] = run.FingerprintUnavailable;
+            else if (fp == null) d["fingerprintError"] = run.FingerprintError;
             string dl = fp == null ? null : fp.Value("DownloadId");
             if (dl != null)
             {

@@ -2602,6 +2602,42 @@ namespace Tiad.Fake
             use.Trusted();
         }
 
+        // AskPasswordOnly asks the password-only logon TIA's fingerprint
+        // service asks a CPU with access control on
+        // (OnlineReadAccessPassword, #1336), and answers as tiad.Openness
+        // does: through OnlineRecord, with what OnlineChecks says; a
+        // credentials answer goes through the operation's LoginUse, and a
+        // password it lets through is written. A refusal is added to
+        // refused, and fails the call.
+        void AskPasswordOnly(string address, LoginUse use, List<string> refused)
+        {
+            var rec = new OnlineRecord { Use = use };
+            string wrote = null;
+            try
+            {
+                rec.Handle(delegate { return FingerprintRule.PasswordOnly; }, delegate(string type, OnlineRecord.Call call)
+                {
+                    if (OnlineChecks.Answer(type) == OnlineChecks.Login)
+                    {
+                        use.Answer(call, type, true, new List<string> { "PasswordOnly" }, delegate(string pw) { wrote = pw; });
+                        return;
+                    }
+                    string ask = OnlineChecks.Ask(type, "", "", new List<string>());
+                    call.Refuse(ask);
+                    throw new TiaException("tiad cancels going online: TIA asked " + ask);
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                // Boundary.Fail's cancel, which TIA gets.
+            }
+            // A password written logs on: the read goes through, which the
+            // contract suite refuses to see.
+            if (wrote != null) return;
+            refused.AddRange(rec.Asked);
+            throw new TiaException(TiaNames.OnlineRefused(address, rec.Asked, "An error occured during getting fingerprints."));
+        }
+
         // AskLogin asks credentials as TIA does going online to a CPU whose
         // access control a hardware load turned on (logins), and answers
         // as tiad.Openness does:
@@ -2663,7 +2699,7 @@ namespace Tiad.Fake
         // eight identifiers, with synthetic values that change as TIA's do
         // (#789 stage (C)): DownloadId and the change counters on every
         // load, Hardware on a hardware load.
-        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
+        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate)
         {
             script.Enter("ReadFingerprint");
             var p = (FakeProject)project;
@@ -2675,13 +2711,26 @@ namespace Tiad.Fake
                 throw new TiaException("fingerprint read: the project's CPU is at " + at + ", not " + address);
             }
             var r = new FingerprintRead();
-            var use = new LoginUse(login, "fingerprint read", address);
+            // As the glue: a fingerprint read never logs on (#1336).
+            var use = LoginUse.Refusing("fingerprint read", address, FingerprintRule.LockedWhy);
+            var refused = new List<string>();
             // Going online first (the project's connection, which asks
-            // credentials), then TIA's fingerprint service, which asks TLS
-            // trust. Whether the service asks credentials of its own is for
-            // the bench to show; the fake's does not.
-            AskLogin(address, use, new List<string>());
-            if (script.FingerprintAsksTls) AskTls(address, trustUnverifiedCertificate, r.TrustedBlindly, use);
+            // credentials when the CPU's access control is on), then TIA's
+            // fingerprint service, which asks TLS trust, then, as the bench
+            // 1510SP's with access control on does, a password-only logon.
+            try
+            {
+                AskLogin(address, use, refused);
+                // TIA went on after credentials answered no: no service.
+                if (use.RefusedAll) throw new TiaException(TiaNames.OnlineRefused(address, refused, "TIA went on with the fingerprint read"));
+                if (script.FingerprintAsksTls) AskTls(address, trustUnverifiedCertificate, r.TrustedBlindly, use);
+                if (logins.ContainsKey(address)) AskPasswordOnly(address, use, refused);
+            }
+            catch (TiaException e)
+            {
+                FingerprintRule.Mark(e, use.RefusedAll, refused, r.TrustedBlindly.Count);
+                throw;
+            }
             if (script.FingerprintNoItems) return r;
             List<KeyValuePair<string, string>> scripted = script.FingerprintItems;
             if (scripted.Count > 0)

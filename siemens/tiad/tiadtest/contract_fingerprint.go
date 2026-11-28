@@ -19,6 +19,43 @@ func contractFingerprint(t *testing.T, start Starter) {
 	t.Run("Retired", func(t *testing.T) { contractFingerprintRetired(t, start) })
 	t.Run("FailsClosed", func(t *testing.T) { contractFingerprintFailsClosed(t, start) })
 	t.Run("Gates", func(t *testing.T) { contractFingerprintGates(t, start) })
+	t.Run("PasswordOnly", func(t *testing.T) { contractFingerprintPasswordOnly(t, start) })
+}
+
+// contractFingerprintPasswordOnly: on a CPU with access control on, TIA's
+// fingerprint service asks a password-only logon (OnlineReadAccessPassword,
+// the bench 1510SP, #1336) after its TLS question. A TIA that kept a logon
+// for its instance asks the project's connection nothing, so the read
+// reaches the service: the password-only logon is answered no, whatever
+// password the request carries, and the read is unavailable, naming
+// verify. The trust it answered on the opt-in is recorded (the read failed
+// after it); without the opt-in the TLS question refuses it first.
+func contractFingerprintPasswordOnly(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	a.SetLogon(t, LogonScript{KeepsLogon: true})
+	hw := AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})
+	if r, err := s.Download(ctx, hw); err != nil || !r.Downloaded || r.Deploy == nil || r.Deploy.FingerprintUnavailable == "" {
+		t.Fatalf("the load that turns access control on: %+v %v", r, err)
+	}
+	// The instance keeps the compare's logon.
+	if r, err := s.CompareWith(ctx, BenchCompare); err != nil || !r.Equal {
+		t.Fatalf("a compare that logs on: %+v %v", r, err)
+	}
+	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
+	_, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
+	if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "trustUnverifiedCertificate: true") {
+		t.Fatalf("no opt-in: %v, want the TLS question refused first", err)
+	}
+	r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true})
+	lockedFingerprint(t, "the service's password-only logon", err, true)
+	if !strings.Contains(err.Error(), "No password was sent; ") || strings.Contains(err.Error(), "Nothing was trusted") || len(r.Items) != 0 {
+		t.Fatalf("after a trust: %+v %v", r, err)
+	}
+	// The read failed after its trust: TIA keeps it, so the instance
+	// reports it, and a download needs the yes.
+	if c, err := s.CompareWith(ctx, BenchCompare); err != nil || c.BlindTrust == nil || c.BlindTrust.Call != "fingerprint read" {
+		t.Fatalf("a compare after the read: %+v %v, want the read's trust", c, err)
+	}
 }
 
 func fpValue(t *testing.T, r tiad.FingerprintResult, id string) string {
@@ -33,8 +70,9 @@ func fpValue(t *testing.T, r tiad.FingerprintResult, id string) string {
 var benchSoftwareLoad = tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}
 
 // contractFingerprintRead: TIA's items in TIA's order; DownloadId and the
-// counters change with every load, Hardware with a hardware load (#789
-// stage (C)); no trust asked, none recorded.
+// counters change with every load, Hardware not with a software load (#789
+// stage (C)); no trust asked, none recorded. The hardware load that turns
+// access control on leaves no fingerprint to read (#1336).
 func contractFingerprintRead(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
@@ -64,16 +102,13 @@ func contractFingerprintRead(t *testing.T, start Starter) {
 	if fpValue(t, r2, "Hardware") != fpValue(t, r, "Hardware") {
 		t.Errorf("a software load changed Hardware: %+v -> %+v", r.Items, r2.Items)
 	}
+	// The bench station's hardware load turns its access control on: from
+	// then on the CPU has no fingerprint to read (#1336).
 	if _, err := s.Download(ctx, AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}})); err != nil {
 		t.Fatal(err)
 	}
-	r3, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fpValue(t, r3, "Hardware") == fpValue(t, r2, "Hardware") || fpValue(t, r3, "DownloadId") == fpValue(t, r2, "DownloadId") {
-		t.Errorf("a hardware load left Hardware or DownloadId as they were: %+v -> %+v", r2.Items, r3.Items)
-	}
+	_, err = s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin})
+	lockedFingerprint(t, "a read after the hardware load", err, false)
 	if l := a.Loaded(t); len(l) != 2 {
 		t.Fatalf("loads %+v, want the two downloads only", l)
 	}

@@ -1013,13 +1013,40 @@ namespace Tiad
         readonly object mu = new object();
         readonly OnlineLogin login;
         readonly string call, address;
-        bool answered, refused, trusted, asked;
+        // refuseAll, when not null, is why every credentials question of
+        // the operation is answered no (Refusing).
+        readonly string refuseAll;
+        bool answered, refused, trusted, asked, refusedAll;
 
-        public LoginUse(OnlineLogin login, string call, string address)
+        public LoginUse(OnlineLogin login, string call, string address) : this(login, call, address, null)
+        {
+        }
+
+        LoginUse(OnlineLogin login, string call, string address, string refuseAll)
         {
             this.login = login;
             this.call = call ?? "";
             this.address = address ?? "";
+            this.refuseAll = refuseAll;
+        }
+
+        // Refusing is the LoginUse of an operation that never logs on: every
+        // credentials question is answered no with why, before anything
+        // else is decided, and no password is ever written (a fingerprint
+        // read, #1336). It holds no login, so a refusal forgets no
+        // instance-logon evidence (OnlineLogin.Lost) and marks nothing
+        // answered (Took): it says nothing about a password.
+        public static LoginUse Refusing(string call, string address, string why)
+        {
+            return new LoginUse(null, call, address, why ?? "");
+        }
+
+        // RefusedAll is true once Refusing's why answered a credentials
+        // question no: TIA asked credentials, so the CPU's access control
+        // is on.
+        public bool RefusedAll
+        {
+            get { lock (mu) return refusedAll; }
         }
 
         // Password is the password to write, once Decide returned null.
@@ -1115,6 +1142,11 @@ namespace Tiad
             lock (mu)
             {
                 asked = true;
+                if (refuseAll != null)
+                {
+                    refusedAll = true;
+                    return refuseAll;
+                }
                 if (answered) return AskedAgain;
                 if (refused) return RefusedBefore;
                 if (login == null) return NoPassword;
