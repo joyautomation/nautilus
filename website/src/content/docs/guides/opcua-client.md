@@ -209,7 +209,9 @@ command per outage, naming it, and counted as `droppedEvents` in the
 driver's status (the metric "late commands dropped"). Press it again once
 the server answers. A release (FALSE) raised while the session is down
 still goes out when it is established, so a node that took the press
-before the session broke is released.
+before the session broke is released. A press within one scan of a
+reconnect or of the write gate reopening is taken as the baseline and not
+sent: press again.
 
 ## Security
 
