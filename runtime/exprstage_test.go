@@ -489,7 +489,8 @@ func TestExprStageIsNeverCarried(t *testing.T) {
 }
 
 // The steady state allocates nothing more with expressions than without,
-// and a member faulting every scan costs no more than the VM's own error.
+// and nor does a member faulting every scan (the VM hands back the same
+// index error, ir.IndexError, and the stage builds no text per scan).
 func TestExprStageAllocatesNothing(t *testing.T) {
 	plain := InstanceDef{Members: map[string]MemberDef{"Raw": {Kind: MemberFrom}, "Idx": {Kind: MemberFrom}, "Div": {Kind: MemberFrom}, "Cmd": {Kind: MemberTo}}}
 	measure := func(def InstanceDef, idx int64) float64 {
@@ -504,20 +505,8 @@ func TestExprStageAllocatesNothing(t *testing.T) {
 	if with := measure(gaugeDef(), 1); with != base {
 		t.Errorf("a scan with 5 expressions: %v allocs, without: %v", with, base)
 	}
-	// The VM's own error for an index out of range, measured alone.
-	r, d := newGaugeRuntime(t, "", gaugeDef())
-	deliver(d, 3, 9, 4)
-	r.Scan()
-	s := r.prog.ex.stage
-	pick := -1
-	for i := range r.prog.ex.units {
-		if r.prog.ex.units[i].full == "G1.Pick" {
-			pick = i
-		}
-	}
-	vm := testing.AllocsPerRun(100, func() { _ = ir.Run(s.units[pick], s.frame, s.host) })
-	if faulting := measure(gaugeDef(), 9); faulting != base+vm {
-		t.Errorf("a scan with a member faulting: %v allocs, want %v (the scan's %v + the VM's error %v)", faulting, base+vm, base, vm)
+	if faulting := measure(gaugeDef(), 9); faulting != base {
+		t.Errorf("a scan with a member faulting every scan: %v allocs, without expressions: %v", faulting, base)
 	}
 }
 
