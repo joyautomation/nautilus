@@ -125,6 +125,23 @@ import "os"
 //     conditions, so a copy silent, lost, at a history or holding entries
 //     is overridden without --accept-loss.
 //
+// One sync per batch (#1455):
+//
+//   - batch_not_synced: a batch of entries is written but not synced
+//     before the answer that acknowledges it;
+//   - batch_kept_on_sync_failure: a batch whose write or sync failed stays
+//     in memory, so the next answer counts entries the disk may not hold;
+//   - catchup_commit_per_page: a follower's catch-up commits as each page
+//     arrives, so a lapse on one page and the entries it names on the one
+//     before are applied apart (#1466);
+//   - leader_catchup_pages_unchecked: a leader's catch-up takes the chosen
+//     copy's later pages without checking that it still counts and its
+//     log is unchanged (a copy that lost its log mid-read ends it short);
+//   - leader_catchup_term_unchecked: a leader's catch-up goes on, and
+//     syncs its term, after a newer term was seen between its pages;
+//   - rewrite_failure_kept: a replaced suffix whose rewrite failed stays
+//     in memory while the file holds the old one.
+//
 // Peer TLS (#710):
 //
 //   - peer_tls_log_plain: the log's calls ignore Options.TLS and go out

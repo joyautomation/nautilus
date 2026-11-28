@@ -685,6 +685,14 @@ var Mutations = []string{
 	"words_stale_at_backoff",            // node: a voter's campaign word goes stale after two leases, so the no-leader cause flips at the look that ends an unheard campaign's back-off (#1436, Fable)
 	"answered_unbound",                  // node: a witness answer under a certificate this controller does not count proves the witness reachable, so the no-leader cause blames its write (#1436, Fable)
 
+	// oplog: one sync per batch of entries (#1455).
+	"batch_not_synced",               // a batch is written but not synced before it is acknowledged
+	"batch_kept_on_sync_failure",     // a batch whose write or sync failed stays in memory, counted by the next answer
+	"catchup_commit_per_page",        // a follower's catch-up commits as each page arrives, splitting a lapse from what it names
+	"leader_catchup_pages_unchecked", // a leader's catch-up takes the chosen copy's later pages without checking it still counts and is unchanged
+	"leader_catchup_term_unchecked",  // a leader's catch-up goes on, and syncs its term, after a newer term was seen between pages
+	"rewrite_failure_kept",           // a replacement whose rewrite failed stays in memory, unlike the file
+
 	"leaderless_alarm_one_episode",         // node: the no-leader alarm keeps one episode across spells, so a page queued in one spell may leave in the next (#1436)
 	"leaderless_alarm_second_never_defers", // node: the second-named controller raises the no-leader alarm despite the first's fresh word that it pages it: paged twice (#1436)
 	"leaderless_alarm_stale_word",          // node: the second-named controller defers to the first's no-leader alarm word however old: paged by nobody (#1436)

@@ -29,13 +29,14 @@
 // replication is refused.
 //
 // Each instance keeps the log in memory and appends it to a local file
-// (synced per write; a torn final line from a crash is dropped), which
+// (synced per batch of entries; a torn final line from a crash is dropped), which
 // survives a process restart but not a reschedule. There is no durable
 // copy on the cluster being watched, on purpose: the log must not depend
 // on the platform it reports on. Two instances of three cannot form a
 // majority, so a split leaves exactly one side writable, and the other
-// says so (Status). The log is not compacted; at operator rates it grows
-// by kilobytes a day.
+// says so (Status). The log is not compacted (#1455): about 225 bytes per
+// entry on disk and 0.5 MB per 1,000 in memory, at a busy plant's rate
+// about 2,400 entries a day.
 //
 // Replica-to-replica calls require a shared token (constant-time compared)
 // whenever there is more than one peer, and replication is accepted only
@@ -480,10 +481,11 @@ type Options struct {
 	// waits for the next start (Mark.SupersedeTo).
 	ResetInPlace bool
 
-	transport     http.RoundTripper // tests: an in-process network
-	afterVouchAsk func()            // tests: Vouch, between its asks and its mark
-	lim           limits            // tests: smaller chunks and bounds
-	markWrite     func(Mark) error  // tests: fails a mark write
+	transport     http.RoundTripper    // tests: an in-process network
+	afterVouchAsk func()               // tests: Vouch, between its asks and its mark
+	lim           limits               // tests: smaller chunks and bounds
+	markWrite     func(Mark) error     // tests: fails a mark write
+	fileSync      func(*os.File) error // tests: observes or fails a log file sync
 }
 
 // Mark is a replica's log mark, kept in Options.Mark.
@@ -665,10 +667,10 @@ type Node struct {
 	seqMu sync.Mutex
 	// mu guards the state below.
 	mu          sync.Mutex
-	entries     []Entry
-	commit      uint64 // applied up to here
-	term        uint64 // highest term seen
-	syncedTerm  uint64 // the term this leader last caught up for
+	entries     []stored // the log, in order (see stored)
+	commit      uint64   // applied up to here
+	term        uint64   // highest term seen
+	syncedTerm  uint64   // the term this leader last caught up for
 	file        *os.File
 	lastContact map[string]time.Time
 	// leaderHeard is when a leader's replication last matched here
@@ -1440,58 +1442,44 @@ type fileLine struct {
 }
 
 // open reads the file, dropping a torn final line, and replays the
-// committed prefix. damaged: a line before the last could not be read
-// (not a torn write, which is only ever the last line); everything from it
-// on was dropped. With a mark that is a lost log (openMarked).
+// committed prefix. It streams the file, one line at a time (#1455).
+// damaged: a line before the last could not be read (not a torn write,
+// which is only ever the last line); everything from it on was dropped.
+// With a mark that is a lost log (openMarked).
 func (n *Node) open() (damaged bool, err error) {
 	f, err := os.OpenFile(n.o.File, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return false, err
 	}
-	data, err := io.ReadAll(f)
-	if err != nil {
-		f.Close()
-		return false, err
-	}
-	good := 0
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	for sc.Scan() {
-		line := sc.Bytes()
-		var l fileLine
-		if err := json.Unmarshal(line, &l); err != nil {
-			break // a torn last line: keep what parsed, drop the rest
-		}
-		good += len(line) + 1
+	good, size, damaged, err := scanLines(f, func(line []byte) (bool, error) {
+		e, c, old, ok := storedLine(line)
 		switch {
-		case l.E != nil:
-			n.entries = append(n.entries, *l.E)
-			if l.E.Term > n.term {
-				n.term = l.E.Term
-			}
-		case l.C != nil:
-			n.commit = *l.C
-		default:
-			// The first format wrote one bare Entry per line, every one
-			// applied as written: load it as committed.
-			var e Entry
-			if err := json.Unmarshal(line, &e); err == nil && e.Seq > 0 {
-				n.entries = append(n.entries, e)
+		case !ok:
+			return false, nil // a torn last line: keep what parsed, drop the rest
+		case e != nil:
+			n.entries = append(n.entries, *e)
+			n.term = max(n.term, e.Term)
+			if old {
+				// The first format wrote one bare Entry per line, every
+				// one applied as written: load it as committed.
 				n.commit = e.Seq
-				continue
 			}
-			f.Close()
+		case c != nil:
+			n.commit = *c
+		default:
 			return false, fmt.Errorf("oplog: %s: unrecognised line %q", n.o.File, truncateStr(string(line), 80))
 		}
+		return true, nil
+	})
+	if err != nil {
+		f.Close()
+		n.entries, n.commit, n.term = nil, 0, 0
+		return false, err
 	}
-	if good < len(data) {
-		// A torn write is only ever the last line: each line goes out in
-		// one write, synced before it is acknowledged. A bad line with
-		// more after it is damage.
-		rest := data[good:]
-		if i := bytes.IndexByte(rest, '\n'); i >= 0 && len(bytes.TrimSpace(rest[i+1:])) > 0 {
-			damaged = true
-		}
+	if good < size {
+		// A torn write is only ever at the end: lines go out in one write
+		// (appendLines), newline last, synced before any is acknowledged.
+		// A bad line with more after it is damage.
 		if damaged && n.o.Mark != "" {
 			// Nothing applied, nothing truncated: openMarked keeps the
 			// file whole, aside, and starts empty.
@@ -1499,8 +1487,8 @@ func (n *Node) open() (damaged bool, err error) {
 			n.entries, n.commit, n.term = nil, 0, 0
 			return true, nil
 		}
-		n.log.Warn("oplog: dropping a torn final line", "file", n.o.File, "bytes", len(data)-good, "damaged", damaged)
-		if err := f.Truncate(int64(good)); err != nil {
+		n.log.Warn("oplog: dropping a torn final line", "file", n.o.File, "bytes", size-good, "damaged", damaged)
+		if err := f.Truncate(good); err != nil {
 			f.Close()
 			return false, err
 		}
@@ -1517,27 +1505,23 @@ func (n *Node) open() (damaged bool, err error) {
 // ReadCommitted reads a log file without opening a node: the entries it
 // holds that are committed, in order. A tool that reads a stopped
 // controller's log (naut notes export) uses it. A torn final line is
-// ignored; a file that does not parse before its end is an error.
+// ignored; a file that does not parse before its end is an error. It
+// streams the file (#1455); what it returns is the committed log.
 func ReadCommitted(path string) ([]Entry, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 	var es []Entry
 	var commit uint64
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	good := 0
-	for sc.Scan() {
-		line := sc.Bytes()
+	var bad string
+	_, _, damaged, err := scanLines(f, func(line []byte) (bool, error) {
 		var l fileLine
 		if err := json.Unmarshal(line, &l); err != nil {
-			if rest := data[good:]; bytes.IndexByte(rest, '\n') >= 0 && len(bytes.TrimSpace(rest[bytes.IndexByte(rest, '\n')+1:])) > 0 {
-				return nil, fmt.Errorf("oplog: %s: unrecognised line %q", path, truncateStr(string(line), 80))
-			}
-			break
+			bad = truncateStr(string(line), 80)
+			return false, nil
 		}
-		good += len(line) + 1
 		switch {
 		case l.E != nil:
 			es = append(es, *l.E)
@@ -1550,6 +1534,16 @@ func ReadCommitted(path string) ([]Entry, error) {
 				commit = e.Seq
 			}
 		}
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if damaged {
+		if bad == "" {
+			bad = "(a line over 1 MiB)"
+		}
+		return nil, fmt.Errorf("oplog: %s: unrecognised line %q", path, bad)
 	}
 	out := es[:0]
 	for _, e := range es {
@@ -1611,6 +1605,13 @@ func (n *Node) Commit() uint64 {
 	return n.commit
 }
 
+// entriesForTest is every stored entry, decoded. Tests only.
+func (n *Node) entriesForTest() []Entry {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.afterLocked(0)
+}
+
 func (n *Node) lastLocked() uint64 {
 	if len(n.entries) == 0 {
 		return 0
@@ -1626,22 +1627,67 @@ func (n *Node) After(seq uint64) []Entry {
 }
 
 func (n *Node) afterLocked(seq uint64) []Entry {
-	i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq > seq })
-	out := make([]Entry, len(n.entries)-i)
-	copy(out, n.entries[i:])
+	return decodeAll(n.entries[n.indexAfterLocked(seq):])
+}
+
+// indexAfterLocked is the index of the first entry after seq. Caller
+// holds mu.
+func (n *Node) indexAfterLocked(seq uint64) int {
+	return sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq > seq })
+}
+
+// decodeAll decodes stored entries.
+func decodeAll(ss []stored) []Entry {
+	out := make([]Entry, len(ss))
+	for i, s := range ss {
+		out[i] = s.entry()
+	}
 	return out
 }
 
 // writeLine appends one line to the file and syncs it. Caller holds mu.
 func (n *Node) writeLine(l fileLine) error {
-	if n.file == nil {
+	return n.appendLines(appendLine(nil, l))
+}
+
+// appendLine adds l to buf as one line of the file.
+func appendLine(buf []byte, l fileLine) []byte {
+	b, _ := json.Marshal(l)
+	return append(append(buf, b...), '\n')
+}
+
+// appendLines appends whole lines to the file in one write and syncs
+// once: a crash leaves the lines before it and, at most, the last one cut
+// short (a torn write, which open drops). Nothing they hold counts as
+// stored until it returns. A failed write or sync cuts the file back to
+// where it was, so a line that may not be on disk is not on it later
+// either; if even that fails the file is closed, and every later write
+// fails, so nothing more is stored or acknowledged here. Caller holds mu.
+func (n *Node) appendLines(buf []byte) error {
+	if n.file == nil || len(buf) == 0 {
 		return nil
 	}
-	b, _ := json.Marshal(l)
-	if _, err := n.file.Write(append(b, '\n')); err != nil {
+	end, err := n.file.Seek(0, io.SeekEnd)
+	if err != nil {
 		return err
 	}
-	return n.file.Sync()
+	_, err = n.file.Write(buf)
+	switch {
+	case err != nil || mutOplog("batch_not_synced"):
+	default:
+		if n.o.fileSync != nil {
+			err = n.o.fileSync(n.file)
+		} else {
+			err = n.file.Sync()
+		}
+	}
+	if err != nil {
+		if terr := n.file.Truncate(end); terr != nil {
+			n.file.Close()
+			return errors.Join(err, terr)
+		}
+	}
+	return err
 }
 
 // rewrite replaces the file with the current entries and commit mark,
@@ -1664,10 +1710,10 @@ func (n *Node) rewrite() error {
 		return err
 	}
 	w := bufio.NewWriter(tmp)
-	for i := range n.entries {
-		e := n.entries[i]
-		b, _ := json.Marshal(fileLine{E: &e})
-		if _, err := w.Write(append(b, '\n')); err != nil {
+	var line []byte
+	for _, s := range n.entries {
+		line = s.line(line[:0])
+		if _, err := w.Write(line); err != nil {
 			return fail(err)
 		}
 	}
@@ -1697,10 +1743,16 @@ func (n *Node) rewrite() error {
 		_ = d.Sync() // not supported on Windows; NTFS journals the rename
 		d.Close()
 	}
-	f, err := os.OpenFile(n.o.File, os.O_RDWR|os.O_APPEND, 0o600)
+	// Not O_APPEND: appendLines seeks to the end before each write, and on
+	// Windows an append-only handle cannot truncate, so a failed write
+	// could not be cut back (#1455).
+	f, err := os.OpenFile(n.o.File, os.O_RDWR, 0o600)
 	if err != nil {
 		// n.file stays the closed handle, so every later write fails
 		// loudly rather than being skipped as if there were no file.
+		if renameErr == nil {
+			err = fmt.Errorf("%w: %w", errRewritten, err) // the new file is in place
+		}
 		return errors.Join(renameErr, err)
 	}
 	n.file = f
@@ -1715,6 +1767,10 @@ func truncateStr(s string, n int) string {
 }
 
 var errGap = errors.New("gap")
+
+// errRewritten: rewrite put the new file in place, then could not reopen
+// it. The file holds what memory does; nothing more can be written.
+var errRewritten = errors.New("oplog: the log was rewritten but could not be reopened")
 
 // errTermNotSynced: this leader has not caught up for its term, so it
 // sends nothing (replicateTo) and a follower takes nothing from it
@@ -1741,8 +1797,7 @@ var errMismatch = errors.New("mismatch")
 // (leaderCatchUp). An older term's uncommitted entry can sit at a seq where
 // that log holds a lower term's entry, so a term comparison here would
 // refuse the very replacement that keeps the logs equal.
-func (n *Node) acceptLocked(es []Entry) (int, error) {
-	fresh := 0
+func (n *Node) acceptLocked(es []Entry) (fresh int, err error) {
 	if len(es) > 0 && n.o.Mark != "" && !n.mark.Held {
 		// Held before the first entry is stored, so it is durable before
 		// any entry is acknowledged: a log lost after that is seen.
@@ -1752,16 +1807,31 @@ func (n *Node) acceptLocked(es []Entry) (int, error) {
 			return 0, fmt.Errorf("oplog: the log's mark: %w", err)
 		}
 	}
+	// The new lines go out together, in one write and one sync, on every
+	// way out (#1455: one fsync per batch, not per entry): an entry taken
+	// into memory is counted by the next answer that carries this log's
+	// last seq, so it is on disk before this returns, error or not.
+	// If they can't be written and synced, the entries they hold leave
+	// memory too: an answer must never count what the disk may not hold.
+	var buf []byte
+	durable := len(n.entries)
+	defer func() {
+		if ferr := n.appendLines(buf); ferr != nil {
+			if !mutOplog("batch_kept_on_sync_failure") {
+				n.entries = n.entries[:durable]
+			}
+			err = errors.Join(err, ferr)
+		}
+	}()
 	for _, e := range es {
 		last := n.lastLocked()
 		switch {
 		case e.Seq > last+1:
 			return fresh, fmt.Errorf("%w: have %d, got %d", errGap, last, e.Seq)
 		case e.Seq == last+1:
-			n.entries = append(n.entries, e)
-			if err := n.writeLine(fileLine{E: &e}); err != nil {
-				return fresh, err
-			}
+			s := storedOf(e)
+			n.entries = append(n.entries, s)
+			buf = s.line(buf)
 			fresh++
 		default:
 			i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq >= e.Seq })
@@ -1772,11 +1842,27 @@ func (n *Node) acceptLocked(es []Entry) (int, error) {
 			if e.Seq <= n.commit {
 				return fresh, fmt.Errorf("%w: a different entry at committed seq %d", errConflict, e.Seq)
 			}
-			// Replace the uncommitted suffix.
-			n.entries = append(n.entries[:i:i], e)
-			if err := n.rewrite(); err != nil {
+			// Replace the uncommitted suffix. The lines so far go to the
+			// file first, as each did before the batch, so a rewrite that
+			// fails leaves the file as it would have been.
+			if err := n.appendLines(buf); err != nil {
+				buf = nil
+				n.entries = n.entries[:durable]
 				return fresh, err
 			}
+			buf = nil
+			// A new slice (capacity i), so the old one is whole if the
+			// rewrite fails: then the file still holds the old suffix, and
+			// so must memory (Fable, #1455 review).
+			before := n.entries
+			n.entries = append(n.entries[:i:i], storedOf(e))
+			if err := n.rewrite(); err != nil {
+				if !errors.Is(err, errRewritten) && !mutOplog("rewrite_failure_kept") {
+					n.entries = before
+				}
+				return fresh, err
+			}
+			durable = len(n.entries)
 			fresh++
 		}
 		if err := n.raiseTermLocked(e.Term); err != nil {
@@ -1795,7 +1881,7 @@ func (n *Node) commitTo(seq uint64) {
 	if seq <= n.commit {
 		return
 	}
-	n.applyRange(n.afterLocked(n.commit), seq)
+	n.applyRange(n.entries[n.indexAfterLocked(n.commit):], seq)
 	n.commit = seq
 	c := seq
 	if err := n.writeLine(fileLine{C: &c}); err != nil {
@@ -1807,19 +1893,28 @@ func (n *Node) commitTo(seq uint64) {
 // committed, in order. An entry a KindLapse in that same range names is
 // applied as Lapsed: the look ahead stops at seq, since an uncommitted
 // KindLapse may yet be replaced by a newer term's leader.
-func (n *Node) applyRange(es []Entry, seq uint64) {
+func (n *Node) applyRange(es []stored, seq uint64) {
+	// Two passes over the stored range, each decoding one entry at a time
+	// (#1455): at open the range is the whole log.
 	lapsed := map[uint64]bool{}
-	for _, e := range es {
-		if e.Seq <= seq && e.Kind == KindLapse && !mutOplog("lapse_ignored") {
+	for _, s := range es {
+		if s.Seq > seq {
+			break
+		}
+		if !s.mayLapse() {
+			continue
+		}
+		if e := s.entry(); e.Kind == KindLapse && !mutOplog("lapse_ignored") {
 			for _, r := range e.Refs {
 				lapsed[r] = true
 			}
 		}
 	}
-	for _, e := range es {
-		if e.Seq > seq {
+	for _, s := range es {
+		if s.Seq > seq {
 			break
 		}
+		e := s.entry()
 		e.Lapsed = lapsed[e.Seq] && e.Kind != KindLapse
 		n.apply(e)
 	}
@@ -1966,7 +2061,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// is one of the candidates, when it counts.
 	from := n.commit
 	last := n.lastLocked()
-	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
+	own := afterResp{Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
 	selfCounts := n.syncedLocked() || mutOplog("unsynced_self_counted")
 	// A vouched log's first catch-up as leader (Vouch): it waits for every
 	// peer, and only when EVERY peer answered, takes the most up-to-date
@@ -1992,6 +2087,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// identity) may lack committed entries, and a majority that counted
 	// it might hold them nowhere (#710 3b-4).
 	var best afterResp
+	var bestPeer string
 	bestSelf, answered, commit := false, 0, uint64(0)
 	if selfCounts {
 		best, bestSelf = own, true
@@ -2015,8 +2111,11 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// holds every committed entry), after a short wait for the rest. A
 	// straggler that has seen a newer term is not waited for: this
 	// leader's own lease ends it, and its replication is refused by term.
+	// Each peer's first page decides: every page names its whole log (its
+	// last entry, commit, term, history). Only the chosen log's further
+	// pages are read, after the choice (#1455).
 	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) answer {
-		got, err := n.fetchAfter(ctx, p, from)
+		got, err := n.fetchPage(ctx, p, from)
 		return answer{got, err}
 	}, func(p string, a answer) bool {
 		switch {
@@ -2049,7 +2148,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 			answered++
 			commit = max(commit, a.got.Commit)
 			if better(a.got, best) {
-				best, bestSelf = a.got, false
+				best, bestSelf, bestPeer = a.got, false, p
 			}
 		}
 		return !alone && answered >= n.majority()
@@ -2124,21 +2223,61 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		}
 		return fmt.Errorf("%w: catch-up heard from %d of %d that count (%s)%s", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "), why)
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
-		// A newer history was heard while the peers were asked.
-		return fmt.Errorf("%w: the log history moved during the catch-up", ErrReadOnly)
-	}
 	// A counting copy's entries (the same history's) are taken first: a
 	// crash before the bump below then leaves this copy at the old history
 	// with them and its one-shot pending, never at the new one without
-	// them (#1177 review nit).
-	if !bestSelf && len(best.Entries) > 0 {
-		if _, err := n.acceptLocked(best.Entries); err != nil {
+	// them (#1177 review nit). Page by page, each synced as it is taken
+	// (#1455); nothing is committed until the last.
+	moved := fmt.Errorf("%w: the log history moved during the catch-up", ErrReadOnly)
+	deposed := func() error {
+		if n.term > term && !mutOplog("leader_catchup_term_unchecked") {
+			return fmt.Errorf("%w: a newer term (%d) was seen during the catch-up for term %d", ErrReadOnly, n.term, term)
+		}
+		return nil
+	}
+	take := func(es []Entry) error {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
+			return moved // a newer history was heard while the peers were asked
+		}
+		if err := deposed(); err != nil {
+			return err
+		}
+		if _, err := n.acceptLocked(es); err != nil {
 			n.log.Warn("oplog: leader catch-up", "error", err)
 			return err
 		}
+		return nil
+	}
+	if !bestSelf && len(best.Entries) > 0 {
+		if err := take(best.Entries); err != nil {
+			return err
+		}
+		if best.More {
+			// Every page from the log that was chosen, still the same and
+			// still counting (Fable, #1455 review: a copy that lost its log
+			// mid-read comes back empty at the same term and history, and
+			// its empty page would end the read short of what was chosen).
+			_, err := n.fetchAfter(ctx, bestPeer, best.Entries[len(best.Entries)-1].Seq, func(p afterResp) error {
+				same := p.Term == best.Term && p.Lineage.same(best.Lineage) && p.LastSeq == best.LastSeq && p.LastTerm == best.LastTerm
+				if !mutOplog("leader_catchup_pages_unchecked") && (!same || !n.counts(bestPeer, p.Unsynced, p.Identity, p.Lineage, hist)) {
+					return fmt.Errorf("%w: %s's log moved while it was read page by page", ErrReadOnly, n.name(bestPeer))
+				}
+				return take(p.Entries)
+			})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
+		return moved
+	}
+	if err := deposed(); err != nil {
+		return err
 	}
 	if useVouch || resolves {
 		// Spent before it is used: a mark that can't record that never
@@ -2829,13 +2968,15 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 			return resp, err
 		}
 		n.mu.Lock()
-		missing := n.afterLocked(from)
+		var missing []Entry
+		if mutOplog("resend_unchunked") {
+			missing = n.afterLocked(from)
+		} else {
+			missing, _ = n.pageLocked(from)
+		}
 		n.mu.Unlock()
 		if len(missing) == 0 {
 			return resp, err
-		}
-		if !mutOplog("resend_unchunked") {
-			missing, _ = n.chunk(missing)
 		}
 		resp, err = send(missing)
 	}
@@ -2870,19 +3011,22 @@ func (n *Node) replicateToErr(ctx context.Context, peer string, es []Entry, term
 	return err
 }
 
-// chunk is the head of es one request carries: at most the limits' chunk
-// entries, and about their chunk bytes (always at least one entry). more:
-// es goes on.
-func (n *Node) chunk(es []Entry) (head []Entry, more bool) {
+// pageLocked is one page of the log after seq, for a reader that reads it
+// page by page (a catch-up) or a lagging peer's resend: at most
+// chunkEntries entries and chunkBytes of them, at least one. It copies
+// only the page, never the whole tail (#1455: a replacement's catch-up
+// asked for every page with the whole log copied each time). more: the
+// log goes on past it. Caller holds mu.
+func (n *Node) pageLocked(seq uint64) (page []Entry, more bool) {
+	i := n.indexAfterLocked(seq)
 	size := 0
-	for i, e := range es {
-		b, _ := json.Marshal(e)
-		size += len(b) + 1
-		if i > 0 && (i >= n.o.lim.chunkEntries || size > n.o.lim.chunkBytes) {
-			return es[:i], true
+	for k := i; k < len(n.entries); k++ {
+		size += len(n.entries[k].raw) + 1
+		if k > i && (k-i >= n.o.lim.chunkEntries || size > n.o.lim.chunkBytes) {
+			return decodeAll(n.entries[i:k]), true
 		}
 	}
-	return es, false
+	return decodeAll(n.entries[i:]), false
 }
 
 // others are the peers but this instance.
@@ -2936,42 +3080,46 @@ func fanOut[T any](ctx context.Context, n *Node, peers []string, f func(context.
 	}
 }
 
-// fetchAfter reads a peer's log after seq, page by page.
-func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64) (afterResp, error) {
-	var all afterResp
+// fetchPage reads one page of a peer's log after seq and notes what it
+// says of itself (its sync, identity and history).
+func (n *Node) fetchPage(ctx context.Context, peer string, after uint64) (afterResp, error) {
+	var got afterResp
+	if err := n.call(ctx, peer, fmt.Sprintf("/api/oplog?after=%d&page=1", after), nil, &got); err != nil {
+		return afterResp{}, err
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.notePeerLocked(peer, got.Unsynced, got.Identity, got.Lineage)
+	if err := n.learnHistoryLocked(got.Lineage); err != nil {
+		return afterResp{}, err
+	}
+	return got, nil
+}
+
+// fetchAfter reads a peer's log after seq page by page, handing each page
+// to take as it arrives: it holds one page at a time, and a log of any
+// length is read (#1455: it gathered every page first, so a replacement
+// held the log twice, and refused one over 16,384 pages). The pages must
+// come from one log: the same term and history, each starting where the
+// last ended. It returns the last page, its entries dropped.
+func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64, take func(afterResp) error) (afterResp, error) {
+	var first afterResp
 	for page := 0; ; page++ {
-		var got afterResp
-		if err := n.call(ctx, peer, fmt.Sprintf("/api/oplog?after=%d&page=1", after), nil, &got); err != nil {
+		got, err := n.fetchPage(ctx, peer, after)
+		if err != nil {
 			return afterResp{}, err
 		}
 		if page == 0 {
-			all = got
-			all.Entries = append([]Entry(nil), got.Entries...)
-		} else {
-			if got.Term != all.Term || len(got.Entries) > 0 && got.Entries[0].Seq != after+1 {
-				return afterResp{}, fmt.Errorf("oplog: %s's log moved while it was read page by page", peer)
-			}
-			all.Entries = append(all.Entries, got.Entries...)
-			all.Commit, all.LastSeq, all.LastTerm = got.Commit, got.LastSeq, got.LastTerm
-			if !got.Lineage.same(all.Lineage) {
-				return afterResp{}, fmt.Errorf("oplog: %s's log moved while it was read page by page", peer)
-			}
-			all.Unsynced, all.Identity, all.Lost = got.Unsynced, got.Identity, got.Lost
-			all.LeaderSynced = all.LeaderSynced && got.LeaderSynced
+			first = got
+		} else if got.Term != first.Term || !got.Lineage.same(first.Lineage) || len(got.Entries) > 0 && got.Entries[0].Seq != after+1 {
+			return afterResp{}, fmt.Errorf("oplog: %s's log moved while it was read page by page", peer)
+		}
+		if err := take(got); err != nil {
+			return afterResp{}, err
 		}
 		if !got.More || len(got.Entries) == 0 {
-			all.More = false
-			n.mu.Lock()
-			n.notePeerLocked(peer, all.Unsynced, all.Identity, all.Lineage)
-			err := n.learnHistoryLocked(all.Lineage)
-			n.mu.Unlock()
-			if err != nil {
-				return afterResp{}, err
-			}
-			return all, nil
-		}
-		if page >= 1<<14 {
-			return afterResp{}, fmt.Errorf("oplog: %s's log did not end after %d pages", peer, page)
+			got.Entries, got.More = nil, false
+			return got, nil
 		}
 		after = got.Entries[len(got.Entries)-1].Seq
 	}
@@ -3025,37 +3173,44 @@ func (n *Node) CatchUp(ctx context.Context) error {
 	}
 	// From the commit index, not the last entry: an uncommitted entry this
 	// instance holds may be stale, and only the leader's entries from the
-	// commit on replace it (see acceptLocked).
-	got, err := n.fetchAfter(ctx, leader, n.Commit())
-	if err != nil {
-		return err
-	}
-	if !got.LeaderSynced && !mutOplog("unsynced_leader_writes") {
-		// Its entries past our commit index may be an earlier term's
-		// leftovers that would replace one a later term committed (#1050
-		// review). Its heartbeat or a later pull brings them once it has
-		// caught up.
-		return errTermNotSynced
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	switch {
-	case n.supersedingLocked():
-		return errSuperseded
-	case !got.Lineage.same(n.mark.Lineage) && !mutOplog("history_lower_counted") && !mutOplog("history_fork_counted"):
-		// A lower history's leader (its log is one a person accepted to
-		// lose; a higher one superseded this copy in fetchAfter), or a
-		// forked one.
-		return fmt.Errorf("%w: the leader's log is at history %d (id %x), this copy's at %d (id %x)", errConflict, got.History, got.HistoryID, n.mark.History, n.mark.HistoryID)
-	}
-	if got.Term < n.term {
-		return fmt.Errorf("%w: leader at term %d, have seen %d", errConflict, got.Term, n.term)
-	}
-	if _, err := n.acceptLocked(got.Entries); err != nil {
-		return err
-	}
-	n.commitTo(got.Commit)
-	return nil
+	// commit on replace it (see acceptLocked). Each page is checked and
+	// taken as it arrives, synced with it (#1455); the commit index moves
+	// once, with the last page, so a lapse and the entries it names are
+	// applied in one range (see applyRange, #1466).
+	_, err := n.fetchAfter(ctx, leader, n.Commit(), func(got afterResp) error {
+		if !got.LeaderSynced && !mutOplog("unsynced_leader_writes") {
+			// Its entries past our commit index may be an earlier term's
+			// leftovers that would replace one a later term committed
+			// (#1050 review). Its heartbeat or a later pull brings them
+			// once it has caught up.
+			return errTermNotSynced
+		}
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		switch {
+		case n.supersedingLocked():
+			return errSuperseded
+		case !got.Lineage.same(n.mark.Lineage) && !mutOplog("history_lower_counted") && !mutOplog("history_fork_counted"):
+			// A lower history's leader (its log is one a person accepted
+			// to lose; a higher one superseded this copy in fetchPage),
+			// or a forked one.
+			return fmt.Errorf("%w: the leader's log is at history %d (id %x), this copy's at %d (id %x)", errConflict, got.History, got.HistoryID, n.mark.History, n.mark.HistoryID)
+		}
+		if got.Term < n.term {
+			return fmt.Errorf("%w: leader at term %d, have seen %d", errConflict, got.Term, n.term)
+		}
+		if _, err := n.acceptLocked(got.Entries); err != nil {
+			return err
+		}
+		switch {
+		case !got.More || len(got.Entries) == 0:
+			n.commitTo(got.Commit)
+		case mutOplog("catchup_commit_per_page"):
+			n.commitTo(min(got.Commit, got.Entries[len(got.Entries)-1].Seq))
+		}
+		return nil
+	})
+	return err
 }
 
 // Status for /api/quorum.
@@ -3239,15 +3394,17 @@ func (n *Node) Handler() http.Handler {
 		_, _ = fmt.Sscanf(r.URL.Query().Get("after"), "%d", &after)
 		n.mu.Lock()
 		last := n.lastLocked()
-		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
+		resp := afterResp{Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
 			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lineage: n.mark.Lineage, Lost: n.mark.Lost != "", SetAside: n.mark.SetAside != ""}
 		resp.LeaderSynced = n.isLeader() && n.syncedTerm != 0 && n.syncedTerm == n.currentTerm()
-		n.mu.Unlock()
 		// Pages only for a reader that asks (page=1): one from before
 		// pages would take the first page for the whole tail.
 		if r.URL.Query().Get("page") == "1" && !mutOplog("resend_unchunked") {
-			resp.Entries, resp.More = n.chunk(resp.Entries)
+			resp.Entries, resp.More = n.pageLocked(after)
+		} else {
+			resp.Entries = n.afterLocked(after)
 		}
+		n.mu.Unlock()
 		writeJSON(w, http.StatusOK, resp)
 	}))
 	mux.HandleFunc("POST /api/oplog/propose", auth(func(w http.ResponseWriter, r *http.Request) {
