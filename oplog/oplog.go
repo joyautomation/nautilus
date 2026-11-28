@@ -2954,9 +2954,10 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 	// chunk at a time, and again from what the peer answers (a gap's
 	// resend can meet a mismatch below it), until it has them. Each step
 	// after a mismatch moves Have past the chunk just taken, so a stale
-	// tail of the peer's is reached and replaced; the bound only guards a
-	// peer that answers nonsense, and the next heartbeat goes on (a rebuilt
-	// replica is filled over several).
+	// tail of the peer's within the rounds' reach of its commit index is
+	// reached and replaced (one further off, by its own pull); the bound
+	// guards a peer that answers nonsense, and the next heartbeat goes on
+	// (a rebuilt replica is filled over several).
 	for range n.o.lim.rounds {
 		var he *httpError
 		var from uint64

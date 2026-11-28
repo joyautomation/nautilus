@@ -67,11 +67,13 @@ func staleTailWrites(t *testing.T, lim limits, pad, nMatch int) {
 	b.down[0].Store(false)
 	b.down[2].Store(true)
 	b.push[0].Store(true) // the commit push to A is lost
+	confirmed := 0
 	for i := range 4 {
 		e, err := bb.Propose(ctx, Entry{Kind: KindAck, IDs: []string{fmt.Sprint("w", i)}})
 		if err != nil {
 			continue
 		}
+		confirmed++
 		held := false
 		for _, x := range a.After(0) {
 			held = held || x.Seq == e.Seq && x.Term == e.Term && x.IDs[0] == e.IDs[0]
@@ -79,6 +81,9 @@ func staleTailWrites(t *testing.T, lim limits, pad, nMatch int) {
 		if !held {
 			t.Fatalf("write %d: B confirmed seq %d with C down, and A does not hold it (a false acknowledgement)", i, e.Seq)
 		}
+	}
+	if confirmed == 0 {
+		t.Fatal("no write was confirmed: nothing checked the acknowledgements")
 	}
 	b.push[0].Store(false)
 	for range 10 {
