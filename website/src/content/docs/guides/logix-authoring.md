@@ -332,8 +332,9 @@ reported, because the write cannot create it.
 On the public yardstick, `examples/batch-skid/line/Line.L5X`, the
 comparison finds no differences.
 
-On a corpus of 52 real production exports, 98.3% of rungs import, 83% of
-ladder routines import whole, and most complete routines write back
+On a private corpus of 52 real production exports (a measurement we cannot
+publish the inputs of), 98.3% of rungs import, 83% of ladder routines import
+whole, and most complete routines write back
 identically or equivalently. `COP` and `CPS` import when they copy like
 for like (a whole array or structure, or a slice at constant indexes) and
 write back as the instruction they were. An `MSG` of type CIP Data Table

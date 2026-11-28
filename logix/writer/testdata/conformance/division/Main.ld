@@ -30,7 +30,7 @@ LD
     { q := a / b; rq := DINT_TO_REAL(q) }
 
   RUNG real (* a REAL divided by an integer is a REAL division on both *)
-    { rr := x / b }
+    { rr := x / DINT_TO_REAL(b) }
 
   RUNG cmpi (* CMP against an integer *)
     GT(a / b, c) ( gi )

@@ -240,7 +240,9 @@ claims:
     tests:
       - go ./logix/logixd TestSDKBuild
     partial: true
-    note: Verified on hardware only (needs NAUTILUS_LOGIXD_URL); skipped in CI.
+    note: >-
+      Verified on hardware only (needs NAUTILUS_LOGIXD_URL); skipped in CI.
+      Not yet run: needs the Logix SDK machine.
 
   - id: LGX-021
     claim: >-
@@ -359,7 +361,9 @@ claims:
     tests:
       - go ./logix/logixd TestAgentRefusesToEscapeItsWorkDirectory
     partial: true
-    note: Verified on hardware only (needs NAUTILUS_LOGIXD_URL); skipped in CI.
+    note: >-
+      Verified on hardware only (needs NAUTILUS_LOGIXD_URL); skipped in CI.
+      Not yet run: needs the Logix SDK machine.
 
   - id: LGX-031
     claim: An agent that has a token answers an unauthenticated or wrongly authenticated caller with 401.
