@@ -225,8 +225,16 @@ func manifestDiagnostics(mpath string, e *manifestEntry, decls map[string]tagDec
 		out[uri] = append(out[uri], Diagnostic{Range: r, Severity: SeverityError, Source: "nautilus", Message: msg})
 	}
 	if e.readErr != nil {
-		file, r := readErrPlace(mpath, files, e.readErr)
-		add(file, r, e.readErr.Error())
+		// Several problems at once (a wiring's, joined): each on its own
+		// line, not all of them on the first one's.
+		errs := []error{e.readErr}
+		if j, ok := e.readErr.(interface{ Unwrap() []error }); ok && len(j.Unwrap()) > 1 {
+			errs = j.Unwrap()
+		}
+		for _, err := range errs {
+			file, r := readErrPlace(mpath, files, err)
+			add(file, r, err.Error())
+		}
 	}
 	for _, b := range e.badTags {
 		file, r := mpath, fileLineRange(mpath, 1)
@@ -240,16 +248,19 @@ func manifestDiagnostics(mpath string, e *manifestEntry, decls map[string]tagDec
 
 var yamlLineRe = regexp.MustCompile(`\bline (\d+)\b`)
 
+// fileLineRe is the line a "<file>:<line>: msg" error names after its file.
+var fileLineRe = regexp.MustCompile(`^(\d+): `)
+
 // readErrPlace places an error reading the manifest: on the file it names
 // (the manifest, or one of its tag-files, by project-relative path) at the
 // line a YAML error gives, else on the manifest's first line.
 func readErrPlace(mpath string, files []string, err error) (string, Range) {
 	msg := err.Error()
-	file := ""
+	file, prefix := "", ""
 	for _, f := range append([]string{mpath}, files...) {
 		rel, rerr := filepath.Rel(filepath.Dir(mpath), f)
 		if rerr == nil && strings.HasPrefix(msg, filepath.ToSlash(rel)+":") {
-			file = f
+			file, prefix = f, filepath.ToSlash(rel)+":"
 			break
 		}
 	}
@@ -257,6 +268,12 @@ func readErrPlace(mpath string, files []string, err error) (string, Range) {
 		return mpath, fileLineRange(mpath, 1)
 	}
 	line := 1
+	// "nautilus.yaml:13: ...": a wiring problem names its line so (#1458).
+	if m := fileLineRe.FindStringSubmatch(strings.TrimPrefix(msg, prefix)); m != nil {
+		if n, cerr := strconv.Atoi(m[1]); cerr == nil && n >= 1 {
+			return file, fileLineRange(file, n)
+		}
+	}
 	if m := yamlLineRe.FindStringSubmatch(msg); m != nil {
 		if n, cerr := strconv.Atoi(m[1]); cerr == nil && n >= 1 {
 			line = n

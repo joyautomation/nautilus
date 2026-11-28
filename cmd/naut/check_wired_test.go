@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/internal/stproject"
+	"github.com/joyautomation/nautilus/lang/st"
 )
 
 const checkPumpTypes = `TYPE Pump : STRUCT
@@ -206,5 +208,22 @@ func TestCheckRefusesALibraryBlockAssigningAnExternalInstance(t *testing.T) {
 		if code != 1 || strings.Count(out, want) != 1 || strings.Count(out, "error:") != 1 {
 			t.Errorf("%s: exit %d, want %q once and no other error:\n%s", name, code, want, out)
 		}
+	}
+}
+
+// A refused write in the prelude lands on its library's line; one on a
+// line no library claims is still said (on the program), never dropped.
+func TestLibWriteErrPlacesOrFallsBack(t *testing.T) {
+	w := st.InstanceWrite{Pos: st.Pos{Line: 3, Col: 3}, Instance: "P101", Member: "Running", Kind: "from"}
+	same := func(n int) int { return n }
+	res := checkResult{preludeLines: 5, segs: []stproject.Segment{{Path: "/p/lib/reset.st", StartLine: 1, Lines: 5}}}
+	le, ok := libWriteErr(w, res, same)
+	if !ok || le.path != "/p/lib/reset.st" || le.line != 3 || le.col != 3 || !strings.HasPrefix(le.msg, "error: P101.Running is read from the device") {
+		t.Errorf("in a library: %+v %v", le, ok)
+	}
+	res.segs = nil
+	le, ok = libWriteErr(w, res, same)
+	if ok || le.msg == "" || !strings.HasPrefix(le.msg, "error: in project library files: P101.Running is read from the device") {
+		t.Errorf("no library claims the line: %+v %v", le, ok)
 	}
 }

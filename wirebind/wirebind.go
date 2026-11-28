@@ -89,6 +89,9 @@ type Member struct {
 	Source string
 	// Addr are the driver's own keys, params substituted.
 	Addr map[string]any
+	// Expr is an expr: member's expression, params substituted (§6). The
+	// project checks it (internal/project wiring_expr.go).
+	Expr string
 	// Type is the member's type in the TYPE.
 	Type *ir.Type
 	Pos  wiring.Pos
@@ -203,8 +206,6 @@ func (r *resolver) fence(w *wiring.Wiring) {
 			pos = w.Pos
 		}
 		switch m.Kind {
-		case wiring.Expr:
-			r.add(pos, "wiring %q: member %q: expr: members arrive with slice 8 of struct wiring (#1458); this build does not evaluate them yet", name, p)
 		case wiring.Both:
 			// wiring.Check refuses both: on a field device, and every
 			// source this build runs is one; this is the last line.
@@ -318,6 +319,9 @@ func (r *resolver) instance(in *wiring.Instance) *Instance {
 			} else {
 				r.add(pos, "instance %s: member %q: readback %q: %v", in.Name, p, e.Readback, err)
 			}
+		}
+		if s, ok := subst(e.Expr).(string); ok {
+			m.Expr = s
 		}
 		if s, ok := subst(e.Unit).(string); ok {
 			m.Unit = s

@@ -21,7 +21,10 @@
 # after the instance push rules (#1458 slice 4, runtime/instance_push.go, the
 # core the playground runs): naut-wasm 4,889,441 in CI, +17,441 over main's
 # 4,872,000; the deps are identical to main's, nothing controller-only leaked.
+# #1458 8a: expr: check (purity/cycles/compile), shared check/load code the
+# playground runs; deps = main: naut-wasm 4,964,636 in CI, +26,301 over the old
+# limit (purity about 9 KB, cycles 4, compile 3, parse/rewrite the rest).
 #
 # One line per module: <target under ./cmd> <bytes>.
-naut-wasm 4938335
+naut-wasm 5014282
 naut-wasm-hmi 3863413

@@ -82,6 +82,14 @@ func composeWiring(fsys fs.FS, m *Manifest, manifestName string, raw []byte) err
 		return err
 	}
 	m.Tags = append(m.Tags, tags...)
+	// expr: members (slice 8a): checked in the project's scope, then
+	// refused while this build does not evaluate them (slice 8b).
+	if problems := checkExprs(fsys, m, set, types); len(problems) > 0 {
+		return wiring.Err(sortedFindings(problems))
+	}
+	if err := wiring.Err(exprFence(set)); err != nil {
+		return err
+	}
 	// A member's unit: and desc: are its tag meta, under its path, as a
 	// tag-meta: entry on a UDT member is; the project's own tag-meta: wins.
 	for _, in := range set.Instances {
@@ -150,11 +158,10 @@ func driverLabel(t string) string {
 // compose it: every library, with each ST task program (a TYPE may be
 // declared in either).
 func projectTypes(fsys fs.FS, m *Manifest) (map[string]*ir.Type, error) {
-	libFiles, err := stproject.Libraries(fsys, nil)
+	libFiles, err := projectLibs(fsys, m)
 	if err != nil {
 		return nil, err
 	}
-	libFiles = withDeviceTypes(libFiles, m.devices)
 	libs := make([]string, len(libFiles))
 	for i, l := range libFiles {
 		libs[i] = l.ST
