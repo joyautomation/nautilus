@@ -136,16 +136,22 @@ func exprCompile(units []*exprUnit, prelude string, preludeLines int, m *Manifes
 	if err != nil {
 		return // the tags report their own problem
 	}
+	if _, err := st.Parse(prelude + "PROGRAM nautilus_prelude\nEND_PROGRAM\n"); err != nil {
+		return // the library's own error, which its file's check reports
+	}
 	live := append([]*exprUnit(nil), units...)
 	for len(live) > 0 {
 		us := make([]st.ExprUnit, len(live))
 		for i, u := range live {
-			us[i] = st.ExprUnit{Text: u.text, Result: u.mem.Type.String()}
+			us[i] = st.ExprUnit{Text: u.text, Target: u.full}
 		}
 		prog, err := st.Parse(prelude + st.ExprProgram(us))
 		if err != nil {
-			// The units parsed one by one, so this is the prelude's own
-			// error, which its file's check reports.
+			// Each unit parsed alone and the prelude parses: never
+			// expected, and never passed silently.
+			for _, u := range live {
+				f.add(u.mem.Pos, u.mem.Path, u.in.Name, fmt.Sprintf("%q could not be compiled with the project's expressions: %v", u.mem.Expr, err))
+			}
 			return
 		}
 		types, _ := st.Types(prog)
@@ -157,10 +163,16 @@ func exprCompile(units []*exprUnit, prelude string, preludeLines int, m *Manifes
 		le, ok := st.AsLowerError(err)
 		i := -1
 		if ok {
-			i = st.ExprUnitOfLine(len(live), le.Pos.Line-preludeLines)
+			i = st.ExprUnitOfLine(us, le.Pos.Line-preludeLines)
 		}
 		if i < 0 {
-			return // not a unit's: a library error, reported where it is
+			if ok && le.Pos.Line > 0 && le.Pos.Line <= preludeLines {
+				return // a library error, reported where it is
+			}
+			for _, u := range live {
+				f.add(u.mem.Pos, u.mem.Path, u.in.Name, fmt.Sprintf("%q could not be compiled with the project's expressions: %v", u.mem.Expr, err))
+			}
+			return
 		}
 		u := live[i]
 		f.add(u.mem.Pos, u.mem.Path, u.in.Name, fmt.Sprintf("%q does not compile: %s", u.mem.Expr, exprErrText(le.Err.Error())))
@@ -252,44 +264,121 @@ func exprCycles(units []*exprUnit, f *exprFindings) {
 			}
 		}
 	}
-	// Each simple cycle once, from its lowest unit: a DFS from each start
-	// that only visits higher units finds it exactly once.
-	said := map[string]bool{}
-	for s := range units {
-		var path []int
-		on := map[int]bool{}
-		var dfs func(int)
-		dfs = func(v int) {
-			path = append(path, v)
-			on[v] = true
-			for _, w := range edges[v] {
-				if w == s {
-					names := make([]string, 0, len(path)+1)
-					for _, p := range path {
-						names = append(names, units[p].full)
-					}
-					names = append(names, units[s].full)
-					key := strings.Join(names, ">")
-					if !said[key] {
-						said[key] = true
-						u := units[s]
-						msg := "it is in a cycle, " + strings.Join(names, " → ") + ": an expression cannot read itself, directly or through another expr:; break the cycle with a memory: member a program sets"
-						if len(path) == 1 {
-							msg = "it reads itself (" + u.full + "): an expression cannot read its own value; keep the previous value in a memory: member a program sets"
-						}
-						f.add(u.mem.Pos, u.mem.Path, u.in.Name, msg)
-					}
-					continue
-				}
-				if w > s && !on[w] {
-					dfs(w)
+	// One problem per ring (strongly connected component), naming every
+	// member in it and one shortest cycle through its first member: linear
+	// in the reads, however densely the members read each other.
+	for _, comp := range sccs(edges) {
+		first := comp[0]
+		self := false
+		for _, w := range edges[first] {
+			self = self || w == first
+		}
+		if len(comp) == 1 && !self {
+			continue
+		}
+		u := units[first]
+		if len(comp) == 1 {
+			f.add(u.mem.Pos, u.mem.Path, u.in.Name, "it reads itself ("+u.full+"): an expression cannot read its own value; keep the previous value in a memory: member a program sets")
+			continue
+		}
+		in := map[int]bool{}
+		for _, v := range comp {
+			in[v] = true
+		}
+		names := make([]string, len(comp))
+		for i, v := range comp {
+			names[i] = units[v].full
+		}
+		ring := shortestCycle(first, edges, in)
+		path := make([]string, len(ring))
+		for i, v := range ring {
+			path[i] = units[v].full
+		}
+		f.add(u.mem.Pos, u.mem.Path, u.in.Name, "it is in a cycle, "+strings.Join(path, " → ")+": the expr: members "+strings.Join(names, ", ")+
+			" read each other, and an expression cannot read itself, directly or through another expr:; break the cycle with a memory: member a program sets")
+	}
+}
+
+// sccs are the strongly connected components of a graph (Tarjan), each
+// in ascending order, ordered by their lowest node.
+func sccs(edges [][]int) [][]int {
+	n := len(edges)
+	index, low := make([]int, n), make([]int, n)
+	for i := range index {
+		index[i] = -1
+	}
+	on := make([]bool, n)
+	var stack []int
+	var out [][]int
+	next := 0
+	var visit func(v int)
+	visit = func(v int) {
+		index[v], low[v] = next, next
+		next++
+		stack = append(stack, v)
+		on[v] = true
+		for _, w := range edges[v] {
+			if index[w] < 0 {
+				visit(w)
+				low[v] = min(low[v], low[w])
+			} else if on[w] {
+				low[v] = min(low[v], index[w])
+			}
+		}
+		if low[v] == index[v] {
+			var comp []int
+			for {
+				w := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				on[w] = false
+				comp = append(comp, w)
+				if w == v {
+					break
 				}
 			}
-			on[v] = false
-			path = path[:len(path)-1]
+			sort.Ints(comp)
+			out = append(out, comp)
 		}
-		dfs(s)
 	}
+	for v := 0; v < n; v++ {
+		if index[v] < 0 {
+			visit(v)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i][0] < out[j][0] })
+	return out
+}
+
+// shortestCycle is a shortest path from s back to s inside the component
+// in (breadth first), as nodes, s first and last.
+func shortestCycle(s int, edges [][]int, in map[int]bool) []int {
+	prev := map[int]int{}
+	queue := []int{s}
+	seen := map[int]bool{}
+	for len(queue) > 0 {
+		v := queue[0]
+		queue = queue[1:]
+		for _, w := range edges[v] {
+			if w == s {
+				path := []int{s}
+				for x := v; x != s; x = prev[x] {
+					path = append(path, x)
+				}
+				path = append(path, s)
+				// path is s, back to front, s: put it in reading order.
+				for i, j := 1, len(path)-2; i < j; i, j = i+1, j-1 {
+					path[i], path[j] = path[j], path[i]
+				}
+				return path
+			}
+			if in[w] && !seen[w] {
+				seen[w] = true
+				prev[w] = v
+				queue = append(queue, w)
+			}
+		}
+	}
+	return []int{s, s}
 }
 
 // exprFence refuses what checked clean: this build does not evaluate

@@ -90,6 +90,8 @@ func TestExprPurityRules(t *testing.T) {
 		{"loop in IF", inner("IF x > 0.0 THEN WHILE TRUE DO END_WHILE; END_IF;\n"), "Outer(1.0)", "Inner", "WHILE loop", "Outer>Inner"},
 		{"recursion", "FUNCTION R : REAL\nVAR_INPUT x : REAL; END_VAR\nR := R(x);\nEND_FUNCTION\n", "R(1.0)", "R", "calls R recursively", "R"},
 		{"mutual recursion", "FUNCTION A : REAL\nVAR_INPUT x : REAL; END_VAR\nA := B(x);\nEND_FUNCTION\nFUNCTION B : REAL\nVAR_INPUT x : REAL; END_VAR\nB := A(x);\nEND_FUNCTION\n", "A(1.0)", "B", "calls A recursively", "A>B"},
+		{"an FB instance by name", "", "T1(IN := TRUE, PT := T#1s).Q", "", "calls T1, which is not a FUNCTION or a standard function", ""},
+		{"an unknown call in a function", inner("x := Mystery(x);\n"), "Outer(1.0)", "Inner", "calls Mystery, which is not a FUNCTION", "Outer>Inner"},
 		{"user FB", "FUNCTION_BLOCK Blk\nEND_FUNCTION_BLOCK\n", "Blk()", "", "the function block Blk", ""},
 		{"call statement", "FUNCTION_BLOCK Blk\nEND_FUNCTION_BLOCK\n" + inner("Blk();\n"), "Outer(1.0)", "Inner", "the function block Blk", "Outer>Inner"},
 	} {
@@ -123,9 +125,9 @@ func TestExprPurityReRootsAMemoisedFunction(t *testing.T) {
 // lowers, a narrowing one is refused on its own unit's line, with both
 // types; a sibling rewritten onto an instance tag resolves as the tag.
 func TestExprProgramCompilesAndAttributesByLine(t *testing.T) {
-	lib := "TYPE Pump : STRUCT Running : BOOL; Speed : REAL; END_STRUCT; END_TYPE\n" +
+	lib := "TYPE Pump : STRUCT Running : BOOL; Ok : BOOL; Speed : REAL; Count : INT; END_STRUCT; END_TYPE\n" +
 		"FUNCTION Sq : REAL\nVAR_INPUT x : REAL; END_VAR\nSq := x * x;\nEND_FUNCTION\n"
-	units := []ExprUnit{{Text: "P101.Running AND Level > 2.0", Result: "BOOL"}, {Text: "Sq(P101.Speed)", Result: "INT"}}
+	units := []ExprUnit{{Text: "P101.Running AND\n Level > 2.0 // a comment\n", Target: "P101.Ok"}, {Text: "Sq(P101.Speed)", Target: "P101.Count"}}
 	src := lib + ExprProgram(units)
 	prog, err := Parse(src)
 	if err != nil {
@@ -141,10 +143,10 @@ func TestExprProgramCompilesAndAttributesByLine(t *testing.T) {
 		t.Fatalf("want a lower error, got %v", err)
 	}
 	libLines := strings.Count(lib, "\n")
-	if u := ExprUnitOfLine(len(units), le.Pos.Line-libLines); u != 1 || !strings.Contains(le.Err.Error(), "cannot assign REAL to INT") {
+	if u := ExprUnitOfLine(units, le.Pos.Line-libLines); u != 1 || !strings.Contains(le.Err.Error(), "cannot assign REAL to INT") {
 		t.Errorf("unit %d, err %v", u, le.Err)
 	}
-	units[1].Result = "REAL"
+	units[1].Target = "P101.Speed"
 	prog, _ = Parse(lib + ExprProgram(units))
 	if _, err := LowerWithOpts(prog, LowerOpts{ImplicitGlobals: map[string]*ir.Type{"P101": types["Pump"], "Level": ir.RealT}}); err != nil {
 		t.Errorf("clean units: %v", err)

@@ -116,3 +116,23 @@ func TestExprMemberErrorIsOnItsManifestLine(t *testing.T) {
 		t.Fatalf("nautilus.yaml diagnostics = %+v, want one on line 13: %q", md, want)
 	}
 }
+
+// Two bad expr: members are two diagnostics, each on its own line, not
+// one joined message on the first one's.
+func TestExprMemberErrorsEachOnTheirLine(t *testing.T) {
+	dir := t.TempDir()
+	manifest := strings.Replace(instWriteManifest, "%s", "main.st", 1)
+	manifest = strings.Replace(manifest, "      Start:   { to: drive, table: coil, address: 10 }\n",
+		"      Start:   { expr: \"SpeedSP\" }\n      SpeedSP: { expr: \"Running\" }\n", 1)
+	src := "PROGRAM main\nEND_PROGRAM\n"
+	writeFiles(t, dir, map[string]string{"nautilus.yaml": manifest, "main.st": src, "types.st": instWriteTypes})
+	uri, muri := pathToURI(filepath.Join(dir, "main.st")), pathToURI(filepath.Join(dir, "nautilus.yaml"))
+	s := startSession(t)
+	s.recvResponse(s.send("initialize", map[string]any{}, true))
+	s.send("initialized", map[string]any{}, false)
+	md := s.publishedUntilBarrier(uri, src, 1)[muri]
+	if len(md) != 2 || md[0].Range.Start.Line != 11 || !strings.Contains(md[0].Message, `member "Start"`) ||
+		md[1].Range.Start.Line != 12 || !strings.Contains(md[1].Message, `member "SpeedSP"`) || strings.Contains(md[0].Message, "SpeedSP\": expr") {
+		t.Fatalf("nautilus.yaml diagnostics = %+v, want Start on line 12 and SpeedSP on line 13", md)
+	}
+}

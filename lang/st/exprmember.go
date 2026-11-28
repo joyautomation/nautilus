@@ -3,7 +3,6 @@ package st
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -185,49 +184,44 @@ func RewriteExpr(instance string, isSibling func(name string) bool, src string) 
 	return out, refs, nil
 }
 
-// ExprUnit is one expression, rewritten, with the ST spelling of the type
-// it must produce.
+// ExprUnit is one expression, rewritten, and the member it computes, as a
+// tag path ("P101.Healthy").
 type ExprUnit struct {
 	Text   string // RewriteExpr's output
-	Result string // the member's type as ST spells it ("BOOL", "REAL")
+	Target string
 }
 
 // ExprProgramName is the POU the expression units compile into.
 const ExprProgramName = "nautilus_exprs"
 
 // ExprProgram is the one program a project's expressions compile into:
-// unit i assigns a local of its member's type on its own line, so a
-// compile error's line names the unit (ExprUnitOfLine). Composed after
-// the library prelude, like any program, so the project's FUNCTIONs and
-// TYPEs are in scope and its tags are implicit globals.
+// unit i assigns its member, starting on its own line, so the member's own
+// type checks the result (no narrowing, as any assignment) and a compile
+// error's line names the unit (ExprUnitOfLine). An expression's own
+// newlines are kept, never folded: a // comment ends at its own line, as
+// it does when the expression is parsed alone. Composed after the library
+// prelude, like any program, so the project's FUNCTIONs and TYPEs are in
+// scope and its tags (the instances among them) are implicit globals.
 func ExprProgram(units []ExprUnit) string {
 	var b strings.Builder
-	b.WriteString("PROGRAM " + ExprProgramName + "\nVAR\n")
-	for i, u := range units {
-		fmt.Fprintf(&b, "  %s : %s;\n", exprLocal(i), u.Result)
-	}
-	b.WriteString("END_VAR\n")
-	for i, u := range units {
-		// One line per unit: an expression's own newlines are folded.
-		fmt.Fprintf(&b, "%s := %s;\n", exprLocal(i), strings.ReplaceAll(u.Text, "\n", " "))
+	b.WriteString("PROGRAM " + ExprProgramName + "\n")
+	for _, u := range units {
+		b.WriteString(u.Target + " := " + u.Text + "\n;\n")
 	}
 	b.WriteString("END_PROGRAM\n")
 	return b.String()
 }
 
-func exprLocal(i int) string { return "nautilus_expr_" + strconv.Itoa(i) }
-
 // ExprUnitOfLine maps a line of ExprProgram(units) (1-based, relative to
-// the program's first line) to the unit it belongs to: -1 for the
-// declarations and the frame.
-func ExprUnitOfLine(n, line int) int {
-	// PROGRAM, VAR, n declarations, END_VAR: the assignments follow.
-	first := 3 + n + 1
-	if line >= first && line < first+n {
-		return line - first
-	}
-	if line >= 3 && line < 3+n {
-		return line - 3 // a declaration: its type did not resolve
+// the program's first line) to the unit it belongs to: -1 for the frame.
+func ExprUnitOfLine(units []ExprUnit, line int) int {
+	at := 2
+	for i, u := range units {
+		n := strings.Count(u.Text, "\n") + 2 // its lines, then the ;
+		if line >= at && line < at+n {
+			return i
+		}
+		at += n
 	}
 	return -1
 }
@@ -347,10 +341,20 @@ func (c *purity) call(v *CallExpr, via []string) []ExprProblem {
 	if c.isFB(v.Name) {
 		return append(out, c.here(via, v.Pos, "calls the function block "+v.Name+", which keeps state"))
 	}
-	if b, ok := ir.Builtins[strings.ToUpper(v.Name)]; ok && b.HostFn != nil {
-		return append(out, c.here(via, v.Pos, "calls the system function "+strings.ToUpper(v.Name)+"(), which reads controller state"))
+	up := strings.ToUpper(v.Name)
+	if b, ok := ir.Builtins[up]; ok {
+		if b.HostFn != nil {
+			return append(out, c.here(via, v.Pos, "calls the system function "+up+"(), which reads controller state"))
+		}
+		return out // a standard function: it computes from its arguments
 	}
-	return out
+	if ir.IsConversion(up) || strings.Contains(up, "_TO_") {
+		return out // a type conversion, standard or of an enumeration
+	}
+	// Not a FUNCTION, a standard function or a conversion: a function block
+	// instance (a project tag of an FB type, T1(...)), which keeps state.
+	// What the purity check cannot name is refused, not trusted.
+	return append(out, c.here(via, v.Pos, "calls "+v.Name+", which is not a FUNCTION or a standard function (a function block instance keeps state)"))
 }
 
 // function checks one FUNCTION, once; via ends with its own name.

@@ -88,6 +88,16 @@ func TestExprMemberChecks(t *testing.T) {
 			"it is in a cycle, G1.A → G1.Sub.X → G1.A"},
 		{"a variable index reads the whole array", "      Vals[1]: { expr: \"Vals[Idx] + 1.0\" }\n", oneGauge, "", "",
 			"it reads itself (G1.Vals[1])"},
+		{"an FB instance held in a tag", "      Healthy: { expr: \"T1(IN := Fault, PT := T#1s).Q\" }\n", oneGauge, "", "tags:\n  - { name: T1, role: state, type: TON }\n",
+			"calls T1, which is not a FUNCTION or a standard function (a function block instance keeps state)"},
+		{"a comment hides nothing from the compile", "      Healthy: { expr: \"Fault // why\\n AND Nope\" }\n", oneGauge, "", "",
+			`undeclared identifier "Nope"`},
+		{"a comment before the rest of a clean expression", "      Healthy: { expr: \"Raw // why\\n > 3\" }\n", oneGauge, "", "",
+			"checks clean"},
+		{"an array member", "      Vals[0]: { expr: \"INT_TO_REAL(Raw)\" }\n", oneGauge, "", "",
+			"checks clean"},
+		{"an array member, narrowing", "      Vals[0]: { expr: \"Fault\" }\n", oneGauge, "", "",
+			"it gives BOOL, but the member is REAL"},
 		{"a cycle across instances", "      A: { expr: \"{peer}.A\" }\n", strings.Replace(twoGauges, "192.0.2.2 }", "192.0.2.2, peer: G1 }", 1) + "", "", "",
 			"G1.A → G2.A → G1.A"},
 	} {
@@ -97,4 +107,27 @@ func TestExprMemberChecks(t *testing.T) {
 			t.Errorf("%s:\n got %v\nwant %q", c.name, err, c.want)
 		}
 	}
+}
+
+// Members that all read the whole instance form one ring: it is one
+// problem naming every member, and the check stays fast, however many
+// there are (every simple cycle would be factorial).
+func TestExprDenseCycleIsOneProblem(t *testing.T) {
+	lib := "FUNCTION GaugeFn : REAL\nVAR_INPUT g : Gauge; END_VAR\nGaugeFn := g.A;\nEND_FUNCTION\n"
+	var members string
+	for _, m := range []string{"Pct", "A", "B", "Vals[0]", "Vals[1]", "Sub.X", "Sub.Y"} {
+		members += "      " + m + ": { expr: \"GaugeFn(G1)\" }\n"
+	}
+	_, err := Load(gaugeProject(members, oneGauge, lib, ""), "")
+	if err == nil || strings.Count(err.Error(), "it is in a cycle") != 1 || len(err.Error()) > 2000 ||
+		!strings.Contains(err.Error(), "the expr: members G1.A, G1.B, G1.Pct, G1.Sub.X, G1.Sub.Y, G1.Vals[0], G1.Vals[1] read each other") {
+		t.Fatalf("%d bytes: %v", len(fmtErr(err)), err)
+	}
+}
+
+func fmtErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

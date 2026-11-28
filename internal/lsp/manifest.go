@@ -225,8 +225,16 @@ func manifestDiagnostics(mpath string, e *manifestEntry, decls map[string]tagDec
 		out[uri] = append(out[uri], Diagnostic{Range: r, Severity: SeverityError, Source: "nautilus", Message: msg})
 	}
 	if e.readErr != nil {
-		file, r := readErrPlace(mpath, files, e.readErr)
-		add(file, r, e.readErr.Error())
+		// Several problems at once (a wiring's, joined): each on its own
+		// line, not all of them on the first one's.
+		errs := []error{e.readErr}
+		if j, ok := e.readErr.(interface{ Unwrap() []error }); ok && len(j.Unwrap()) > 1 {
+			errs = j.Unwrap()
+		}
+		for _, err := range errs {
+			file, r := readErrPlace(mpath, files, err)
+			add(file, r, err.Error())
+		}
 	}
 	for _, b := range e.badTags {
 		file, r := mpath, fileLineRange(mpath, 1)
