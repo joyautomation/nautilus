@@ -1743,7 +1743,10 @@ func (n *Node) rewrite() error {
 		_ = d.Sync() // not supported on Windows; NTFS journals the rename
 		d.Close()
 	}
-	f, err := os.OpenFile(n.o.File, os.O_RDWR|os.O_APPEND, 0o600)
+	// Not O_APPEND: appendLines seeks to the end before each write, and on
+	// Windows an append-only handle cannot truncate, so a failed write
+	// could not be cut back (#1455).
+	f, err := os.OpenFile(n.o.File, os.O_RDWR, 0o600)
 	if err != nil {
 		// n.file stays the closed handle, so every later write fails
 		// loudly rather than being skipped as if there were no file.
