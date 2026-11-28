@@ -18,7 +18,10 @@
 # read by the manifest the playground also loads): naut-wasm 4,833,340 in CI,
 # +40,919 over the old limit; the deps differ by that one leaf package, nothing
 # controller-only leaked. The playground will run wirings, so it stays in.
+# after the instance push rules (#1458 slice 4, runtime/instance_push.go, the
+# core the playground runs): naut-wasm 4,889,441 in CI, +17,441 over main's
+# 4,872,000; the deps are identical to main's, nothing controller-only leaked.
 #
 # One line per module: <target under ./cmd> <bytes>.
-naut-wasm 4881673
+naut-wasm 4938335
 naut-wasm-hmi 3863413
