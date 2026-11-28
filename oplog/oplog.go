@@ -29,13 +29,14 @@
 // replication is refused.
 //
 // Each instance keeps the log in memory and appends it to a local file
-// (synced per write; a torn final line from a crash is dropped), which
+// (synced per batch of entries; a torn final line from a crash is dropped), which
 // survives a process restart but not a reschedule. There is no durable
 // copy on the cluster being watched, on purpose: the log must not depend
 // on the platform it reports on. Two instances of three cannot form a
 // majority, so a split leaves exactly one side writable, and the other
-// says so (Status). The log is not compacted; at operator rates it grows
-// by kilobytes a day.
+// says so (Status). The log is not compacted (#1455): about 225 bytes per
+// entry on disk and 0.5 MB per 1,000 in memory, at a busy plant's rate
+// about 2,400 entries a day.
 //
 // Replica-to-replica calls require a shared token (constant-time compared)
 // whenever there is more than one peer, and replication is accepted only

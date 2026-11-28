@@ -41,7 +41,7 @@ bumpless, and the measured takeover time is published instead.
   state stream keeps the two equal.
 - **`oplog`: the witness is its third peer** (decision 6). Operator intent (acks, shelves) is
   committed by a majority of A, B and the witness, as `oplog` does under Kubernetes, so an ack
-  survives a failover. The leader sequences. The witness stores the entries (kilobytes a day)
+  survives a failover. The leader sequences. The witness stores the entries (about 0.5 MB a day at a busy plant's rate, #1455)
   and follows the leader that its own vote state names.
   - **Where acks come from.** The state stream still carries alarm state for a hot takeover,
     but the log is where an ack comes from (#710 PR 3b-2c, `server/alarms_oplog.go`).

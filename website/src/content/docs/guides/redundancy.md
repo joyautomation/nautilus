@@ -1515,6 +1515,13 @@ It does that only on evidence. These stay `unknown`:
 that lapses is journalled as `alarm.lapse`, one entry per alarm, under
 the operator's name.
 
+The log is never compacted (not built yet, #1455). Every copy reads all
+of it at start and keeps it in memory: about 225 bytes per entry on disk
+and 0.5 MB per 1,000 entries in memory (measured on x86-64 and arm64).
+A busy plant, two consoles at ISA-18.2's manageable alarm rate, writes
+about 2,400 entries a day: in a year about 870,000 entries and 470 MB
+of memory. Size each controller and the witness for the years it will run.
+
 Each change in the log carries who made it (`user:alice`,
 `token:historian`), so the journal names the same principal whichever
 controller carries it out. During a rolling upgrade a controller on an
