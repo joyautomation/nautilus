@@ -243,11 +243,11 @@ type Runtime struct {
 	// driver input whole.
 	instances []string
 	dtTag     string
-	meta    map[string]TagMeta
-	params  paramBook // parameters: manifest inits and drift bases (#718)
-	types   map[string]*ir.Type
-	tasks   []*taskRun
-	clock   Clock // nil = wall clock; see clock.go
+	meta      map[string]TagMeta
+	params    paramBook // parameters: manifest inits and drift bases (#718)
+	types     map[string]*ir.Type
+	tasks     []*taskRun
+	clock     Clock // nil = wall clock; see clock.go
 	// subMu orders substitute starts and restores (substitute.go); subSeq
 	// is the highest entry ID seen.
 	subMu  sync.Mutex
