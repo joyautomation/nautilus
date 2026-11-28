@@ -89,6 +89,16 @@ func TestEventCommandQueuedOfflineIsDroppedAtReconnect(t *testing.T) {
 		t.Errorf("the drop's log line does not name the binding:\n%s", logs.String())
 	}
 
+	// A live replace of the source keeps the count (since the driver
+	// started; a replace is not a start).
+	if err := d.ReplaceSource(fastSource("DEV", srv.Addr()), m.Tags, ReplaceOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Health().Sources[0].DroppedEvents; got != 1 {
+		t.Errorf("DroppedEvents = %d after a replace, want 1 carried over", got)
+	}
+	waitFor(t, "the replaced source connects", func() bool { return d.Health().Sources[0].State == "connected" })
+
 	// The device never got TRUE; the binding's next change goes out.
 	if err := d.WriteOutputs(nio.Values{"P1.Cmd.Start": false, "P1.Cmd.Run": true}); err != nil {
 		t.Fatal(err)
@@ -129,8 +139,7 @@ func TestEventCommandWhileConnectedIsSent(t *testing.T) {
 // (Start TRUE), then was released (FALSE) while the device could not be
 // reached, sends the release on the reconnect. Dropping it would leave the
 // device's coil asserted while the program holds FALSE, and the next press
-// would write TRUE onto TRUE with no edge. A numeric event at rest (0) is
-// the same.
+// would write TRUE onto TRUE with no edge.
 func TestEventCommandReleaseQueuedOfflineStillGoesOut(t *testing.T) {
 	srv := newSlave(t)
 	ln := &link{up: true}
@@ -138,7 +147,7 @@ func TestEventCommandReleaseQueuedOfflineStillGoesOut(t *testing.T) {
 		Sources: []Source{fastSource("DEV", srv.Addr())},
 		Tags: []TagBinding{
 			{Name: "P1.Cmd.Start", Source: "DEV", Table: TableCoil, Address: 1, Writable: true, WriteOnly: true, Event: true},
-			{Name: "P1.Cmd.Reset", Source: "DEV", Table: TableHolding, Address: 5, Format: "uint16", Writable: true, WriteOnly: true, Event: true},
+			{Name: "P1.Cmd.Reset", Source: "DEV", Table: TableHolding, Address: 5, Format: "bit:3", Writable: true, WriteOnly: true, Event: true},
 		},
 	}
 	d, err := New(m, WithScanRate(15*time.Millisecond), WithDialer(ln.dial))
@@ -147,13 +156,13 @@ func TestEventCommandReleaseQueuedOfflineStillGoesOut(t *testing.T) {
 	}
 	startDriver(t, d)
 	waitFor(t, "connect", func() bool { return d.Health().Sources[0].State == "connected" })
-	_ = d.WriteOutputs(nio.Values{"P1.Cmd.Start": false, "P1.Cmd.Reset": int64(0)})
-	_ = d.WriteOutputs(nio.Values{"P1.Cmd.Start": true, "P1.Cmd.Reset": int64(3)})
-	waitFor(t, "the press reaches the device", func() bool { return srv.Unit(1).Coil(1) && srv.Unit(1).Holding(5) == 3 })
+	_ = d.WriteOutputs(nio.Values{"P1.Cmd.Start": false, "P1.Cmd.Reset": false})
+	_ = d.WriteOutputs(nio.Values{"P1.Cmd.Start": true, "P1.Cmd.Reset": true})
+	waitFor(t, "the press reaches the device", func() bool { return srv.Unit(1).Coil(1) && srv.Unit(1).Holding(5) == 8 })
 
 	ln.cut()
 	waitFor(t, "source offline", func() bool { v, _ := d.ReadInputs(); return v["DEV__Online"] == false })
-	_ = d.WriteOutputs(nio.Values{"P1.Cmd.Start": false, "P1.Cmd.Reset": int64(0)})
+	_ = d.WriteOutputs(nio.Values{"P1.Cmd.Start": false, "P1.Cmd.Reset": false})
 	waitFor(t, "both releases queued", func() bool { return d.Health().Sources[0].QueuedWrites == 2 })
 	ln.restore()
 	waitFor(t, "the releases go out on the reconnect", func() bool { return !srv.Unit(1).Coil(1) && srv.Unit(1).Holding(5) == 0 })
@@ -169,6 +178,7 @@ func TestEventValidate(t *testing.T) {
 	for want, b := range map[string]TagBinding{
 		"event without writable": {Name: "T", Source: "A", Table: TableCoil, Event: true},
 		"event and rewrite":      {Name: "T", Source: "A", Table: TableCoil, Writable: true, Event: true, Rewrite: time.Second},
+		"event on a INT binding": {Name: "T", Source: "A", Table: TableHolding, Format: "int16", Writable: true, Event: true},
 	} {
 		err := Manifest{Sources: src, Tags: []TagBinding{b}}.Validate()
 		if err == nil || !strings.Contains(err.Error(), want) {

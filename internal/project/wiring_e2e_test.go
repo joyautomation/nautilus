@@ -287,6 +287,8 @@ instances:
 `, "instance P101 reads 2 connections (x, y): an instance on more than one connection arrives with slice 9"},
 		"one device twice": {wire("      Running: { from: drive, table: coil, address: 0 }\n") + "  - { name: P102, type: Pump, params: { endpoint: 192.0.2.1 } }\n",
 			"instance P101 and instance P102 are both on 192.0.2.1:502 unit 0"},
+		"a numeric event command": {wire("      Cmd.SpeedRef: { to: drive, table: holding, address: 20, format: int16, event: true }\n"),
+			`instance P101: member "Cmd.SpeedRef" is REAL and event: true: an event command is a BOOL`},
 		"bool from a register": {wire("      Running: { from: drive, table: holding, address: 0, format: int16 }\n"),
 			"instance P101: member Running: is BOOL, but holding 0 (format int16) delivers INT"},
 		"a scaled reading into an integer": {strings.Replace(wire("      Count: { from: drive, table: holding, address: 0, format: int16, scale: 0.1 }\n"), "Pump", "Counter", -1),

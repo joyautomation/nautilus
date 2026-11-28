@@ -1535,8 +1535,8 @@ func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
 	// it is a trigger, and one sent now would fire late, so it is dropped,
 	// said and counted. Its written value stays, so a re-push of the same
 	// value is no change and only the binding's next change goes out. A
-	// queued value at rest (FALSE, 0) is the trigger's release and still
-	// goes out: dropping it would leave the device asserted.
+	// queued FALSE is the trigger's release and still goes out: dropping
+	// it would leave the device asserted.
 	var dropped []string
 	for _, name := range sortedPending(s) {
 		if bs, ok := s.byName[name]; ok && bs.b.Event && !atRest(s.pending[name]) {
@@ -2463,24 +2463,10 @@ func sortedPending(s *source) []string {
 	return out
 }
 
-// atRest says whether a command value is a trigger's rest state: FALSE or
-// zero. An event command at rest is its release, which is safe to send late.
+// atRest says whether an event command's value is its rest, FALSE: its
+// release, which is safe to send late. An event command is a BOOL
+// (Validate), so nothing else is at rest.
 func atRest(v any) bool {
-	switch x := v.(type) {
-	case bool:
-		return !x
-	case int64:
-		return x == 0
-	case int:
-		return x == 0
-	case int32:
-		return x == 0
-	case uint64:
-		return x == 0
-	case float64:
-		return x == 0
-	case float32:
-		return x == 0
-	}
-	return false
+	b, ok := v.(bool)
+	return ok && !b
 }

@@ -313,6 +313,13 @@ func (r *resolver) instance(in *wiring.Instance) *Instance {
 		}
 		seen[path] = p
 		m := Member{Path: path, Kind: e.Kind, MemoryMode: e.MemoryMode, Event: e.Event, Unit: e.Unit, Desc: e.Desc, Source: e.Source, Type: mt, Pos: pos}
+		if e.Event && mt.Kind != ir.TypeBool {
+			// A trigger's rest is FALSE: what a driver may still send after
+			// an outage (its release). A number has no value that is always
+			// safe to send late (0 may be an action of its own, and an
+			// offset moves it on the wire).
+			r.add(pos, "instance %s: member %q is %s and event: true: an event command is a BOOL (a start, a reset), whose release FALSE is safe to send late; make the member BOOL, or drop event: to make it a level command", in.Name, p, mt)
+		}
 		if e.Readback != "" {
 			if rb, _, err := canonical(typ, e.Readback); err == nil {
 				m.Readback = rb

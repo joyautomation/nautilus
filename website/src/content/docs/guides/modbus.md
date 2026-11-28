@@ -354,13 +354,13 @@ registers since is left alone. Not so for a `rewrite:` binding: it
 re-asserts its last commanded value on connect and on every period, so it
 overwrites the other master's value anyway.
 
-An **event** command is the exception: a struct-wiring member with
+An **event** command is the exception: a BOOL struct-wiring member with
 `event: true` (a reset, a start pulse) raised while the source is down is
 dropped when the source reconnects, never sent late. A Start pressed while
 the device could not be reached must not fire minutes later. The drop is
 logged once per command per outage, naming it, and counted as
 `droppedEvents` on the device row. Press it again once the device answers.
-Its release (FALSE, or 0) still goes out on the reconnect, so a device that
+Its release (FALSE) still goes out on the reconnect, so a device that
 took the press before the link broke is never left asserted.
 
 **An exception to a write depends on whether the write ran.** When the

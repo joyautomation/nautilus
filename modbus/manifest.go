@@ -125,8 +125,8 @@ type TagBinding struct {
 	// the driver's other paths. The driver's part: one raised while the
 	// source is offline is dropped when the source reconnects, never sent
 	// late, and the drop is logged and counted (SourceHealth.DroppedEvents).
-	// A value at rest (FALSE, 0) is the trigger's release and still goes
-	// out, so the device is never left asserted. A level command queued
+	// It is a BOOL (a coil, or a bit:N register): FALSE is the trigger's
+	// release and still goes out, so the device is never left asserted. A level command queued
 	// meanwhile goes out on the reconnect, as ever.
 	Event bool
 }
@@ -388,6 +388,9 @@ func (m Manifest) Validate() error {
 		}
 		if !t.Writable && t.WriteOnly {
 			errs = append(errs, fmt.Errorf("tag %s: writeonly without writable", t.Name))
+		}
+		if t.Event && t.IECType() != "BOOL" {
+			errs = append(errs, fmt.Errorf("tag %s: event on a %s binding: an event command is a BOOL, whose release FALSE is safe to send late", t.Name, t.IECType()))
 		}
 		if !t.Writable && t.Event {
 			errs = append(errs, fmt.Errorf("tag %s: event without writable (event marks a command that is a trigger)", t.Name))
