@@ -222,8 +222,11 @@ claims:
   - id: STR-023
     claim: /api/meta reports blockDeltas true on a controller that understands ?blocks=delta.
     source: "#merging-blocks-is-opt-in-separately"
-    tests: []
-    note: TestMetaAdvertisesQualityAndDeltas checks quality and deltas only, not blockDeltas.
+    tests:
+      - go ./server TestMetaAdvertisesQualityAndDeltas
+    note: >-
+      Asserted: the advertisement (blockDeltas true on the same /api/meta
+      answer as quality and deltas), not that ?blocks=delta is then served.
 
   - id: STR-024
     claim: >-
