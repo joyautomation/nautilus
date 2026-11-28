@@ -108,9 +108,11 @@ func TestPairFailbackIsHotAndAManualSwitchoverSuspends(t *testing.T) {
 	}
 
 	// Resumed (asked on the standby: forwarded to b), it fails back hot.
+	// The clock starts before the ask: b starts its after (5 s) when the
+	// forwarded resume reaches it, before the answer is back here (#1120).
+	t0 := time.Now()
 	r.failback(t, "a", false)
 	stopped := 0
-	t0 := time.Now()
 	pairWait(t, "the failback to a", 20*time.Second, func() bool {
 		if c := r.count("b"); c > stopped {
 			stopped = c
