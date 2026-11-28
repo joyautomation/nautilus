@@ -323,8 +323,8 @@ func (r *Runtime) loadableLocked(re retain.SubstituteRetain) (string, error) {
 	if _, key, whole := r.tags.lookupLocked(re.Name); whole {
 		root = key
 	}
-	if !r.isInput(root) {
-		return root, fmt.Errorf("%s is no longer a driver-bound input", root)
+	if !r.substitutableAt(re.Name, root) {
+		return root, fmt.Errorf("%s is no longer a driver-bound input or a member an instance reads from a device", re.Name)
 	}
 	if !r.substitutable(root) {
 		return root, fmt.Errorf("%s is no longer substitutable (no substitutes: rule names it)", root)

@@ -95,6 +95,19 @@ func (r *Runtime) Quality() map[string]nio.Quality {
 			}
 		}
 	}
+	if len(r.tags.instList) > 0 {
+		out = r.instanceQualities(out, standby)
+	}
+	if !standby && len(r.tags.instList) > 0 {
+		for _, name := range r.tags.instanceSubstitutedNames() {
+			if q, said := out[name]; !said || q == nio.Good {
+				if out == nil {
+					out = make(map[string]nio.Quality)
+				}
+				out[name] = nio.Substituted
+			}
+		}
+	}
 	if !standby {
 		r.tags.eachSubstitutedRoot(func(root string, s subState) {
 			key := root
@@ -132,6 +145,11 @@ func (r *Runtime) TagQuality(name string) nio.Quality {
 		}
 	}
 	standby := r.standby()
+	if in := r.tags.instanceOf(root); in != nil {
+		// An instance answers per member, substitutes included.
+		_, segs := ir.SplitAddress(name)
+		return r.instanceTagQuality(in, segs, standby)
+	}
 	q := r.liveQuality(root, standby)
 	if standby {
 		return q
@@ -187,7 +205,7 @@ func (r *Runtime) ReportsQuality() bool {
 	if _, ok := r.driver.(nio.QualityReporter); ok {
 		return true
 	}
-	return r.coord != nil || len(r.inputs) > 0
+	return r.coord != nil || len(r.inputs) > 0 || len(r.instances) > 0
 }
 
 // standby reports whether this replica's scan-fed tags are frozen: it has
@@ -207,6 +225,9 @@ func (r *Runtime) standby() bool {
 // measured-dt tags. A name may come more than once.
 func (r *Runtime) scanFed(fn func(name string)) {
 	for _, name := range r.inputs {
+		fn(name)
+	}
+	for _, name := range r.instances {
 		fn(name)
 	}
 	r.forEachProgram(func(p *Program) {
@@ -232,6 +253,11 @@ func (r *Runtime) isScanFed(root string) bool {
 		return true
 	}
 	for _, name := range r.inputs {
+		if ir.SameName(name, root) {
+			return true
+		}
+	}
+	for _, name := range r.instances {
 		if ir.SameName(name, root) {
 			return true
 		}

@@ -113,6 +113,24 @@ func (v *scanView) commit() {
 	v.store.mu.Lock()
 	for name, m := range v.dirty {
 		val := v.vals[name]
+		if in := v.store.instanceOf(name); in != nil {
+			// An instance always merges onto the stored value, and its
+			// read-only members keep what the store holds whatever the
+			// program assigned (instance.go).
+			if cur, key, ok := v.store.lookupLocked(name); ok {
+				base := v.store.writeBase(key, cur)
+				if m != nil && !m.all {
+					val = m.merge(base, val)
+				}
+				val = in.stripReadOnly(val, base)
+			}
+			if m != nil {
+				m.reset()
+			}
+			v.store.writeLocked(name, val)
+			delete(v.dirty, name)
+			continue
+		}
 		if m != nil {
 			if !m.all {
 				if cur, key, ok := v.store.lookupLocked(name); ok && (cur.gen > v.snapGen || cur.forced || cur.substituted) {
