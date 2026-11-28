@@ -29,7 +29,7 @@ LD
   RUNG viatag (* the quotient into a DINT tag, then into a REAL *)
     { q := a / b; rq := DINT_TO_REAL(q) }
 
-  RUNG real (* a REAL divided by an integer is a REAL division on both *)
+  RUNG real (* a REAL divided by a converted integer is a REAL division on both *)
     { rr := x / DINT_TO_REAL(b) }
 
   RUNG cmpi (* CMP against an integer *)
