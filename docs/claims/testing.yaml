@@ -121,9 +121,8 @@ claims:
     claim: >-
       Writing an undeclared tag in given: is an error, not a new tag.
     source: "#given-setting-the-world"
-    tests: []
-    note: >-
-      Gap. Only force: of an unknown tag is asserted (undefined tag), not given:.
+    tests:
+      - go ./acceptance TestGivenOfAnUndeclaredTagIsAnError
   - id: TEST-012
     claim: >-
       A dotted name in given: addresses one field of a UDT tag and zero-fills
@@ -152,9 +151,8 @@ claims:
       harness substitutes a stub, so a project bound to hardware is testable
       offline.
     source: "#given-setting-the-world"
-    tests: []
-    note: >-
-      Gap. No test loads a project with a network driver and checks that no connection is attempted.
+    tests:
+      - go ./cmd/naut TestNautTestNeverOpensASocket
   - id: TEST-015
     claim: >-
       Expectations take an exact value (BOOL, STRING or number) or a
@@ -210,10 +208,8 @@ claims:
       A scan that faults fails the test that ran it, with the error and the
       virtual timestamp, without the author writing an assertion.
     source: "#expectations"
-    tests: []
-    note: >-
-      Gap. A failure with step 0 / line 0 for a faulted scan is described
-      in the docs; no acceptance test provokes a faulting scan.
+    tests:
+      - go ./acceptance TestAFaultingScanFailsTheTestWithoutAnAssertion
   - id: TEST-019
     claim: >-
       alarms: asserts host alarm state (active, unacked, shelved, state,
@@ -319,9 +315,8 @@ claims:
       naut test exits non-zero on any failure, and -run filters tests by
       name pattern.
     source: "#in-ci"
-    tests: []
-    note: >-
-      Gap. cmd/naut has no test for the test subcommand's exit code or -run flag.
+    tests:
+      - go ./cmd/naut TestNautTestExitCodeAndRunFilter
   - id: TEST-028
     claim: >-
       *_test.yaml files are discovered in the project, and never reach a
