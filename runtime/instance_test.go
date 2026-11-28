@@ -9,6 +9,7 @@ import (
 
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/retain"
 )
 
 // Instances (struct wiring, #1458 slice 3; instance.go): one struct tag whose
@@ -42,12 +43,12 @@ END_TYPE
 `
 
 func pumpDef() InstanceDef {
-	return InstanceDef{Wiring: "Pump", Members: map[string]MemberDef{
+	return InstanceDef{Members: map[string]MemberDef{
 		"Running":      {Kind: MemberFrom},
-		"Speed":        {Kind: MemberFrom, Unit: "%"},
+		"Speed":        {Kind: MemberFrom},
 		"Fault":        {Kind: MemberFrom},
 		"Healthy":      {Kind: MemberExpr},
-		"RunHours":     {Kind: MemberMemory, Retained: true},
+		"RunHours":     {Kind: MemberMemory},
 		"Cmd.Start":    {Kind: MemberTo},
 		"Cmd.Stop":     {Kind: MemberTo, Event: true},
 		"Cmd.SpeedRef": {Kind: MemberTo, Readback: "Speed"},
@@ -109,7 +110,7 @@ func (d *instDriver) setQ(k string, q nio.Quality) {
 func newPumpRuntime(t *testing.T, body string, extra ...TagDef) (*Runtime, *instDriver) {
 	t.Helper()
 	d := &instDriver{}
-	tags := append([]TagDef{Instance("P101", "Pump", pumpDef())}, extra...)
+	tags := append([]TagDef{InstanceTag("P101", "Pump", pumpDef())}, extra...)
 	r, err := New(Options{
 		Program:   "PROGRAM Main\nVAR_EXTERNAL P101 : Pump; END_VAR\n" + body + "\nEND_PROGRAM",
 		Libraries: []string{pumpLib},
@@ -276,7 +277,7 @@ func TestInstanceOperatorWriteMidScanSurvives(t *testing.T) {
 		Program: "PROGRAM Main\nVAR_EXTERNAL P101 : Pump; END_VAR\nVAR wall : LOCAL_TIME; END_VAR\nwall();\n" +
 			"P101.Cmd.Start := TRUE;\nEND_PROGRAM",
 		Libraries: []string{pumpLib}, Driver: d, Clock: clk,
-		Tags: []TagDef{Instance("P101", "Pump", pumpDef())},
+		Tags: []TagDef{InstanceTag("P101", "Pump", pumpDef())},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -290,6 +291,14 @@ func TestInstanceOperatorWriteMidScanSurvives(t *testing.T) {
 // members by the device library's rule. Memory and commands are Good.
 func TestInstanceQualityRollsUp(t *testing.T) {
 	r, d := newPumpRuntime(t, "")
+	r.Scan()
+	if q := r.Quality(); q["P101"] != nio.NotConnected || q["P101.Speed"] != nio.NotConnected {
+		t.Errorf("never delivered: quality = %v, want the device members and the root NotConnected", q)
+	}
+	if q := r.TagQuality("P101.RunHours"); q != nio.Good {
+		t.Errorf("a memory member never delivered reads %v, want Good", q)
+	}
+	d.set("P101", pumpValue(t, r))
 	r.Scan()
 	if q := r.Quality(); len(q) != 0 {
 		t.Fatalf("a healthy instance reports %v", q)
@@ -363,12 +372,13 @@ func TestInstanceSubstituteOnDeviceMembersOnly(t *testing.T) {
 		Program:       "PROGRAM Main\nVAR_EXTERNAL P101 : Pump; END_VAR\nEND_PROGRAM",
 		Libraries:     []string{pumpLib},
 		Driver:        d,
-		Tags:          []TagDef{Instance("P101", "Pump", pumpDef())},
+		Tags:          []TagDef{InstanceTag("P101", "Pump", pumpDef())},
 		Substitutable: []string{"P101"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	d.set("P101", pumpValue(t, r))
 	d.set("P101.Speed", 30.0)
 	r.Scan()
 	subFor(t, r, "P101.Speed", 55.0, time.Hour, false)
@@ -376,6 +386,28 @@ func TestInstanceSubstituteOnDeviceMembersOnly(t *testing.T) {
 	wantPath(t, r, "P101.Speed", 55.0)
 	if q := r.TagQuality("P101"); q != nio.Substituted {
 		t.Errorf("root quality with a substituted member = %v, want Substituted", q)
+	}
+	for path, want := range map[string]nio.Quality{"P101.Speed": nio.Substituted, "P101.RunHours": nio.Good, "P101.Cmd.Start": nio.Good, "P101.Running": nio.Good} {
+		if q := r.TagQuality(path); q != want {
+			t.Errorf("TagQuality(%s) with P101.Speed substituted = %v, want %v", path, q, want)
+		}
+	}
+	if q := r.Quality(); q["P101.Speed"] != nio.Substituted || q["P101"] != nio.Substituted {
+		t.Errorf("Quality() with P101.Speed substituted = %v", q)
+	}
+	// The other gates that admit a substitute ask the same question: a
+	// start's validation, and a retained entry's load after a restart.
+	if err := r.ValidateStart("P101.Speed", 1.0); err != nil {
+		t.Errorf("ValidateStart(P101.Speed): %v", err)
+	}
+	if err := r.ValidateStart("P101.RunHours", 1.0); err == nil {
+		t.Error("ValidateStart(P101.RunHours) passed")
+	}
+	if _, err := r.loadableLocked(retain.SubstituteRetain{Name: "P101.Speed"}); err != nil {
+		t.Errorf("a retained substitute of P101.Speed does not load: %v", err)
+	}
+	if _, err := r.loadableLocked(retain.SubstituteRetain{Name: "P101.RunHours"}); err == nil {
+		t.Error("a retained substitute of a memory member loads")
 	}
 	for _, addr := range []string{"P101.RunHours", "P101.Cmd.Start", "P101.Healthy", "P101"} {
 		if _, err := r.Substitute(addr, SubstituteRequest{Value: 1.0, For: time.Hour, By: "op"}); err == nil {
@@ -413,7 +445,7 @@ func TestInstanceIsNoInputAndNotRetained(t *testing.T) {
 	}
 	r2, err := New(Options{
 		Program: "PROGRAM Main\nVAR_EXTERNAL P101 : Pump; END_VAR\nEND_PROGRAM", Libraries: []string{pumpLib},
-		Driver: &instDriver{}, Tags: []TagDef{Instance("P101", "Pump", pumpDef())}, Retain: &memStore{},
+		Driver: &instDriver{}, Tags: []TagDef{InstanceTag("P101", "Pump", pumpDef())}, Retain: &memStore{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -434,17 +466,17 @@ func TestInstanceRefusedAtNew(t *testing.T) {
 		opt  func(*Options)
 		want string
 	}{
-		{"not a struct", Instance("P101", "REAL", bad(nil)), nil, "type REAL is not a STRUCT"},
+		{"not a struct", InstanceTag("P101", "REAL", bad(nil)), nil, "type REAL is not a STRUCT"},
 		{"no type", TagDef{Name: "P101", Role: RoleState, Instance: &InstanceDef{}}, nil, "an instance needs its TYPE"},
 		{"a role of its own", TagDef{Name: "P101", Role: RoleInput, Type: "Pump", Instance: &InstanceDef{}}, nil, "an instance has no role of its own"},
-		{"a member the type lacks", Instance("P101", "Pump", bad(map[string]MemberDef{"Sped": {Kind: MemberFrom}})), nil, "member Sped: type Pump has no member Sped"},
-		{"an index outside the array", Instance("P101", "Pump", bad(map[string]MemberDef{"Speed[2]": {Kind: MemberFrom}})), nil, "indexes something that is not an array"},
-		{"a read-back of memory", Instance("P101", "Pump", bad(map[string]MemberDef{"Cmd.SpeedRef": {Kind: MemberTo, Readback: "RunHours"}})), nil, "readback RunHours is memory"},
-		{"a read-back on a from", Instance("P101", "Pump", bad(map[string]MemberDef{"Speed": {Kind: MemberFrom, Readback: "Fault"}})), nil, "Readback is for a MemberTo"},
-		{"event on a from", Instance("P101", "Pump", bad(map[string]MemberDef{"Speed": {Kind: MemberFrom, Event: true}})), nil, "Event is for a MemberTo"},
-		{"retained whole", Instance("P101", "Pump", pumpDef(), Retained()), nil, "by their own Retained flag"},
-		{"also an input", Instance("P101", "Pump", pumpDef()), func(o *Options) { o.Inputs = []string{"P101"} }, "is also a driver input or output"},
-		{"listed twice", Instance("P101", "Pump", bad(map[string]MemberDef{"Speed": {Kind: MemberFrom}, "speed": {Kind: MemberTo}})), nil, "member speed is listed twice"},
+		{"a member the type lacks", InstanceTag("P101", "Pump", bad(map[string]MemberDef{"Sped": {Kind: MemberFrom}})), nil, "member Sped: type Pump has no member Sped"},
+		{"an index outside the array", InstanceTag("P101", "Pump", bad(map[string]MemberDef{"Speed[2]": {Kind: MemberFrom}})), nil, "indexes something that is not an array"},
+		{"a read-back of memory", InstanceTag("P101", "Pump", bad(map[string]MemberDef{"Cmd.SpeedRef": {Kind: MemberTo, Readback: "RunHours"}})), nil, "readback RunHours is memory"},
+		{"a read-back on a from", InstanceTag("P101", "Pump", bad(map[string]MemberDef{"Speed": {Kind: MemberFrom, Readback: "Fault"}})), nil, "Readback is for a MemberTo"},
+		{"event on a from", InstanceTag("P101", "Pump", bad(map[string]MemberDef{"Speed": {Kind: MemberFrom, Event: true}})), nil, "Event is for a MemberTo"},
+		{"retained whole", InstanceTag("P101", "Pump", pumpDef(), Retained()), nil, "an instance is never retained whole"},
+		{"also an input", InstanceTag("P101", "Pump", pumpDef()), func(o *Options) { o.Inputs = []string{"P101"} }, "is also a driver input or output"},
+		{"listed twice", InstanceTag("P101", "Pump", bad(map[string]MemberDef{"Speed": {Kind: MemberFrom}, "speed": {Kind: MemberTo}})), nil, "member speed is listed twice"},
 	} {
 		o := Options{Program: "PROGRAM Main\nEND_PROGRAM", Libraries: []string{pumpLib}, Driver: &instDriver{}, Tags: []TagDef{tc.def}}
 		if tc.opt != nil {
