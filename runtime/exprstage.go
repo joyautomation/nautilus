@@ -158,15 +158,40 @@ var (
 	errExprNotANumber = errors.New("the result is not a number (NaN or infinite)")
 )
 
-// sameBits is sameValue with a REAL compared by its bits, so a result that
-// is the same NaN every scan is no change.
+// plainZero is what a member not computed holds: the zero of each leaf,
+// with none of a TYPE's initial values (an enumeration keeps its default
+// member, as 0 may be none of its members).
+func plainZero(t *ir.Type) ir.Value {
+	if t == nil {
+		return ir.Value{}
+	}
+	switch t.Kind {
+	case ir.TypeArray:
+		a := make([]ir.Value, t.ArrLen)
+		for i := range a {
+			a[i] = plainZero(t.Elem)
+		}
+		return ir.Value{Kind: ir.TypeArray, Arr: a}
+	case ir.TypeStruct:
+		f := make([]ir.Value, len(t.Struct.Fields))
+		for i, fld := range t.Struct.Fields {
+			f[i] = plainZero(fld.Type)
+		}
+		return ir.Value{Kind: ir.TypeStruct, Fld: f, Struct: t.Struct}
+	}
+	return ir.Zero(t)
+}
+
+// sameBits is sameValue as the store compares (a REAL by ==, so -0.0 is
+// +0.0), except that a NaN equals a NaN: a result that stays NaN inside an
+// aggregate is no change each scan.
 func sameBits(a, b *ir.Value) bool {
 	if a.Kind != b.Kind {
 		return false
 	}
 	switch a.Kind {
 	case ir.TypeReal:
-		return math.Float64bits(a.F) == math.Float64bits(b.F)
+		return a.F == b.F || (math.IsNaN(a.F) && math.IsNaN(b.F))
 	case ir.TypeStruct:
 		if len(a.Fld) != len(b.Fld) {
 			return false
@@ -373,7 +398,7 @@ func (ex *exprSet) compile(src string, opts st.LowerOpts, t *Tags) (*exprStage, 
 			return nil, ex.unitErr(i, "uses EN/ENO execution control, which an expression does not take: call the function without EN")
 		}
 		assigns[i] = a
-		s.zeros[i] = ir.Zero(a.Target.ExprType())
+		s.zeros[i] = plainZero(a.Target.ExprType())
 		s.slots[i] = len(shared.Slots)
 		shared.Slots = append(shared.Slots, ir.VarSlot{Name: fmt.Sprintf("__expr%d", i), Type: a.Target.ExprType(), Kind: ir.VarLocal})
 	}
