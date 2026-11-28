@@ -348,10 +348,15 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 		// keep the whole copy-back.
 		var rec *inOutRec
 		var frame *Frame
-		if n.Def.Body != nil && inst.StepFrame().inout == nil {
-			// (An instance already being stepped, re-entered, is not
-			// recorded: its pins copy back whole, the old rule.)
-			if rec = inst.startInOut(n.Def); rec != nil {
+		if n.Def.Body != nil && len(n.Def.InOuts) > 0 {
+			if live := inst.StepFrame().inout; live != nil {
+				// An instance already being stepped, re-entered: its copy-in
+				// replaces the outer call's pins, so the outer call takes
+				// them whole, and this call is not recorded (the old rule).
+				for i := range live.slots {
+					live.slots[i].all, live.slots[i].paths = true, live.slots[i].paths[:0]
+				}
+			} else if rec = inst.startInOut(n.Def); rec != nil {
 				frame = inst.StepFrame()
 				frame.inout = rec
 			}
