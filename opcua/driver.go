@@ -864,9 +864,11 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	// The driver has asked for every output (the gate reopened, a session
 	// was re-established, a write was lost) and the runtime has not taken
 	// the ask yet: this push was built before it, so its event leaves are
-	// not rebased. An event command in it is recorded, never sent: the
-	// first value after a reopen or a reconnect is a baseline (design
-	// §2.3), and the runtime's rebase on the ask agrees with it.
+	// not rebased. An event command asserting in it (TRUE) is recorded,
+	// never sent: the first value after a reopen or a reconnect is a
+	// baseline (design §2.3), and the runtime's rebase on the ask agrees
+	// with it. A release (FALSE) goes out as any command: dropping it would
+	// leave the node asserted.
 	asked := d.wanted.Load()
 	kicked := false
 	d.mu.Lock()
@@ -875,7 +877,7 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		if !ok || !b.Writable {
 			continue
 		}
-		if asked && b.Event {
+		if asked && b.Event && !atRest(v) {
 			d.written[name] = v
 			delete(d.undecided, name)
 			continue

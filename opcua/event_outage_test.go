@@ -214,6 +214,28 @@ func TestEventAtRest(t *testing.T) {
 	}
 }
 
+// A release (FALSE) in the push that finds the gate reopened goes out: only
+// an asserting value is recorded while the ask is untaken, so a node that
+// took the press is never left asserted.
+func TestEventReleaseOnGateReopenGoesOut(t *testing.T) {
+	ts := startServer(t, freePort(t))
+	d := startDriver(t, ts.url, eventManifest(true))
+	var open atomic.Bool
+	open.Store(true)
+	d.SetWriteGate(open.Load)
+	waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 0.0}) // baseline
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 0.0})
+	waitFor(t, "the press", func() bool { return ts.get(t, "Start") == true })
+	waitFor(t, "nothing queued", func() bool { return d.Health().QueuedWrites == 0 })
+
+	open.Store(false)
+	_ = d.WriteOutputs(nio.Values{"Start": true, "Setpoint": 0.0}) // finds it shut
+	open.Store(true)
+	_ = d.WriteOutputs(nio.Values{"Start": false, "Setpoint": 0.0}) // finds it reopened, and releases
+	waitFor(t, "the release goes out", func() bool { return ts.get(t, "Start") == false })
+}
+
 // Validate refuses event without writable, and event on anything but a
 // Boolean: a trigger's release is FALSE, the one value always safe to send
 // late.
