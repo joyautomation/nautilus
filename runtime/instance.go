@@ -635,6 +635,7 @@ func (t *Tags) deliverLocked(in *instInfo, vals map[string]any) {
 			for _, j := range in.sub[i] {
 				now[j] = true
 				in.got[j].Store(true)
+				in.keys[j].bad.Store(false)
 			}
 		}
 	}

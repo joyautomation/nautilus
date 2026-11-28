@@ -37,6 +37,10 @@ import (
 //     moved off it (another client wrote it), and the leaf is the peer's
 //     again: not handed over until written again, so a copy the peer has
 //     moved on from is never written back, on a reopen's full push either.
+//     A program that assigns the leaf every scan re-makes the command after
+//     each read that shows the peer elsewhere, so it is handed on every scan
+//     until the peer shows it: a level re-assert, until an in-flight hold
+//     (slice 12) waits for the peer's answer.
 //     An outside write before the first delivery is refused
 //     (ErrNotDelivered); a program's assignment then is not a write, and the
 //     delivery replaces it.
@@ -211,27 +215,35 @@ func (t *Tags) markWrittenLocked(in *instInfo, under func(*pushLeaf) bool) {
 	}
 }
 
-// markForcedLocked records a force at path: a to: leaf under it goes out
-// with the forced value, as a forced output does, for as long as the force
-// holds (forceReleasedLocked). A both: leaf is the peer's memory, and a
-// force of it is the logic's view, as a force of an input is: never a
-// command. Caller holds t.mu.
-func (t *Tags) markForcedLocked(path string) {
+// markForcedLocked records a force at path of value: a to: leaf it names
+// goes out with the forced value, as a forced output does, for as long as
+// the force holds (forceReleasedLocked). An object names only its members:
+// the ones it leaves out are held at what they were, not commanded. A both:
+// leaf is the peer's memory, and a force of it is the logic's view, as a
+// force of an input is: never a command. Caller holds t.mu.
+func (t *Tags) markForcedLocked(path string, value any) {
 	root, segs := ir.SplitAddress(path)
 	in := t.instanceOf(root)
 	if in == nil || len(in.push) == 0 {
 		return
 	}
-	chain, ok := in.walk(segs)
-	if !ok {
-		return
+	var targets []string
+	for _, p := range writtenPaths(value) {
+		if chain, ok := in.walk(append(append([]string(nil), segs...), ir.PathSegments(p)...)); ok {
+			targets = append(targets, chain[len(chain)-1].canon)
+		}
 	}
-	c := chain[len(chain)-1].canon
 	for i := range in.push {
 		l := &in.push[i]
-		if !l.both && !l.written && (c == "" || pathUnder(l.node.canon, c)) {
-			l.written, l.byForce = true, true
-			t.pushRev++
+		if l.both || l.written {
+			continue
+		}
+		for _, c := range targets {
+			if c == "" || pathUnder(l.node.canon, c) {
+				l.written, l.byForce = true, true
+				t.pushRev++
+				break
+			}
 		}
 	}
 }

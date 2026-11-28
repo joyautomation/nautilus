@@ -731,3 +731,17 @@ func TestPushWriteSetIsAWrite(t *testing.T) {
 	p.r.Scan()
 	wantHanded(t, p.d.last(t), "P101.Cmd.SpeedRef", 30.0)
 }
+
+// An object force names only its members: the ones it leaves out are held,
+// not commanded.
+func TestPushObjectForceCommandsOnlyWhatItNames(t *testing.T) {
+	def := InstanceDef{Members: map[string]MemberDef{"Speed": {Kind: MemberFrom}, "Cmd": {Kind: MemberTo}}}
+	p := newPushRig(t, "", def, false)
+	p.r.Scan()
+	if err := p.r.Tags().Force("P101.Cmd", map[string]any{"Start": true}); err != nil {
+		t.Fatal(err)
+	}
+	p.r.Scan()
+	wantHanded(t, p.d.last(t), "P101.Cmd.Start", true)
+	wantAbsent(t, p.d.last(t), "P101.Cmd.Stop", "P101.Cmd.SpeedRef")
+}
