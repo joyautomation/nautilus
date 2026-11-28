@@ -33,6 +33,8 @@ import (
 //     may set delivered members, which is what they are for.
 //   - Quality is per member, and the root shows the worst of its delivered
 //     members (the device library's rule).
+//   - The to: and both: leaves go to the drivers in the output push, each
+//     under its full path, by the push rules (instance_push.go).
 //
 // Every rule is decided on the leaves of one tree built from the type
 // (knode), each carrying its effective kind: its own entry, else its
@@ -40,10 +42,9 @@ import (
 // member name and position, never by StructDef identity, so a driver's own
 // StructDef and a recompiled TYPE after an online edit are the same shape.
 //
-// Experimental: CONTRIBUTING.md, "Go API". What is not here yet: commands are
-// not pushed (to: members reach no driver until the push rules land), memory
-// is not retained, and expressions are not evaluated. An instance is a
-// RoleState tag, so it is seeded, is no driver input or output, and is never
+// Experimental: CONTRIBUTING.md, "Go API". What is not here yet: memory is not
+// retained, and expressions are not evaluated. An instance is a RoleState
+// tag, so it is seeded, is no driver input or output tag, and is never
 // retained.
 
 // MemberKind is what one member of an instance's value comes from.
@@ -95,7 +96,9 @@ type MemberDef struct {
 	// Readback names the member that shows what the device did with a
 	// MemberTo (a from, both or expr member).
 	Readback string
-	// Event marks a MemberTo that must never be sent twice.
+	// Event marks a MemberTo that must never be sent twice: after a start,
+	// a takeover or a driver asking for every output, its first value is a
+	// baseline and only a later change goes out.
 	Event bool
 }
 
@@ -109,8 +112,8 @@ type InstanceDef struct {
 
 // InstanceTag declares a tag of a wired type. typeName is the project's TYPE
 // (a STRUCT); the tag is seeded at its zero, or at Init. Experimental while
-// struct wiring (#1458) lands: commands are not yet pushed to a driver,
-// memory is not yet retained and expressions are not yet evaluated.
+// struct wiring (#1458) lands: memory is not yet retained and expressions are
+// not yet evaluated.
 //
 // A driver delivers an instance's from: and both: members either one by one,
 // under the member's full path ("P101.Speed", which mixes freely across the
@@ -118,6 +121,13 @@ type InstanceDef struct {
 // from which only those members are taken. A value of another shape, or one a
 // member cannot hold, is not delivered: it is counted, and the instance's
 // quality is Bad until a delivery lands.
+//
+// The to: and both: members are pushed leaf by leaf, under each leaf's full
+// path ("P101.Cmd.Start", "P101.Cmd.SpeedRef"; a member listed whole is split
+// into its leaves), in the same WriteOutputs map as the output tags, and only
+// when the push rules hand a leaf over (instance_push.go): a command once
+// written in this leadership, an event: command once it changed off its
+// baseline, a peer's both: member once delivered and then written.
 func InstanceTag(name, typeName string, def InstanceDef, opts ...TagOpt) TagDef {
 	d := newDef(name, RoleState, nil, opts)
 	d.Type = typeName
@@ -187,6 +197,17 @@ type instInfo struct {
 	// drops counts them.
 	dropped atomic.Bool
 	drops   atomic.Uint64
+	// The push rules' state (instance_push.go), under Tags.mu: lead says
+	// whether each key has been delivered in this leadership; push are the
+	// to: and both: leaves; pushLooked and pushGen are the root's generation
+	// at the last look at them; now and firstNow are a delivery's scratch.
+	lead       []bool
+	push       []pushLeaf
+	pushLooked bool
+	pushGen    uint64
+	now        []bool
+	firstNow   []int
+	sub        [][]int // per key, the keys nested beneath it
 }
 
 type instKey struct {
@@ -335,6 +356,17 @@ func newInstInfo(d TagDef, types map[string]*ir.Type) (*instInfo, error) {
 		}
 	}
 	in.got = make([]atomic.Bool, len(in.keys))
+	in.lead = make([]bool, len(in.keys))
+	in.now = make([]bool, len(in.keys))
+	in.sub = make([][]int, len(in.keys))
+	for i, k := range in.keys {
+		for j, n := range in.keys {
+			if j != i && pathUnder(n.node.canon, k.node.canon) {
+				in.sub[i] = append(in.sub[i], j)
+			}
+		}
+	}
+	in.buildPush(d)
 	return in, nil
 }
 
@@ -545,6 +577,10 @@ func (t *Tags) deliverLocked(in *instInfo, vals map[string]any) {
 	}
 	base := t.writeBase(name, cur)
 	nv, changed, seen, dropped := base, false, false, false
+	now := in.now
+	for i := range now {
+		now[i] = false
+	}
 	if raw, ok := vals[in.name]; ok {
 		seen, dropped = true, true
 		if v, isIR := raw.(ir.Value); isIR {
@@ -552,6 +588,7 @@ func (t *Tags) deliverLocked(in *instInfo, vals map[string]any) {
 				nv, changed, dropped = m, true, false
 				for i := range in.got {
 					in.got[i].Store(true)
+					now[i] = true
 				}
 			}
 		}
@@ -565,6 +602,7 @@ func (t *Tags) deliverLocked(in *instInfo, vals map[string]any) {
 		if k.node.leaf {
 			if leaf, ok := valueAt(nv, k.idx); ok && sameLeaf(leaf, raw) {
 				in.got[i].Store(true)
+				now[i] = true
 				k.bad.Store(false)
 				continue
 			}
@@ -588,7 +626,23 @@ func (t *Tags) deliverLocked(in *instInfo, vals map[string]any) {
 		}
 		nv, changed = cand, true
 		in.got[i].Store(true)
+		now[i] = true
 		k.bad.Store(false)
+	}
+	// A key nested in a delivered one came with it.
+	for i, d := range now {
+		if d {
+			for _, j := range in.sub[i] {
+				now[j] = true
+				in.got[j].Store(true)
+				in.keys[j].bad.Store(false)
+			}
+		}
+	}
+	if len(in.push) > 0 {
+		if m, adopted := t.deliveredLocked(in, now, nv); adopted {
+			nv, changed = m, true
+		}
 	}
 	if seen {
 		in.dropped.Store(dropped)
@@ -634,12 +688,15 @@ func (t *Tags) instanceWritable(path string, value any) error {
 				return err
 			}
 		}
-		return nil
+		return in.notDeliveredErr(segs, value)
 	}
 	if len(segs) == 0 {
 		return fmt.Errorf("instance %s: write its members by name (an object), not a whole value: some are read-only: %w", in.name, ErrReadOnly)
 	}
-	return in.writable(segs)
+	if err := in.writable(segs); err != nil {
+		return err
+	}
+	return in.notDeliveredErr(segs, value)
 }
 
 // writable refuses a path that is, holds or lies under a read-only member.
@@ -1023,6 +1080,7 @@ func (t *Tags) registerInstances(o Options, types map[string]*ir.Type) ([]string
 		}
 		t.inst[ir.NameKey(d.Name)] = in
 		t.instList = append(t.instList, in)
+		t.instPush += len(in.push)
 		names = append(names, d.Name)
 	}
 	return names, nil

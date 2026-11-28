@@ -149,6 +149,11 @@ type Tags struct {
 	// once in New, read-only after.
 	inst     map[string]*instInfo
 	instList []*instInfo // inst in declaration order, for each delivery
+	// instPush counts the instances' to: and both: leaves (set in New);
+	// pushRev moves whenever their push state does, and pushSeen is the
+	// pushRev the last push looked at (instance_push.go). Under mu.
+	instPush          int
+	pushRev, pushSeen uint64
 }
 
 // tagVal is one stored tag: its value and the store generation at which
@@ -706,6 +711,7 @@ func (t *Tags) setPathLocked(path string, v any, strict bool) error {
 		return err
 	}
 	t.writeLocked(key, nv)
+	t.markPathWrittenLocked(path, v)
 	return nil
 }
 

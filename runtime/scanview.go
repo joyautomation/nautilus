@@ -124,10 +124,13 @@ func (v *scanView) commit() {
 				}
 				val = in.stripReadOnly(val, base)
 			}
+			v.store.writeLocked(name, val)
+			// What the program assigned is written in this leadership,
+			// the value it already held included (instance_push.go).
+			v.store.markMaskWrittenLocked(in, m)
 			if m != nil {
 				m.reset()
 			}
-			v.store.writeLocked(name, val)
 			delete(v.dirty, name)
 			continue
 		}

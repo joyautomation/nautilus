@@ -1633,20 +1633,29 @@ func (r *Runtime) scanAt(due time.Time) {
 	//
 	// While a pair's takeover hold holds (hold.go), nothing is pushed: not
 	// sent means not held, so the release's push is the whole set.
-	if r.driver != nil && len(r.outputs) > 0 && r.coord != nil && !r.coord.IsLeader() {
+	//
+	// An instance's to: and both: leaves ride in the same push, under their
+	// full paths, by the push rules (instance_push.go). A driver asking for
+	// every output is also where an event: leaf takes a new baseline.
+	pushes := len(r.outputs) > 0 || r.tags.instPush > 0
+	if r.driver != nil && pushes && r.coord != nil && !r.coord.IsLeader() {
 		r.outSent.Store(false)
 	} else if r.holdScan() {
 		r.outSent.Store(false)
-	} else if r.driver != nil && len(r.outputs) > 0 {
+	} else if r.driver != nil && pushes {
 		gen := r.tags.outputGeneration()
 		wanted := r.asker != nil && r.asker.OutputsWanted()
-		if r.alwaysWrite || wanted || !r.outSent.Load() || gen != r.outGen.Load() {
+		if r.outBuf == nil {
+			r.outBuf = make(nio.Values, len(r.outputs)+r.tags.instPush)
+		}
+		if wanted {
+			r.tags.rebaseEvents()
+		}
+		instMoved := r.tags.instancePush(r.outBuf)
+		if r.alwaysWrite || wanted || !r.outSent.Load() || gen != r.outGen.Load() || instMoved {
 			// Compound values (UDTs, arrays) cross the seam as ir.Value so
 			// typed drivers keep field names and integer widths; scalars
 			// stay plain Go values for simple drivers.
-			if r.outBuf == nil {
-				r.outBuf = make(nio.Values, len(r.outputs))
-			}
 			out := r.outBuf
 			r.tags.readMany(r.outputs, out)
 			if err := r.driver.WriteOutputs(out); err != nil {
@@ -1660,6 +1669,9 @@ func (r *Runtime) scanAt(due time.Time) {
 			} else {
 				r.outGen.Store(gen)
 				r.outSent.Store(true)
+				if r.tags.instPush > 0 {
+					r.tags.instancePushed()
+				}
 				r.deliverPush(out)
 				r.holdAfterPush()
 			}
