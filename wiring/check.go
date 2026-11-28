@@ -229,6 +229,7 @@ func (c *checker) wiring(w *Wiring) {
 			continue
 		}
 		seenAlarm[a.Member] = true
+		c.inType(w, paths, a.Member, "an alarm", w.Pos)
 		c.explicit(w, a.Member, "an alarm", w.Pos)
 		refs(w.Pos, "alarm "+a.Member+" name", a.Name)
 		refs(w.Pos, "alarm "+a.Member+" notes", a.Notes)
@@ -242,7 +243,9 @@ func (c *checker) member(w *Wiring, path string, m *Member, pos Pos, refs func(P
 		c.add(pos, "member %q has no kind: give it one of from:, to:, both:, memory: or expr: (a member left out is retained memory)", path)
 		return
 	case From, To, Both:
-		if _, ok := w.Sources[m.Source]; !ok {
+		if m.Source == "" {
+			c.add(pos, "member %q: %s: needs a source name (one of %s)", path, m.Kind, strings.Join(sortedKeys(w.Sources), ", "))
+		} else if _, ok := w.Sources[m.Source]; !ok {
 			c.add(pos, "member %q: %s: %q is not a source of this wiring%s", path, m.Kind, m.Source, didYouMean(m.Source, sortedKeys(w.Sources)))
 		} else if m.Kind == Both {
 			c.both(w, path, m, pos)
@@ -261,6 +264,9 @@ func (c *checker) member(w *Wiring, path string, m *Member, pos Pos, refs func(P
 		c.add(pos, "member %q is %s, which takes no address keys (%s): remove them, or make it from:, to: or both:", path, m.Kind, strings.Join(sortedKeys(m.Addr), ", "))
 	}
 	for _, k := range sortedKeys(m.Addr) {
+		if near := nearKey(k); near != "" {
+			c.add(pos, "member %q: %q is passed to the driver as an address key, but it is one edit from %q: did you mean %s? (a misspelled event: would silently make a command re-sendable)", path, k, near, near)
+		}
 		if v, ok := m.Addr[k].(string); ok {
 			refs(pos, "member "+path+" "+k, v)
 		}
@@ -273,6 +279,20 @@ func (c *checker) member(w *Wiring, path string, m *Member, pos Pos, refs func(P
 	}
 	refs(pos, "member "+path+" unit", m.Unit)
 	refs(pos, "member "+path+" desc", m.Desc)
+}
+
+// nearKey is the member key an address key looks like a misspelling of.
+func nearKey(k string) string {
+	for _, w := range []string{"readback", "event", "unit", "desc", "memory", "expr"} {
+		limit := 2
+		if len(w) <= 4 && (k == "" || k[0] != w[0]) {
+			limit = 1 // a short word is a typo only if it starts the same
+		}
+		if k != w && editDistance(strings.ToLower(k), w) <= limit {
+			return w
+		}
+	}
+	return ""
 }
 
 // both refuses `both:` on a field-device driver.
@@ -333,6 +353,31 @@ func (c *checker) readback(w *Wiring, path string, m *Member, pos Pos) {
 	case t.Kind != From && t.Kind != Both && t.Kind != Expr:
 		c.add(pos, "member %q: readback: %q is %s: a read-back must be from:, both: or expr:", path, m.Readback, t.Kind)
 	}
+}
+
+// inType refuses a path the wiring's type does not have, when the project's
+// types are known.
+func (c *checker) inType(w *Wiring, paths map[string]bool, path, what string, pos Pos) {
+	if paths == nil || paths[indexRE.ReplaceAllString(path, "")] {
+		return
+	}
+	c.add(pos, "%s names member %q, but type %s has none%s", what, path, w.Type, didYouMean(path, keysOf(paths)))
+}
+
+// typePaths is the member paths of a type, or nil when they are not known.
+func (c *checker) typePaths(typ string) map[string]bool {
+	if c.env.Type == nil {
+		return nil
+	}
+	ps, ok := c.env.Type(typ)
+	if !ok {
+		return nil
+	}
+	m := map[string]bool{}
+	for _, p := range ps {
+		m[p] = true
+	}
+	return m
 }
 
 // explicit requires a member an alarm or similar names to be wired.
@@ -402,6 +447,9 @@ func (c *checker) sameKinds(ws []*Wiring) {
 			}
 		}
 		for _, p := range sortedKeys(paths) {
+			if isPrefix(paths, p) {
+				continue // a whole struct: its leaves are compared
+			}
 			var first *Wiring
 			var fk Kind
 			var fmode string
@@ -433,6 +481,16 @@ func (c *checker) sameKinds(ws []*Wiring) {
 			}
 		}
 	}
+}
+
+// isPrefix reports whether another path is under p (p is a struct).
+func isPrefix(paths map[string]bool, p string) bool {
+	for q := range paths {
+		if strings.HasPrefix(q, p+".") || strings.HasPrefix(q, p+"[") {
+			return true
+		}
+	}
+	return false
 }
 
 func describe(k Kind, mode string) string {
@@ -484,14 +542,14 @@ func (c *checker) instance(in *Instance) {
 	}
 
 	for _, p := range sortedKeys(in.Params) {
-		decl, ok := w.Params[p]
+		_, ok := w.Params[p]
 		switch {
 		case !ok:
 			c.add(in.Pos, "instance %s: %q is not a param of wiring %q (it has %s)%s", in.Name, p, w.WiringName(), paramNames(w), didYouMean(p, sortedKeys(w.Params)))
 		case isStructured(in.Params[p]):
 			c.add(in.Pos, "instance %s: param %q must be a scalar", in.Name, p)
-		case in.Params[p] == nil && decl.Required():
-			c.add(in.Pos, "instance %s: param %q is empty: give it a value", in.Name, p)
+		case in.Params[p] == nil:
+			c.add(in.Pos, "instance %s: param %q is empty: give it a value, or leave it out to take the wiring's default", in.Name, p)
 		}
 	}
 	for _, p := range sortedKeys(w.Params) {
@@ -500,11 +558,13 @@ func (c *checker) instance(in *Instance) {
 		}
 	}
 
+	tp := c.typePaths(in.Type)
 	for _, p := range flatten(in.Set) {
 		if !pathRE.MatchString(p) {
 			c.add(in.Pos, "instance %s: set: %q is not a member path", in.Name, p)
 			continue
 		}
+		c.inType(w, tp, p, "instance "+in.Name+": set:", in.Pos)
 		if k, mode, known := kindOf(w, p); known && k != Memory {
 			c.add(in.Pos, "instance %s: set: %s is %s, not memory: set: gives an initial value to a memory member only (%s)", in.Name, p, describe(k, mode), setHint(k))
 		}
@@ -513,7 +573,17 @@ func (c *checker) instance(in *Instance) {
 		m := in.Wire[p]
 		pos := in.Pos
 		base, ok := w.Members[p]
+		c.inType(w, tp, p, "instance "+in.Name+": wire:", pos)
+		for k, v := range m.Addr {
+			if s, isStr := v.(string); isStr {
+				c.refs(pos, "instance "+in.Name+" wire "+p+" "+k, s, paramSet(w))
+			}
+		}
+		if m.Event {
+			c.add(pos, "instance %s: wire: %s: event: belongs to the wiring (a kind's property), not an override", in.Name, p)
+		}
 		switch {
+		case !ok && w.Fill != nil:
 		case !ok:
 			c.add(pos, "instance %s: wire: %s is not wired by wiring %q: wire: changes an address or source, so the wiring must give the member one%s", in.Name, p, w.WiringName(), didYouMean(p, sortedKeys(w.Members)))
 		case base.Kind != From && base.Kind != To && base.Kind != Both:
@@ -527,6 +597,9 @@ func (c *checker) instance(in *Instance) {
 		}
 	}
 	for _, p := range sortedKeys(in.Alarms) {
+		if t := in.Alarms[p]; !t.Off && t == (Tuning{}) {
+			c.add(in.Pos, "instance %s: alarms: %s is empty: write false to turn the alarm off, or the fields to change (%s)", in.Name, p, strings.Join(TuningKeys, ", "))
+		}
 		found := false
 		for _, a := range w.Alarms {
 			found = found || a.Member == p
@@ -575,6 +648,15 @@ func (c *checker) pick(in *Instance) *Wiring {
 	}
 	c.add(in.Pos, "instance %s: type %s has several wirings (%s) and none is named %s: say which with wiring:", in.Name, in.Type, strings.Join(names, ", "), in.Type)
 	return nil
+}
+
+// paramSet is the names a substitution may use in w.
+func paramSet(w *Wiring) map[string]bool {
+	m := map[string]bool{"name": true, "desc": true}
+	for p := range w.Params {
+		m[p] = true
+	}
+	return m
 }
 
 func setHint(k Kind) string {

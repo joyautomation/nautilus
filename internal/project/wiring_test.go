@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/joyautomation/nautilus/devbind"
+	"github.com/joyautomation/nautilus/wiring"
 )
 
 const wiringManifest = `name: wired
@@ -110,7 +113,7 @@ func TestInstanceNameClashesWithATag(t *testing.T) {
 	m := wiringManifest + "tags:\n  - { name: P1, role: state, type: BOOL }\n" + wiringPump +
 		"instances:\n  - { name: p1, type: Pump, params: { endpoint: a } }\n"
 	err := readWiring(t, m, nil)
-	if err == nil || !strings.Contains(err.Error(), `instance "p1" has the name of the tag "P1"`) {
+	if err == nil || !strings.Contains(err.Error(), `instance "p1" has the name of the tag P1`) {
 		t.Errorf("an instance named like a tag: %v", err)
 	}
 }
@@ -152,5 +155,24 @@ func TestWiringResolvesDriversByName(t *testing.T) {
 func TestNoWiringIsUntouched(t *testing.T) {
 	if _, err := ReadManifest(wiringFS(wiringManifest, nil), ""); err != nil {
 		t.Errorf("a manifest with no wiring: %v", err)
+	}
+}
+
+// A devices: row is a tag too, so an instance may not take its name.
+func TestInstanceNameClashesWithADevice(t *testing.T) {
+	m := &Manifest{Devices: []devbind.Device{{Name: "P1"}}}
+	f := &wiring.File{Instances: []wiring.Instance{{Name: "p1", Type: "Pump", Pos: wiring.Pos{File: "nautilus.yaml", Line: 9}}}}
+	ps := instanceTagClashes([]*wiring.File{f}, m)
+	if len(ps) != 1 || !strings.Contains(ps[0].Error(), `nautilus.yaml:9: instance "p1" has the name of the tag P1 (a devices: row)`) {
+		t.Errorf("an instance named like a device: %v", ps)
+	}
+}
+
+// A devices: key in a wiring file says when it will be allowed.
+func TestDevicesInAWiringFileSaysWhen(t *testing.T) {
+	files := map[string]string{"wiring/a.yaml": "devices:\n  - { name: D }\n"}
+	err := readWiring(t, wiringManifest+"wiring-files: [wiring/a.yaml]\n", files)
+	if err == nil || !strings.Contains(err.Error(), "devices: rows in a wiring file arrive with slice 10") {
+		t.Errorf("devices: in a wiring file: %v", err)
 	}
 }

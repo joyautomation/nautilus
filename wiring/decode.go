@@ -143,6 +143,9 @@ func (s *Source) UnmarshalYAML(n *yaml.Node) error {
 	for i := 0; i+1 < len(kv); i += 2 {
 		k, v := kv[i].Value, kv[i+1]
 		if k == "driver" {
+			if s.Driver != "" {
+				return fmt.Errorf("line %d: \"driver\" is given twice", kv[i].Line)
+			}
 			s.Driver = v.Value
 			continue
 		}
@@ -171,8 +174,14 @@ func (f *Fill) UnmarshalYAML(n *yaml.Node) error {
 		k, v := kv[i].Value, kv[i+1]
 		switch k {
 		case "from":
+			if f.From != "" {
+				return fmt.Errorf("line %d: \"from\" is given twice", kv[i].Line)
+			}
 			f.From = v.Value
 		case "member":
+			if f.Member != "" {
+				return fmt.Errorf("line %d: \"member\" is given twice", kv[i].Line)
+			}
 			f.Member = v.Value
 		default:
 			val, err := scalarAny(v)
@@ -200,6 +209,9 @@ func (p *Param) UnmarshalYAML(n *yaml.Node) error {
 				val, err := scalarAny(v)
 				if err != nil {
 					return fmt.Errorf("line %d: default: %w", v.Line, err)
+				}
+				if isStructured(val) {
+					return fmt.Errorf("line %d: a param's default is a scalar", v.Line)
 				}
 				p.Default = val
 			case "publish":
@@ -263,6 +275,9 @@ func (t *Tuning) fields(n *yaml.Node, allowed []string) error {
 	}
 	for i := 0; i+1 < len(kv); i += 2 {
 		k, v := kv[i].Value, kv[i+1].Value
+		if kv[i+1].Kind != yaml.ScalarNode {
+			return fmt.Errorf("line %d: %s: an alarm tuning's fields are plain values", kv[i+1].Line, k)
+		}
 		ok := false
 		for _, a := range allowed {
 			ok = ok || a == k
@@ -302,11 +317,16 @@ func (o *Offline) UnmarshalYAML(n *yaml.Node) error {
 	if err != nil {
 		return err
 	}
-	direct := true
+	direct, mixed := true, false
 	for i := 0; i+1 < len(kv); i += 2 {
 		if k := kv[i].Value; k != "priority" && k != "on-delay" {
 			direct = false
+		} else {
+			mixed = true
 		}
+	}
+	if mixed && !direct {
+		return fmt.Errorf("line %d: offline-alarm is either {priority, on-delay} for every connection the instance owns, or a mapping of source name to that: do not mix them", n.Line)
 	}
 	if direct {
 		var t Tuning

@@ -550,3 +550,103 @@ func TestKeyListsMatchTheDecoders(t *testing.T) {
 		}
 	}
 }
+
+// A misspelled member key must not pass as a driver's address key: a typo in
+// event: would silently make a command that must never repeat re-sendable.
+func TestMisspelledMemberKeysAreRefused(t *testing.T) {
+	for _, tc := range []struct{ typo, near string }{
+		{"evnet: true", "event"}, {"readbak: Speed", "readback"}, {"untis: x", "unit"}, {"descr: x", "desc"},
+	} {
+		src := edit("Cmd.Start:    { to: drive,", "Cmd.Start:    { "+tc.typo+", to: drive,")
+		got := problems(t, Env{}, src)
+		if !strings.Contains(got, `did you mean `+tc.near+`?`) {
+			t.Errorf("%s: want a did-you-mean %s in:\n%s", tc.typo, tc.near, got)
+		}
+	}
+	// The driver columns the brief's examples use are not mistaken for typos.
+	if got := problems(t, Env{}, pump, tank); got != "" {
+		t.Errorf("legitimate address keys refused:\n%s", got)
+	}
+}
+
+// A whole-struct memory entry in one wiring and the same leaves in another
+// is not a difference of kind.
+func TestWholeStructMemoryIsNotAKindMismatch(t *testing.T) {
+	a := `
+wirings:
+  - name: A
+    type: T
+    sources: { s: { driver: modbus } }
+    members:
+      Cmd.Start: { to: s, address: 1 }
+      Cmd.Stop:  { to: s, address: 2 }
+`
+	b := `
+wirings:
+  - name: B
+    type: T
+    sources: { s: { driver: modbus } }
+    members:
+      Cmd:       { memory: initial }
+      Cmd.Start: { to: s, address: 1 }
+      Cmd.Stop:  { to: s, address: 2 }
+`
+	if got := problems(t, Env{}, a, b); got != "" {
+		t.Errorf("a whole-struct entry beside its leaves raised a mismatch:\n%s", got)
+	}
+}
+
+// With the project's types, a typo in set:, wire: or an alarm is refused: a
+// typo cannot turn a device member into memory without a word (§1).
+func TestTypoedPathsAgainstTheType(t *testing.T) {
+	paths := []string{"Running", "Fault", "Speed", "Healthy", "RunHours", "Cmd", "Cmd.Start", "Cmd.Stop", "Cmd.SpeedRef"}
+	env := Env{Type: func(n string) ([]string, bool) { return paths, n == "Pump" }}
+	inst := func(line string) string {
+		return strings.Replace(pump, "instances:\n", "instances:\n  "+line+"\n", 1)
+	}
+	for _, tc := range []struct{ name, src, want string }{
+		{"set", inst("- { name: X, type: Pump, params: { endpoint: a }, set: { RunHoursz: 1 } }"), `set: names member "RunHoursz", but type Pump has none (did you mean RunHours?)`},
+		{"wire", inst("- { name: X, type: Pump, params: { endpoint: a }, wire: { Spede: { address: 1 } } }"), `wire: names member "Spede", but type Pump has none`},
+		{"alarm", edit("member: Fault,", "member: Fualt,"), `an alarm names member "Fualt", but type Pump has none (did you mean Fault?)`},
+	} {
+		if got := problems(t, env, tc.src); !strings.Contains(got, tc.want) {
+			t.Errorf("%s: want %q in:\n%s", tc.name, tc.want, got)
+		}
+	}
+}
+
+func TestNullsAndEmptiesAreRefused(t *testing.T) {
+	inst := func(line string) string {
+		return strings.Replace(pump, "instances:\n", "instances:\n  "+line+"\n", 1)
+	}
+	for _, tc := range []struct{ name, src, want string }{
+		{"a null alarm tuning", inst("- { name: X, type: Pump, params: { endpoint: a }, alarms: { Fault: null } }"), "alarms: Fault is empty: write false to turn the alarm off"},
+		{"a null param", inst("- { name: X, type: Pump, params: { endpoint: a, unit-id: null } }"), `param "unit-id" is empty: give it a value, or leave it out`},
+		{"a member with no source", edit("Running:      { from: drive,", "Running:      { from: '', "), `member "Running": from: needs a source name (one of drive)`},
+		{"wire with an unknown param", inst("- { name: X, type: Pump, params: { endpoint: a }, wire: { Speed: { address: \"{reg}\" } } }"), "wire Speed address: {reg} is not a param"},
+		{"wire with event", inst("- { name: X, type: Pump, params: { endpoint: a }, wire: { Cmd.Stop: { event: true } } }"), "event: belongs to the wiring"},
+	} {
+		if got := problems(t, Env{}, tc.src); !strings.Contains(got, tc.want) {
+			t.Errorf("%s: want %q in:\n%s", tc.name, tc.want, got)
+		}
+	}
+	// A wire: on a member a fill brings is fine: the wiring need not list it.
+	fill := strings.Replace(peer, "instances:\n", "instances:\n  - { name: M2, type: Motor, params: { tag: x }, wire: { Speed: { tag: other } } }\n", 1)
+	if got := problems(t, Env{}, fill); got != "" {
+		t.Errorf("wire: on a fill member refused:\n%s", got)
+	}
+}
+
+func TestDecodeRefusalsForDuplicatesAndShapes(t *testing.T) {
+	for _, tc := range []struct{ src, want string }{
+		{"wirings:\n  - type: T\n    sources: { s: { driver: a, driver: b } }\n", `"driver" is given twice`},
+		{"wirings:\n  - type: T\n    fill: { from: a, from: b }\n", `"from" is given twice`},
+		{"wirings:\n  - type: T\n    params: { a: { default: [1] } }\n", "a param's default is a scalar"},
+		{"instances:\n  - { name: P, type: T, alarms: { A: { priority: [a] } } }\n", "an alarm tuning's fields are plain values"},
+		{"instances:\n  - { name: P, type: T, offline-alarm: { priority: low, drive: { priority: low } } }\n", "do not mix them"},
+	} {
+		if _, err := Decode("f", []byte(tc.src)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: err = %v, want %q", tc.src, err, tc.want)
+		}
+	}
+}

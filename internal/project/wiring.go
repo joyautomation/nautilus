@@ -33,7 +33,11 @@ func composeWiring(fsys fs.FS, m *Manifest, manifestName string, raw []byte) err
 		}
 		wf, err := wiring.Decode(p, b)
 		if err != nil {
-			return fmt.Errorf("wiring-files: %w (a wiring file holds wirings: and instances:)", err)
+			hint := "a wiring file holds wirings: and instances:"
+			if strings.Contains(err.Error(), "field devices not found") {
+				hint = "devices: rows in a wiring file arrive with slice 10 of #1458; keep them in nautilus.yaml for now"
+			}
+			return fmt.Errorf("wiring-files: %w (%s)", err, hint)
 		}
 		files = append(files, wf)
 	}
@@ -57,12 +61,15 @@ func instanceTagClashes(files []*wiring.File, m *Manifest) []wiring.Problem {
 	for _, t := range m.Tags {
 		tags[ir.NameKey(t.Name)] = t.Name
 	}
+	for _, d := range m.Devices {
+		tags[ir.NameKey(d.Name)] = d.Name + " (a devices: row)"
+	}
 	var out []wiring.Problem
 	for _, f := range files {
 		for _, in := range f.Instances {
 			if t, ok := tags[ir.NameKey(in.Name)]; ok {
 				out = append(out, wiring.Problem{Pos: in.Pos, Msg: fmt.Sprintf(
-					"instance %q has the name of the tag %q: an instance is a tag of its type, so a name is declared once (rename one)", in.Name, t)})
+					"instance %q has the name of the tag %s: an instance is a tag of its type, so a name is declared once (rename one)", in.Name, t)})
 			}
 		}
 	}
