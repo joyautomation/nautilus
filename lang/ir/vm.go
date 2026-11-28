@@ -348,7 +348,9 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 		// keep the whole copy-back.
 		var rec *inOutRec
 		var frame *Frame
-		if n.Def.Body != nil {
+		if n.Def.Body != nil && inst.StepFrame().inout == nil {
+			// (An instance already being stepped, re-entered, is not
+			// recorded: its pins copy back whole, the old rule.)
 			if rec = inst.startInOut(n.Def); rec != nil {
 				frame = inst.StepFrame()
 				frame.inout = rec
@@ -443,33 +445,7 @@ func writeLValueBits(ctx *EvalCtx, lv LValue, v Value, bits uint64) error {
 			}
 			return storeAtRoot(&ctx.Frame.Slots[n.Slot], chain, v)
 		case *GlobalRef:
-			if len(chain) == 0 {
-				if bits != 0 {
-					if mw, ok := ctx.Host.(MemberWriter); ok {
-						return mw.WriteGlobalMember(n.Name, v, MemberPath{bits: bits})
-					}
-				}
-				return ctx.Host.WriteGlobal(n.Name, CopyValue(v))
-			}
-			// Reaching into a field/element of a global: the tag store holds
-			// the whole aggregate, so read-modify-write it. This is the same
-			// thing a program used to have to spell out by hand ("copy →
-			// mutate the local → assign the whole struct back").
-			cur, err := ctx.Host.ReadGlobal(n.Name)
-			if err != nil {
-				return err
-			}
-			cur = CopyValue(coerceValue(cur, n.T))
-			if err := storeAtRoot(&cur, chain, v); err != nil {
-				return fmt.Errorf("assign to %s: %w", n.Name, err)
-			}
-			if mw, ok := ctx.Host.(MemberWriter); ok {
-				if p, ok := memberPath(chain); ok {
-					p.bits = bits
-					return mw.WriteGlobalMember(n.Name, cur, p)
-				}
-			}
-			return ctx.Host.WriteGlobal(n.Name, cur)
+			return writeGlobalChain(ctx, n, chain, v, bits)
 		case *IndexRef:
 			iv, err := evalExpr(ctx, n.Index)
 			if err != nil {
@@ -492,6 +468,38 @@ func writeLValueBits(ctx *EvalCtx, lv LValue, v Value, bits uint64) error {
 			return fmt.Errorf("unknown lvalue %T", lv)
 		}
 	}
+}
+
+// writeGlobalChain stores v at chain (leaf first) inside global n, of which
+// only bits were assigned (0: all of it).
+func writeGlobalChain(ctx *EvalCtx, n *GlobalRef, chain []accessor, v Value, bits uint64) error {
+	if len(chain) == 0 {
+		if bits != 0 {
+			if mw, ok := ctx.Host.(MemberWriter); ok {
+				return mw.WriteGlobalMember(n.Name, v, MemberPath{bits: bits})
+			}
+		}
+		return ctx.Host.WriteGlobal(n.Name, CopyValue(v))
+	}
+	// Reaching into a field/element of a global: the tag store holds the
+	// whole aggregate, so read-modify-write it. This is the same thing a
+	// program used to have to spell out by hand ("copy → mutate the local →
+	// assign the whole struct back").
+	cur, err := ctx.Host.ReadGlobal(n.Name)
+	if err != nil {
+		return err
+	}
+	cur = CopyValue(coerceValue(cur, n.T))
+	if err := storeAtRoot(&cur, chain, v); err != nil {
+		return fmt.Errorf("assign to %s: %w", n.Name, err)
+	}
+	if mw, ok := ctx.Host.(MemberWriter); ok {
+		if p, ok := memberPath(chain); ok {
+			p.bits = bits
+			return mw.WriteGlobalMember(n.Name, cur, p)
+		}
+	}
+	return ctx.Host.WriteGlobal(n.Name, cur)
 }
 
 // storeAtRoot walks the chain (built leaf-first) in reverse so we traverse

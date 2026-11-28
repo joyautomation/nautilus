@@ -23,6 +23,10 @@ TYPE
     Note     : INT;
     Cmd      : PumpCmd;
   END_STRUCT;
+  Big : STRUCT
+    A    : ARRAY[1..100] OF INT;
+    Note : INT;
+  END_STRUCT;
   Bank : STRUCT
     Pumps : ARRAY[1..2] OF PumpCmd;
     Note  : INT;
@@ -59,6 +63,54 @@ FUNCTION_BLOCK CmdStart
   C.Start := TRUE;
 END_FUNCTION_BLOCK
 
+FUNCTION_BLOCK Looper
+  VAR_IN_OUT P : Pump; END_VAR
+  VAR i : INT; END_VAR
+  FOR i := 1 TO 100 DO
+    P.Cmd.SpeedRef := 1.0;
+  END_FOR;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK Filler
+  VAR_IN_OUT G : Big; END_VAR
+  VAR i : INT; END_VAR
+  FOR i := 1 TO 100 DO
+    G.A[i] := i;
+  END_FOR;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK Two
+  VAR_IN_OUT A : PumpCmd; B : PumpCmd; END_VAR
+  A.Stop := TRUE;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK TwoOuter
+  VAR_IN_OUT P : PumpCmd; END_VAR
+  VAR T : Two; END_VAR
+  T(A := P, B := P);
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK Bit
+  VAR_IN_OUT P : Pump; END_VAR
+  P.Note.3 := TRUE;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK Indexed
+  VAR_IN_OUT B : Bank; END_VAR
+  VAR_INPUT k : INT; END_VAR
+  B.Pumps[k].Start := TRUE;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK Fails
+  VAR_IN_OUT P : Pump; END_VAR
+  VAR_INPUT Bad : BOOL; END_VAR
+  VAR arr : ARRAY[1..2] OF INT; k : INT := 5; END_VAR
+  IF Bad THEN
+    P.Cmd.Start := TRUE;
+    arr[k] := 1;
+  END_IF;
+END_FUNCTION_BLOCK
+
 FUNCTION_BLOCK Counter
   VAR_IN_OUT N : INT; END_VAR
   FOR N := 1 TO 3 DO
@@ -75,10 +127,12 @@ func newInOutRuntime(t *testing.T, clk Clock, vars, body string, tags ...TagDef)
 	all := append([]TagDef{
 		InstanceTag("P101", "Pump", pump),
 		InstanceTag("B1", "Bank", InstanceDef{}),
+		InstanceTag("G1", "Big", InstanceDef{}),
 		Typed("Plain", RoleState, "Pump"),
+		Typed("Plain2", RoleState, "Pump"),
 	}, tags...)
 	r, err := New(Options{
-		Program: "PROGRAM Main\nVAR_EXTERNAL P101 : Pump; B1 : Bank; Plain : Pump; " + externs(tags) + " END_VAR\n" +
+		Program: "PROGRAM Main\nVAR_EXTERNAL P101 : Pump; B1 : Bank; G1 : Big; Plain : Pump; Plain2 : Pump; " + externs(tags) + " END_VAR\n" +
 			"VAR wall : LOCAL_TIME; " + vars + " END_VAR\nwall();\n" + body + "\nEND_PROGRAM",
 		Libraries: []string{inoutLib},
 		Driver:    &instDriver{},
@@ -214,18 +268,92 @@ func externs(tags []TagDef) string {
 	return s
 }
 
-// Recording what a block assigns reuses its storage: a scan that copies an
-// instance back exactly allocates no more than the same scan copying a
-// plain struct back whole, the old way.
-func TestInOutRecordAllocatesNoMoreThanTheOldCopyBack(t *testing.T) {
-	scanAllocs := func(target string) float64 {
-		r := newInOutRuntime(t, newGateClock(), "S : Starter; O : Outer;", "S(P := "+target+", Go := TRUE);\nO(P := "+target+");")
+// The copy-back allocates no more per scan than it did before the exact
+// record, for the targets that walk a chain (numbers measured on the
+// whole-pin copy-back: 5 for a local element, 8 for a plain global's
+// member, 11 for an instance's element).
+func TestInOutCopyBackAllocatesNoMoreThanBefore(t *testing.T) {
+	for _, tc := range []struct {
+		vars, body string
+		max        float64
+	}{
+		{"C : CmdStart; b : Bank; k : INT := 2;", "C(C := b.Pumps[k]);", 5},
+		{"C : CmdStart;", "C(C := Plain.Cmd);", 8},
+		{"C : CmdStart; k : INT := 2;", "C(C := B1.Pumps[k]);", 11},
+	} {
+		r := newInOutRuntime(t, newGateClock(), tc.vars, tc.body)
 		r.Scan()
 		r.Scan()
-		return testing.AllocsPerRun(50, r.Scan)
+		if n := testing.AllocsPerRun(50, r.Scan); n > tc.max {
+			t.Errorf("%s: %v allocs per scan, want at most %v", tc.body, n, tc.max)
+		}
 	}
-	exact, old := scanAllocs("P101"), scanAllocs("Plain")
-	if exact > old {
-		t.Errorf("a scan with the exact copy-back allocates %v, the old copy-back %v", exact, old)
+}
+
+// Assigning one member over and over is one record: a loop does not turn
+// the pin whole, so members the block never touched survive.
+func TestInOutRepeatedAssignmentIsOneRecord(t *testing.T) {
+	clk := newGateClock()
+	r := newInOutRuntime(t, clk, "L : Looper;", "L(P := P101);")
+	parkedScan(t, r, clk, func() {
+		write(t, r, "P101.Cmd.Start", true)
+		write(t, r, "P101.RunHours", 6.0)
+	})
+	wantPath(t, r, "P101.Cmd.SpeedRef", 1.0)
+	wantPath(t, r, "P101.Cmd.Start", true)
+	wantPath(t, r, "P101.RunHours", 6.0)
+}
+
+// More distinct assignments than the record holds take the pin whole: the
+// old rule, a member written meanwhile is replaced by the block's copy.
+func TestInOutPastTheBoundTakesThePinWhole(t *testing.T) {
+	clk := newGateClock()
+	r := newInOutRuntime(t, clk, "F : Filler;", "F(G := G1);")
+	parkedScan(t, r, clk, func() { write(t, r, "G1.Note", int64(9)) })
+	wantPath(t, r, "G1.A[100]", int64(100))
+	wantPath(t, r, "G1.Note", int64(0))
+}
+
+// Two pins bound to one plain variable land the same whether the call is
+// made directly or from inside another block: the copy-back stores where it
+// always did, and only the record is exact (plain structs are unchanged).
+func TestInOutPlainTargetsLandAsBeforeWhenNested(t *testing.T) {
+	r := newInOutRuntime(t, newGateClock(), "T : Two; O : TwoOuter; Lc : Pump; Ld : Pump;",
+		"T(A := Plain.Cmd, B := Plain.Cmd);\nO(P := Plain2.Cmd);\nT(A := Ld.Cmd, B := Ld.Cmd);\nO(P := Lc.Cmd);\nPlain.Note := BOOL_TO_INT(Ld.Cmd.Stop);\nPlain2.Note := BOOL_TO_INT(Lc.Cmd.Stop);")
+	r.Scan()
+	direct, _ := r.Tags().ReadPath("Plain.Cmd.Stop")
+	nested, _ := r.Tags().ReadPath("Plain2.Cmd.Stop")
+	if direct != nested {
+		t.Errorf("a global: direct call gives Stop=%v, nested %v", direct, nested)
 	}
+	ld, _ := r.Tags().ReadPath("Plain.Note")
+	lc, _ := r.Tags().ReadPath("Plain2.Note")
+	if ld != lc {
+		t.Errorf("a local: direct call gives Stop=%v, nested %v", ld, lc)
+	}
+}
+
+// A bit of a pin member and a run-time index are recorded as such.
+func TestInOutBitAndRunTimeIndex(t *testing.T) {
+	clk := newGateClock()
+	r := newInOutRuntime(t, clk, "B : Bit; X : Indexed; k : INT := 2;", "B(P := P101);\nX(B := B1, k := k);")
+	parkedScan(t, r, clk, func() {
+		write(t, r, "P101.RunHours", 6.0)
+		write(t, r, "B1.Pumps[1].SpeedRef", 40.0)
+	})
+	wantPath(t, r, "P101.Note", int64(8))
+	wantPath(t, r, "P101.RunHours", 6.0)
+	wantPath(t, r, "B1.Pumps[2].Start", true)
+	wantPath(t, r, "B1.Pumps[1].SpeedRef", 40.0)
+}
+
+// A body that fails mid-call leaves no record behind: the next call, which
+// assigns nothing, commits nothing.
+func TestInOutAFailedBodyLeavesNoRecord(t *testing.T) {
+	clk := newGateClock()
+	r := newInOutRuntime(t, clk, "F : Fails;", "F(P := P101, Bad := Bad);", State("Bad", true))
+	r.Scan() // faults inside the body
+	write(t, r, "Bad", false)
+	parkedScan(t, r, clk, func() { write(t, r, "P101.Cmd.Start", true) })
+	wantPath(t, r, "P101.Cmd.Start", true)
 }

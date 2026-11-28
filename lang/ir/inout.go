@@ -1,5 +1,7 @@
 package ir
 
+import "fmt"
+
 // The exact copy-back of a VAR_IN_OUT pin (#1458, docs/design/one-struct-model.md §2.4).
 //
 // A call copies an in-out pin in before Step and back out after it, so a
@@ -72,11 +74,40 @@ func (s *inOutSlot) mark(p MemberPath, ok bool) {
 	if s.all {
 		return
 	}
-	if !ok || (p.n == 0 && p.bits == 0) || len(s.paths) >= maxInOutPaths {
+	if !ok || (p.n == 0 && p.bits == 0) {
+		s.all, s.paths = true, s.paths[:0]
+		return
+	}
+	for i := range s.paths {
+		if covers(s.paths[i], p) {
+			return // assigned again: one record, however often
+		}
+	}
+	if len(s.paths) >= maxInOutPaths {
 		s.all, s.paths = true, s.paths[:0]
 		return
 	}
 	s.paths = append(s.paths, p)
+}
+
+// covers reports whether an assignment at a already covers one at b: a is b,
+// or a whole ancestor of it, or the same integer with b's bits among a's.
+func covers(a, b MemberPath) bool {
+	if a.n > b.n {
+		return false
+	}
+	for i := 0; i < a.n; i++ {
+		if a.idx[i] != b.idx[i] || (a.field>>uint(i))&1 != (b.field>>uint(i))&1 {
+			return false
+		}
+	}
+	switch {
+	case a.bits == 0:
+		return true
+	case a.n == b.n:
+		return b.bits != 0 && b.bits&^a.bits == 0
+	}
+	return false
 }
 
 // markUnder records sub (a record from an inner call) beneath base.
@@ -124,7 +155,9 @@ func holdsFB(t *Type) bool {
 		return true
 	case t.Kind == TypeArray:
 		return holdsFB(t.Elem)
-	case t.Kind == TypeStruct && t.Struct != nil:
+	case t.Kind == TypeStruct && t.Struct == nil:
+		return true // unknown: take it whole
+	case t.Kind == TypeStruct:
 		for _, f := range t.Struct.Fields {
 			if holdsFB(f.Type) {
 				return true
@@ -140,8 +173,10 @@ func (p MemberPath) Join(sub MemberPath) (MemberPath, bool) {
 	if p.n+sub.n > MaxMemberDepth {
 		return MemberPath{}, false
 	}
-	if p.bits != 0 && sub.n > 0 {
-		return MemberPath{}, false // a step below a bit: not a path
+	if p.bits != 0 && (sub.n > 0 || sub.bits != 0) {
+		// A step below a bit is no path, and bits within bits are relative
+		// to a part: neither joins.
+		return MemberPath{}, false
 	}
 	out := p
 	for i := 0; i < sub.n; i++ {
@@ -151,21 +186,19 @@ func (p MemberPath) Join(sub MemberPath) (MemberPath, bool) {
 		}
 	}
 	out.n = p.n + sub.n
-	switch {
-	case sub.bits != 0 && p.bits != 0:
-		out.bits = p.bits & sub.bits
-	case sub.bits != 0:
+	if sub.bits != 0 {
 		out.bits = sub.bits
 	}
 	return out, true
 }
 
-// lvalueRoot walks lv down to its root, evaluating any index on the way:
-// the root (a *SlotRef or a *GlobalRef) and the chain, leaf first, as
-// writeLValue builds it. ok is false for a target this walk does not
-// model (a bit), which takes the old copy-back.
-func lvalueRoot(ctx *EvalCtx, lv LValue) (LValue, []accessor, bool, error) {
-	var chain []accessor
+// lvalueRoot walks lv down to its root, evaluating any index on the way
+// once: the root (a *SlotRef or a *GlobalRef) and the chain, leaf first, as
+// writeLValue builds it, appended to buf. ok is false for a target this walk
+// does not model (a bit), which takes the old copy-back; done is then
+// false only if nothing was evaluated yet.
+func lvalueRoot(ctx *EvalCtx, lv LValue, buf []accessor) (LValue, []accessor, bool, error) {
+	chain := buf
 	cur := lv
 	for {
 		switch n := cur.(type) {
@@ -179,14 +212,14 @@ func lvalueRoot(ctx *EvalCtx, lv LValue) (LValue, []accessor, bool, error) {
 			chain = append(chain, accessor{arrIdx: int(iv.I)})
 			inner, ok := n.Array.(LValue)
 			if !ok {
-				return nil, nil, false, nil
+				return nil, nil, false, fmt.Errorf("cannot assign through non-lvalue array base %T", n.Array)
 			}
 			cur = inner
 		case *MemberRef:
 			chain = append(chain, accessor{fieldIdx: n.FieldIdx, isField: true})
 			inner, ok := n.Object.(LValue)
 			if !ok {
-				return nil, nil, false, nil
+				return nil, nil, false, fmt.Errorf("cannot assign through non-lvalue object base %T", n.Object)
 			}
 			cur = inner
 		default:
@@ -195,13 +228,19 @@ func lvalueRoot(ctx *EvalCtx, lv LValue) (LValue, []accessor, bool, error) {
 	}
 }
 
-// copyBack writes an in-out pin's value back to its target, telling a
-// recording caller and an InOutWriter host only what the block assigned.
+// copyBack writes an in-out pin's value back to its target, as writeLValue
+// would, and tells a recording caller and an InOutWriter host only what the
+// block assigned. The value always lands where it did before; only the
+// record of what was assigned is exact.
 func copyBack(ctx *EvalCtx, target LValue, v Value, rec *inOutSlot) error {
 	if rec == nil {
 		return writeLValue(ctx, target, v)
 	}
-	root, chain, ok, err := lvalueRoot(ctx, target)
+	if _, isBit := target.(*BitRef); isBit {
+		return writeLValue(ctx, target, v)
+	}
+	var buf [MaxMemberDepth]accessor
+	root, chain, ok, err := lvalueRoot(ctx, target, buf[:0])
 	if err != nil {
 		return err
 	}
@@ -212,15 +251,11 @@ func copyBack(ctx *EvalCtx, target LValue, v Value, rec *inOutSlot) error {
 	switch r := root.(type) {
 	case *SlotRef:
 		outer := ctx.Frame.inout.slotRec(r.Slot)
-		if outer == nil {
-			// Not a pin of a block being recorded: store it as before.
-			return writeLValue(ctx, target, v)
-		}
-		if !rec.all && len(rec.paths) == 0 {
-			return nil // the block assigned nothing: the slot already holds it
-		}
 		if err := storeAtRoot(&ctx.Frame.Slots[r.Slot], chain, v); err != nil {
 			return err
+		}
+		if outer == nil {
+			return nil // not a pin of a block being recorded: stored, as before
 		}
 		if !pathOK {
 			outer.mark(MemberPath{}, false)
@@ -231,17 +266,19 @@ func copyBack(ctx *EvalCtx, target LValue, v Value, rec *inOutSlot) error {
 	case *GlobalRef:
 		w, isW := ctx.Host.(InOutWriter)
 		if !isW || !pathOK {
-			return writeLValue(ctx, target, v)
+			return writeGlobalChain(ctx, r, chain, v, 0)
 		}
-		whole := CopyValue(v)
-		if len(chain) > 0 {
+		var whole Value
+		if len(chain) == 0 {
+			whole = CopyValue(v)
+		} else {
 			cur, err := ctx.Host.ReadGlobal(r.Name)
 			if err != nil {
 				return err
 			}
 			cur = CopyValue(coerceValue(cur, r.T))
 			if err := storeAtRoot(&cur, chain, v); err != nil {
-				return err
+				return fmt.Errorf("assign to %s: %w", r.Name, err)
 			}
 			whole = cur
 		}
