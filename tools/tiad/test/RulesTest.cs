@@ -219,6 +219,8 @@ namespace Tiad.Test
                 T("LoginOncePerOperation", LoginOncePerOperation),
                 T("DownloadNamesTheLogin", DownloadNamesTheLogin),
                 T("LoginThroughTheRecord", LoginThroughTheRecord),
+                T("FingerprintNeverLogsOn", FingerprintNeverLogsOn),
+                T("FingerprintMarks", FingerprintMarks),
                 T("QuietlyEvenWhenTheLogFails", QuietlyEvenWhenTheLogFails),
                 T("Selections", SelectionsWritten),
                 T("ALoadAfterADeclineIsInDoubt", ALoadAfterADeclineIsInDoubt),

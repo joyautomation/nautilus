@@ -23,6 +23,83 @@ namespace Tiad
         // these bound what the audit line can carry from the CPU.
         public const int MaxItems = 64, MaxIdentifier = 128, MaxValue = 1024;
 
+        // LockedWhy is why a fingerprint read answers TIA's credentials
+        // questions no (LoginUse.Refusing): on the bench 1510SP with access
+        // control on (#1336), TIA's fingerprint service opens a connection
+        // of its own, asks TLS trust with no certificate to check, then a
+        // password-only logon (OnlineReadAccessPassword). Answering it
+        // would send a password over a connection tiad cannot verify, so a
+        // fingerprint read never logs on: a CPU that asks credentials is
+        // read through verify instead.
+        public const string LockedWhy = "a fingerprint read never logs on: the CPU asks credentials, so its access control is on, and TIA's fingerprint service would then need a blind certificate trust and a password-only logon, which tiad does not send";
+
+        // UseVerify is the fix fingerprint_unavailable names.
+        public const string UseVerify = "use verify (a compare logged on as \"nautilus\" with secrets.fullAccessPassword) as this CPU's reference";
+
+        // PasswordOnly is the password-only logon TIA's fingerprint service
+        // asks a CPU with access control on.
+        public const string PasswordOnly = "OnlineReadAccessPassword";
+
+        // Mark marks e, a fingerprint read's failure, AccessControlOn when
+        // the CPU's access control is on: the read answered credentials no
+        // with LockedWhy (refusedAll, LoginUse.RefusedAll), or answered any
+        // credentials question no (asked holds the questions answered no,
+        // as OnlineChecks.Ask names them): a read never logs on, so TIA
+        // asking credentials of any type, on the project's connection or
+        // in its fingerprint service (OnlineReadAccessPassword on the
+        // bench), shows the access control. TrustedNothing then says that
+        // no certificate question was answered trusted (trusted counts
+        // them, LoginUse.TrustedAny among them). It returns e, unchanged
+        // when the access control is not shown.
+        public static TiaException Mark(TiaException e, bool refusedAll, IEnumerable<string> asked, int trusted)
+        {
+            bool credentials = false;
+            foreach (string a in asked)
+            {
+                if (a.StartsWith("credentials (", StringComparison.Ordinal)) credentials = true;
+            }
+            if (refusedAll || credentials)
+            {
+                e.AccessControlOn = true;
+                e.TrustedNothing = trusted == 0;
+            }
+            return e;
+        }
+
+        // Unavailable is the message of fingerprint_unavailable for the CPU
+        // at address: e is the refusal (TiaException.AccessControlOn).
+        public static string Unavailable(string address, TiaException e)
+        {
+            string how = e.Message.IndexOf("credentials (" + PasswordOnly + ")", StringComparison.Ordinal) >= 0
+                ? "TIA's fingerprint service asked a password-only logon (" + PasswordOnly + ")"
+                : "TIA asked credentials going online";
+            return Unavailable(address, how, e.TrustedNothing, "");
+        }
+
+        // AnsweredBeforeHow and RetireFix are the refusal before going
+        // online: tiad answered credentials for the CPU earlier in this TIA
+        // instance (InstanceLogons.AnsweredBefore), so its access control
+        // was on, and a TIA that kept that logon would ask the read's own
+        // connection nothing and reach the fingerprint service (#1336
+        // review). It holds until the instance retires.
+        public const string AnsweredBeforeHow = "tiad answered its credentials question earlier in this TIA instance";
+        public const string RetireFix = "; if its access control was turned off since, close every session (the agent then retires the TIA instance) and read again";
+
+        // UnavailableBefore is fingerprint_unavailable refused before going
+        // online: nothing was trusted, nothing sent.
+        public static string UnavailableBefore(string address)
+        {
+            return Unavailable(address, AnsweredBeforeHow, true, RetireFix);
+        }
+
+        static string Unavailable(string address, string how, bool trustedNothing, string tail)
+        {
+            return "fingerprint unavailable: the CPU at " + address + " has access control on (" + how + "), and a fingerprint read never logs on: " +
+                "TIA's fingerprint service reads over a connection of its own, which needs a blind certificate trust and then a password-only logon, " +
+                "and tiad sends no password over a connection it cannot verify. " +
+                (trustedNothing ? "Nothing was trusted and no password was sent; " : "No password was sent; ") + UseVerify + tail;
+        }
+
         // CertificateOnly is true when a refusal (TiaNames.OnlineRefused)
         // names only certificate questions, which the opt-in answers; it
         // answers no credentials and no question tiad does not know.
@@ -58,9 +135,6 @@ namespace Tiad
     {
         public bool Trust;
         public string Address = "";
-        // Password is the request's secrets.fullAccessPassword (OnlineLogin);
-        // never logged, never in ToJson.
-        public string Password = "";
         public FingerprintRead Read;
         public BlindTrust BlindTrust;
 
@@ -232,9 +306,13 @@ namespace Tiad
             {
                 return f();
             }
-            catch (Exception)
+            catch (Exception e)
             {
-                if (trust) RecordBlindTrust(call, s, address, new List<string> { UnknownTrust });
+                // A read refused for access control that answered no
+                // certificate question trusted trusted nothing (#1336).
+                var te = e as TiaException;
+                bool none = te != null && te.AccessControlOn && te.TrustedNothing;
+                if (trust && !none) RecordBlindTrust(call, s, address, new List<string> { UnknownTrust });
                 throw;
             }
         }
@@ -282,7 +360,9 @@ namespace Tiad
                     var req = c.Json();
                     // An explicit, per-call opt-in, as an upload's.
                     r.Trust = req.Bool("trustUnverifiedCertificate");
-                    r.Password = OnlinePassword(req);
+                    // A fingerprint read never logs on (#1336): the
+                    // password a client sends is read and not used.
+                    OnlinePassword(req);
                     DeviceAttestation att = ReadDeviceAttestation(req);
                     req.Done();
                     r.Address = CpuOf(s);
@@ -317,14 +397,30 @@ namespace Tiad
                 prepare(run);
                 string address = run.Address;
                 bool trust = run.Trust;
-                string password = run.Password;
                 run.Read = OnSession(s, delegate(ITia t)
                 {
+                    // A CPU tiad logged on to in this instance has access
+                    // control on: refused before anything goes online, so
+                    // nothing is trusted, even where TIA kept the logon
+                    // (#1336).
+                    if (instanceLogons.AnsweredBefore(t, address))
+                    {
+                        run.BlindTrust = blindTrust;
+                        ran = true;
+                        throw new TiadException(409, Kinds.FingerprintUnavailable, FingerprintRule.UnavailableBefore(address));
+                    }
                     try
                     {
-                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust, LoginFor(t, password, blindTrust, address, "fingerprint read")); });
+                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust); });
                         if (fr != null) RecordBlindTrust("fingerprint read", s, address, fr.TrustedBlindly);
                         return fr;
+                    }
+                    catch (TiaException e)
+                    {
+                        // The CPU's access control is on: no read, and no
+                        // error either (#1336).
+                        if (e.AccessControlOn) throw new TiadException(409, Kinds.FingerprintUnavailable, FingerprintRule.Unavailable(address, e));
+                        throw;
                     }
                     finally
                     {

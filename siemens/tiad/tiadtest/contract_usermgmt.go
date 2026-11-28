@@ -310,7 +310,7 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		// restore: an as-found project with access control off and no
 		// users, loaded over the CPU tiad turned on, logged on as
 		// "nautilus", a user the project being loaded does not hold.
-		a, s := compiledBench(t, start)
+		a, s := compiledBench(t, start, benchCPU, otherCPU)
 		c := a.Client()
 		a.SetQuestions(t, benchHardwareChecks)
 		load := func(cpu string, secrets *tiad.Secrets) tiad.DownloadRequest {
@@ -367,11 +367,7 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		noPw.Secrets = nil
 		_, err = r.Download(ctx, noPw)
 		wantResetRefused(t, "the restore without a password", err, tiad.ResetNoPassword)
-		a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
-		if fp, err := r.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || len(fp.TrustedBlindly) != 1 {
-			t.Fatalf("a read that trusts blindly: %+v %v", fp, err)
-		}
-		a.SetFingerprint(t, FingerprintScript{})
+		TrustBlindlyElsewhere(t, a, r, adoptedStation())
 		if _, err := r.Download(ctx, restore); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "has to log on to the CPU first, so nothing was sent to the CPU") {
 			t.Fatalf("the restore after a blind trust: %v", err)
 		}
@@ -546,8 +542,8 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 	})
 
 	t.Run("InstanceLogonForgottenOnRefusals", func(t *testing.T) {
-		// Any credentials question tiad answers no on the CPU takes the
-		// evidence away: a fingerprint read with a wrong password (the
+		// Any credentials question tiad answers no on the CPU with a
+		// password takes the evidence away: a compare with a wrong one (the
 		// login's Lost), and a compare without one (a compare that failed
 		// after TIA asked). An equal compare that logs on earns it back.
 		a, s := compiledBench(t, start)
@@ -557,8 +553,8 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 			t.Fatalf("A: %v", err)
 		}
 		wrong := &tiad.OnlineSecrets{FullAccessPassword: "Wrong-access-2026"}
-		if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: wrong}); err == nil || !strings.Contains(err.Error(), LoginAskedAgain) {
-			t.Fatalf("a fingerprint read with a wrong password: %v", err)
+		if _, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: wrong}); err == nil || !strings.Contains(err.Error(), LoginAskedAgain) {
+			t.Fatalf("a compare with a wrong password: %v", err)
 		}
 		reload := func(name string) {
 			t.Helper()
@@ -567,7 +563,7 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 				t.Fatalf("a reload after %s: %v (acting %v)", name, err, tiad.ActingAnswers(err))
 			}
 		}
-		reload("a refused fingerprint read")
+		reload("a compare with a wrong password")
 		if cmp, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: BenchLogin}); err != nil || !cmp.Equal {
 			t.Fatalf("an equal compare that logs on: %+v %v", cmp, err)
 		}
@@ -605,16 +601,13 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		// The evidence of the compare after A goes with a blind trust and
 		// the instance it retires; an unequal compare that logs on in the
 		// next instance earns nothing.
-		a, s := compiledBench(t, start)
+		a, s := compiledBench(t, start, benchCPU, otherCPU)
 		a.SetQuestions(t, benchHardwareChecks)
 		a.SetLogon(t, LogonScript{CredentialsAfterChecks: true})
 		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
 			t.Fatalf("A: %v", err)
 		}
-		a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
-		if fp, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || len(fp.TrustedBlindly) != 1 {
-			t.Fatalf("a read that trusts blindly: %+v %v", fp, err)
-		}
+		TrustBlindlyElsewhere(t, a, s, BenchStation())
 		a.SetFingerprint(t, FingerprintScript{})
 		// Closing every session retires the instance that trusted.
 		closeFirst(t, s)

@@ -145,12 +145,12 @@ func (f *Fake) recordOutcome(d *tiad.Deploy, s *session, req tiad.DownloadReques
 	o.UserManagementReset = r.UserManagementReset
 	dr := &tiad.DeployResult{ID: d.ID, Archive: d.Archive, Source: d.Source, OutsideChanges: d.OutsideChanges}
 	trust := req.Fingerprint != nil && req.Fingerprint.TrustUnverifiedCertificate
-	pw := ""
-	if req.Secrets != nil {
-		pw = req.Secrets.FullAccessPassword
-	}
-	fp, ffl := f.fingerprintOf(s, req.Address, trust, pw, deployTrustFix)
-	if ffl != nil {
+	fp, ffl := f.fingerprintOf(s, req.Address, trust, deployTrustFix)
+	if ffl != nil && ffl.kind == tiad.KindFingerprintUnavailable {
+		// The CPU's access control is on (#1336): no error.
+		dr.FingerprintUnavailable = ffl.msg
+		o.FingerprintUnavailable = ffl.msg
+	} else if ffl != nil {
 		dr.FingerprintError = ffl.msg
 		o.FingerprintError = ffl.msg
 	} else {

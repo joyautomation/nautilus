@@ -92,17 +92,19 @@ func contractDeployRecord(t *testing.T, start Starter) {
 	}
 
 	// A hardware load: its own record and archive, first in the list,
-	// with the attestation, unverified hardware and the new Hardware item.
+	// with the attestation and unverified hardware. It turns the CPU's
+	// access control on, so its fingerprint is unavailable, never an
+	// error, and nothing is trusted (#1336).
 	r2, err := s.Download(ctx, AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{ResetData: tiad.Yes(), StartAfter: tiad.No()}}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	d2 := r2.Deploy
-	if d2 == nil || d2.ID == d.ID || d2.Archive.SHA256 == d.Archive.SHA256 || d2.Source != nil || d2.DownloadID != "fake-download-2" {
+	if d2 == nil || d2.ID == d.ID || d2.Archive.SHA256 == d.Archive.SHA256 || d2.Source != nil || d2.DownloadID != "" {
 		t.Fatalf("a second deploy: %+v, want a record and an archive of its own", d2)
 	}
-	if v, _ := d2.Fingerprint.Value("Hardware"); v != "fake-hardware-1" {
-		t.Fatalf("the hardware load's Hardware item: %q", v)
+	if d2.Fingerprint != nil || d2.FingerprintError != "" || !strings.Contains(d2.FingerprintUnavailable, FingerprintUseVerify) || d2.BlindTrustAfter != nil {
+		t.Fatalf("the hardware load's fingerprint: %+v", d2)
 	}
 	l = deploys(t, c, benchCPU)
 	if len(l.Deploys) != 2 || l.Deploys[0].ID != d2.ID || l.Deploys[1].ID != d.ID {
@@ -110,7 +112,8 @@ func contractDeployRecord(t *testing.T, start Starter) {
 	}
 	h := l.Deploys[0]
 	if !h.Hardware || h.Attestation == nil || h.Attestation.By != BenchAttestation.By || h.Attestation.At == "" ||
-		h.Outcome == nil || h.Outcome.HardwareVerified == nil || *h.Outcome.HardwareVerified {
+		h.Outcome == nil || h.Outcome.HardwareVerified == nil || *h.Outcome.HardwareVerified ||
+		h.Outcome.FingerprintError != "" || !strings.Contains(h.Outcome.FingerprintUnavailable, FingerprintUseVerify) {
 		t.Fatalf("the hardware load's record: %+v %+v", h, h.Outcome)
 	}
 	if l := deploys(t, c, "192.0.2.99"); len(l.Deploys) != 0 {

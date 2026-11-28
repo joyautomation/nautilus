@@ -29,6 +29,14 @@ namespace Tiad
         // same-named object where it sits, so the session stays unusable
         // whatever a compare after it shows.
         public bool OutsideGroup;
+        // AccessControlOn marks a fingerprint read refused because the CPU
+        // asks credentials, so its access control is on (FingerprintRule,
+        // #1336): the agent answers fingerprint_unavailable, naming verify.
+        // TrustedNothing marks that the read answered no certificate
+        // question trusted before it was refused: the agent then records
+        // no blind trust for it (TrustingCall). Set only with
+        // AccessControlOn, by the side that answered TIA's questions.
+        public bool AccessControlOn, TrustedNothing;
 
         public TiaException(string message) : base(message)
         {
@@ -334,8 +342,8 @@ namespace Tiad
         // after loading (null: it stays as it is). secrets carries the
         // protection password a password question needs.
         //
-        // login, in Upload and ReadFingerprint, is what the call answers
-        // when TIA asks credentials going online (null: none). Each
+        // login, in Upload, is what the call answers when TIA asks
+        // credentials going online (null: none). Each
         // operation makes its own LoginUse of it, which decides every
         // answer (OnlineLogin, LoginUse). Download and Compare take the
         // LoginUse the agent made (use, never null): the agent reads from
@@ -379,8 +387,15 @@ namespace Tiad
         // else TIA asks fails the read. It fails, never returns part of a
         // read, when the CPU is not reached online or any step fails. It
         // refuses before going online when address is not the project
-        // CPU's address.
-        FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login);
+        // CPU's address. It never logs on (#1336): TIA asking credentials
+        // means the CPU's access control is on, and TIA's fingerprint
+        // service would then need a blind trust and a password-only logon.
+        // Its credentials questions are answered no through
+        // LoginUse.Refusing(FingerprintRule.LockedWhy), and it is refused
+        // with a TiaException marked AccessControlOn (TrustedNothing when
+        // it trusted no certificate), before the service is called when the
+        // project's connection asked.
+        FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate);
 
         // ProjectCpu is the identity of the project's CPU as the project
         // holds it: after an upload, what the CPU reported. Serial and Mac

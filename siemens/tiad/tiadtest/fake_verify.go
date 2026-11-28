@@ -206,8 +206,11 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 		f.verifiedLoads[address] = verifiedLoad{deploy: d.ID, at: time.Now()}
 	}
 	if req.Fingerprint != nil {
-		fp, fl := f.fingerprintOf(s, address, req.Fingerprint.TrustUnverifiedCertificate, password, verifyTrustFix)
-		if fl != nil {
+		fp, fl := f.fingerprintOf(s, address, req.Fingerprint.TrustUnverifiedCertificate, verifyTrustFix)
+		if fl != nil && fl.kind == tiad.KindFingerprintUnavailable {
+			// The CPU's access control is on (#1336): no error.
+			res.FingerprintUnavailable = fl.msg
+		} else if fl != nil {
 			res.FingerprintError = fl.msg
 		} else {
 			vf := &tiad.VerifyFingerprint{Items: fp.Items, TrustedBlindly: fp.TrustedBlindly, BlindTrust: fp.BlindTrust}

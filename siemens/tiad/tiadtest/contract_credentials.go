@@ -1,6 +1,7 @@
 package tiadtest
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ import (
 // instance trusts a certificate blindly. Before this, a CPU the agent made
 // locked the agent out of it.
 func contractCredentials(t *testing.T, start Starter) {
-	a, s := compiledBench(t, start)
+	a, s := compiledBench(t, start, benchCPU, otherCPU)
 	c := a.Client()
 	wrong := &tiad.OnlineSecrets{FullAccessPassword: "Wrong-access-2026"}
 	refused := func(what string, err error, kind, why string) {
@@ -59,11 +60,27 @@ func contractCredentials(t *testing.T, start Starter) {
 		t.Fatalf("the refusal echoes the password: %v", err)
 	}
 
-	// A fingerprint read logs on too.
-	_, err = s.Fingerprint(ctx, tiad.FingerprintRequest{})
-	refused("fingerprint read without the password", err, tiad.KindOperationFailed, LoginNoPassword)
-	if r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin}); err != nil || len(r.Items) == 0 {
-		t.Fatalf("fingerprint read with the password: %+v %v", r, err)
+	// A fingerprint read never logs on (#1336): TIA's fingerprint service
+	// would need a blind trust and a password-only logon on a CPU with
+	// access control on. Whatever password it carries, and with or
+	// without the trust opt-in, it is refused as unavailable, naming
+	// verify, trusting nothing and sending nothing: a compare with the
+	// password still logs on after it, and nothing is trusted (the
+	// downloads below would need acceptBlindTrust).
+	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
+	for _, req := range []tiad.FingerprintRequest{{}, {Secrets: BenchLogin}, {Secrets: wrong}, {Secrets: BenchLogin, TrustUnverifiedCertificate: true}, {TrustUnverifiedCertificate: true}} {
+		r, err := s.Fingerprint(ctx, req)
+		lockedFingerprint(t, fmt.Sprintf("a fingerprint read (password %v, opt-in %v)", req.Secrets != nil, req.TrustUnverifiedCertificate), err, lockedBefore)
+		if len(r.Items) != 0 || r.BlindTrust != nil {
+			t.Fatalf("a refused fingerprint read returned %+v", r)
+		}
+		if strings.Contains(err.Error(), wrong.FullAccessPassword) || strings.Contains(err.Error(), BenchLogin.FullAccessPassword) {
+			t.Fatalf("the refusal echoes a password: %v", err)
+		}
+	}
+	a.SetFingerprint(t, FingerprintScript{})
+	if r, err := s.CompareWith(ctx, BenchCompare); err != nil || !r.Equal || r.BlindTrust != nil {
+		t.Fatalf("a compare with the password after the refused reads: %+v %v", r, err)
 	}
 
 	// A download with a wrong password: refused going online (in doubt,
@@ -81,9 +98,15 @@ func contractCredentials(t *testing.T, start Starter) {
 	if err != nil || !r.Downloaded || !r.CompareEqual || r.Deploy == nil {
 		t.Fatalf("a download with the password: %+v %v", r, err)
 	}
-	// The deploy's fingerprint read after the load logs on with it too.
-	if r.Deploy.Fingerprint == nil || r.Deploy.FingerprintError != "" {
+	// The deploy's fingerprint read after the load: unavailable, never an
+	// error, in the response and in the deploy record; nothing trusted.
+	if r.Deploy.Fingerprint != nil || r.Deploy.FingerprintError != "" || !strings.Contains(r.Deploy.FingerprintUnavailable, FingerprintUseVerify) ||
+		r.Deploy.BlindTrustAfter != nil || r.BlindTrust != nil {
 		t.Fatalf("the deploy's fingerprint read: %+v", r.Deploy)
+	}
+	if e := deploys(t, c, "").Deploys[0]; e.ID != r.Deploy.ID || e.Outcome == nil || e.Outcome.Status != tiad.DeployLoaded ||
+		e.Outcome.FingerprintError != "" || !strings.Contains(e.Outcome.FingerprintUnavailable, FingerprintUseVerify) {
+		t.Fatalf("the deploy record: %+v", e)
 	}
 	if r, err := s.Download(ctx, hw); err != nil || !r.Downloaded {
 		t.Fatalf("a second hardware load with the password: %+v %v", r, err)
@@ -96,11 +119,17 @@ func contractCredentials(t *testing.T, start Starter) {
 
 	// A verify opens its own session: the project is closed first.
 	closeFirst(t, s)
-	// A verify compares online: it logs on too.
+	// A verify compares online: it logs on too. Its fingerprint, asked,
+	// is unavailable, never an error: the logged-on verdict stands as
+	// the locked CPU's reference.
 	_, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: id})
 	refused("a verify without the password", err, tiad.KindOperationFailed, LoginNoPassword)
 	if v, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: id, Secrets: BenchLogin}); err != nil || v.Verdict != tiad.VerifyEqual {
 		t.Fatalf("a verify with the password: %+v %v", v, err)
+	}
+	if v, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: id, Secrets: BenchLogin, Fingerprint: &tiad.FingerprintRequest{TrustUnverifiedCertificate: true}}); err != nil ||
+		v.Verdict != tiad.VerifyEqual || v.Fingerprint != nil || v.FingerprintError != "" || !strings.Contains(v.FingerprintUnavailable, FingerprintUseVerify) {
+		t.Fatalf("a verify with its fingerprint: %+v %v", v, err)
 	}
 	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: id, Fingerprint: &tiad.FingerprintRequest{Secrets: BenchLogin}}); tiad.Kind(err) != tiad.KindBadRequest {
 		t.Fatalf("a verify with the password in its fingerprint: %v, want the client's bad_request", err)
@@ -122,9 +151,8 @@ func contractCredentials(t *testing.T, start Starter) {
 
 	closeFirst(t, s2)
 
-	// No password follows a blind trust. A read that trusts the
-	// certificate logs on to the project's connection first, then trusts
-	// TIA's fingerprint service, and goes through; from then on the
+	// No password follows a blind trust. A fingerprint read of another
+	// CPU, one without access control, trusts blindly; from then on the
 	// instance sends no password, so a compare is refused, and a download
 	// of a fullAccessUser station, which would have to log on, is refused
 	// before anything reaches the CPU.
@@ -135,10 +163,7 @@ func contractCredentials(t *testing.T, start Starter) {
 	if _, err := s3.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
-	if r, err := s3.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || len(r.TrustedBlindly) != 1 {
-		t.Fatalf("a read that logs on, then trusts blindly: %+v %v", r, err)
-	}
+	TrustBlindlyElsewhere(t, a, s3, BenchStation())
 	blocked := func(what string, err error, kind string) {
 		t.Helper()
 		if tiad.Kind(err) != kind || !strings.Contains(err.Error(), "password not sent: this agent's TIA instance trusted an unverified CPU certificate (") ||
@@ -157,7 +182,73 @@ func contractCredentials(t *testing.T, start Starter) {
 	a.SetFingerprint(t, FingerprintScript{})
 	// The last session closing retires the instance and its trust.
 	closeFirst(t, s3)
+	// A new instance has logged on to nothing: a read of the locked CPU
+	// goes online, its project's connection asks credentials, answered no,
+	// and TIA's fingerprint service is never called (#1336).
+	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
+	s4, err := c.CreateProject(ctx, "fresh", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s4.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true})
+	lockedFingerprint(t, "a read in a new instance", err, lockedOnline)
+	if !strings.Contains(err.Error(), "Nothing was trusted") {
+		t.Fatalf("a read refused going online: %v", err)
+	}
+	// It trusted nothing, though it took the opt-in: a compare logs on.
+	if r, err := s4.CompareWith(ctx, BenchCompare); err != nil || r.BlindTrust != nil {
+		t.Fatalf("a compare after the read refused going online: %+v %v", r, err)
+	}
+	a.SetFingerprint(t, FingerprintScript{})
+	closeFirst(t, s4)
 	if v, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: id, Secrets: BenchLogin}); err != nil || v.Verdict != tiad.VerifyEqual {
 		t.Fatalf("a verify once the trusting instance was retired: %+v %v", v, err)
+	}
+}
+
+// How a fingerprint read of a CPU with access control on was refused
+// (#1336): before going online (tiad answered credentials for it in this
+// TIA instance), going online (the project's connection asked
+// credentials), or at TIA's fingerprint service's password-only logon.
+const (
+	lockedBefore  = "(" + FingerprintAnsweredBefore + ")"
+	lockedOnline  = "(TIA asked credentials going online)"
+	lockedService = "(TIA's fingerprint service asked a password-only logon (OnlineReadAccessPassword))"
+)
+
+// lockedFingerprint fails t unless err is the agent's refusal of a
+// fingerprint read of a CPU with access control on (#1336): kind
+// fingerprint_unavailable, naming the CPU, how its access control showed
+// (lockedBefore, lockedOnline, lockedService) and verify.
+func lockedFingerprint(t *testing.T, what string, err error, how string) {
+	t.Helper()
+	if tiad.Kind(err) != tiad.KindFingerprintUnavailable || !strings.Contains(err.Error(), "the CPU at "+benchCPU+" has access control on "+how) ||
+		!strings.Contains(err.Error(), FingerprintUseVerify) {
+		t.Fatalf("%s: %v, want fingerprint_unavailable %s naming verify", what, err, how)
+	}
+}
+
+// TrustBlindlyElsewhere makes the agent's TIA instance trust a CPU
+// certificate blindly, on session s (TIA opens one project at a time, and
+// closing the last session retires the instance and its trust): s's
+// station, back, moves to otherCPU (a target of a, no access control), a
+// fingerprint read with the opt-in trusts blindly, and the station moves
+// back, compiled. It leaves the fingerprint script asking TLS.
+func TrustBlindlyElsewhere(t testing.TB, a Target, s *tiad.Session, back tiad.Station) {
+	t.Helper()
+	st := back
+	st.CPU.Address = otherCPU
+	if _, err := s.ApplyStation(ctx, st, BenchSecrets); err != nil {
+		t.Fatalf("the station at another CPU: %v", err)
+	}
+	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
+	if r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil || len(r.TrustedBlindly) != 1 || r.BlindTrust == nil {
+		t.Fatalf("a read of another CPU that trusts blindly: %+v %v", r, err)
+	}
+	if _, err := s.ApplyStation(ctx, back, BenchSecrets); err != nil {
+		t.Fatalf("the station back at the bench CPU: %v", err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
 	}
 }

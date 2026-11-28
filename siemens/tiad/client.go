@@ -91,6 +91,13 @@ const (
 	// program block that exists outside the import's group: TIA would
 	// replace it. Nothing was imported; rename the block (a prefix).
 	KindForeignBlock = "foreign_block"
+	// KindFingerprintUnavailable refuses a fingerprint read of a CPU whose
+	// access control is on (#1336): TIA's fingerprint service would need a
+	// blind certificate trust and a password-only logon, which the agent
+	// does not send. The message names verify, the locked CPU's reference.
+	// A deploy or verify reports it in FingerprintUnavailable, never as
+	// FingerprintError.
+	KindFingerprintUnavailable = "fingerprint_unavailable"
 
 	KindUnreachable = "unreachable"
 	KindBadReply    = "bad_reply"
@@ -1184,8 +1191,10 @@ type FingerprintRequest struct {
 	// fingerprint service asks "trusted", blindly, as an upload's does.
 	// The bench CPU's read asks it (#789 stage 1b).
 	TrustUnverifiedCertificate bool `json:"trustUnverifiedCertificate,omitempty"`
-	// Secrets answer TIA's credentials question (OnlineSecrets). In a
-	// VerifyRequest they go in VerifyRequest.Secrets instead.
+	// Secrets are accepted and not used: a fingerprint read never logs on
+	// (#1336). A CPU that asks credentials is refused with
+	// KindFingerprintUnavailable, nothing sent. In a VerifyRequest they go
+	// in VerifyRequest.Secrets instead, for its compare.
 	Secrets *OnlineSecrets `json:"secrets,omitempty"`
 	// DeviceAttestation: as CompareRequest's. In a VerifyRequest or a
 	// DownloadRequest it goes in their own DeviceAttestation instead.
