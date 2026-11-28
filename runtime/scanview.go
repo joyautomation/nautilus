@@ -200,6 +200,36 @@ func (v *scanView) WriteGlobalMember(name string, val ir.Value, path ir.MemberPa
 	return nil
 }
 
+// WriteGlobalInOut is the VM's optional ir.InOutWriter: the copy-back of a
+// VAR_IN_OUT pin bound to a global, with what the block assigned on this
+// call. For a struct instance (instance.go) only those parts are the
+// program's this scan, so a block that only reads the instance commands
+// nothing and an operator's mid-scan write to a member it did not assign
+// survives (docs/design/one-struct-model.md §2.4). Every other global keeps
+// the old rule, the pin's part whole, which is what the VM does for a host
+// without this method (design question 7: plain structs are unchanged).
+func (v *scanView) WriteGlobalInOut(name string, whole ir.Value, base ir.MemberPath, assigned []ir.MemberPath, all bool) error {
+	pinWhole := func() error {
+		if base.Len() == 0 && base.Bits() == 0 {
+			return v.WriteGlobal(name, whole)
+		}
+		return v.WriteGlobalMember(name, whole, base)
+	}
+	if v.store.instanceOf(name) == nil || all {
+		return pinWhole()
+	}
+	for _, p := range assigned {
+		j, ok := base.Join(p)
+		if !ok {
+			return pinWhole()
+		}
+		if err := v.WriteGlobalMember(name, whole, j); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (v *scanView) NowMs() int64 { return v.store.NowMs() }
 
 // DivZero forwards the VM's optional ir.DivZeroCounter to the store, so a
