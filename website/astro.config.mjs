@@ -108,6 +108,7 @@ export default defineConfig({
           label: 'I/O and protocols',
           items: [
             { slug: 'guides/modbus' },
+            { slug: 'guides/struct-wiring' },
             { slug: 'guides/opcua-server' },
             { slug: 'guides/opcua-client' },
             { slug: 'guides/ethernet-ip' },

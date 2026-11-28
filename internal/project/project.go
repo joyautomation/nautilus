@@ -46,6 +46,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
+	"github.com/joyautomation/nautilus/wirebind"
 	"github.com/joyautomation/nautilus/wiring"
 )
 
@@ -94,8 +95,7 @@ type Manifest struct {
 	Tags     []TagConfig `yaml:"tags"`
 	// Wirings, Instances and WiringFiles are struct wiring (#1458,
 	// docs/design/one-struct-model.md): where each member of a plain TYPE
-	// comes from, and the tags of those types. They are read and checked,
-	// and then refused until a build runs them (composeWiring). WiringFiles
+	// comes from, and the tags of those types (composeWiring). WiringFiles
 	// is the include file: each holds wirings: and instances: and is
 	// resolved inside the project like tag-files:.
 	Wirings     []wiring.Wiring   `yaml:"wirings"`
@@ -120,7 +120,10 @@ type Manifest struct {
 	PlantFile string           `yaml:"plant"`
 	Devices   []devbind.Device `yaml:"devices"`
 	// devices is Devices resolved against profiles/ (ReadManifest).
-	devices   *devbind.Set     `yaml:"-"`
+	devices *devbind.Set `yaml:"-"`
+	// wired is the struct wiring resolved (composeWiring); nil when the
+	// manifest has none.
+	wired     *wirebind.Set    `yaml:"-"`
 	plant     *plant.Plant     `yaml:"-"`
 	Sparkplug *SparkplugConfig `yaml:"sparkplug"`
 	OPCUA     *OPCUAConfig     `yaml:"opcua"`
@@ -1105,6 +1108,10 @@ type TagConfig struct {
 	// must be inside (#718).
 	Min *float64 `yaml:"min"`
 	Max *float64 `yaml:"max"`
+
+	// instance makes the tag an instance of a wired type (composeWiring):
+	// its members' kinds. Not a manifest key; a tags: row cannot set it.
+	instance *runtime.InstanceDef `yaml:"-"`
 }
 
 // MetaConfig is HMI documentation for a tag, kept separate from the tag's
@@ -1215,6 +1222,12 @@ type DriverConfig struct {
 	// it on the Modbus driver, and on each OPC UA device's own driver);
 	// not a manifest key.
 	devices *devbind.Set `yaml:"-"`
+	// wired are the project's instances; the Modbus driver their sources
+	// name carries their bindings (withWired). Not a manifest key.
+	wired *wirebind.Set `yaml:"-"`
+	// wiredByType: this is the Modbus driver a source's driver: modbus
+	// (the type, not an entry's name) resolves to.
+	wiredByType bool `yaml:"-"`
 	// opcuaDevice is the OPC UA device an opcua-client driver Load made
 	// for a devices: row is; not a manifest key.
 	opcuaDevice string `yaml:"-"`
@@ -1303,6 +1316,7 @@ type Project struct {
 	sparkplug *SparkplugConfig
 	drivers   []nio.NamedDriver // the configured drivers, named; nil for the implicit memory loopback
 	devices   *devbind.Set      // devices: resolved; nil when none
+	wired     *wirebind.Set     // struct wiring resolved; nil when none
 	// Plant is the plant model (plant:), nil when the manifest has none.
 	Plant *plant.Plant
 
@@ -1439,6 +1453,10 @@ func (p *Project) Drivers() []nio.NamedDriver { return p.drivers }
 // Devices is the project's devices: resolved against profiles/; nil when
 // it declares none.
 func (p *Project) Devices() *devbind.Set { return p.devices }
+
+// Wired is the project's struct wiring resolved: its instances; nil when it
+// has none.
+func (p *Project) Wired() *wirebind.Set { return p.wired }
 
 func (p *Project) RetainNames() (configMap, file string) {
 	configMap, file = p.Name+"-retain", "retain.json"
@@ -2103,6 +2121,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		substitutes:     substitutes,
 		drivers:         drivers,
 		devices:         m.devices,
+		wired:           m.wired,
 		Plant:           m.plant,
 		OPCUA:           m.OPCUA,
 		Retain:          m.Retain,
@@ -2469,6 +2488,10 @@ func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
 			meta = append(meta, runtime.Range(t.Min, t.Max))
 		}
 		var def runtime.TagDef
+		if t.instance != nil {
+			defs = append(defs, runtime.InstanceTag(t.Name, t.Type, *t.instance, meta...))
+			continue
+		}
 		switch strings.ToLower(t.Role) {
 		case "input":
 			if t.Init != nil {
@@ -2591,6 +2614,10 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		if configs, err = withDevices(configs, m.devices); err != nil {
 			return nil, nil, err
 		}
+	}
+	configs, err := withWired(configs, m.wired)
+	if err != nil {
+		return nil, nil, err
 	}
 	names := driverNames(configs)
 	switch len(configs) {

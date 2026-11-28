@@ -630,6 +630,11 @@ func (io *IOConfig) restoreUnits(r *restore, boot map[string]ioUnit) (map[string
 			r.drop(k, b.hash, "the deployed manifest changed it since it was applied: a deploy replaces a live change (pull the kept files with naut pull --io before deploying to keep it)")
 		case cand.err != nil:
 			r.drop(k, b.hash, "the kept files no longer load: "+cand.err.Error())
+		case wiringDigest(cand.m.wired) != io.bootWiring:
+			// The kept files carry a manifest whose struct wiring the deploy
+			// has since changed: restoring them would bring the old wiring
+			// back, which only a restart applies (the wiring check).
+			r.drop(k, b.hash, "the deployed struct wiring differs from the kept files': a deploy replaces a live change (pull the kept files with naut pull --io before deploying to keep it)")
 		default:
 			cu, ok := cand.units[k]
 			if !ok || cu.hash != ru.Hash {

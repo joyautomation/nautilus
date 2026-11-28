@@ -44,6 +44,7 @@ import (
 	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/wirebind"
 )
 
 // IORuntime is what an apply needs of the running runtime.
@@ -64,6 +65,9 @@ type IOConfig struct {
 	bootYAML string
 	bootRows []devbind.Device // the boot manifest's devices:
 	bootST   string           // and their composed types
+	// bootWiring is the boot manifest's struct wiring, resolved, as a
+	// digest (wiringDigest).
+	bootWiring string
 
 	applying sync.Mutex // one apply at a time
 	mu       sync.Mutex // guards boot and running
@@ -221,7 +225,7 @@ func NewIOConfig(p *Project, rt IORuntime, fsys fs.FS, manifest string) (*IOConf
 	}
 	io := &IOConfig{
 		p: p, rt: rt, manifest: manifest, hold: p.Runtime.HoldOutputsOnSwap,
-		bootYAML: nonIOYAML(m), bootRows: m.Devices, bootST: types, boot: units, running: running,
+		bootYAML: nonIOYAML(m), bootRows: m.Devices, bootST: types, bootWiring: wiringDigest(m.wired), boot: units, running: running,
 		replaceSource: func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error {
 			return mb.ReplaceSource(src, tags, opts)
 		},
@@ -294,6 +298,10 @@ func driverConfigs(m *Manifest) ([]DriverConfig, error) {
 		if configs, err = withDevices(configs, m.devices); err != nil {
 			return nil, err
 		}
+	}
+	configs, err := withWired(configs, m.wired)
+	if err != nil {
+		return nil, err
 	}
 	names := driverNames(configs)
 	out := make([]DriverConfig, len(configs))
@@ -411,7 +419,7 @@ type IOCommand struct {
 
 // restartChecks are the checks whose failure only means a restart would be
 // needed: what is fixed while the runtime runs.
-var restartChecks = map[string]bool{"topology": true, "tags": true, "device-type": true, "fields": true}
+var restartChecks = map[string]bool{"topology": true, "tags": true, "device-type": true, "fields": true, "wiring": true}
 
 // needsRestart reports whether every check that failed is a restart one, and
 // the candidate loaded (schema passed): a configuration a restart would apply.
@@ -762,6 +770,14 @@ func (io *IOConfig) validate(c *IOCandidate, probes bool) *IOValidation {
 	check("tags", tagp)
 
 	check("device-type", io.deviceTypeProblems(c))
+	// Struct wiring (#1458) is applied by a restart in this build: an
+	// instance's bindings, kinds and push rules are built with the runtime,
+	// so an edit is never half-applied through the Modbus source it derives.
+	var wp []string
+	if wiringDigest(c.m.wired) != io.bootWiring {
+		wp = append(wp, "the struct wiring (wirings:, instances:, wiring-files:) changes; this build applies a wiring edit by a restart, not live")
+	}
+	check("wiring", wp)
 	check("fields", io.fieldProblems(c, running))
 	check("outputs", newOutputConflicts(running, c.units))
 
@@ -850,6 +866,40 @@ func sortedNames(s []string) []string {
 // deviceTypeProblems refuses a devices: row whose profile or points change:
 // that changes the device's struct, which the runtime fixed at start. A
 // vendored profile's addresses may change; its members may not.
+// wiringDigest is a resolved wiring as a comparable digest: every instance,
+// member (path, kind, source, address) and connection; "" for none.
+func wiringDigest(set *wirebind.Set) string {
+	if set == nil {
+		return ""
+	}
+	type member struct {
+		Path, Kind, Mode, Source, Readback string
+		Event                              bool
+		Addr                               map[string]any
+	}
+	type conn struct {
+		Source, Driver, ID string
+		Keys               map[string]any
+	}
+	type inst struct {
+		Name, Type, Wiring string
+		Members            []member
+		Conns              []conn
+	}
+	var all []inst
+	for _, in := range set.Instances {
+		x := inst{Name: in.Name, Type: in.Type, Wiring: in.Wiring}
+		for _, c := range in.Conns {
+			x.Conns = append(x.Conns, conn{c.Source, c.Driver, c.ID, c.Keys})
+		}
+		for _, m := range in.Members {
+			x.Members = append(x.Members, member{m.Path, string(m.Kind), m.MemoryMode, m.Source, m.Readback, m.Event, m.Addr})
+		}
+		all = append(all, x)
+	}
+	return hashOf(all)
+}
+
 func (io *IOConfig) deviceTypeProblems(c *IOCandidate) []string {
 	rows := map[string]devbind.Device{}
 	for _, r := range io.bootRows {

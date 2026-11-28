@@ -128,6 +128,9 @@ func platformNotices(m Manifest) []string {
 	for _, c := range m.Channels {
 		out = append(out, fmt.Sprintf("channel %s (%s) reaches no peer in the browser: its READ and WRITE blocks report ERROR with STATUS -2. Install naut to run them against real equipment.", c.Name, strings.ToLower(c.Type)))
 	}
+	if m.wired != nil && len(m.wired.Instances) > 0 {
+		out = append(out, "instances: their Modbus connections are simulated, so a device member reads as not connected until a test gives it, and each member's Modbus address is checked by naut check, not here. Install naut to run them against real equipment.")
+	}
 	if m.OPCUA != nil {
 		out = append(out, "opcua: the OPC UA server is off in the browser (nothing can connect to a tab). Install naut to serve this project's tags over OPC UA.")
 	}

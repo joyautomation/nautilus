@@ -1121,8 +1121,19 @@ code, see the test fail, restore it). Each updates the guides it touches.
 5. **Modbus instances, end to end.** `wirings:` and `instances:` in the
    manifest, `wirebind` for Modbus, and companions. The Logix/Siemens
    refusal ships here, from the first day instances exist, with the wording
-   of §14, and the tracking issue it cites is filed with this slice.
-   *Needs 4.*
+   of §14, and the tracking issue it cites (#1478) is filed with this slice.
+   **Hard condition** (naut-lead, 11-27), met before instances are enabled:
+   no push key is silently dropped. `runtime.New` refuses an instance whose
+   `to:` or `both:` leaf no driver takes as an output, or whose `from:` or
+   `both:` member no driver delivers, naming the member and its key, when
+   the driver declares its tags; `io.Multi` logs, once per key and listed by
+   `Unclaimed()`, any write no child claims. Test: a command to an
+   unclaimed key fails loudly. What slice 5 does not run yet (`expr:`,
+   `fill:`, wiring and instance alarms, `offline-alarm:`, `set:`, a source
+   on any driver but Modbus, an instance on more than one connection) is
+   refused at load, naming its slice. Memory is not retained yet (slice 6):
+   `naut check` warns, naming the members. A wiring edit applies at a
+   restart, never through the live I/O apply. *Needs 4.*
 6. **Memory.** Retained and initial memory, the retain-store filter,
    `set:`, params by member path, and the redundancy replication test (§7).
    *Needs 5.*
@@ -1145,12 +1156,20 @@ code, see the test fail, restore it). Each updates the guides it touches.
     in `lang/ir`, the LSP, `stgen`, conformance cases, and the writers
     flattening it. *Needs 2 only.*
 12. **EtherNet/IP fill.** `fill:`, wrap, extend, and `both:` with the
-    in-flight hold. *Needs 5; extend needs 11.*
+    in-flight hold. **Hard condition** (naut-lead, 11-27), met before any
+    `both:` binding is enabled (here and in slice 14): the in-flight hold and
+    peer dedupe. A `both:` leaf the program assigns every scan must not be
+    re-sent every scan while the peer shows another value (a write storm to
+    a peer PLC). Test: N scans of the same assigned value give one write.
+    *Needs 5; extend needs 11.*
 13. **Sparkplug edge.** Version, parameters (codec), member properties, the
     command refusal by kind, node-level placement and the stale-quality
     property for a connection that is down. *Needs 6, 8.*
 14. **Sparkplug host and the round trip.** Fill, `both:`, parameters,
-    reading the `Quality` property, and the round-trip acceptance test. *Needs 11, 12 (`fill:`), 13.*
+    reading the `Quality` property, and the round-trip acceptance test.
+    The slice 12 hard condition holds here too: no `both:` binding before
+    the in-flight hold and peer dedupe, with the same N-scans-one-write
+    test. *Needs 11, 12 (`fill:`), 13.*
 15. **IT drivers.** `Cmd` members through `WriteDecl`, and the generated
     `hw` extensions. *Needs 11.*
 16. **IO-Link port devices** produce wiring. *Needs 10.*

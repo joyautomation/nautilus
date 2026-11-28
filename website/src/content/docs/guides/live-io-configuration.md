@@ -34,7 +34,10 @@ device that allows only one connection is checked statically instead; say
 `endpoint` and a binding's `nodeid`; a driver's scan rate; a `devices:` row's
 `endpoint` and `unit-id`. Anything else (the tag set, adding or removing a
 driver or device, word order, timeouts, scaling, security) is refused by
-name, with "restart to apply the rest".
+name, with "restart to apply the rest". So is any edit to
+[struct wiring](/guides/struct-wiring/) (`wirings:`, `instances:`,
+`wiring-files:`), an address included: an instance's bindings are built
+with the runtime, so a wiring edit applies at the next restart.
 
 Two safety details. `willCommand` in the validation lists the outputs the
 first scan after the apply will command, so you see them before they go. And

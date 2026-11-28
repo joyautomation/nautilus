@@ -321,6 +321,9 @@ func runLogixDeploy(args []string) int {
 // the runtime would refuse (a tag with no role:, say) is an error naming
 // the tag, never a write with every manifest tag untyped.
 func logixTagTypes(m *project.Manifest) (map[string]string, error) {
+	if err := project.WiredOnTarget(m, "logix"); err != nil {
+		return nil, err
+	}
 	defs, err := project.TagDefs(m)
 	if err != nil {
 		return nil, err
