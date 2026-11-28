@@ -486,18 +486,33 @@ type Options struct {
 	// waits for the next start (Mark.SupersedeTo).
 	ResetInPlace bool
 
-	transport     http.RoundTripper    // tests: an in-process network
-	afterVouchAsk func()               // tests: Vouch, between its asks and its mark
-	lim           limits               // tests: smaller chunks and bounds
-	markWrite     func(Mark) error     // tests: fails a mark write
-	fileSync      func(*os.File) error // tests: observes or fails a log file sync
-	// compactRules is this build's compaction keep-rules version (#1455):
-	// 0, compaction is off (nothing proposes K). Set by tests only until the
-	// decision is built (PR 2b), so no build advertises a version whose
-	// decision it lacks.
-	compactRules int
-	compactCrash func(step string) bool          // tests: a crash point in a physical compaction
-	freeDisk     func(dir string) (int64, error) // tests: the free disk a compaction checks
+	// CompactRules is this build's compaction keep-rules version (#1455,
+	// docs/design/oplog-compaction.md §3): 0, compaction is off: nothing is
+	// advertised and nothing proposes a compaction. Any later change to a
+	// keep rule or an Entry field bumps it. A copy that may lead needs
+	// Compact with it; the witness, which never leads, sets it alone (it
+	// says the copy can take a compacted log and its installs).
+	CompactRules int
+	// Compact is the keep decision (#1455 §3; the server's, which knows the
+	// kinds): the leader asks it, on its own goroutine, which committed
+	// entries up to in.Through are kept, once the gate holds. Nil: this
+	// copy never proposes a compaction.
+	Compact Compactor
+	// Base, when set, is told the base's Through before a compacted log is
+	// replayed into Apply (at open, and when an install lands): everything
+	// up to it has been delivered, though only its kept entries are
+	// replayed, so a consumer's high-water marks start at it. Called under
+	// the node's lock; it must not call the node.
+	Base func(through uint64)
+
+	transport     http.RoundTripper               // tests: an in-process network
+	afterVouchAsk func()                          // tests: Vouch, between its asks and its mark
+	lim           limits                          // tests: smaller chunks and bounds
+	markWrite     func(Mark) error                // tests: fails a mark write
+	fileSync      func(*os.File) error            // tests: observes or fails a log file sync
+	compactCrash  func(step string) bool          // tests: a crash point in a physical compaction
+	decide        decideLimits                    // tests: the decision's timings and thresholds
+	freeDisk      func(dir string) (int64, error) // tests: the free disk a compaction checks
 }
 
 // Mark is a replica's log mark, kept in Options.Mark.
@@ -893,6 +908,7 @@ func New(o Options) (*Node, error) {
 	if n.kickOwed {
 		n.kickCompact() // a committed compaction the file is not rewritten to
 	}
+	n.startDecide()
 	n.mu.Unlock()
 	return n, nil
 }
@@ -1643,6 +1659,7 @@ func (n *Node) open() (damaged bool, err error) {
 	// page, and a failed commit line only warns, so the file's own commit
 	// line may say less.
 	n.commit = min(max(n.commit, n.disk.Through, n.floor), n.lastLocked())
+	n.baseLocked(n.disk.Through)
 	n.applyRange(n.entries, n.commit)
 	return damaged, nil
 }
@@ -2129,6 +2146,15 @@ func (n *Node) applyRange(es []stored, seq uint64) {
 	}
 }
 
+// baseLocked tells Options.Base that everything up to through (a
+// compacted base's, 0: none) is delivered, before its kept entries are
+// replayed. Caller holds mu.
+func (n *Node) baseLocked(through uint64) {
+	if through > 0 && n.o.Base != nil && !mutOplog("base_hook_skipped") {
+		n.o.Base(through)
+	}
+}
+
 func (n *Node) apply(e Entry) {
 	if n.o.Apply == nil || e.Kind == KindNoop || e.Kind == KindCompact {
 		return
@@ -2290,10 +2316,19 @@ func (n *Node) carrierLocked(term uint64) Entry {
 			}
 		}
 	}
+	e := Entry{Kind: KindNoop, By: "system", Origin: n.o.Self}
 	if len(refs) > 0 {
-		return Entry{Kind: KindLapse, Refs: refs, By: "system", Origin: n.o.Self}
+		e = Entry{Kind: KindLapse, Refs: refs, By: "system", Origin: n.o.Self}
 	}
-	return Entry{Kind: KindNoop, By: "system", Origin: n.o.Self}
+	// A leader on compaction's rules says so in its term's first entry
+	// (#1455: since when a compaction waits is counted from the first, so a
+	// rolling upgrade raises nothing). In Value, which every build keeps
+	// as it is: a follower on a build from before re-marshals entries and
+	// drops fields it doesn't know.
+	if r := n.o.CompactRules; r > 0 && n.o.Compact != nil && !mutOplog("carrier_unmarked") {
+		e.Value = json.RawMessage(fmt.Sprintf(`{"rules":%d}`, r))
+	}
+	return e
 }
 
 // Self is this instance's base URL (Options.Self).
@@ -2341,6 +2376,9 @@ func (n *Node) SyncLeader(ctx context.Context) error {
 	c := n.carrierLocked(n.currentTerm())
 	n.mu.Unlock()
 	_, err := n.sequenceLocked(ctx, c)
+	if err == nil && len(c.Value) > 0 {
+		n.rulesMarkedNow()
+	}
 	return err
 }
 

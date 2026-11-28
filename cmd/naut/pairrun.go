@@ -1020,6 +1020,11 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		// runtime ends the old history's substitutes at once, leading or
 		// not (driveLog repeats it).
 		OnSuperseded: func(oplog.Lineage) { m.endSuperseded() },
+		// Compaction (#1455): the keep decision and the base hook. Off
+		// until a keep-rules version is set (PR 2b-2): with no rules version the
+		// node never looks for a compaction nor marks its terms.
+		Compact: server.NewKeeper().Decide,
+		Base:    sl.Base,
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("operator-intent log: %w", err)
@@ -1359,10 +1364,11 @@ func (m *pairMember) logConditions() {
 		}
 	}
 	m.q.SetCondition("oplog-read-only", readOnly)
-	disk, behind, blocked := compactConditions(st, time.Now())
+	disk, behind, blocked, refused := compactConditions(st, time.Now())
 	m.q.SetCondition("oplog-compaction-disk", disk)
 	m.q.SetCondition("oplog-peer-behind-base", behind)
 	m.q.SetCondition("oplog-compaction-blocked", blocked)
+	m.q.SetCondition("oplog-compaction-refused", refused)
 	if !st.Unsynced {
 		m.q.SetCondition("oplog-yield", "")
 		m.q.SetCondition("oplog-vouch-refused", "")
@@ -1389,8 +1395,9 @@ const compactBlockedAfter = 7 * 24 * time.Hour
 // compactConditions are the log compaction's conditions (#1455), "" each
 // when clear: too little free disk for the rewrite; a copy behind the base
 // on a build from before compaction; a wanted compaction waiting more than
-// 7 days.
-func compactConditions(st oplog.Status, now time.Time) (disk, behind, blocked string) {
+// 7 days (since when, the log says: a restart never resets it); the keep
+// decision's own check refusing (a bug: its evidence is in the text).
+func compactConditions(st oplog.Status, now time.Time) (disk, behind, blocked, refused string) {
 	if st.CompactRefused != "" {
 		disk = "this controller's operator-intent log can't be compacted on disk: " + st.CompactRefused
 	}
@@ -1399,9 +1406,12 @@ func compactConditions(st oplog.Status, now time.Time) (disk, behind, blocked st
 	}
 	since := time.UnixMilli(st.CompactBlockedSince)
 	if st.CompactBlocked != "" && (now.Sub(since) > compactBlockedAfter || mutNaut("blocked_at_once")) {
-		blocked = fmt.Sprintf("the operator-intent log has not been compacted for %d days: %s", int(now.Sub(since).Hours()/24), st.CompactBlocked)
+		blocked = fmt.Sprintf("the operator-intent log's compaction has waited %d days, so the log keeps growing: %s", int(now.Sub(since).Hours()/24), st.CompactBlocked)
 	}
-	return disk, behind, blocked
+	if st.CompactDecisionRefused != "" {
+		refused = "the operator-intent log is not compacted: the decision of what to keep did not check out, so nothing was dropped (a bug in naut; report it with this text): " + st.CompactDecisionRefused
+	}
+	return disk, behind, blocked, refused
 }
 
 func nonEmpty(s, or string) string {

@@ -123,6 +123,10 @@ type AlarmLog struct {
 	term    func() uint64
 	node    *oplog.Node
 	refusal string
+	// scratch: a view of its own for the log's compaction (the keep
+	// decision's check, compact_models.go): it never leads, and logs
+	// nothing of what it replays.
+	scratch bool
 
 	// restored is the term whose takeover restored the view into the
 	// engine (live). liveMu orders a committed entry's apply against the
@@ -381,7 +385,9 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 	l.heard(e.TS)
 	live := l.live()
 	if e.Lapsed && (e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve || e.Kind == oplog.KindOutOfService) {
-		slog.Warn("alarm: an operator's ack or shelve lapsed: it was committed too late to apply to the occurrence it was for", "kind", e.Kind, "ids", e.IDs, "id", e.ID, "by", e.By)
+		if !l.scratch {
+			slog.Warn("alarm: an operator's ack or shelve lapsed: it was committed too late to apply to the occurrence it was for", "kind", e.Kind, "ids", e.IDs, "id", e.ID, "by", e.By)
+		}
 		l.mu.Lock()
 		if l.lapsed == nil {
 			l.lapsed = map[uint64]oplog.Entry{}
@@ -1419,6 +1425,9 @@ type chatterEpisode struct {
 func (l *AlarmLog) applyDetect(e oplog.Entry) {
 	var b detectEntry
 	if err := json.Unmarshal(e.Value, &b); err != nil || b.V != detectEntryVersion {
+		if l.scratch {
+			return
+		}
 		slog.Warn("alarm: an alarm-detect entry this build does not read; a takeover carries no flood or chattering episode from it", "seq", e.Seq, "v", b.V, "err", err)
 		return
 	}

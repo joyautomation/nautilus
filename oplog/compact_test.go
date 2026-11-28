@@ -34,7 +34,7 @@ type ctrio struct {
 func compactTrio(t *testing.T, opts func(i int, o *Options)) *ctrio {
 	t.Helper()
 	tr := newTrio(t, func(i int, o *Options) {
-		o.compactRules = 1
+		o.CompactRules = 1
 		o.lim.compactDelay = func() time.Duration { return 0 }
 		o.lim.compactRetry = 20 * time.Millisecond
 		if opts != nil {
@@ -612,7 +612,7 @@ func TestAnOlderOrDamagedCompactedFileIsLost(t *testing.T) {
 func TestNothingBelowTheBaseIsServedAsTheLog(t *testing.T) {
 	tr := compactTrio(t, func(i int, o *Options) {
 		if i == 2 {
-			o.compactRules = 0
+			o.CompactRules = 0
 		}
 	})
 	mustSync(t, tr.trio, 0)
@@ -885,7 +885,7 @@ func TestAWitnessThatDivergesAtStartStartsOver(t *testing.T) {
 // compact a log compacted under newer ones, after a restart too.
 func TestTheHeaderKeepsTheRulesVersion(t *testing.T) {
 	rules := 2
-	tr := compactTrio(t, func(_ int, o *Options) { o.compactRules = rules })
+	tr := compactTrio(t, func(_ int, o *Options) { o.CompactRules = rules })
 	mustSync(t, tr.trio, 0)
 	full := tr.fill(0, 20, 14)
 	tr.compact(0, 10, toyKeep(full, 10, 0))

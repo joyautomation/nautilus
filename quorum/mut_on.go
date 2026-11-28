@@ -750,6 +750,30 @@ var Mutations = []string{
 	"write_dedup_off",           // node: a re-ask's write of a Seq already on disk is written again: two fsyncs for one promise on a slow card (#1436 PR 2)
 	"handback_undo_unwritten",   // quorum: an undone hand-back keeps the armed write's Seq, so once that write lands the reverted guard never reaches disk and a restart refuses a real hand-back (#1436 PR 2, Fable)
 	"write_dedup_failed_counts", // node: a failed write counts as written, so the re-ask queued behind it is skipped and the promise never reaches disk: the voter grants it nothing, silently (#1436 PR 2, F25)
+
+	// #1455 PR 2b-1: the compaction's decision.
+	"decide_off",                  // oplog: a copy with a keep decision and a rules version never looks for a compaction
+	"decide_no_shrink",            // oplog: an over-size decision is not retried on a smaller range: a year's first compaction never happens
+	"decide_never_wanted",         // oplog: no compaction is ever wanted, however much is older than the margin
+	"blocked_since_now",           // oplog: a wanted compaction's "since" is the time of the look, not the log's: a restart resets the 7 days
+	"blocked_since_unfloored",     // oplog: a log grown before compaction was switched on counts its wait from long ago: every rolling upgrade raises oplog-compaction-blocked
+	"carrier_unmarked",            // oplog: a leader on compaction's rules does not say so in its term's first entry
+	"rules_mark_first_found",      // oplog: blocked-since counts from the first marker found, not the earliest (two leaders in a row each wrote one)
+	"marker_skips_lapses",         // oplog: the rules marker is a bare noop, which commits an earlier term's stale start un-lapsed
+	"decide_transient_blocks",     // oplog: a reason the next look clears by itself (a write in flight) starts the blocked time
+	"decide_clock_spread_ignored", // oplog: copies whose clocks spread over 5 minutes compact anyway
+	"decide_uncounted_peer",       // oplog: a copy that does not count (unsynced, lost) does not block a compaction
+	"decide_ignores_peer_commit",  // oplog: Through may pass what a copy has committed
+	"decide_base_unchecked",       // oplog: a decision made over another base is proposed
+	"decide_gate_unchecked",       // oplog: the gate is not checked again when the decision is sequenced
+	"base_hook_skipped",           // oplog: a compacted replay does not tell Options.Base, so high-water marks start low
+	"keep_drops_unclaimed",        // server: an entry of a kind no model claims (a newer build's) is dropped
+	"keep_reads_ignored",          // server: a kept entry does not keep the writer of what it read
+	"keep_no_forward_closure",     // server: a kept entry does not keep the later entries that undo it
+	"keep_lapse_split",            // server: a kept entry does not keep the KindLapse naming it
+	"keep_check_refuses",          // server: the check before proposing refuses every decision
+	"keep_undone_shelf_dropped",   // server: an unshelve is dropped while the shelve it undid could still be in a retain store: an unsynced takeover brings the shelf back
+	"view_maybe_dropped",          // runtime: a retry the view did not apply (its request ID's first start was refused by the runtime, which then runs the retry) is dropped by a compaction
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")
