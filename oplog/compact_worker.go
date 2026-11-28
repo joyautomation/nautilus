@@ -345,12 +345,29 @@ func unruns(rs [][2]uint64, limit int) ([]uint64, error) {
 // differs) means this copy's log is not the others': it has diverged.
 // Caller holds mu.
 func (n *Node) carryOutLocked(e Entry) {
-	if e.Seq <= n.cut.Compact {
+	if e.Seq < n.cut.Compact {
+		return
+	}
+	if e.Kind != KindCompact {
+		// The entry at the seq of the compaction that made this base is
+		// not one (applyRange): this log is not the one the base came from.
+		n.divergeLocked(e.Seq, fmt.Sprintf("its base came from a compaction at seq %d, this copy's entry there is a %q", e.Seq, e.Kind))
 		return
 	}
 	var b compactBody
 	if err := json.Unmarshal(e.Value, &b); err != nil || b.V != 1 {
 		n.divergeLocked(e.Seq, fmt.Sprintf("its body can't be read (version %d, %v)", b.V, err))
+		return
+	}
+	if e.Seq == n.cut.Compact {
+		// The K that made this copy's base: carried out here (its base came
+		// from it), or installed from another copy, which checked it against
+		// the K that came with the install. This one, in the log the
+		// leader replicates, must be that K too.
+		c := n.cut
+		if (b.Through != c.Through || b.ThroughTerm != c.ThroughTerm || b.Kept != len(c.Kept) || b.Digest != c.Digest) && !mutOplog("install_k_tail_unchecked") {
+			n.divergeLocked(e.Seq, fmt.Sprintf("the base here (through %d, %d kept, digest %.12s) is not the one it made (through %d, %d kept, digest %.12s)", c.Through, len(c.Kept), c.Digest, b.Through, b.Kept, b.Digest))
+		}
 		return
 	}
 	next, why := n.nextBaseLocked(e.Seq, b)

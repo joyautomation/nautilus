@@ -32,7 +32,10 @@ type simnet struct {
 	dropPush  [3]bool    // a replication to it that carries no entries (a heartbeat, a commit push) is lost
 	cutAfter  [3]int     // when > 0: it takes this many more requests, then goes down
 	cut       [3][3]bool // the link from i to j fails
-	late      sync.WaitGroup
+	// tamper, when set, sees (and may change) every request body on its
+	// way from i to j; path holds the query too.
+	tamper func(from, to int, path string, body []byte) []byte
+	late   sync.WaitGroup
 }
 
 // simDelay is longer than a fan-out's grace (lease/8, at most 50 ms) and
@@ -77,6 +80,7 @@ func (h hop) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 	}
 	hd := h.s.handlers[to]
+	tamper := h.s.tamper
 	h.s.mu.Unlock()
 	if r.Body != nil {
 		defer r.Body.Close()
@@ -94,6 +98,9 @@ func (h hop) RoundTrip(r *http.Request) (*http.Response, error) {
 	var body []byte
 	if r.Body != nil {
 		body, _ = io.ReadAll(r.Body)
+	}
+	if tamper != nil && !down && hd != nil {
+		body = tamper(h.from, to, r.URL.RequestURI(), body)
 	}
 	if dropPush && strings.HasSuffix(r.URL.Path, "/api/oplog/replicate") {
 		var q replicateReq

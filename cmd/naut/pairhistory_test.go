@@ -43,7 +43,7 @@ func TestASupersededControllerRestartsItselfOnlyUnderTheRule(t *testing.T) {
 		{"no supervisor", false, peer, true, false, false, "no supervisor"},
 		{"restarted once already", false, peer, true, true, true, "already restarted once"},
 	} {
-		got := supersedeRule(tc.leading, tc.pl, tc.heard, to, tc.supervised, tc.restartedForOne)
+		got := supersedeRule(tc.leading, tc.pl, tc.heard, to, tc.supervised, tc.restartedForOne, "a superseded log")
 		if tc.want == "" && got != "" || tc.want != "" && !strings.Contains(got, tc.want) {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}
