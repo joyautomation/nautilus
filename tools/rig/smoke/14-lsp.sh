@@ -534,11 +534,12 @@ yaml_rows() { # <file> <label> <bogus-from> <bogus-to> <anchor ERE for the entry
 }
 yaml_rows "$PROJ/tags/spare-tags.yaml" tags-yaml "init: 0.0" "inits: 0.0" '^- name: SpareFlag' name role type init unit desc
 yaml_rows "$PROJ/alarms/spare-alarms.yaml" alarms-yaml "priority: high" "priorty: high" \
-  '^- id: spare-low' id name match class
-# The suggest list is alphabetical and shows ~12 rows, so `tag` and `priority`
-# sit below the fold: filter by typing their prefixes instead.
+  '^- id: spare-low' id match class
+# The suggest list is alphabetical and shows ~12 rows, so `tag`, `priority` and
+# `name` sit below the fold (the alarm schema grew keys before them: #1240):
+# filter by typing their prefixes instead.
 A=$PROJ/alarms/spare-alarms.yaml
-for pre in "ta:tag" "prio:priority"; do
+for pre in "ta:tag" "prio:priority" "na:name"; do
   new_line_above "$A" '^- id: spare-low'
   rows=$(complete_with "- ${pre%%:*}")
   png=$(shot "alarms-yaml-complete-${pre#*:}")
