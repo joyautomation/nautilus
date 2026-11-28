@@ -311,3 +311,42 @@ END_PROGRAM
 		t.Errorf("got %+v", got)
 	}
 }
+
+// A block that reaches an instance through VAR_EXTERNAL, not a pin, writes
+// the instance itself: assigning a from: member there is refused on the
+// block's line, and so is passing it on to a block that assigns one. The
+// commands and memory stay the block's to set.
+func TestInstanceWritesThroughVarExternal(t *testing.T) {
+	src := `FUNCTION_BLOCK Reset
+  VAR_IN_OUT P : Pump; END_VAR
+  P.Running := FALSE;
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK Ext
+  VAR_EXTERNAL P101 : Pump; P102 : Pump; END_VAR
+  VAR r : Reset; END_VAR
+  P101.Cmd.Start := TRUE;
+  P101.RunHours := 0.0;
+  P101.Running := FALSE;
+  r(P := P102);
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR e : Ext; END_VAR
+  e();
+END_PROGRAM
+`
+	got := writes(t, src, pumpKinds)
+	if len(got) != 2 {
+		t.Fatalf("got %d refusals, want 2: %+v", len(got), got)
+	}
+	base := strings.Count(pumpTypes, "\n")
+	byInst := map[string]InstanceWrite{}
+	for _, w := range got {
+		byInst[w.Instance] = w
+	}
+	if w := byInst["P101"]; w.Member != "Running" || w.Kind != "from" || w.Block != "" || w.Pos.Line != base+10 {
+		t.Errorf("direct VAR_EXTERNAL write: %+v (want line %d)", w, base+10)
+	}
+	if w := byInst["P102"]; w.Member != "Running" || w.Block != "Reset" || w.Call != "Reset" || w.Pos.Line != base+11 {
+		t.Errorf("VAR_EXTERNAL passed to a block: %+v (want line %d)", w, base+11)
+	}
+}

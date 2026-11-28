@@ -177,3 +177,34 @@ func TestCheckNamesTheBlocksLineInTheSameFile(t *testing.T) {
 		t.Errorf("exit %d:\n%s", code, out)
 	}
 }
+
+// A library block that reaches an instance through VAR_EXTERNAL assigns it
+// itself, so the refusal is on the library's own line. It is said once
+// whichever files are named: the library's own check, or only the program
+// that composes it (`naut check main.st`), which used to pass silently.
+func TestCheckRefusesALibraryBlockAssigningAnExternalInstance(t *testing.T) {
+	lib := "FUNCTION_BLOCK Reset\n  VAR_EXTERNAL P101 : Pump; END_VAR\n  P101.Start := TRUE;\n  P101.Running := FALSE;\nEND_FUNCTION_BLOCK\n"
+	main := "PROGRAM main\nVAR r : Reset; END_VAR\nr();\nEND_PROGRAM\n"
+	files := checkWriteFiles("main.st", main, map[string]string{"lib/reset.st": lib})
+	dir := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := "reset.st:4:3: error: P101.Running is read from the device (from:), so the program cannot assign it"
+	for name, args := range map[string][]string{
+		"the project":   {dir},
+		"main.st alone": {filepath.Join(dir, "main.st")},
+		"both files":    {filepath.Join(dir, "main.st"), filepath.Join(dir, "lib", "reset.st")},
+	} {
+		out, code := capture(t, func() int { return runCheck(args) })
+		if code != 1 || strings.Count(out, want) != 1 || strings.Count(out, "error:") != 1 {
+			t.Errorf("%s: exit %d, want %q once and no other error:\n%s", name, code, want, out)
+		}
+	}
+}
