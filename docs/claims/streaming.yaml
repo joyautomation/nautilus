@@ -102,11 +102,14 @@ claims:
 
   - id: STR-012
     claim: >-
-      A delta frame is about 51x, 17x and 4.8x smaller than a full frame at 1
-      percent, 5 percent and 20 percent churn on 10,000 tags.
+      Measured on 10,000 plant-shaped tag names, with the scan diagnostics
+      included in both frames: a delta frame is about 51x, 17x and 4.8x
+      smaller than a full frame at 1 percent, 5 percent and 20 percent churn.
     source: "#what-it-costs"
     tests: []
-    note: Measured by a benchmark (FrameBytes), not asserted by any test; the ratios are not CI-checked.
+    note: >-
+      A benchmark figure (FrameBytes) the page reports as measured; the ratios
+      are not asserted by a test and not CI-checked.
 
   - id: STR-013
     claim: >-
@@ -187,12 +190,15 @@ claims:
 
   - id: STR-020
     claim: >-
-      A frame floor of 4.3 MB a minute drops to about 0.15 MB (about 28x
-      less) for a client subscribed to no tags against a 55-node driver
-      status.
+      Measured against a 55-node driver status with a resync every 30 s and
+      one edge node dropping mid-minute: a frame floor of 4.3 MB a minute
+      drops to about 0.15 MB (about 28x less) for a client subscribed to no
+      tags.
     source: "#what-the-floor-costs-now"
     tests: []
-    note: Benchmark figure (FrameFloor); not asserted by a test.
+    note: >-
+      A benchmark figure (FrameFloor) the page reports as measured; not
+      asserted by a test.
 
   - id: STR-021
     claim: >-

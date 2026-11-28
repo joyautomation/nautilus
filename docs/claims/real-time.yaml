@@ -152,13 +152,15 @@ claims:
 
   - id: RT-015
     claim: >-
-      A 1 ms task alone runs every scan with p99 lateness around 30 to 55 µs
-      on a busy desktop with a stock kernel, and a 20 ms task beside it
-      changes nothing it can see.
+      Measured on a busy desktop with a stock kernel: a 1 ms task alone runs
+      every scan with p99 lateness around 30 to 55 µs, and a 20 ms task beside
+      it changes nothing it can see.
     source: "#what-the-runtime-does"
     tests: []
     partial: true
-    note: Hardware-dependent latency figure measured with tools/jitter and docs/design/realtime.md; not CI-testable.
+    note: >-
+      A measurement the page reports as one, not a guarantee: it depends on
+      the machine and its load. Not CI-testable, so no test backs it.
 
   - id: RT-016
     claim: A task's cpu setting pins its thread to that core (Linux).
@@ -205,13 +207,15 @@ claims:
 
   - id: RT-020
     claim: >-
-      SCHED_FIFO priority reduces p99 lateness from 55 µs to 20 µs and the
-      worst case from 2.3 ms to 0.3 ms on the busy desktop; cpu alone worsens
-      p99 to 300 to 400 µs.
+      Measured on the same busy desktop: SCHED_FIFO priority reduces p99
+      lateness from 55 µs to 20 µs and the worst case from 2.3 ms to 0.3 ms;
+      cpu alone worsens p99 to 300 to 400 µs.
     source: "#priority-and-pinning"
     tests: []
     partial: true
-    note: Hardware and load dependent measurement; not CI-testable.
+    note: >-
+      A measurement the page reports as one, not a guarantee: it depends on
+      the machine and its load. Not CI-testable, so no test backs it.
 
   - id: RT-021
     claim: >-
@@ -233,13 +237,15 @@ claims:
 
   - id: RT-023
     claim: >-
-      With GOGC=off and a memory limit, GC collections drop from 448 a minute
-      with a 2.1 ms worst pause to 12 with an 82 µs worst pause under 50 MB/s
-      of allocation elsewhere.
+      Measured with 50 MB/s of allocation from elsewhere in the process: with
+      GOGC=off and a memory limit, GC collections drop from 448 a minute with
+      a 2.1 ms worst pause to 12 with an 82 µs worst pause.
     source: "#the-garbage-collector"
     tests: []
     partial: true
-    note: Hardware and workload dependent measurement; not CI-testable.
+    note: >-
+      A measurement the page reports as one, not a guarantee: it depends on
+      the machine and its load. Not CI-testable, so no test backs it.
 
   - id: RT-024
     claim: >-

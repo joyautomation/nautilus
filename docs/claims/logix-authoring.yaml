@@ -520,14 +520,17 @@ claims:
 
   - id: LGA-026
     claim: >-
-      On a corpus of 52 real production exports, 97.9% of rungs import, 81%
-      of ladder routines import whole, and most complete routines write back
-      identically or equivalently.
+      Measured on a private corpus of 52 real production exports: 98.3% of
+      rungs import, 83% of ladder routines import whole, and most complete
+      routines write back identically or equivalently.
     source: "#bringing-an-existing-program-in"
     tests:
       - go ./logix/importer TestCorpus
     partial: true
-    note: The corpus is private (NAUTILUS_L5X_CORPUS), so the test skips in CI; the figure is not independently checkable.
+    note: >-
+      A private measurement, not independently checkable: the corpus is not
+      public (NAUTILUS_L5X_CORPUS), so the test skips in CI and no CI run
+      reproduces the figures.
 
   - id: LGA-027
     claim: >-

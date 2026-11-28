@@ -217,8 +217,8 @@ claims:
       The dashboard REFUSED label itself is not asserted.
   - id: TASK-017
     claim: >-
-      Pinning alone on a stock kernel makes a fast task worse; it should be
-      used together with an isolated core or a real-time priority.
+      Measured: pinning alone on a stock kernel makes a fast task worse, so
+      pin only together with an isolated core or a real-time priority.
     source: "#more-than-one-program-tasks"
     tests: []
     note: >-
