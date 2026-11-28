@@ -64,9 +64,36 @@ func (l *lockedNS) SetID(id uint16) {
 }
 
 func (l *lockedNS) Attribute(id *ua.NodeID, attr ua.AttributeID) *ua.DataValue {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	if attr == ua.AttributeIDNodeClass {
+		// The library rewrites this stored value in place on every read.
+		l.mu.Lock()
+		defer l.mu.Unlock()
+	} else {
+		l.mu.RLock()
+		defer l.mu.RUnlock()
+	}
 	return l.NodeNameSpace.Attribute(id, attr)
+}
+
+// setValue replaces a node's value under the lock and tells nobody: for a
+// test service handler that answers a Write itself (fence_test.go) and would
+// otherwise reach the node around the lock.
+func setValue(srv *server.Server, id *ua.NodeID, v *ua.DataValue) {
+	ns, err := srv.Namespace(int(id.Namespace()))
+	if err != nil {
+		return
+	}
+	l, ok := ns.(*lockedNS)
+	if !ok {
+		return
+	}
+	n := l.NodeNameSpace.Node(id)
+	if n == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_ = n.SetAttribute(ua.AttributeIDValue, v)
 }
 
 // SetAttribute is NodeNameSpace's, with only the node's own write under the
