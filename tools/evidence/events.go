@@ -48,10 +48,11 @@ type Results struct {
 	Go   map[string]map[string]Status // package dir ("./modbus") → test path → status
 	Pkg  map[string]Status            // package dir → package outcome
 	Naut map[string]map[string]Status // project root → test name → status
+	Npm  map[string]map[string]Status // package dir → "describe / it" → status
 }
 
 func newResults() *Results {
-	return &Results{Go: map[string]map[string]Status{}, Pkg: map[string]Status{}, Naut: map[string]map[string]Status{}}
+	return &Results{Go: map[string]map[string]Status{}, Pkg: map[string]Status{}, Naut: map[string]map[string]Status{}, Npm: map[string]map[string]Status{}}
 }
 
 // pkgDir turns an import path into the ./dir form claims use.
@@ -153,7 +154,7 @@ func (r *Results) readDir(dir string) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		if !strings.HasSuffix(p, ".json") && !strings.HasSuffix(p, ".ndjson") || d.Name() == releaseRunFile {
+		if !strings.HasSuffix(p, ".json") && !strings.HasSuffix(p, ".ndjson") && !(strings.HasSuffix(p, ".txt") && strings.HasPrefix(d.Name(), "npm-")) || d.Name() == releaseRunFile {
 			return nil
 		}
 		f, err := os.Open(p)
@@ -161,7 +162,9 @@ func (r *Results) readDir(dir string) error {
 			return err
 		}
 		defer f.Close()
-		if strings.HasPrefix(filepath.Base(p), "naut") {
+		if strings.HasPrefix(filepath.Base(p), "npm-") && strings.HasSuffix(p, ".txt") {
+			err = r.readNpmText(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "npm-"), ".txt"), f)
+		} else if strings.HasPrefix(filepath.Base(p), "naut") {
 			err = r.readNautJSON(f)
 		} else {
 			err = r.readGoJSON(f)
@@ -200,7 +203,11 @@ func (r *Results) lookup(ref Ref) RefResult {
 			out.Skipped++
 		}
 	}
-	if ref.Kind == "naut" {
+	if ref.Kind == "npm" {
+		if s, ok := r.Npm[ref.Dir][ref.Test]; ok {
+			count(s)
+		}
+	} else if ref.Kind == "naut" {
 		if s, ok := r.Naut[ref.Dir][ref.Test]; ok {
 			count(s)
 		}
@@ -284,4 +291,36 @@ func (r *Results) packages(cov map[string][2]int) []PackageStat {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out
+}
+
+// readNpmText reads the output of a package's `npm test` (the kit's
+// harness, hmi/tests/harness.ts): an unindented line names a describe,
+// "  ok   <it>" and "  FAIL <it>" are its results. dir is the package dir,
+// from the file name npm-<dir>.txt.
+func (r *Results) readNpmText(dir string, rd io.Reader) error {
+	sc := bufio.NewScanner(rd)
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	desc := ""
+	for sc.Scan() {
+		line := sc.Text()
+		var st Status
+		var name string
+		switch {
+		case strings.HasPrefix(line, "  ok   "):
+			st, name = Pass, strings.TrimPrefix(line, "  ok   ")
+		case strings.HasPrefix(line, "  FAIL "):
+			st, name = Fail, strings.TrimPrefix(line, "  FAIL ")
+		case line != "" && line[0] != ' ' && line[0] != '>' && !strings.HasPrefix(line, "npm "):
+			desc = line
+			continue
+		default:
+			continue
+		}
+		if r.Npm[dir] == nil {
+			r.Npm[dir] = map[string]Status{}
+		}
+		key := desc + " / " + name
+		r.Npm[dir][key] = merge(r.Npm[dir][key], st)
+	}
+	return sc.Err()
 }

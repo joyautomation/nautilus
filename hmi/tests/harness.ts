@@ -28,15 +28,38 @@ let failures = 0;
 let ran = 0;
 let pending = 0;
 
+// The describe a result belongs to. A result printed under another
+// describe's line (an async spec settles after every describe has printed,
+// a nested describe returns to its outer one) first repeats its own
+// describe's line, so tools/evidence, which files each result under the
+// last unindented line, reads it right.
+let current = '';
+let printed = '';
+
 export function describe(name: string, fn: () => void): void {
+	const outer = current;
+	current = name;
+	printed = name;
 	console.log(name);
-	fn();
+	try {
+		fn();
+	} finally {
+		current = outer;
+	}
 }
 
-function pass(name: string) {
+function under(d: string) {
+	if (d !== printed) {
+		printed = d;
+		console.log(d);
+	}
+}
+function pass(name: string, d: string) {
+	under(d);
 	console.log(`  ok   ${name}`);
 }
-function fail(name: string, e: unknown) {
+function fail(name: string, e: unknown, d: string) {
+	under(d);
 	failures++;
 	console.log(`  FAIL ${name}\n       ${(e as Error)?.message ?? String(e)}`);
 }
@@ -50,6 +73,7 @@ function fail(name: string, e: unknown) {
  */
 export function it(name: string, fn: Fn): void {
 	ran++;
+	const d = current;
 	try {
 		const r = fn();
 		if (r && typeof (r as Promise<void>).then === 'function') {
@@ -57,18 +81,18 @@ export function it(name: string, fn: Fn): void {
 			(r as Promise<void>).then(
 				() => {
 					pending--;
-					pass(name);
+					pass(name, d);
 				},
 				(e) => {
 					pending--;
-					fail(name, e);
+					fail(name, e, d);
 				}
 			);
 			return;
 		}
-		pass(name);
+		pass(name, d);
 	} catch (e) {
-		fail(name, e);
+		fail(name, e, d);
 	}
 }
 

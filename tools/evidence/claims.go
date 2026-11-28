@@ -39,8 +39,9 @@ type Claim struct {
 //
 //	go <package dir> <TestName>[/<subtest>...]
 //	naut <project root> <test name>
+//	npm <package dir> <describe> / <it>
 type Ref struct {
-	Kind string // "go" or "naut"
+	Kind string // "go", "naut" or "npm"
 	Dir  string // package dir ("./modbus") or project root ("examples/lift-station")
 	Test string // test path as written
 	Raw  string
@@ -49,8 +50,8 @@ type Ref struct {
 func parseRef(s string) (Ref, error) {
 	s = strings.TrimSpace(s)
 	kind, rest, ok := strings.Cut(s, " ")
-	if !ok || (kind != "go" && kind != "naut") {
-		return Ref{}, fmt.Errorf("%q: a test reference starts with `go ` or `naut `", s)
+	if !ok || (kind != "go" && kind != "naut" && kind != "npm") {
+		return Ref{}, fmt.Errorf("%q: a test reference starts with `go `, `naut ` or `npm `", s)
 	}
 	dir, test, ok := strings.Cut(strings.TrimSpace(rest), " ")
 	test = strings.TrimSpace(test)
@@ -213,6 +214,10 @@ func (c *checker) checkRef(at string, r Ref) {
 		c.errorf("%s: %s: no directory %s", at, r.Raw, r.Dir)
 		return
 	}
+	if r.Kind == "npm" {
+		c.checkNpm(at, r)
+		return
+	}
 	if r.Kind == "naut" {
 		names := c.suiteNames(r.Dir)
 		if names == nil {
@@ -263,4 +268,37 @@ func checkClaims(root string, files []ClaimFile) []string {
 	c := &checker{root: root, funcs: map[string]map[string]bool{}, suite: map[string]map[string]bool{}}
 	c.check(files)
 	return c.errs
+}
+
+// checkNpm holds an npm reference to the package's test sources: the
+// describe and the it must both appear as string literals in one
+// <dir>/tests/*.test.ts.
+func (c *checker) checkNpm(at string, r Ref) {
+	desc, it, ok := strings.Cut(r.Test, " / ")
+	if !ok {
+		c.errorf("%s: %s: an npm test is `<describe> / <it>`", at, r.Raw)
+		return
+	}
+	paths, _ := filepath.Glob(filepath.Join(c.root, r.Dir, "tests", "*.test.ts"))
+	if len(paths) == 0 {
+		c.errorf("%s: %s: %s/tests has no *.test.ts", at, r.Raw, r.Dir)
+		return
+	}
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err == nil && hasLiteral(string(b), desc) && hasLiteral(string(b), it) {
+			return
+		}
+	}
+	c.errorf("%s: %s: no file in %s/tests names both %q and %q", at, r.Raw, r.Dir, desc, it)
+}
+
+// hasLiteral reports whether name appears quoted (”, "" or backticks).
+func hasLiteral(src, name string) bool {
+	for _, q := range []string{"'", `"`, "`"} {
+		if strings.Contains(src, q+name+q) || strings.Contains(src, q+strings.ReplaceAll(name, q, `\`+q)+q) {
+			return true
+		}
+	}
+	return false
 }
