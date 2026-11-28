@@ -24,6 +24,8 @@ type FBInstance struct {
 	// frame is the body's execution frame over Slots, kept across steps so
 	// its scratch stack (see Frame) warms up once. See StepFrame.
 	frame *Frame
+	// inout is reused call to call for the in-out record (inout.go).
+	inout *inOutRec
 }
 
 // StepFrame returns the frame a user-defined FB's body runs in: a view over

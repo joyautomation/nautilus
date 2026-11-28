@@ -182,6 +182,9 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 				return fmt.Errorf("FOR %s: %d is outside %s (%d..%d)", n.Var, i, n.Type, n.Lo, n.Hi)
 			}
 			ctx.Frame.Slots[n.Slot] = IntVal(i)
+			if s := ctx.Frame.inout.slotRec(n.Slot); s != nil {
+				s.mark(MemberPath{}, false) // a FOR counter: the pin whole
+			}
 			if err := execBlock(ctx, n.Body); err != nil {
 				return err
 			}
@@ -207,6 +210,9 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 			i = n.Wrap.Apply(i)
 		}
 		ctx.Frame.Slots[n.Slot] = IntVal(i)
+		if s := ctx.Frame.inout.slotRec(n.Slot); s != nil {
+			s.mark(MemberPath{}, false)
+		}
 		return nil
 
 	case *While:
@@ -336,12 +342,41 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 			inst.Slots[in.SlotIdx] = CopyValue(coerceValue(v, n.Def.Slot(in.SlotIdx).Type))
 		}
 		stepCtx := FBStepCtx{NowMs: ctx.Host.NowMs(), Host: ctx.Host}
-		if err := n.Def.Step(inst, stepCtx); err != nil {
+		// A user block's body records what it assigns into its in-out
+		// pins, so the copy-back can say exactly that (inout.go). A
+		// built-in's pins are written in Go, out of the VM's sight, and
+		// keep the whole copy-back.
+		var rec *inOutRec
+		var frame *Frame
+		if n.Def.Body != nil && len(n.Def.InOuts) > 0 {
+			if live := inst.StepFrame().inout; live != nil {
+				// An instance already being stepped, re-entered: its copy-in
+				// replaces the outer call's pins, so the outer call takes
+				// them whole, and this call is not recorded (the old rule).
+				for i := range live.slots {
+					live.slots[i].all, live.slots[i].paths = true, live.slots[i].paths[:0]
+				}
+			} else if rec = inst.startInOut(n.Def); rec != nil {
+				frame = inst.StepFrame()
+				frame.inout = rec
+			}
+		}
+		err := n.Def.Step(inst, stepCtx)
+		if frame != nil {
+			frame.inout = nil
+		}
+		if err != nil {
 			return err
 		}
 		for _, out := range n.Outputs {
 			if out.SlotIdx < 0 || out.SlotIdx >= len(inst.Slots) {
 				return fmt.Errorf("FB output slot %d out of range", out.SlotIdx)
+			}
+			if rec != nil && n.Def.IsInOut(out.SlotIdx) {
+				if err := copyBack(ctx, out.Target, inst.Slots[out.SlotIdx], rec.slotRec(out.SlotIdx)); err != nil {
+					return err
+				}
+				continue
 			}
 			if err := writeLValue(ctx, out.Target, inst.Slots[out.SlotIdx]); err != nil {
 				return err
@@ -408,35 +443,14 @@ func writeLValueBits(ctx *EvalCtx, lv LValue, v Value, bits uint64) error {
 	for {
 		switch n := cur.(type) {
 		case *SlotRef:
+			if s := ctx.Frame.inout.slotRec(n.Slot); s != nil {
+				p, ok := memberPath(chain)
+				p.bits = bits
+				s.mark(p, ok)
+			}
 			return storeAtRoot(&ctx.Frame.Slots[n.Slot], chain, v)
 		case *GlobalRef:
-			if len(chain) == 0 {
-				if bits != 0 {
-					if mw, ok := ctx.Host.(MemberWriter); ok {
-						return mw.WriteGlobalMember(n.Name, v, MemberPath{bits: bits})
-					}
-				}
-				return ctx.Host.WriteGlobal(n.Name, CopyValue(v))
-			}
-			// Reaching into a field/element of a global: the tag store holds
-			// the whole aggregate, so read-modify-write it. This is the same
-			// thing a program used to have to spell out by hand ("copy →
-			// mutate the local → assign the whole struct back").
-			cur, err := ctx.Host.ReadGlobal(n.Name)
-			if err != nil {
-				return err
-			}
-			cur = CopyValue(coerceValue(cur, n.T))
-			if err := storeAtRoot(&cur, chain, v); err != nil {
-				return fmt.Errorf("assign to %s: %w", n.Name, err)
-			}
-			if mw, ok := ctx.Host.(MemberWriter); ok {
-				if p, ok := memberPath(chain); ok {
-					p.bits = bits
-					return mw.WriteGlobalMember(n.Name, cur, p)
-				}
-			}
-			return ctx.Host.WriteGlobal(n.Name, cur)
+			return writeGlobalChain(ctx, n, chain, v, bits)
 		case *IndexRef:
 			iv, err := evalExpr(ctx, n.Index)
 			if err != nil {
@@ -459,6 +473,38 @@ func writeLValueBits(ctx *EvalCtx, lv LValue, v Value, bits uint64) error {
 			return fmt.Errorf("unknown lvalue %T", lv)
 		}
 	}
+}
+
+// writeGlobalChain stores v at chain (leaf first) inside global n, of which
+// only bits were assigned (0: all of it).
+func writeGlobalChain(ctx *EvalCtx, n *GlobalRef, chain []accessor, v Value, bits uint64) error {
+	if len(chain) == 0 {
+		if bits != 0 {
+			if mw, ok := ctx.Host.(MemberWriter); ok {
+				return mw.WriteGlobalMember(n.Name, v, MemberPath{bits: bits})
+			}
+		}
+		return ctx.Host.WriteGlobal(n.Name, CopyValue(v))
+	}
+	// Reaching into a field/element of a global: the tag store holds the
+	// whole aggregate, so read-modify-write it. This is the same thing a
+	// program used to have to spell out by hand ("copy → mutate the local →
+	// assign the whole struct back").
+	cur, err := ctx.Host.ReadGlobal(n.Name)
+	if err != nil {
+		return err
+	}
+	cur = CopyValue(coerceValue(cur, n.T))
+	if err := storeAtRoot(&cur, chain, v); err != nil {
+		return fmt.Errorf("assign to %s: %w", n.Name, err)
+	}
+	if mw, ok := ctx.Host.(MemberWriter); ok {
+		if p, ok := memberPath(chain); ok {
+			p.bits = bits
+			return mw.WriteGlobalMember(n.Name, cur, p)
+		}
+	}
+	return ctx.Host.WriteGlobal(n.Name, cur)
 }
 
 // storeAtRoot walks the chain (built leaf-first) in reverse so we traverse

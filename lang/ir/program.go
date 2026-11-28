@@ -138,6 +138,9 @@ type Frame struct {
 	// the builtin, and pops. It grows to the deepest call nesting once and
 	// is never reallocated after, so a scan makes no allocation per call.
 	scratch []Value
+	// inout is the record of what this frame's body assigns into its
+	// VAR_IN_OUT slots, while a call steps it (inout.go); nil otherwise.
+	inout *inOutRec
 }
 
 // NewFuncFrame allocates a fresh per-call frame for a user FUNCTION,
