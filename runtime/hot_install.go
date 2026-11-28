@@ -180,7 +180,7 @@ func (r *Runtime) hotTakeover(h *HotImage, why string, had bool) bool {
 		cs := r.carried
 		for i, ok := range h.tags.have {
 			if ok {
-				_ = r.tags.WriteGlobal(cs.keys[i], h.tags.vals[i])
+				r.tags.installCarried(cs.keys[i], h.tags.vals[i])
 			}
 		}
 	}

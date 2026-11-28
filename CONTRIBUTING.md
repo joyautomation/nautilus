@@ -73,6 +73,9 @@ its Go packages. For those who do (the `sdk` templates of `naut new`, and
 `examples/go-sdk`), only this much is a supported Go API:
 
 - **Stable packages:** `io`, `runtime`, `server` and `acceptance`.
+  A name whose doc comment says **Experimental** is the exception: it may
+  change in any release until the feature it belongs to is complete (the
+  hot-takeover `Image` family, struct wiring's `InstanceTag`).
 - **Stable interfaces** in packages that are otherwise internal:
   `retain.Store`, `hist.Sink`, `alarm.Journal` and `alarm.Notifier`, plus
   the types their methods take and return (`retain.State`,

@@ -121,7 +121,7 @@ type hotRig struct {
 	flush func() (*HotImage, error)
 }
 
-func newHotRig(t *testing.T, leadMain, stbyMain string) *hotRig {
+func newHotRig(t *testing.T, leadMain, stbyMain string, mods ...func(*Options)) *hotRig {
 	t.Helper()
 	r := &hotRig{
 		lc:    &imgClock{t: time.Unix(1_700_000_000, 0)},
@@ -130,10 +130,16 @@ func newHotRig(t *testing.T, leadMain, stbyMain string) *hotRig {
 		store: &failStore{},
 	}
 	var err error
-	if r.lead, err = New(hotOptions(r.lc, leadMain, &memStore{}, nil)); err != nil {
+	opts := func(o Options) Options {
+		for _, m := range mods {
+			m(&o)
+		}
+		return o
+	}
+	if r.lead, err = New(opts(hotOptions(r.lc, leadMain, &memStore{}, nil))); err != nil {
 		t.Fatal(err)
 	}
-	if r.stby, err = New(hotOptions(r.sc, stbyMain, r.store, r.coord)); err != nil {
+	if r.stby, err = New(opts(hotOptions(r.sc, stbyMain, r.store, r.coord))); err != nil {
 		t.Fatal(err)
 	}
 	r.sh = r.stby.NewShadow()

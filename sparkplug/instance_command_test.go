@@ -19,7 +19,7 @@ func TestCommandToAnInstanceFollowsMemberKinds(t *testing.T) {
 		Program:   "PROGRAM Main\nVAR_EXTERNAL P101 : Pump; END_VAR\nEND_PROGRAM",
 		Libraries: []string{"TYPE Pump : STRUCT Speed : REAL; RunHours : REAL; END_STRUCT; END_TYPE"},
 		Driver:    nio.NewMemory(), Scan: 50 * time.Millisecond,
-		Tags: []runtime.TagDef{runtime.Instance("P101", "Pump", runtime.InstanceDef{Members: map[string]runtime.MemberDef{
+		Tags: []runtime.TagDef{runtime.InstanceTag("P101", "Pump", runtime.InstanceDef{Members: map[string]runtime.MemberDef{
 			"Speed": {Kind: runtime.MemberFrom},
 		}})},
 	})
