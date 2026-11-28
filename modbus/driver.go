@@ -288,9 +288,11 @@ type source struct {
 	lastErr  error
 	retries  uint64
 	excs     uint64
-	rttMs    float64 // EWMA of request round-trip
-	enabled  bool
-	held     bool // ReplaceOptions.Held: never started, its tags Bad
+	// dropped counts the event commands dropped at a reconnect (Event).
+	dropped uint64
+	rttMs   float64 // EWMA of request round-trip
+	enabled bool
+	held    bool // ReplaceOptions.Held: never started, its tags Bad
 
 	// pending is the last-value write queue (tag name → desired value),
 	// held across disconnects and flushed on reconnect. written is the last
@@ -1528,6 +1530,19 @@ func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
 	open := d.gateOpen()
 	now := time.Now()
 	s.mu.Lock()
+	// An event command still queued here was written while the device was
+	// unreachable (or its flush broke with the link): it is a trigger, and
+	// one sent now would fire late, so it is dropped, said and counted. Its
+	// written value stays, so a re-push of the same value is no change and
+	// only the binding's next change goes out.
+	for _, name := range sortedPending(s) {
+		if bs, ok := s.byName[name]; ok && bs.b.Event {
+			delete(s.pending, name)
+			s.dropped++
+			d.log.Warn("modbus: event command dropped: it was written while the device was offline, and a trigger is never sent late",
+				"source", s.cfg.ID, "tag", name)
+		}
+	}
 	for _, rw := range s.rewrites {
 		if v, ok := s.written[rw.name]; ok && open {
 			s.pending[rw.name] = v // re-assert after an outage, on the spot
@@ -2429,4 +2444,15 @@ func (d *Driver) Manifest() Manifest {
 	d.srcMu.RLock()
 	defer d.srcMu.RUnlock()
 	return d.manifest
+}
+
+// sortedPending is a source's queued command names in order, so what a
+// reconnect drops is logged in a stable order. Caller holds s.mu.
+func sortedPending(s *source) []string {
+	out := make([]string, 0, len(s.pending))
+	for n := range s.pending {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }

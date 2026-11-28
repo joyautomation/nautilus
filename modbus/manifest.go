@@ -118,6 +118,12 @@ type TagBinding struct {
 	// a writable binding is also polled, and the read-back is the source of
 	// truth after a restart.
 	WriteOnly bool
+	// Event marks a command that is a trigger, not a level (a struct-wiring
+	// `event: true` member, #1458): one written while its source is offline
+	// is dropped when the source reconnects, never sent late, and the drop
+	// is logged and counted (SourceHealth.DroppedEvents). A level command
+	// queued meanwhile goes out on the reconnect, as ever.
+	Event bool
 }
 
 // ── YAML ─────────────────────────────────────────────────────────────────
@@ -223,6 +229,7 @@ type tagYAML struct {
 	Rewrite   duration
 	ScanClass string
 	WriteOnly bool
+	Event     bool
 }
 
 func (t *TagBinding) UnmarshalYAML(node *yaml.Node) error {
@@ -234,7 +241,7 @@ func (t *TagBinding) UnmarshalYAML(node *yaml.Node) error {
 		Name: r.Name, Source: r.Source, Table: r.Table, Address: r.Address,
 		Format: r.Format, Scale: r.Scale, Offset: r.Offset,
 		Writable: r.Writable, Rewrite: time.Duration(r.Rewrite),
-		ScanClass: r.ScanClass, WriteOnly: r.WriteOnly,
+		ScanClass: r.ScanClass, WriteOnly: r.WriteOnly, Event: r.Event,
 	}
 	return nil
 }
@@ -244,7 +251,7 @@ func (t TagBinding) MarshalYAML() (any, error) {
 		Name: t.Name, Source: t.Source, Table: t.Table, Address: t.Address,
 		Format: t.Format, Scale: t.Scale, Offset: t.Offset,
 		Writable: t.Writable, Rewrite: duration(t.Rewrite),
-		ScanClass: t.ScanClass, WriteOnly: t.WriteOnly,
+		ScanClass: t.ScanClass, WriteOnly: t.WriteOnly, Event: t.Event,
 	}, nil
 }
 
@@ -377,6 +384,12 @@ func (m Manifest) Validate() error {
 		}
 		if !t.Writable && t.WriteOnly {
 			errs = append(errs, fmt.Errorf("tag %s: writeonly without writable", t.Name))
+		}
+		if !t.Writable && t.Event {
+			errs = append(errs, fmt.Errorf("tag %s: event without writable (event marks a command that is a trigger)", t.Name))
+		}
+		if t.Event && t.Rewrite > 0 {
+			errs = append(errs, fmt.Errorf("tag %s: event and rewrite: an event command is never sent twice, and rewrite re-sends it every period; give it one or the other", t.Name))
 		}
 		if int(t.Address)+f.Words() > 0x10000 {
 			errs = append(errs, fmt.Errorf("tag %s: address %d + %d registers exceeds the 16-bit address space", t.Name, t.Address, f.Words()))

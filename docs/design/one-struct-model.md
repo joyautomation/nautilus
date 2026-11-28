@@ -250,7 +250,10 @@ later change of value goes out. Assigning the same value again does not
 count here, although the tag model counts it as a write elsewhere:
 `PumpCtl` (§2.4) assigns `Cmd.Start` on every call, and a held TRUE must
 not go out again after a reopen. That is the `dropAndRebaseline` rule,
-applied per member on any driver, and it is a slice 4 test. A profile
+applied per member on any driver, and it is a slice 4 test. An event leaf
+written while its connection is down is not delivered late on the
+reconnect either: the driver drops it, logs it once and counts it (Modbus
+`TagBinding.Event`, `droppedEvents`; naut-lead's ruling during slice 9). A profile
 point may declare `event: true` too, and its generated `Cmd` member
 inherits it. (Q22)
 

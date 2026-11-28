@@ -742,6 +742,31 @@ func TestModbusStatus(t *testing.T) {
 	if !found {
 		t.Fatal("queued writes gauge missing")
 	}
+
+	// Event commands dropped at a reconnect (never sent late) are counted
+	// across the sources, and named per source in Extra.
+	h = modbus.Health{Sources: []modbus.SourceHealth{
+		{ID: "A", State: "connected", DroppedEvents: 2},
+		{ID: "B", State: "connected", DroppedEvents: 1},
+	}}
+	s = modbusStatus(h)
+	found = false
+	for _, m := range s.Metrics {
+		if m.Label == "late commands dropped" && m.Value == 3 && !m.Volatile {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the dropped late commands metric is missing: %+v", s.Metrics)
+	}
+	if rows, _ := s.Extra["sources"].([]modbusSourceRow); len(rows) != 2 || rows[0].DroppedEvents != 2 {
+		t.Fatalf("per-source dropped count missing from Extra: %+v", s.Extra["sources"])
+	}
+	for _, m := range modbusStatus(modbus.Health{Sources: []modbus.SourceHealth{{ID: "A", State: "connected"}}}).Metrics {
+		if m.Label == "late commands dropped" {
+			t.Fatal("no drop, no metric")
+		}
+	}
 }
 
 // opcua: the section's presence turns the server on; its endpoint is

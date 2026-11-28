@@ -87,7 +87,10 @@ is sent again (a level). On top of that:
   its commands on its first scan, so they go out as before.
 - **`event: true`** marks a command that must never be sent twice (a reset,
   a pulse): its first value after a start, a takeover or a gate that
-  reopened is a baseline, and only a later change goes out.
+  reopened is a baseline, and only a later change goes out. One assigned
+  while its device is unreachable is not sent late when the device answers
+  again: the driver drops it, logs it and counts it (Modbus:
+  `droppedEvents` on the device row).
 - **`readback: <member>`** names the `from:` member that shows what the
   device did. A command of the same type that nothing has written yet takes
   the read-back's value when it first arrives. That is no command; it only
