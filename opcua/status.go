@@ -30,10 +30,14 @@ type Health struct {
 	MaxNodes  int     `json:"maxNodes"`         // nodes per request in use
 	// QueuedWrites is how many commands are parked RIGHT NOW, waiting for
 	// a reconnect — a gauge that clears itself when the session comes back.
-	QueuedWrites int    `json:"queuedWrites"`
-	Reads        uint64 `json:"reads"`
-	Writes       uint64 `json:"writes"`
-	Errors       uint64 `json:"errors"`
+	QueuedWrites int `json:"queuedWrites"`
+	// DroppedEvents counts, since the driver started, the event commands
+	// (TagBinding.Event) raised while the session was down and dropped at
+	// its reconnect rather than sent late. It moves only at a reconnect.
+	DroppedEvents uint64 `json:"droppedEvents"`
+	Reads         uint64 `json:"reads"`
+	Writes        uint64 `json:"writes"`
+	Errors        uint64 `json:"errors"`
 	// ReadMode is poll or subscribe. With subscribe, Subscriptions is how
 	// many the server granted on this session, Notifications counts the
 	// data change notifications received, and RevisedMs is each scan
@@ -54,22 +58,23 @@ func (d *Driver) Health() Health {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	h := Health{
-		Name:         d.name,
-		Endpoint:     d.endpoint,
-		State:        d.state,
-		SinceMs:      d.sinceMs,
-		Policy:       d.server.policy,
-		Mode:         d.server.mode,
-		Retries:      d.retries,
-		RTTMs:        d.rttMs,
-		Tags:         len(d.inputs) - 1,
-		Classes:      len(d.classes),
-		MaxNodes:     d.server.maxNodes,
-		QueuedWrites: len(d.pending),
-		Reads:        d.reads.Load(),
-		Writes:       d.writes.Load(),
-		Errors:       d.errs.Load(),
-		ReadMode:     d.readMode,
+		Name:          d.name,
+		Endpoint:      d.endpoint,
+		State:         d.state,
+		SinceMs:       d.sinceMs,
+		Policy:        d.server.policy,
+		Mode:          d.server.mode,
+		Retries:       d.retries,
+		RTTMs:         d.rttMs,
+		Tags:          len(d.inputs) - 1,
+		Classes:       len(d.classes),
+		MaxNodes:      d.server.maxNodes,
+		QueuedWrites:  len(d.pending),
+		DroppedEvents: d.droppedEvents,
+		Reads:         d.reads.Load(),
+		Writes:        d.writes.Load(),
+		Errors:        d.errs.Load(),
+		ReadMode:      d.readMode,
 	}
 	if d.readMode == ReadModeSubscribe {
 		h.Subscriptions = d.server.subscriptions

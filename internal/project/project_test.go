@@ -12,6 +12,7 @@ import (
 
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/sparkplug"
 	sphost "github.com/joyautomation/nautilus/sparkplug/host"
@@ -902,5 +903,24 @@ func TestSparkplugStatusRowNamesHeldDevices(t *testing.T) {
 	}
 	if row != "RTU53" {
 		t.Errorf("devices held row %q, want RTU53 only", row)
+	}
+}
+
+// An OPC UA client's event commands dropped at a reconnect (never sent
+// late) show as a metric once there are any.
+func TestOPCUAClientStatusDroppedEvents(t *testing.T) {
+	has := func(h opcua.Health) bool {
+		for _, m := range opcuaClientStatus(h).Metrics {
+			if m.Label == "late commands dropped" {
+				return m.Value == float64(h.DroppedEvents) && !m.Volatile
+			}
+		}
+		return false
+	}
+	if !has(opcua.Health{Name: "plant", State: "connected", DroppedEvents: 2}) {
+		t.Fatal("the dropped late commands metric is missing")
+	}
+	if has(opcua.Health{Name: "plant", State: "connected"}) {
+		t.Fatal("no drop, no metric")
 	}
 }

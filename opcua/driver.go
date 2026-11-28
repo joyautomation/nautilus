@@ -180,6 +180,9 @@ type Driver struct {
 	readMode  string
 	// reassert: a session after the first re-sends every output (#1061).
 	reassert bool
+	// droppedEvents counts the event commands dropped at a reconnect
+	// (TagBinding.Event). Under mu.
+	droppedEvents uint64
 	// refreshFloor is refreshEvery's floor (defaultRefreshFloor; tests
 	// lower it).
 	refreshFloor time.Duration
@@ -1178,9 +1181,28 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 			remapped++
 		}
 	}
+	// An event command still queued here was raised while there was no
+	// session (or its write did not complete before the session broke): it
+	// is a trigger, and one sent now would fire late, so it is dropped, said
+	// and counted, before the session can flush it. A queued FALSE is the
+	// trigger's release and stays queued: dropping it would leave the
+	// server's node asserted. A level command stays queued.
+	var dropped []string
+	for name, v := range d.pending {
+		if b := d.byName[name]; b != nil && b.Event && !atRest(v) {
+			delete(d.pending, name)
+			d.droppedEvents++
+			dropped = append(dropped, name)
+		}
+	}
 	d.server = info
 	d.online, d.answered, d.primed = true, false, false
 	d.mu.Unlock()
+	sort.Strings(dropped)
+	for _, name := range dropped {
+		d.log.Warn("opcua-client: event command dropped at the reconnect: it was raised while the server could not be reached, and a trigger is never sent late",
+			"driver", d.name, "tag", name)
+	}
 	d.setState("connected", nil)
 	if d.connected.Add(1) > 1 && d.reassert {
 		// The server may have restarted with its state reset: forget what
@@ -1656,3 +1678,11 @@ var (
 	_ nio.QualityReporter  = (*Driver)(nil)
 	_ nio.OutputsRequester = (*Driver)(nil)
 )
+
+// atRest says whether an event command's value is its rest, FALSE: its
+// release, which is safe to send late. An event command is a Boolean
+// (Validate), so nothing else is at rest.
+func atRest(v any) bool {
+	b, ok := v.(bool)
+	return ok && !b
+}
