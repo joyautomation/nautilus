@@ -2,11 +2,13 @@ package oplog
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,12 +38,16 @@ type lapseBench struct {
 	clock   atomic.Int64 // unix ms
 	mu      sync.Mutex
 	applied [][]Entry
+	lim     limits
 }
 
-func newLapseBench(t *testing.T, n int) *lapseBench {
+func newLapseBench(t *testing.T, n int) *lapseBench { return newLapseBenchLim(t, n, limits{}) }
+
+// newLapseBenchLim is newLapseBench with every replica's chunk limits.
+func newLapseBenchLim(t *testing.T, n int, lim limits) *lapseBench {
 	t.Helper()
 	b := &lapseBench{t: t, dir: t.TempDir(), urls: make([]string, n), srv: make([]*httptest.Server, n),
-		nodes: make([]*Node, n), down: make([]atomic.Bool, n), push: make([]atomic.Bool, n), m: &moving{}, applied: make([][]Entry, n)}
+		nodes: make([]*Node, n), down: make([]atomic.Bool, n), push: make([]atomic.Bool, n), m: &moving{}, applied: make([][]Entry, n), lim: lim}
 	b.clock.Store(time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC).UnixMilli())
 	for i := range b.srv {
 		b.srv[i] = httptest.NewUnstartedServer(nil)
@@ -88,7 +94,7 @@ func (b *lapseBench) open(i int) {
 			b.applied[i] = append(b.applied[i], e)
 			b.mu.Unlock()
 			return nil
-		}})
+		}, lim: b.lim})
 	if err != nil {
 		b.t.Fatal(err)
 	}
@@ -303,5 +309,135 @@ func TestLapseReachesAReplicaThatStartedIt(t *testing.T) {
 	b.node(1).Heartbeat(ctx)
 	if how, lapse := b.start(0, "Level"); how != "started" || !lapse {
 		t.Fatalf("A: %q, KindLapse naming it %v; want the KindLapse to reach A's Apply after its start", how, lapse)
+	}
+}
+
+// A lagging follower given the tail in chunks applies a lapsed entry as
+// the leader did, even when the chunk boundary falls between the entry and
+// the lapse that names it (#1466). A's start is unknown (stored on A
+// alone); two hours later B leads with A, adopts it and commits a KindLapse
+// naming it. C, down all along, is then sent the tail one entry a chunk:
+// the start, then the lapse. Each chunk's commit used to apply the start
+// on its own, carried out; C's restart replayed it as lapsed.
+func TestLapseSplitFromItsEntryByAChunk(t *testing.T) {
+	b := lateStartLapsedWithoutC(t)
+	ctx := context.Background()
+	b.down[2].Store(false)
+	for range 4 {
+		b.node(1).Heartbeat(ctx)
+	}
+	b.checkCAgrees()
+}
+
+// The late lapse of a term already writing (Fable, #1466 design review):
+// B adopts A's young start at its catch-up (its carrier, a noop, is not
+// written), its first write e1 misses the majority, and two hours later its
+// next write puts a KindLapse first: x (term 1), e1 (term 2), the lapse
+// (term 2), e2. A follower sent one entry a chunk must not commit at e1,
+// though e1 is of the current term: the start would be carried out there.
+func TestLateLapseAfterACurrentTermEntry(t *testing.T) {
+	b := newLapseBenchLim(t, 3, limits{chunkEntries: 1, chunkBytes: 1 << 20})
+	ctx := context.Background()
+	if _, err := b.node(0).Propose(ctx, Entry{Kind: KindAck, IDs: []string{"warm"}}); err != nil {
+		t.Fatal(err)
+	}
+	b.down[2].Store(true) // C: away until the end
+	b.down[1].Store(true)
+	if _, err := b.node(0).Propose(ctx, Entry{Kind: KindSubstitute, Tag: "Level"}); err == nil {
+		t.Fatal("the start committed without its majority")
+	}
+	b.down[1].Store(false)
+	b.m.set(b.urls[1], 2)
+	nb := b.node(1)
+	nb.seqMu.Lock()
+	err := nb.leaderCatchUp(ctx, 2) // B adopts the start, still young: no carrier
+	nb.seqMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.down[0].Store(true)
+	if _, err := nb.Propose(ctx, Entry{Kind: KindAck, IDs: []string{"e1"}}); err == nil {
+		t.Fatal("e1 committed without its majority")
+	}
+	b.wait(2 * time.Hour)
+	b.down[0].Store(false)
+	if _, err := nb.Propose(ctx, Entry{Kind: KindAck, IDs: []string{"e2"}}); err != nil {
+		t.Fatal(err)
+	}
+	nb.Heartbeat(ctx)
+	for i, n := range []string{"A", "B"} {
+		if how, lapse := b.start(i, "Level"); how != "lapsed" || !lapse {
+			t.Fatalf("%s applied the late start as %q (lapse seen %v); want lapsed", n, how, lapse)
+		}
+	}
+	var kinds []string
+	for _, e := range nb.After(0) {
+		kinds = append(kinds, fmt.Sprint(e.Term, e.Kind))
+	}
+	if got := strings.Join(kinds, " "); !strings.Contains(got, "1substitute 2ack 2lapse 2ack") {
+		t.Fatalf("B's log is %s; the test needs the lapse after a term-2 entry", got)
+	}
+	b.down[2].Store(false)
+	for range 6 {
+		nb.Heartbeat(ctx)
+	}
+	b.checkCAgrees()
+}
+
+// The same through C's own pull, one entry a page: its catch-up commits
+// once, with the last page, so the start and its lapse are applied
+// together (catchup_commit_per_page splits them).
+func TestLapseSplitAcrossCatchUpPages(t *testing.T) {
+	b := lateStartLapsedWithoutC(t)
+	b.down[2].Store(false)
+	if err := b.node(2).CatchUp(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	b.checkCAgrees()
+}
+
+// lateStartLapsedWithoutC is three replicas, one entry a chunk or page: A
+// stored a start alone (unknown), and two hours later B led with A,
+// adopted it and committed a KindLapse naming it, while C was down.
+func lateStartLapsedWithoutC(t *testing.T) *lapseBench {
+	t.Helper()
+	b := newLapseBenchLim(t, 3, limits{chunkEntries: 1, chunkBytes: 1 << 20})
+	ctx := context.Background()
+	if _, err := b.node(0).Propose(ctx, Entry{Kind: KindAck, IDs: []string{"warm"}}); err != nil {
+		t.Fatal(err)
+	}
+	b.down[2].Store(true) // C: away until the end
+	b.down[1].Store(true)
+	if _, err := b.node(0).Propose(ctx, Entry{Kind: KindSubstitute, Tag: "Level"}); err == nil {
+		t.Fatal("the start committed without its majority")
+	}
+	b.wait(2 * time.Hour)
+	b.down[1].Store(false)
+	b.m.set(b.urls[1], 2)
+	if err := b.node(1).SyncLeader(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b.node(1).Heartbeat(ctx)
+	for i, n := range []string{"A", "B"} {
+		if how, lapse := b.start(i, "Level"); how != "lapsed" || !lapse {
+			t.Fatalf("%s applied the late start as %q (lapse seen %v); want lapsed", n, how, lapse)
+		}
+	}
+	return b
+}
+
+// checkCAgrees: C, caught up, applied the start as lapsed, live and on
+// replay.
+func (b *lapseBench) checkCAgrees() {
+	b.t.Helper()
+	if got, want := b.node(2).Commit(), b.node(1).Commit(); got != want {
+		b.t.Fatalf("C committed to %d, the leader %d", got, want)
+	}
+	how, _ := b.start(2, "Level")
+	b.node(2).Close()
+	b.open(2)
+	replayed, _ := b.start(2, "Level")
+	if how != "lapsed" || replayed != "lapsed" {
+		b.t.Fatalf("C applied the late start as %q live and %q after a restart; the leader and A as lapsed", how, replayed)
 	}
 }
