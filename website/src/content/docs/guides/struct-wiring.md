@@ -275,7 +275,18 @@ instances and tags share one namespace across every file.
 
 An instance on its own connection gets `<Instance>__Online` (and
 `<Instance>__Outages` on Modbus), as a `devices:` row does; one on a shared
-OPC UA session uses that driver's own companion. Quality is per member: the
+OPC UA session uses that driver's own companion.
+
+An instance may read several connections, of any of these drivers (a
+Modbus pump and an OPC UA level transmitter in one `Tank`). Each connection
+of its own then gets `<Instance>_<source>__Online` (and `__Outages` on
+Modbus), a shared one keeps its driver's companion, and
+`<Instance>__Online` is their AND: TRUE only while every connection
+answers. The runtime computes it after each read, nothing else writes it,
+and it raises no alarm of its own (each connection's own does). Two
+commands on two connections changed in one scan are two independent writes,
+in no guaranteed order: a sequence that needs an order writes one, waits
+for its read-back, then writes the next. Quality is per member: the
 root shows the worst of its device members, and a screen bound to
 `P101.Speed` greys only that member.
 
@@ -292,7 +303,6 @@ of a multi-driver set do not claim is logged once, naming its key.
 |---|---|
 | `memory:` retained across a restart (accepted, but `naut check` warns: it starts from its initial value) | slice 6 |
 | `set:` on an instance | slice 6 |
-| an instance on more than one connection | slice 9a-2 |
 | wiring `alarms:`, instance `alarms:` and `offline-alarm:` | slice 9b |
 | `fill:` and `both:` (EtherNet/IP) | slice 12 |
 | the Sparkplug host | slice 14 |

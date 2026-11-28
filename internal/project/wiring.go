@@ -247,6 +247,24 @@ func wiredTags(set *wirebind.Set, m *Manifest) ([]TagConfig, error) {
 		for _, mem := range in.Members {
 			def.Members[mem.Path] = runtime.MemberDef{Kind: memberKind(mem.Kind), Readback: mem.Readback, Event: mem.Event, Expr: mem.Expr}
 		}
+		if len(in.Conns) > 1 {
+			// Several connections: each keeps its own companion, and
+			// <Instance>__Online is their AND, which the runtime computes
+			// after each delivery (design §3; it raises no alarm of its own).
+			def.Online = in.Name + "__Online"
+			for _, c := range in.Conns {
+				if c.Shared {
+					def.OnlineOf = append(def.OnlineOf, m.sharedOPCUACompanion(c.Driver))
+				} else {
+					def.OnlineOf = append(def.OnlineOf, c.Online())
+				}
+			}
+			if prev, dup := taken[ir.NameKey(def.Online)]; dup {
+				return nil, fmt.Errorf("instance %s: its combined companion %s has the name of %s: rename one", in.Name, def.Online, prev)
+			}
+			taken[ir.NameKey(def.Online)] = "the combined companion of instance " + in.Name
+			out = append(out, TagConfig{Name: def.Online, Role: "input", Type: "BOOL", Desc: in.Name + ": every connection it reads answers (" + strings.Join(def.OnlineOf, " AND ") + ")"})
+		}
 		out = append(out, TagConfig{Name: in.Name, Role: "state", Type: in.Type, Desc: in.Desc, instance: &def})
 		for _, c := range in.Conns {
 			if c.Shared {
@@ -265,9 +283,13 @@ func wiredTags(set *wirebind.Set, m *Manifest) ([]TagConfig, error) {
 				}
 				continue
 			}
-			companions := []TagConfig{{Name: c.Online(), Role: "input", Type: "BOOL", Desc: in.Name + ": the device answers"}}
+			who := in.Name
+			if len(in.Conns) > 1 {
+				who = in.Name + " (source " + c.Source + ")"
+			}
+			companions := []TagConfig{{Name: c.Online(), Role: "input", Type: "BOOL", Desc: who + ": the device answers"}}
 			if c.DriverType == "modbus" {
-				companions = append(companions, TagConfig{Name: c.Outages(), Role: "input", Type: "DINT", Desc: in.Name + ": times it stopped answering since start"})
+				companions = append(companions, TagConfig{Name: c.Outages(), Role: "input", Type: "DINT", Desc: who + ": times it stopped answering since start"})
 			}
 			for _, t := range companions {
 				if prev, dup := taken[ir.NameKey(t.Name)]; dup {

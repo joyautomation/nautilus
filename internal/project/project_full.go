@@ -333,6 +333,10 @@ func buildChannel(c ChannelConfig) (runtime.ChannelIO, error) {
 	return eip.NewChannel(c.Host, slot, c.Port, nil), nil
 }
 
+// oneSimulated: native drivers are real, so a set of them is an io.Multi
+// (the browser's simulated stand-ins collapse to one; project_js.go).
+func oneSimulated([]nio.NamedDriver) (nio.Driver, bool) { return nil, false }
+
 // opcuaManifest is what an opcua-client driver binds: an OPC UA devices:
 // row's manifest, derived from its vendored profile (device-library.md
 // §3), else the manifest file the entry names. A live I/O apply
