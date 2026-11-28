@@ -114,6 +114,10 @@ func (wl *witnessLogs) open(cluster string) (*witnessLog, int, error) {
 		// No runtime applies the witness's copy: a newer log history
 		// supersedes it in place (#1029 3c-3c-2a).
 		ResetInPlace: !mutNaut("witness_supersede_waits"),
+		// Compaction (#1455): the witness never leads, so it decides
+		// nothing; its rules version says it can take a compacted log and
+		// its installs, which the leader's gate waits for.
+		CompactRules: logCompactRules("witness_compaction_off"),
 	}
 	testLogOptions("witness", &lo)
 	n, err := oplog.New(lo)

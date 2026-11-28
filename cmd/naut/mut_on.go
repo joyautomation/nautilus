@@ -58,6 +58,7 @@ func init() {
 //   - diverged_restart_loops: a diverged controller restarts itself again after a start that moved a diverged log aside;
 //   - diverged_says_vouch: a diverged controller's unsynced condition tells a person to vouch;
 //   - blocked_at_once: oplog-compaction-blocked is raised as soon as a compaction waits, not after 7 days.
+//   - pair_compaction_off, witness_compaction_off: that operator-intent log is opened with no keep-rules version, so compaction never starts (#1455 PR 2b-2).
 //
 // Peer TLS (#710):
 //

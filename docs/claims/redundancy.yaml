@@ -720,3 +720,57 @@ claims:
       two boxes may answer ARP for it meanwhile; that window is documented
       and not measured here (it needs the container tier). Field writes stay
       fenced by the gate in that window.
+
+  - id: RED-045
+    claim: >-
+      A pair's operator-intent log compacts once all three members run a
+      release that compacts, and the first compaction waits 7 days counted
+      from the first time all three run it: a staggered upgrade gets its 7
+      days from the last member, and a leader whose clock is behind cannot
+      shorten them.
+    source: "#the-log-stays-small-compaction"
+    tests:
+      - go ./cmd/naut TestPairCompactionIsOnInThisBuild
+      - go ./oplog TestTheFirstCompactionWaitsSevenDaysFromTheSwitchOn
+      - go ./oplog TestAStaggeredUpgradeGetsSevenDaysFromTheLastMember
+      - go ./oplog TestABehindClockLeaderCannotShortenTheWait
+      - go ./oplog TestAnEntryFromAClockAheadDoesNotStallTheFirstCompaction
+    note: >-
+      The pair-level run through a committed compaction (the substitutes,
+      the alarm view, the notes and their export before and after, across
+      restarts and a takeover) is TestPairCompactionKeepsTheOperatorState,
+      behind the oplogtest tag with shortened timings, in its own CI step;
+      it is not cited here because its output is not in the evidence.
+
+  - id: RED-046
+    claim: >-
+      A release from before log compaction refuses a compacted log, and its
+      error shows the fix ("update naut, or export notes and start a new
+      log"); its `naut notes export` still exports every note.
+    source: "#the-log-stays-small-compaction"
+    tests:
+      - go ./oplog TestOldBuildsRefuseACompactedLogAndStillExportItsNotes
+
+  - id: RED-047
+    claim: >-
+      `naut redundancy status` says when a copy's log was compacted
+      ("compacted through seq N"), and says nothing of it before; a build
+      with compaction switched off again still opens and runs a compacted
+      log.
+    source: "#the-log-stays-small-compaction"
+    tests:
+      - go ./cmd/naut TestStatusSaysTheLogWasCompacted
+      - go ./oplog TestARevertedBuildRunsACompactedLog
+      - go ./oplog TestARevertedBuildCarriesOutAPendingCompaction
+
+  - id: RED-048
+    claim: >-
+      A compaction that has waited more than 7 days raises
+      `oplog-compaction-blocked` with the reason, a rolling upgrade raises
+      nothing, a copy short of disk raises `oplog-compaction-disk`, and a
+      refused decision raises `oplog-compaction-refused` asking for a
+      report.
+    source: "#the-log-stays-small-compaction"
+    tests:
+      - go ./cmd/naut TestTheLogCompactionsConditions
+      - go ./oplog TestARollingUpgradeUnderSevenDaysRaisesNothing

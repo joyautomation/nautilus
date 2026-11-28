@@ -734,6 +734,8 @@ var Mutations = []string{
 	"diverged_restart_loops",         // naut: a diverged controller restarts itself again after a start that moved a diverged log aside (#1455)
 	"diverged_says_vouch",            // naut: a diverged controller's unsynced condition tells a person to vouch (#1455)
 	"blocked_at_once",                // naut: oplog-compaction-blocked is raised as soon as a compaction waits, not after 7 days (#1455)
+	"pair_compaction_off",            // cmd/naut: the pair's operator-intent log has no keep-rules version, so compaction never starts (#1455 2b-2)
+	"witness_compaction_off",         // cmd/naut: the witness's operator-intent log has no keep-rules version, so the leader's gate never holds (#1455 2b-2)
 
 	"leaderless_alarm_one_episode",         // node: the no-leader alarm keeps one episode across spells, so a page queued in one spell may leave in the next (#1436)
 	"leaderless_alarm_second_never_defers", // node: the second-named controller raises the no-leader alarm despite the first's fresh word that it pages it: paged twice (#1436)

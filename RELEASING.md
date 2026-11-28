@@ -142,6 +142,51 @@ release (v0.24.0 then), in the release commit:
   `leaseModeRefusesKeep`;
 - and remove this paragraph.
 
+#1455: the first release that compacts a pair's operator-intent log
+(`compactRules` in `cmd/naut/pairrun.go`, set for the pair's log and the
+witness's). Before its tag:
+
+- [ ] **The compaction bench on a real Verdin**, only with the bench
+  owner's OK: not on the real-time core, nothing pinned to its cores,
+  nothing else running on the bench. Build it with `GOOS=linux
+  GOARCH=arm64 go test -c -tags oplogbench -o /tmp/oplog-bench.test
+  ./oplog` and copy it over. Run it on one core that is not the real-time
+  one, with its files on the eMMC, not a tmpfs:
+  `TMPDIR=<a directory on the eMMC> taskset -c <core> env GOMAXPROCS=1
+  GODEBUG=gctrace=1 OPLOG_BENCH_QUIET=130s OPLOG_BENCH_COMPACT=216000
+  ./oplog-bench.test -test.run '^TestOplogCompactBench$' -test.v
+  -test.timeout 2h`. Put its table on #1455. A write wait over 150 ms,
+  or a tick outside GC more than 5 ms later while compacting than in the
+  quiet window, holds the release.
+- [ ] **Record GC tick lateness on the real Verdin (quiet):** in the same
+  run's table, the quiet side of the "the same, all ticks" column (ticks
+  inside GC cycles included). Over 20 ms: open an issue before the tag.
+- [ ] **The release notes' "Upgrading" section carries these lines:**
+  - **The operator-intent log compacts itself** (#1455). Once all three
+    members run this release, the leader drops the log entries that no
+    longer decide anything (ended substitutes, cleared acknowledgements,
+    undone shelves, signed-out sessions). It keeps everything in force,
+    every note and checkout run, and the last 7 days. The first compaction
+    waits 7 days: the 7 days count from the first time all three members
+    run this release. A revert and a later re-upgrade do not restart them.
+    `naut redundancy status` says "compacted through seq N" once a log
+    is compacted.
+  - **Upgrade the witness too.** A member on an older release holds
+    compaction back. Once the log is big enough to compact and has
+    waited 7 days, the leader raises `oplog-compaction-blocked` naming it:
+    14 days after the upgrade at the earliest.
+  - **No downgrade past compaction.** Once its log is compacted, a
+    controller on an older release refuses to start ("compacted log:
+    update naut, or export notes and start a new log"), and a witness on
+    one answers 503 for the pair's log. The fix is to put this release
+    back. Going further back needs a new operator-intent log on all three
+    members, so the pair loses its acknowledgements, shelves, substitutes,
+    sessions, notes and checkout runs. Run `naut notes export` first; the
+    checkout runs have no export. The guide's "No downgrade past
+    compaction" has the details.
+
+After that release, remove this paragraph.
+
 ## Guard rails
 
 The extension's channel logic lives in two scripts that every workflow

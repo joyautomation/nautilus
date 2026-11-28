@@ -487,9 +487,14 @@ can be reverted on its own:
   compaction (below); `compactedThrough` in `/api/cluster` and `naut
   redundancy status`.
 - **2b-2 (the switch-on):** the pair's and the witness's logs set
-  `CompactRules`, with the release notes, RELEASING.md and the guide's
-  "no downgrade past compaction" lines, and the old build's refusal naming
-  the fix.
+  `CompactRules` (`compactRules` in `cmd/naut/pairrun.go`, 1;
+  `TestPairCompactionIsOnInThisBuild` reads it from each copy's answers,
+  mutants `pair_compaction_off`, `witness_compaction_off`), with the
+  release notes' lines and the real-Verdin bench in RELEASING.md and the
+  guide's compaction section ("No downgrade past compaction"). The old
+  build's refusal naming the fix is the header's `why` (§4, tested since
+  2a: `TestOldBuildsRefuseACompactedLogAndStillExportItsNotes`); the guide
+  quotes it.
 
 **How 2b-1 decides (as built).** Each consumer's model replays the log and
 says, per entry, which items of its state the outcome read (only items not
@@ -585,7 +590,9 @@ loop (never a takeover's catch-up) when the log has no committed marker
 and no base. The earliest committed marker counts (two
 leaders in a row may each write one); an uncommitted one never does. So a
 rolling upgrade raises nothing, while a copy left on an old build raises
-the condition 7 days after the switch-on. Transient reasons (a takeover
+the condition once there is enough to compact and it has waited 7 days:
+14 days after the switch-on at the earliest (the blocked-since floor, then
+the condition's own 7 days). Transient reasons (a takeover
 not caught up, leadership moving) neither start nor clear it.
 
 **Behaviour a compacted log changes (accepted):**
