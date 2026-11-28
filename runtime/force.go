@@ -354,6 +354,7 @@ func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, string
 		}
 	}
 	t.storeLocked(root, tv, fs.apply(fs.actual))
+	t.markPathWrittenLocked(name, v) // a forced command goes out, as a forced output does
 	t.forceRev++
 	return e.gen, name, nil
 }

@@ -204,8 +204,10 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		// between. Nothing to reload and nothing stale to discard, so no
 		// takeover: frames, timers, SFC steps and retained state carry on.
 		// The drivers get the whole output set on this scan, as after any
-		// gap in what was sent.
+		// gap in what was sent; an event: leaf takes a new baseline
+		// (instance_push.go).
 		r.outSent.Store(false)
+		r.tags.rebaseEvents()
 		// No unfresh: the step-down before this resume cleared fresh and
 		// counted an edge, so a main read that began under the leadership
 		// before it cannot set fresh either.
@@ -389,6 +391,10 @@ func (r *Runtime) takeover() {
 	// the bad reading back into the logic is the bump they exist to prevent
 	// (#707).
 	if r.coord != nil {
+		// A new leadership has written no command and read no peer value
+		// (instance_push.go). Not on a plain start: nothing came before it,
+		// and an outside write the API took before the first scan stands.
+		r.tags.newPushLeadership()
 		r.dropForces("takeover")
 		// READ/WRITE requests the last leadership queued are not this
 		// one's to send.
