@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -1694,12 +1695,19 @@ func (r *Runtime) scanAt(due time.Time) {
 				// A failed write leaves the driver holding who-knows-what:
 				// retry the whole set next scan rather than trusting the stamp.
 				r.outSent.Store(false)
+				// But a composite's children that took their share did take
+				// it: their event: commands are what their devices now hold,
+				// so a later ask does not hand them again (#1497).
+				var partial *nio.PartialWriteError
+				if r.tags.instPush > 0 && errors.As(err, &partial) {
+					r.tags.instancePushed(partial.Taken)
+				}
 				r.holdAfterPush() // a child of a composite may have taken it
 			} else {
 				r.outGen.Store(gen)
 				r.outSent.Store(true)
 				if r.tags.instPush > 0 {
-					r.tags.instancePushed()
+					r.tags.instancePushed(nil)
 				}
 				r.deliverPush(out)
 				r.holdAfterPush()

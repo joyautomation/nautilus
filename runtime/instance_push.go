@@ -573,14 +573,17 @@ func (t *Tags) instancePush(out nio.Values) bool {
 
 // instancePushed: the push instancePush filled was handed over. A both:
 // command in it is no longer pending, unless a newer one came while the
-// driver had it; an event leaf in it is what the device now holds.
-func (t *Tags) instancePushed() {
+// driver had it; an event leaf in it is what the device now holds. taken,
+// when not nil, says which keys were handed over: a push some children of
+// an io.Multi failed was still taken by the others (#1497), and only the
+// failing children's leaves stay unhanded.
+func (t *Tags) instancePushed(taken func(key string) bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for _, in := range t.instList {
 		for i := range in.push {
 			l := &in.push[i]
-			if !l.inc {
+			if !l.inc || taken != nil && !taken(l.key) {
 				continue
 			}
 			if l.both && l.fillRev == l.wrev {

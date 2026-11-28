@@ -385,16 +385,41 @@ func (m *Multi) WriteOutputs(vals Values) error {
 		perChild[i][k] = v
 	}
 	var errs []error
+	var failed map[string]bool
 	for i, sub := range perChild {
 		if len(sub) == 0 {
 			continue
 		}
 		if err := m.children[i].Driver.WriteOutputs(sub); err != nil {
 			errs = append(errs, fmt.Errorf("driver %q: %w", m.children[i].Name, err))
+			if failed == nil {
+				failed = map[string]bool{}
+			}
+			for k := range sub {
+				failed[k] = true
+			}
 		}
 	}
-	return errors.Join(errs...)
+	if len(errs) == 0 {
+		return nil
+	}
+	return &PartialWriteError{err: errors.Join(errs...), failed: failed}
 }
+
+// PartialWriteError is what Multi.WriteOutputs returns when one or more
+// children failed their share of a push: the other children took theirs.
+// The runtime counts what was taken as handed over (#1497), so an event:
+// command a healthy child took is not handed to it again.
+type PartialWriteError struct {
+	err    error
+	failed map[string]bool
+}
+
+func (e *PartialWriteError) Error() string { return e.err.Error() }
+func (e *PartialWriteError) Unwrap() error { return e.err }
+
+// Taken says whether key was in the share of a child that took its write.
+func (e *PartialWriteError) Taken(key string) bool { return !e.failed[key] }
 
 // noteUnclaimed logs key the first time a write holds it and no child
 // claims it.
