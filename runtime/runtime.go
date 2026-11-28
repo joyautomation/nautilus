@@ -237,7 +237,12 @@ type Runtime struct {
 	scan    time.Duration
 	inputs  []string
 	outputs []string
-	dtTag   string
+	// instances are the instance tags (instance.go): delivered like inputs,
+	// but member by member, and written from outside like any tag whose
+	// member kind allows it. Not in inputs, so nothing treats one as a
+	// driver input whole.
+	instances []string
+	dtTag     string
 	meta    map[string]TagMeta
 	params  paramBook // parameters: manifest inits and drift bases (#718)
 	types   map[string]*ir.Type
@@ -664,6 +669,10 @@ func New(o Options) (*Runtime, error) {
 		}
 	}
 	tags.types = tagTypes(o.Tags, types, unionGlobals(prog, tasks))
+	instances, err := tags.registerInstances(o, types)
+	if err != nil {
+		return nil, err
+	}
 	// Set before any scan or goroutine can observe it, so the store's NowMs
 	// and the scan's dt always read the same clock.
 	tags.clock = o.Clock
@@ -721,7 +730,7 @@ func New(o Options) (*Runtime, error) {
 	}
 	r := &Runtime{
 		prog: prog, tags: tags, driver: o.Driver, scan: o.Scan,
-		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
+		inputs: o.Inputs, outputs: o.Outputs, instances: instances, dtTag: o.DtTag, meta: o.Meta,
 		clock: o.Clock, loopSleep: o.LoopSleep, types: types, tasks: tasks,
 		retainStore: o.Retain, retainTags: retainTags, coord: o.Coordinator,
 		alwaysWrite: o.AlwaysWriteOutputs, holdOnSwap: o.HoldOutputsOnSwap, untypedComms: untyped,

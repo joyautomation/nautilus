@@ -114,6 +114,10 @@ type TagDef struct {
 	// RETAIN. An input re-reads from the field and an output re-derives
 	// from the logic, so neither may be retained (New refuses it).
 	Retain bool
+	// Instance makes the tag an instance of a wired type (struct wiring,
+	// #1458): its members' kinds decide what a delivery lands and what an
+	// outside write may set (instance.go). Declare one with Instance.
+	Instance *InstanceDef
 }
 
 // TagOpt customizes a TagDef (Desc, Unit, Init).

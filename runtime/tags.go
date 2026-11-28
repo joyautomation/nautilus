@@ -145,6 +145,10 @@ type Tags struct {
 	pulseOn, pulseSeen bool
 	pulseAt            time.Duration
 	subBusy            atomic.Bool
+	// inst are the instances, by ir.NameKey of the name (instance.go). Set
+	// once in New, read-only after.
+	inst     map[string]*instInfo
+	instList []*instInfo // inst in declaration order, for each delivery
 }
 
 // tagVal is one stored tag: its value and the store generation at which
@@ -431,6 +435,9 @@ func (t *Tags) setMany(names []string, in map[string]any) uint64 {
 		if iv, isIR := irValue(v); isIR {
 			t.writeLocked(name, iv)
 		}
+	}
+	for _, inst := range t.instList {
+		t.deliverLocked(inst, in)
 	}
 	return t.gen
 }

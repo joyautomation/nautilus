@@ -211,8 +211,8 @@ func (r *Runtime) ValidateStart(addr string, v any) error {
 	if _, _, whole := r.tags.lookupName(addr); whole {
 		root = addr
 	}
-	if !r.isInput(root) {
-		return fmt.Errorf("substitute %s: only a driver-bound input can be substituted", addr)
+	if !r.substitutableAt(addr, root) {
+		return fmt.Errorf("substitute %s: only a driver-bound input, or a member an instance reads from a device, can be substituted", addr)
 	}
 	if !r.substitutable(root) {
 		return fmt.Errorf("substitute %s: %s is not substitutable (no substitutes: rule names it), so it has no %s flag for the logic to interlock on", addr, root, SubstitutedSuffix)

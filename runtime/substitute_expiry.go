@@ -623,14 +623,8 @@ func (r *Runtime) ownSubstituteCompanions(subs, comps []string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	for i, n := range subs {
-		root := ""
-		for _, in := range r.inputs {
-			if ir.SameName(in, n) {
-				root = in
-				break
-			}
-		}
-		if root == "" {
+		root, ok := r.substitutableRoot(n)
+		if !ok {
 			return fmt.Errorf("substitutable %s is not a driver-bound input: only an input can be substituted", n)
 		}
 		r.subRoots[ir.NameKey(root)] = struct{}{}

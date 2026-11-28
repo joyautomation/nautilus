@@ -95,6 +95,9 @@ func (r *Runtime) Quality() map[string]nio.Quality {
 			}
 		}
 	}
+	if len(r.tags.instList) > 0 {
+		out = r.instanceQualities(out, standby)
+	}
 	if !standby {
 		r.tags.eachSubstitutedRoot(func(root string, s subState) {
 			key := root
@@ -132,7 +135,13 @@ func (r *Runtime) TagQuality(name string) nio.Quality {
 		}
 	}
 	standby := r.standby()
-	q := r.liveQuality(root, standby)
+	var q nio.Quality
+	if in := r.tags.instanceOf(root); in != nil {
+		_, segs := ir.SplitAddress(name)
+		q = r.instanceTagQuality(in, segs, standby)
+	} else {
+		q = r.liveQuality(root, standby)
+	}
 	if standby {
 		return q
 	}
@@ -209,6 +218,9 @@ func (r *Runtime) scanFed(fn func(name string)) {
 	for _, name := range r.inputs {
 		fn(name)
 	}
+	for _, name := range r.instances {
+		fn(name)
+	}
 	r.forEachProgram(func(p *Program) {
 		for key := range p.writtenKeys() {
 			if name, ok := r.tags.Canonical(key); ok {
@@ -232,6 +244,11 @@ func (r *Runtime) isScanFed(root string) bool {
 		return true
 	}
 	for _, name := range r.inputs {
+		if ir.SameName(name, root) {
+			return true
+		}
+	}
+	for _, name := range r.instances {
 		if ir.SameName(name, root) {
 			return true
 		}

@@ -134,6 +134,10 @@ func (t *Tags) WriteAs(ops []WriteOp, by string) []error {
 			errs[i] = err
 			continue
 		}
+		if err := t.instanceWritable(op.Path, op.Value); err != nil {
+			errs[i] = err
+			continue
+		}
 		if err := t.rangeCheck(op); err != nil {
 			errs[i] = err
 			continue
@@ -204,6 +208,8 @@ func (t *Tags) WriteSetGuarded(ops []WriteOp, expect map[string]any, by string, 
 		} else if f := t.forcedOverlapLocked(op.Path); f != "" {
 			out[i].Err = &ForcedError{Path: op.Path, Force: f}
 		} else if err := t.readOnlyLocked(op.Path); err != nil {
+			out[i].Err = err
+		} else if err := t.instanceWritable(op.Path, op.Value); err != nil {
 			out[i].Err = err
 		} else if err := t.rangeCheck(op); err != nil {
 			out[i].Err = err
