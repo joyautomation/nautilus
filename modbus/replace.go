@@ -116,6 +116,7 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding, opts ReplaceOption
 	old.mu.Lock()
 	ns.enabled = old.enabled
 	ns.outages = old.outages // since the driver started; a replace is not one
+	ns.dropped = old.dropped // the same
 	old.mu.Unlock()
 
 	d.srcMu.Lock()

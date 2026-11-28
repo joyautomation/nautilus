@@ -11,6 +11,7 @@ import (
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/slave"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -135,6 +136,76 @@ END_PROGRAM
 	}
 }
 
+// An event: command assigned while its device is unreachable is not
+// delivered late when the device answers again: a Start pressed during the
+// outage must not fire on the reconnect (lead ruling on #1458 slice 9; the
+// Modbus driver drops it, modbus TagBinding.Event). The command's next
+// change goes out as usual.
+func TestModbusEventCommandNotDeliveredLateAfterAnOutage(t *testing.T) {
+	srv := slave.NewServer("127.0.0.1:0", nil)
+	srv.Unit(1)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	addr := srv.Addr()
+	proj, err := Load(wiredProject(`name: w
+tasks: [{ program: main.st, scan: 20ms }]
+drivers: [{ type: modbus, scan-rate: 20ms }]
+tags:
+  - { name: Demand, role: setpoint, type: BOOL, init: false }
+wirings:
+  - type: Pump
+    params: { endpoint: null }
+    sources:
+      drive: { driver: modbus, endpoint: "{endpoint}", unit-id: 1, timeout: 200ms }
+    members:
+      Running:   { from: drive, table: coil, address: 0 }
+      Cmd.Start: { to: drive, table: coil, address: 10, event: true }
+instances:
+  - { name: P101, type: Pump, params: { endpoint: "`+addr+`" } }
+`, `PROGRAM Main
+P101.Cmd.Start := Demand;
+END_PROGRAM
+`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := startWired(t, proj)
+	eventually(t, "the drive answers", func() bool { return rt.Tags().Bool("P101__Online") })
+
+	srv.Stop()
+	eventually(t, "the drive is gone", func() bool { return !rt.Tags().Bool("P101__Online") })
+	if err := rt.Tags().SetPath("Demand", true); err != nil {
+		t.Fatal(err)
+	}
+	queued := func() int {
+		h := proj.Runtime.Driver.(interface{ Health() modbus.Health }).Health()
+		return h.Sources[0].QueuedWrites
+	}
+	eventually(t, "the program's Cmd.Start TRUE is queued while the drive is gone", func() bool { return queued() == 1 })
+
+	back := slave.NewServer(addr, nil)
+	drive := back.Unit(1)
+	if err := back.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(back.Stop)
+	eventually(t, "the drive answers again", func() bool { return rt.Tags().Bool("P101__Online") })
+	time.Sleep(200 * time.Millisecond)
+	if drive.Coil(10) {
+		t.Fatal("Cmd.Start, assigned TRUE while the drive was gone, went out late on the reconnect")
+	}
+
+	if err := rt.Tags().SetPath("Demand", false); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if err := rt.Tags().SetPath("Demand", true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the command's next change goes out", func() bool { return drive.Coil(10) })
+}
+
 // The hard condition of slice 5 (docs/design/one-struct-model.md §18): no
 // push key is silently dropped. A project whose instance command no driver
 // takes does not start: the runtime names the command and its key.
@@ -216,6 +287,8 @@ instances:
 `, "instance P101 reads 2 connections (x, y): an instance on more than one connection arrives with slice 9"},
 		"one device twice": {wire("      Running: { from: drive, table: coil, address: 0 }\n") + "  - { name: P102, type: Pump, params: { endpoint: 192.0.2.1 } }\n",
 			"instance P101 and instance P102 are both on 192.0.2.1:502 unit 0"},
+		"a numeric event command": {wire("      Cmd.SpeedRef: { to: drive, table: holding, address: 20, format: int16, event: true }\n"),
+			`instance P101: member "Cmd.SpeedRef" is REAL and event: true: an event command is a BOOL`},
 		"bool from a register": {wire("      Running: { from: drive, table: holding, address: 0, format: int16 }\n"),
 			"instance P101: member Running: is BOOL, but holding 0 (format int16) delivers INT"},
 		"a scaled reading into an integer": {strings.Replace(wire("      Count: { from: drive, table: holding, address: 0, format: int16, scale: 0.1 }\n"), "Pump", "Counter", -1),
@@ -291,15 +364,15 @@ instances:
 	}
 	got := map[string]string{}
 	for _, b := range mm.Tags {
-		got[b.Name] = fmt.Sprintf("%s %s %d w%v wo%v", b.Source, b.Table, b.Address, b.Writable, b.WriteOnly)
+		got[b.Name] = fmt.Sprintf("%s %s %d w%v wo%v e%v", b.Source, b.Table, b.Address, b.Writable, b.WriteOnly, b.Event)
 	}
 	want := map[string]string{
-		"P101.Running":   "P101 coil 0 wfalse wofalse",
-		"P101.Speed":     "P101 holding 4 wfalse wofalse",
-		"P101.Cmd.Start": "P101 coil 10 wtrue wotrue",
-		"P102.Running":   "P102 coil 7 wfalse wofalse",
-		"P102.Speed":     "P102 holding 40 wfalse wofalse",
-		"P102.Cmd.Start": "P102 coil 10 wtrue wotrue",
+		"P101.Running":   "P101 coil 0 wfalse wofalse efalse",
+		"P101.Speed":     "P101 holding 4 wfalse wofalse efalse",
+		"P101.Cmd.Start": "P101 coil 10 wtrue wotrue etrue",
+		"P102.Running":   "P102 coil 7 wfalse wofalse efalse",
+		"P102.Speed":     "P102 holding 40 wfalse wofalse efalse",
+		"P102.Cmd.Start": "P102 coil 10 wtrue wotrue etrue",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("bindings\n got %v\nwant %v", got, want)

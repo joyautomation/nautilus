@@ -276,6 +276,9 @@ func modbusBinding(key, source string, mem Member) (modbus.TagBinding, error) {
 			return b, fmt.Errorf("is a command (to:), and table %s is read-only: commands go to holding or coil", b.Table)
 		}
 		b.Writable, b.WriteOnly = true, true
+		// A trigger written while the device is offline is dropped at the
+		// reconnect, never sent late (modbus TagBinding.Event).
+		b.Event = mem.Event
 	}
 	if err := fits(b, mem); err != nil {
 		return b, err

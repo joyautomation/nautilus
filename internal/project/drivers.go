@@ -411,11 +411,13 @@ func modbusStatus(h modbus.Health) server.DriverStatus {
 		Name: "modbus",
 	}
 	connected, parked, down, blocks, badBlocks, queued := 0, 0, 0, 0, 0, 0
+	var dropped uint64
 	var lastErr string
 	for _, src := range h.Sources {
 		blocks += src.Blocks
 		badBlocks += src.BadBlocks
 		queued += src.QueuedWrites
+		dropped += src.DroppedEvents
 		switch src.State {
 		case "connected":
 			connected++
@@ -471,6 +473,12 @@ func modbusStatus(h modbus.Health) server.DriverStatus {
 		// the moment the source reconnects and they go out.
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "queued writes", Value: float64(queued)})
 	}
+	if dropped > 0 {
+		// Event commands written while their device was offline and dropped
+		// at the reconnect rather than sent late (modbus TagBinding.Event).
+		// It moves only on a reconnect, so it is no free-runner.
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "late commands dropped", Value: float64(dropped)})
+	}
 
 	rows := make([]modbusSourceRow, 0, total)
 	for _, src := range h.Sources {
@@ -481,7 +489,7 @@ func modbusStatus(h modbus.Health) server.DriverStatus {
 		})
 		rows = append(rows, modbusSourceRow{
 			ID: src.ID, Addr: src.Addr, State: src.State, SinceMs: src.SinceMs,
-			Blocks: src.Blocks, BadBlocks: src.BadBlocks, QueuedWrites: src.QueuedWrites,
+			Blocks: src.Blocks, BadBlocks: src.BadBlocks, QueuedWrites: src.QueuedWrites, DroppedEvents: src.DroppedEvents,
 			RTTMs: src.RTTMs, Retries: src.Retries, Exceptions: src.Exceptions,
 		})
 	}
@@ -497,16 +505,18 @@ func modbusStatus(h modbus.Health) server.DriverStatus {
 // the flattened Devices list. Lower-camel JSON names, like every other field
 // this API puts on the wire.
 type modbusSourceRow struct {
-	ID           string  `json:"id"`
-	Addr         string  `json:"addr"`
-	State        string  `json:"state"`
-	SinceMs      int64   `json:"sinceMs,omitempty"`
-	Blocks       int     `json:"blocks"`
-	BadBlocks    int     `json:"badBlocks,omitempty"`
-	QueuedWrites int     `json:"queuedWrites,omitempty"`
-	RTTMs        float64 `json:"rttMs,omitempty"`
-	Retries      uint64  `json:"retries,omitempty"`
-	Exceptions   uint64  `json:"exceptions,omitempty"`
+	ID           string `json:"id"`
+	Addr         string `json:"addr"`
+	State        string `json:"state"`
+	SinceMs      int64  `json:"sinceMs,omitempty"`
+	Blocks       int    `json:"blocks"`
+	BadBlocks    int    `json:"badBlocks,omitempty"`
+	QueuedWrites int    `json:"queuedWrites,omitempty"`
+	// DroppedEvents: event commands dropped at a reconnect, never sent late.
+	DroppedEvents uint64  `json:"droppedEvents,omitempty"`
+	RTTMs         float64 `json:"rttMs,omitempty"`
+	Retries       uint64  `json:"retries,omitempty"`
+	Exceptions    uint64  `json:"exceptions,omitempty"`
 }
 
 // modbusSourceDetail is one source's row text. Categorical on purpose — no
