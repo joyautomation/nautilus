@@ -4,8 +4,9 @@
 the field and IT drivers. It changes the Runtime (members with their own
 kinds, §2.3) and the Device library (profiles produce wiring, §12). Driver
 names stop at the driver packages, as now. Core: the type a program sees is
-the product. Issue #1458; related #717. Status: **proposal**, for naut-lead
-and James. No code until the brief is approved.
+the product. Issue #1458; related #717. Status: **approved by naut-lead**;
+James said on 11-28 to proceed. Q4, Q12, Q20 and Q24 wait on James (§19),
+and each gates one later slice.
 
 ## 0. Why, and what is decided
 
@@ -423,8 +424,9 @@ wirings:
   as fresh (sparkplug guide), and the edge publishes no per-metric quality.
   At node level the instance stays born. So while a connection is down, the
   edge publishes that instance's `from:`, `both:` and `expr:` members that
-  depend on it as stale. Each carries a quality property, and a value never
-  delivered is sent with `is_null`, until the connection answers again. This moves
+  depend on it as stale, using the property §11.1 names (`Quality`), and a
+  value never delivered is sent with `is_null`, until the connection answers
+  again. This moves
   today's `devices:` struct tags from their device to node level, and is
   part of the §12.1 switch and its report. (Q9)
 
@@ -806,9 +808,39 @@ host imports them as `LINT` and `LREAL`.
   Sparkplug can carry.
 - **Node level.** Every wired instance publishes at node level (§3), so its
   commands are NCMDs. While one of its connections is down, the members
-  that depend on it carry a stale quality property (or `is_null` when never
+  that depend on it carry a stale quality (or `is_null` when never
   delivered), so a host is not shown stale values as fresh. That replaces
-  the device death a host gets today, and slice 13 tests it.
+  the device death a host gets today. The convention:
+  - **The property** is `Quality`, an Int32, in the metric's property set.
+    A metric without it is Good, so a healthy instance pays nothing. This
+    is Cirrus Link's convention for its Ignition MQTT modules ("If the
+    payload is missing the quality property, it should be considered to be
+    Good", [Cirrus Link, message payloads](https://docs.chariot.io/x/8YFpCw)).
+    It is not part of the Sparkplug 3.0 specification.
+  - **The values** are Ignition quality codes: Good is 192, Bad_Stale is
+    516 and Bad_NotConnected is 522
+    ([Ignition 8.3, quality codes](https://docs.inductiveautomation.com/docs/8.3/platform/tags/quality-codes-and-overlays)).
+    A member of a connection that is down is sent as Bad_Stale. One never
+    delivered is sent as Bad_NotConnected, with `is_null`.
+  - **Not yet verified:** how a Bad code is encoded in the Int32. Cirrus
+    Link's example payloads carry `-2147483133`, which is 0x80000000 plus
+    515 (Bad_Disabled). A forum account
+    ([Inductive Automation forum](https://forum.inductiveautomation.com/t/tag-quality-via-sparkplug/34456))
+    says the top bit marks Bad. The Ignition page gives no bit layout, and
+    nothing official says that MQTT Engine reads the property as a host
+    (the docs show MQTT Transmission writing it). **Slice 13 verifies both
+    against a running Ignition with MQTT Engine before shipping**, and
+    naut-lead hears the result before the slice starts.
+  - **Hosts that would no longer see a device go stale:** any host that
+    ignores metric properties. Today that includes nautilus's own Sparkplug
+    host, which reads no property (slice 14 makes it read `Quality`). It
+    also includes, as far as this brief can tell, every host other than
+    Ignition: no public documentation was found for another host reading
+    it. Geo SCADA has a Sparkplug quality mapping page that could not be
+    read, so it is unverified. Such a host sees the node alive and the
+    instance's last values with no change; its `__Online` companion still
+    dies with its Sparkplug device. This line goes in the §12.1 migration
+    report.
 - **`flatten-udts: true`** publishes members as metrics, as now
   (`P101/Cmd/Start`). There are no definitions in that mode, so there are
   no parameters or version either, and the documentation says so.
@@ -910,7 +942,12 @@ therefore an explicit switch:
    project: every Sparkplug metric that disappears (`PUMP_ControlWord`) or
    moves (a device's struct tag moves from its device to node level, §3),
    and every OPC UA node that changes. Those are the hosts and clients to
-   update. `examples/device-library` migrates in the same slice.
+   update. It also says, once per project with a `sparkplug:` section:
+   "staleness of a device's members now travels as the `Quality` metric
+   property (Ignition's convention), not as a DDEATH; a host that ignores
+   metric properties (any host other than Ignition, as far as we know, and
+   nautilus's own host before slice 14) will no longer see these members go
+   stale, only the device's `__Online` companion". `examples/device-library` migrates in the same slice.
 3. **The next minor release:** the default flips. A project without the key
    gets members, and `device-commands: tags` keeps the old shape with a
    deprecation warning.
@@ -1109,8 +1146,8 @@ code, see the test fail, restore it). Each updates the guides it touches.
 13. **Sparkplug edge.** Version, parameters (codec), member properties, the
     command refusal by kind, node-level placement and the stale-quality
     property for a connection that is down. *Needs 6, 8.*
-14. **Sparkplug host and the round trip.** Fill, `both:`, parameters, and
-    the round-trip acceptance test. *Needs 11, 12 (`fill:`), 13.*
+14. **Sparkplug host and the round trip.** Fill, `both:`, parameters,
+    reading the `Quality` property, and the round-trip acceptance test. *Needs 11, 12 (`fill:`), 13.*
 15. **IT drivers.** `Cmd` members through `WriteDecl`, and the generated
     `hw` extensions. *Needs 11.*
 16. **IO-Link port devices** produce wiring. *Needs 10.*
@@ -1123,7 +1160,11 @@ command tags are in released builds, the more projects a migration touches.
 
 ## 19. Open questions
 
-Each has a recommendation. A question that is James's call is marked.
+Each has a recommendation. naut-lead accepted the recommendation for every
+question not marked *James, pending* (Q9 with a condition, recorded there).
+The four pending ones are in James's decisions doc, and each gates one
+slice: Q4 gates slice 6, Q12 slice 12, Q20 slice 11 and Q24 slice 13.
+Nothing in slices 2 to 5 waits on them.
 
 1. **Instances in their own list, or as `tags:` rows with a `wiring:`
    key?** Recommend their own `instances:` list. A tags row would grow
@@ -1142,7 +1183,7 @@ Each has a recommendation. A question that is James's call is marked.
    that the retained value wins and the change shows as repo-ahead in
    `naut params` (§7), matching setpoints today. The alternative, a deploy
    that resets changed values, would let a redeploy overwrite an operator's
-   tuning silently. *James's call.*
+   tuning silently. *James, pending* (gates slice 6).
 5. **A retained member whose type changed:** discard it, start from the
    initial value, and log it (recommended). Converting the value, for
    example INT to REAL, is possible but would surprise more than it helps.
@@ -1164,8 +1205,12 @@ Each has a recommendation. A question that is James's call is marked.
    level keeps memory and `Cmd` members alive across a DDEATH and keeps a
    metric from moving when a source is added. The costs: today's
    `devices:` struct tags move, which the §12.1 switch reports; and staleness
-   reaches a host as a per-member quality property instead of a DDEATH,
-   which a host that ignores properties does not see.
+   reaches a host as the `Quality` metric property (Ignition's convention,
+   §11.1) instead of a DDEATH, which a host that ignores properties does not
+   see. **Accepted by naut-lead on that condition**: the property, the codes
+   and the hosts that lose the signal are named in §11.1 and in the §12.1
+   report, and the Int32 encoding is verified against Ignition before
+   slice 13.
 10. **Template version:** a content hash by default, with an explicit
     `version:` in the wiring for imported types (recommended), or always
     explicit? Explicit-only relies on people remembering to bump it, which
@@ -1177,8 +1222,8 @@ Each has a recommendation. A question that is James's call is marked.
 12. **Peer importers' writable members:** `both:` in place (recommended,
     §9), or a generated `Cmd` sub-struct as the 11-28 comment's wording
     says? `Cmd` there would make the imported type differ from the peer's,
-    and the round trip in §11.3 would fail. *James's call*, since it reads
-    against his comment.
+    and the round trip in §11.3 would fail. *James, pending* (gates slice
+    12), since it reads against his comment.
 13. **The `both:` in-flight hold:** hold until the write is answered or the
     peer's next data carries the member, bounded by a few polls
     (recommended), or no hold and accept the flicker?
@@ -1195,13 +1240,13 @@ Each has a recommendation. A question that is James's call is marked.
     is the same rule as in addresses.
 18. **`expr:` reading project tags**, not only siblings: yes, read-only
     (recommended). A sibling shadows a tag, with a warning.
-19. **Where #1458 sits in the order** (bugs, claims, coverage, fuzz).
-    Recommend slices 2 to 4 right after the in-flight bug work, because the
-    device-library migration grows with every release. *James's call.*
+19. **Where #1458 sits in the order:** answered. James said on 11-28 to
+    proceed now, so slice 2 starts once this brief merges.
 20. **`STRUCT EXTENDS` as a nautilus extension** beyond IEC: accept it
     (recommended). The CODESYS spelling reads naturally, flattening keeps
     every writer and wire format plain, and wrap remains the pure-IEC path.
-    *James's call* under "language stays vendor-neutral".
+    *James, pending* (gates slice 11), under "language stays
+    vendor-neutral".
 21. **The keyword `fill:`** for a driver filling a type whole: keep it, or
     `from:` at the wiring level? Recommend `fill:`, so a reader never
     confuses "the whole type" with "this member".
@@ -1223,7 +1268,8 @@ Each has a recommendation. A question that is James's call is marked.
     "instance params (`prefix`, overrides)". Recommend publishing params
     only. `set:` values already appear as members, `wire:` is addressing,
     and params feeding an `endpoint` are left out unless marked
-    `publish: true` (§11.1). *James's call*, since it narrows his comment.
+    `publish: true` (§11.1). *James, pending* (gates slice 13), since it
+    narrows his comment.
 25. **A `both:` write before its first delivery** (§2.3): refuse an
     external write, naming the cause, and let the delivery replace a
     program's assignment (recommended). This overrides the Sparkplug host's
