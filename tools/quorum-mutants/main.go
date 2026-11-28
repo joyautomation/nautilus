@@ -448,6 +448,9 @@ var table = []mutation{
 	{"diverged_restart_loops", []string{"TestADivergedControllerRestartsItselfOnlyUnderTheRule"}},
 	{"diverged_says_vouch", []string{"TestADivergedLogIsNotToldToVouch"}},
 	{"blocked_at_once", []string{"TestTheLogCompactionsConditions"}},
+	// #1455 PR 2b-2: the switch-on.
+	{"pair_compaction_off", []string{"TestPairCompactionIsOnInThisBuild"}},
+	{"witness_compaction_off", []string{"TestPairCompactionIsOnInThisBuild"}},
 	{"leader_catchup_pages_unchecked", []string{"TestLeaderCatchUpStopsWhenTheChosenCopyLosesItsLog"}},
 	{"leader_catchup_term_unchecked", []string{"TestLeaderCatchUpStopsAtANewerTerm"}},
 	{"rewrite_failure_kept", []string{"TestFailedRewriteKeepsTheOldSuffix"}},
@@ -1058,6 +1061,8 @@ var rowPkgs = map[string][]string{
 	"diverged_restart_loops":            {"./cmd/naut"},
 	"diverged_says_vouch":               {"./cmd/naut"},
 	"blocked_at_once":                   {"./cmd/naut"},
+	"pair_compaction_off":               {"./cmd/naut"},
+	"witness_compaction_off":            {"./cmd/naut"},
 	"entry_unbounded":                   {"./oplog"},
 	"compaction_unpaced":                {"./oplog"},
 	"rewrite_unpaced":                   {"./oplog"},

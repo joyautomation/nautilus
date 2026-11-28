@@ -1686,6 +1686,99 @@ Peer traffic, this log included, is encrypted by peer TLS (below),
 unless it is turned off.
 :::
 
+#### The log stays small: compaction
+
+The operator-intent log would otherwise grow forever. So the leader
+compacts it: it drops the entries that no longer decide anything, such
+as a substitute that ended, an acknowledgement that was cleared, a shelve
+that was undone, or a browser session that signed out. Every other copy
+then does the same.
+
+- **What stays:** everything still in force, every operator note and
+  every checkout run (a shift log is a record), and the last 7 days whole.
+  So the log still grows by its notes and checkout runs, and nothing else.
+- **When:** at most once a day. It starts once 20,000 entries (or 8 MB)
+  are older than 7 days, and only while all three members answer, are
+  synced and run a release that compacts, with their clocks within 5
+  minutes of each other. Each controller rewrites its log file once at
+  least twice the log's size is free on its disk.
+- **The first compaction waits 7 days.** The 7 days count from the first
+  time all three members run a release that compacts. Until then a
+  downgrade works as before. A revert and a later re-upgrade do not
+  restart them.
+- **Seeing it:** once a copy's log is compacted, `naut redundancy status`
+  says so on its log line: `operator-intent log: synced; compacted through
+  seq 40210 (a build from before log compaction can't open it)`.
+  `GET /api/cluster` gives the same seq as `log.compactedThrough`.
+
+What it raises, and the fix for each:
+
+- `oplog-compaction-blocked`: a compaction has waited more than 7 days,
+  and the log keeps growing. The condition says why, and each reason names
+  its fix:
+  - a member that doesn't answer: bring it back;
+  - a member still on an older release: upgrade it;
+  - the clocks disagree by more than 5 minutes: correct the clock that is
+    wrong (NTP);
+  - a member runs newer keep rules than this controller: upgrade this
+    controller.
+
+  Any other reason (a copy not synced, superseded, diverged or lost, a
+  vouch not spent yet) has its own condition, above.
+
+  It is raised only once there is enough to compact. After an upgrade
+  that leaves a member behind, that is 14 days at the earliest: 7 days
+  after the first upgraded leader, then 7 days waiting.
+- `oplog-compaction-disk`: a controller has too little free disk to
+  rewrite its log file. It names the free space and what it needs (twice the log's
+  size). Free some space; the rewrite runs again on its own.
+- `oplog-peer-behind-base`: a member missed the part that was compacted.
+  - "runs a build from before log compaction ... update it": the member is
+    on an older release and can't be sent it. Upgrade that member.
+  - "refuses its install": the member is on this release but its log
+    can't take the compacted part (it holds entries the compaction does
+    not fit). This happens when an old copy of the log file was put back
+    on that member (a restored backup or disk image). Report it with the
+    condition's text. Until it is fixed the pair has no spare copy of the
+    log: operator writes need both other copies answering, and if the
+    member is the other controller, there is no synced standby.
+- `oplog-diverged`: a copy's log doesn't fit a compaction the other copies
+  committed. It counts for nothing until naut restarts on it, which moves
+  the log aside and syncs it again. Under systemd it restarts itself once,
+  as soon as it is the standby and the other controller leads synced.
+  Otherwise the condition says why it waits; restart naut on it.
+- `oplog-compaction-refused`: the leader's check of what to keep did not
+  check out, so nothing was dropped. That is a bug in naut: report it with
+  the condition's text.
+
+:::caution[No downgrade past compaction]
+A controller on a release from before log compaction can't open a
+compacted log, and refuses to start. Its error shows the start of the log
+file's first line:
+
+```
+naut run: redundancy: operator-intent log: oplog: /var/lib/naut/oplog.jsonl: unrecognised line "{\"b\":{\"why\":\"compacted log: update naut, or export notes and start a new log\",\"t…"
+```
+
+A witness on such a release keeps running but answers 503 for that pair's
+log, so the pair can't commit operator writes while the witness is one of
+the two copies it needs.
+
+- **The fix is to put the compacting release back.** Nothing is lost.
+- **Before the first compaction** (no "compacted through" in `naut
+  redundancy status` on any member), going back works as before.
+- **Going further back after a compaction is not supported,** and there is
+  no back-out tool. It means a new operator-intent log on all three
+  members, so the pair loses its acknowledgements, shelves, substitutes
+  and sessions, and its notes and checkout runs, which only the log holds.
+  Export the notes first: `naut notes export` reads the log on either
+  release, even with the controller stopped. The checkout runs have no
+  export: keep the compacting release until they are no longer needed.
+- **A build with compaction switched off again** (a later release that
+  reverts it) still opens and runs a compacted log. It can't refill a
+  member that lost its log, though, until a compacting release is back.
+:::
+
 #### Peer TLS
 
 Every call on a peer port (votes, the handshake, the operator-intent

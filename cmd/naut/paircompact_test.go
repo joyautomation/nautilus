@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"go/ast"
 	"go/build"
 	"go/parser"
 	"go/token"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -90,21 +93,39 @@ func TestADivergedLogIsNotToldToVouch(t *testing.T) {
 	}
 }
 
-// TestCompactionStaysDarkInThisBuild (#1455 PR 2b-1): the keep decision is
-// wired (Options.Compact, Options.Base), but neither production log, the
-// pair's nor the witness's, sets a keep-rules version, so no copy
-// advertises compaction, marks its terms, or looks for one. PR 2b-2, the
-// switch-on, replaces this with a test that both set it.
-func TestCompactionStaysDarkInThisBuild(t *testing.T) {
-	for _, f := range []string{"pairrun.go", "witnesslog.go"} {
-		src, err := os.ReadFile(f)
+// TestPairCompactionIsOnInThisBuild (#1455 PR 2b-2, the switch-on): the
+// pair's two logs and the witness's, opened as naut run and naut witness
+// open them, each advertise this build's keep-rules version in their
+// answers, which the leader's gate reads: one left without it (the
+// mutants pair_compaction_off, witness_compaction_off) holds every
+// compaction back for good.
+func TestPairCompactionIsOnInThisBuild(t *testing.T) {
+	r := newPairRig(t)
+	rules := func(who string, code int, body string) {
+		t.Helper()
+		var ans struct {
+			CompactRules int `json:"compactRules"`
+		}
+		if code != http.StatusOK || json.Unmarshal([]byte(body), &ans) != nil {
+			t.Fatalf("%s's log: %d %s", who, code, body)
+		}
+		if ans.CompactRules < 1 || ans.CompactRules != compactRules {
+			t.Errorf("%s's log advertises keep rules %d, want %d and at least 1 (compaction on): %s", who, ans.CompactRules, compactRules, body)
+		}
+	}
+	for _, n := range []string{"a", "b"} {
+		req, _ := http.NewRequest("GET", r.peerScheme()+r.peer[n]+"/api/oplog?after=0", nil)
+		req.Header.Set(node.TokenHeader, testPeerToken)
+		resp, err := r.peerHTTPAs(other(n), n).Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if bytes.Contains(src, []byte("CompactRules")) {
-			t.Fatalf("%s sets a keep-rules version: compaction is on (that is PR 2b-2, with its release notes)", f)
-		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		rules("controller "+n, resp.StatusCode, string(b))
 	}
+	code, body := r.witnessLog("GET", "/api/oplog?after=0", "")
+	rules("the witness", code, body)
 }
 
 // TestTheCompactionSeamIsNotInAReleaseBuild (#1455 PR 2b-1.9, the lead's
@@ -113,7 +134,8 @@ func TestCompactionStaysDarkInThisBuild(t *testing.T) {
 // files that name the tag are exactly the seam's; a release build (the
 // release config sets no tags or flags) takes the no-op hook, whose body
 // is empty, and leaves the seam out; and in oplog only the seam sets a
-// keep-rules version (cmd/naut's is TestCompactionStaysDarkInThisBuild's).
+// keep-rules version (cmd/naut's own, compactRules, is
+// TestPairCompactionIsOnInThisBuild's).
 func TestTheCompactionSeamIsNotInAReleaseBuild(t *testing.T) {
 	ctx := build.Default
 	ctx.BuildTags = nil

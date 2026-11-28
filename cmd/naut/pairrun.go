@@ -1020,11 +1020,13 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		// runtime ends the old history's substitutes at once, leading or
 		// not (driveLog repeats it).
 		OnSuperseded: func(oplog.Lineage) { m.endSuperseded() },
-		// Compaction (#1455): the keep decision and the base hook. Off
-		// until a keep-rules version is set (PR 2b-2): with no rules version the
-		// node never looks for a compaction nor marks its terms.
-		Compact: server.NewKeeper().Decide,
-		Base:    sl.Base,
+		// Compaction (#1455): this build's keep rules, the keep decision
+		// and the base hook. The leader compacts once all three copies run
+		// them (the witness's log sets the same version), and the first
+		// time 7 days after that (docs/design/oplog-compaction.md).
+		CompactRules: logCompactRules("pair_compaction_off"),
+		Compact:      server.NewKeeper().Decide,
+		Base:         sl.Base,
 	}
 	testLogOptions("pair", &lo)
 	n, err := oplog.New(lo)
@@ -1421,6 +1423,22 @@ func nonEmpty(s, or string) string {
 		return or
 	}
 	return s
+}
+
+// compactRules is the keep-rules version of this build's operator-intent
+// logs, the pair's and the witness's (#1455 PR 2b-2, the switch-on; 0
+// would leave compaction off). Any change to a keep rule or an Entry
+// field bumps it: a copy on newer rules holds every compaction back until
+// the others run them (oplog.Options.CompactRules).
+const compactRules = 1
+
+// logCompactRules is compactRules, or 0 under the named mutant (that log
+// left without a rules version).
+func logCompactRules(mut string) int {
+	if mutNaut(mut) {
+		return 0
+	}
+	return compactRules
 }
 
 // logIdentity is this controller's log identity: cluster, node and box,
