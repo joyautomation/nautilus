@@ -98,6 +98,11 @@ func TestPairHandBackToAGoodPeer(t *testing.T) {
 	ok := r.healthy(lead)
 	healthyOnAsk(ok)
 	before := r.nodes[stand].m.q.Node().Term()
+	// The standby may have taken over once already, while the pair
+	// settled after commissioning (the lead can move once): only a
+	// takeover on the hand-back's edge is wrong (#1096, a flake under
+	// slow voter writes).
+	prior := r.nodes[stand].rt.LastTakeover()
 	ok.Store(false) // the leader's lease lapses; the standby wins
 	r.wonAfter(t, stand, before)
 	won := time.Now()
@@ -124,7 +129,7 @@ func TestPairHandBackToAGoodPeer(t *testing.T) {
 	if !r.hasWarning(lead, "at term ") {
 		t.Error("the condition does not give the file's place")
 	}
-	if rep := r.nodes[stand].rt.LastTakeover(); !rep.At.IsZero() {
+	if rep := r.nodes[stand].rt.LastTakeover(); !rep.At.Equal(prior.At) {
 		t.Errorf("%s took over (%+v) on the edge it handed back", stand, rep)
 	}
 	if rep := r.nodes[lead].rt.LastTakeover(); rep.NoHandBack != "" {
