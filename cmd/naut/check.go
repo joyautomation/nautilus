@@ -410,7 +410,19 @@ func runCheck(args []string) int {
 		// write at commit, so without this it would be silently lost.
 		for _, w := range st.InstanceWrites(res.composed, runtime.WiredKinds(tags)) {
 			if w.Pos.Line <= res.preludeLines {
-				continue // inside a library: its own check says it
+				// Inside a library: a block that assigns a VAR_EXTERNAL
+				// instance member. Said at the library's own line, once,
+				// like any library error, so `naut check main.st` reports
+				// it even when the library file is not named.
+				if sg, line, ok := stproject.Locate(res.segs, w.Pos.Line); ok {
+					col := w.Pos.Col
+					if sg.Transpiled {
+						line, col = 1, 1
+					}
+					libErrs = append(libErrs, libErr{path: sg.Path, line: line, col: col,
+						msg: "error: " + w.Message(blockLocation(w, res, mapLine))})
+				}
+				continue
 			}
 			markBad(f)
 			line, col := mapLine(w.Pos.Line-res.preludeLines), w.Pos.Col

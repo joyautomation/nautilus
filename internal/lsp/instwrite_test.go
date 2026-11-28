@@ -74,3 +74,23 @@ func TestInstanceWriteDiagnostics(t *testing.T) {
 		}
 	}
 }
+
+// A library block that assigns a from: member of an instance it reaches
+// through VAR_EXTERNAL shows the error in the library file, on its line.
+func TestInstanceWriteDiagnosticsInALibraryBlock(t *testing.T) {
+	lib := "FUNCTION_BLOCK Reset\n  VAR_EXTERNAL P101 : Pump; END_VAR\n  P101.Start := TRUE;\n  P101.Running := FALSE;\nEND_FUNCTION_BLOCK\n"
+	files := map[string]string{
+		"nautilus.yaml": strings.Replace(instWriteManifest, "%s", "main.st", 1),
+		"main.st":       "PROGRAM main\nVAR r : Reset; END_VAR\nr();\nEND_PROGRAM\n",
+		"types.st":      instWriteTypes,
+		"lib/reset.st":  lib,
+	}
+	_, paths := refProject(t, files)
+	s := startSession(t)
+	s.recvResponse(s.send("initialize", map[string]any{}, true))
+	d := s.openDiags(pathToURI(paths["lib/reset.st"]), lib)
+	if len(d) != 1 || d[0].Severity != SeverityError || d[0].Range.Start.Line != 3 ||
+		!strings.Contains(d[0].Message, "P101.Running is read from the device (from:)") {
+		t.Errorf("diagnostics = %+v", d)
+	}
+}
