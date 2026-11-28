@@ -150,3 +150,23 @@ func TestInstanceOnlineRefusesASubstitute(t *testing.T) {
 		t.Errorf("Substitute = %v, want it refused", err)
 	}
 }
+
+// A force holds the combined companion, as it holds any input, so an alarm
+// on it can be tried; the runtime's AND takes over again once it is gone.
+func TestInstanceOnlineAForceHoldsIt(t *testing.T) {
+	r, d := onlineRig(t, "")
+	d.set("T1_a__Online", true)
+	d.set("T1_b__Online", false)
+	if err := r.Tags().Force("T1__Online", true); err != nil {
+		t.Fatal(err)
+	}
+	r.Scan()
+	if !r.Tags().Bool("T1__Online") {
+		t.Error("the force did not hold the combined companion")
+	}
+	r.Tags().Unforce("T1__Online")
+	r.Scan()
+	if r.Tags().Bool("T1__Online") {
+		t.Error("TRUE after the force with B down")
+	}
+}

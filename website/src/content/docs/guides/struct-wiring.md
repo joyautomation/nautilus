@@ -282,8 +282,10 @@ Modbus pump and an OPC UA level transmitter in one `Tank`). Each connection
 of its own then gets `<Instance>_<source>__Online` (and `__Outages` on
 Modbus), a shared one keeps its driver's companion, and
 `<Instance>__Online` is their AND: TRUE only while every connection
-answers. The runtime computes it after each read, nothing else writes it,
-and it raises no alarm of its own (each connection's own does). Two
+answers, and FALSE after a read that failed. The runtime computes it after
+each read; an outside write and a substitute are refused (substitute a
+connection's companion instead), a force holds it, and it raises no alarm
+of its own (each connection's own does). Two
 commands on two connections changed in one scan are two independent writes,
 in no guaranteed order: a sequence that needs an order writes one, waits
 for its read-back, then writes the next. Quality is per member: the
