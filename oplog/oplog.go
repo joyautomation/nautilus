@@ -666,10 +666,10 @@ type Node struct {
 	seqMu sync.Mutex
 	// mu guards the state below.
 	mu          sync.Mutex
-	entries     []Entry
-	commit      uint64 // applied up to here
-	term        uint64 // highest term seen
-	syncedTerm  uint64 // the term this leader last caught up for
+	entries     []stored // the log, in order (see stored)
+	commit      uint64   // applied up to here
+	term        uint64   // highest term seen
+	syncedTerm  uint64   // the term this leader last caught up for
 	file        *os.File
 	lastContact map[string]time.Time
 	// leaderHeard is when a leader's replication last matched here
@@ -1451,27 +1451,21 @@ func (n *Node) open() (damaged bool, err error) {
 		return false, err
 	}
 	good, size, damaged, err := scanLines(f, func(line []byte) (bool, error) {
-		var l fileLine
-		if err := json.Unmarshal(line, &l); err != nil {
-			return false, nil // a torn last line: keep what parsed, drop the rest
-		}
+		e, c, old, ok := storedLine(line)
 		switch {
-		case l.E != nil:
-			n.entries = append(n.entries, *l.E)
-			if l.E.Term > n.term {
-				n.term = l.E.Term
-			}
-		case l.C != nil:
-			n.commit = *l.C
-		default:
-			// The first format wrote one bare Entry per line, every one
-			// applied as written: load it as committed.
-			var e Entry
-			if err := json.Unmarshal(line, &e); err == nil && e.Seq > 0 {
-				n.entries = append(n.entries, e)
+		case !ok:
+			return false, nil // a torn last line: keep what parsed, drop the rest
+		case e != nil:
+			n.entries = append(n.entries, *e)
+			n.term = max(n.term, e.Term)
+			if old {
+				// The first format wrote one bare Entry per line, every
+				// one applied as written: load it as committed.
 				n.commit = e.Seq
-				return true, nil
 			}
+		case c != nil:
+			n.commit = *c
+		default:
 			return false, fmt.Errorf("oplog: %s: unrecognised line %q", n.o.File, truncateStr(string(line), 80))
 		}
 		return true, nil
@@ -1614,7 +1608,7 @@ func (n *Node) Commit() uint64 {
 func (n *Node) entriesForTest() []Entry {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return append([]Entry(nil), n.entries...)
+	return n.afterLocked(0)
 }
 
 func (n *Node) lastLocked() uint64 {
@@ -1632,9 +1626,21 @@ func (n *Node) After(seq uint64) []Entry {
 }
 
 func (n *Node) afterLocked(seq uint64) []Entry {
-	i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq > seq })
-	out := make([]Entry, len(n.entries)-i)
-	copy(out, n.entries[i:])
+	return decodeAll(n.entries[n.indexAfterLocked(seq):])
+}
+
+// indexAfterLocked is the index of the first entry after seq. Caller
+// holds mu.
+func (n *Node) indexAfterLocked(seq uint64) int {
+	return sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq > seq })
+}
+
+// decodeAll decodes stored entries.
+func decodeAll(ss []stored) []Entry {
+	out := make([]Entry, len(ss))
+	for i, s := range ss {
+		out[i] = s.entry()
+	}
 	return out
 }
 
@@ -1703,10 +1709,10 @@ func (n *Node) rewrite() error {
 		return err
 	}
 	w := bufio.NewWriter(tmp)
-	for i := range n.entries {
-		e := n.entries[i]
-		b, _ := json.Marshal(fileLine{E: &e})
-		if _, err := w.Write(append(b, '\n')); err != nil {
+	var line []byte
+	for _, s := range n.entries {
+		line = s.line(line[:0])
+		if _, err := w.Write(line); err != nil {
 			return fail(err)
 		}
 	}
@@ -1812,8 +1818,9 @@ func (n *Node) acceptLocked(es []Entry) (fresh int, err error) {
 		case e.Seq > last+1:
 			return fresh, fmt.Errorf("%w: have %d, got %d", errGap, last, e.Seq)
 		case e.Seq == last+1:
-			n.entries = append(n.entries, e)
-			buf = appendLine(buf, fileLine{E: &e})
+			s := storedOf(e)
+			n.entries = append(n.entries, s)
+			buf = s.line(buf)
 			fresh++
 		default:
 			i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq >= e.Seq })
@@ -1833,7 +1840,7 @@ func (n *Node) acceptLocked(es []Entry) (fresh int, err error) {
 				return fresh, err
 			}
 			buf = nil
-			n.entries = append(n.entries[:i:i], e)
+			n.entries = append(n.entries[:i:i], storedOf(e))
 			if err := n.rewrite(); err != nil {
 				return fresh, err
 			}
@@ -1856,7 +1863,7 @@ func (n *Node) commitTo(seq uint64) {
 	if seq <= n.commit {
 		return
 	}
-	n.applyRange(n.afterLocked(n.commit), seq)
+	n.applyRange(n.entries[n.indexAfterLocked(n.commit):], seq)
 	n.commit = seq
 	c := seq
 	if err := n.writeLine(fileLine{C: &c}); err != nil {
@@ -1868,19 +1875,28 @@ func (n *Node) commitTo(seq uint64) {
 // committed, in order. An entry a KindLapse in that same range names is
 // applied as Lapsed: the look ahead stops at seq, since an uncommitted
 // KindLapse may yet be replaced by a newer term's leader.
-func (n *Node) applyRange(es []Entry, seq uint64) {
+func (n *Node) applyRange(es []stored, seq uint64) {
+	// Two passes over the stored range, each decoding one entry at a time
+	// (#1455): at open the range is the whole log.
 	lapsed := map[uint64]bool{}
-	for _, e := range es {
-		if e.Seq <= seq && e.Kind == KindLapse && !mutOplog("lapse_ignored") {
+	for _, s := range es {
+		if s.Seq > seq {
+			break
+		}
+		if !s.mayLapse() {
+			continue
+		}
+		if e := s.entry(); e.Kind == KindLapse && !mutOplog("lapse_ignored") {
 			for _, r := range e.Refs {
 				lapsed[r] = true
 			}
 		}
 	}
-	for _, e := range es {
-		if e.Seq > seq {
+	for _, s := range es {
+		if s.Seq > seq {
 			break
 		}
+		e := s.entry()
 		e.Lapsed = lapsed[e.Seq] && e.Kind != KindLapse
 		n.apply(e)
 	}
@@ -2967,16 +2983,15 @@ func (n *Node) replicateToErr(ctx context.Context, peer string, es []Entry, term
 // asked for every page with the whole log copied each time). more: the
 // log goes on past it. Caller holds mu.
 func (n *Node) pageLocked(seq uint64) (page []Entry, more bool) {
-	i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq > seq })
+	i := n.indexAfterLocked(seq)
 	size := 0
 	for k := i; k < len(n.entries); k++ {
-		b, _ := json.Marshal(n.entries[k])
-		size += len(b) + 1
+		size += len(n.entries[k].raw) + 1
 		if k > i && (k-i >= n.o.lim.chunkEntries || size > n.o.lim.chunkBytes) {
-			return slices.Clone(n.entries[i:k]), true
+			return decodeAll(n.entries[i:k]), true
 		}
 	}
-	return slices.Clone(n.entries[i:]), false
+	return decodeAll(n.entries[i:]), false
 }
 
 // others are the peers but this instance.
