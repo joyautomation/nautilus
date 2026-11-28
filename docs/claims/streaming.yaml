@@ -368,8 +368,14 @@ claims:
       last scan, drivers and alarms blocks, and falls back to pass-through
       against a controller without deltas.
     source: "#from-the-hmi-kit"
-    tests: []
-    note: Client-side TypeScript behaviour with its own non-Go tests (hmi/src/lib/delta.ts); not in the Go or naut test results.
+    tests:
+      - 'npm hmi mergeDelta / merges a delta over the accumulated state'
+      - 'npm hmi mergeDelta / retains a non-tag block that is absent from a delta'
+      - 'npm hmi mergeDelta / passes a frame with no seq straight through'
+    note: >-
+      The merge (tags kept complete, blocks retained, pass-through without a
+      seq) is tested in the kit (hmi/tests/delta.test.ts).
+    partial: false
 
   - id: STR-039
     claim: >-

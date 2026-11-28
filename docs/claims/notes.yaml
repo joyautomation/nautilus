@@ -143,11 +143,16 @@ claims:
       is signed in, so it is never shown to or left for the next person at a
       shared terminal.
     source: "#on-the-screen"
-    tests: []
+    tests:
+      - 'npm hmi DraftKeeper: one person''s unsent text is theirs / keeps a draft per principal and per target'
+      - 'npm hmi DraftKeeper: one person''s unsent text is theirs / the next person who signs in does not see the last one''s text, and sign-out takes it away'
+      - 'npm hmi DraftKeeper: one person''s unsent text is theirs / someone else signing in finds the last person''s unsent text gone from storage too'
+      - 'npm hmi DraftKeeper: one person''s unsent text is theirs / survives a reload (a new keeper over the same storage)'
     note: >-
-      Tested in the kit (hmi/tests/notes.test.ts, run by npm test, not by go
-      test) and in a Chromium run recorded in the pull request; the claims
-      tool lists only Go tests.
+      The draft keeper (per person and target, reload, sign-out, a different
+      person) is tested in the kit. How the note box uses it was seen in a
+      Chromium run recorded in the pull request, not automated.
+    partial: true
 
   - id: NOTE-016
     claim: >-
@@ -155,7 +160,11 @@ claims:
       the person's text in place; an unconfirmed one says it may have been
       kept and offers to check.
     source: "#on-the-screen"
-    tests: []
+    tests:
+      - 'npm hmi a write that did not keep the note says why / says the controller''s own words, and the draft is always still there'
+      - 'npm hmi a write that did not keep the note says why / an unconfirmed proposal is "unknown", with the note id to check, never "failed"'
     note: >-
-      Tested in the kit (hmi/tests/notes.test.ts) and in a Chromium run with
-      the controller's refusals simulated; not a Go test.
+      The refusal wording and the unconfirmed outcome are tested in the kit.
+      The dialog showing them, and its offer to check, were seen in a Chromium
+      run with the controller's refusals simulated, not automated.
+    partial: true
