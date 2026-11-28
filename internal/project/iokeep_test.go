@@ -1343,3 +1343,36 @@ func TestIOKeptLeaseModeStillRunsAKeptState(t *testing.T) {
 	s3.Unit(1).SetHolding(0, 20)
 	eventually(t, "the Lease-mode leader commands the kept address", func() bool { return s3.Unit(1).Holding(10) == 21 })
 }
+
+// A kept live change whose files carry a manifest with struct wiring the
+// deploy has since changed is dropped, as a deploy replaces a live change:
+// restoring it would bring the old wiring back (a restart applies wiring),
+// and holding the whole driver for it would stop every device on it.
+func TestIOKeptDroppedWhenTheDeployChangedTheWiring(t *testing.T) {
+	store, s1, s2, _, files := keptThenRestart(t)
+	_ = s2
+	inst := newSlave(t, 0)
+	wiredManifest := func(addr int) string {
+		return string(files["nautilus.yaml"].Data) + fmt.Sprintf(`wirings:
+  - type: Pump
+    sources: { d: { driver: modbus, endpoint: "127.0.0.1:%d", unit-id: 1 } }
+    members:
+      Running: { from: d, table: coil, address: %d }
+`, slavePort(inst), addr) + "instances:\n  - { name: P1, type: Pump }\n"
+	}
+	boot := withFile(withFile(files, "types.st", "TYPE Pump : STRUCT\n  Running : BOOL;\nEND_STRUCT; END_TYPE\n"), "nautilus.yaml", wiredManifest(1))
+	store.edit(t, func(st *retain.State) {
+		st.IO.Files["nautilus.yaml"] = wiredManifest(0) // what the kept files hold: the wiring before the deploy
+	})
+	r := startKeepRig(t, boot, keepOpts{store: store})
+	r.leading(t)
+	if d := r.io.Differs(); len(d) != 0 {
+		t.Fatalf("differs = %+v, want the deployed manifest running", d)
+	}
+	eventually(t, "A_In from the deployed address", func() bool { return r.value("A_In") == "4" })
+	_ = s1
+	d := r.io.Discarded()
+	if len(d) != 1 || d[0].Device != "DEV_A" || !strings.Contains(d[0].Why, "the deployed struct wiring differs from the kept files'") {
+		t.Fatalf("discarded = %+v, want DEV_A, the deploy changed the wiring", d)
+	}
+}

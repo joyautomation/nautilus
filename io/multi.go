@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sort"
 	"sync"
@@ -85,6 +86,11 @@ type Multi struct {
 	// gates are the write gates installed so far (SetWriteGate, then any
 	// SetPlainGate), in order, replayed onto a child Replace brings in.
 	gates []func(Driver)
+
+	// unclaimed are the keys a WriteOutputs held that no child takes, each
+	// logged the first time (WriteOutputs). Under unclaimedMu.
+	unclaimedMu sync.Mutex
+	unclaimed   map[string]bool
 }
 
 // NewMulti composes drivers into one. Every child must be named, the names
@@ -355,9 +361,14 @@ func (m *Multi) ReadInputsInto(dst Values) error {
 
 // WriteOutputs routes each value to the child whose OutputNames claim it
 // and skips children that own none of this delivery. A value no child
-// claims is dropped silently — the same tolerance a single driver extends
-// to a tag it has no binding for. Errors from several children are joined,
-// each naming its child.
+// claims reaches no device: it is not an error (a declared output tag no
+// driver binds is legal, and an error here would fail every push, the
+// claimed keys' too), but it is never dropped without a word either. The
+// first time a key arrives unclaimed it is logged, naming it, and Unclaimed
+// lists it from then on. (The runtime refuses at start an instance whose
+// to: or both: leaf no driver claims, so a command of a wired instance
+// never gets here.) Errors from several children are joined, each naming
+// its child.
 func (m *Multi) WriteOutputs(vals Values) error {
 	m.set.RLock()
 	defer m.set.RUnlock()
@@ -365,6 +376,7 @@ func (m *Multi) WriteOutputs(vals Values) error {
 	for k, v := range vals {
 		i, ok := m.outOwner[k]
 		if !ok {
+			m.noteUnclaimed(k)
 			continue
 		}
 		if perChild[i] == nil {
@@ -382,6 +394,39 @@ func (m *Multi) WriteOutputs(vals Values) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// noteUnclaimed logs key the first time a write holds it and no child
+// claims it.
+func (m *Multi) noteUnclaimed(key string) {
+	m.unclaimedMu.Lock()
+	defer m.unclaimedMu.Unlock()
+	if m.unclaimed[key] {
+		return
+	}
+	if m.unclaimed == nil {
+		m.unclaimed = map[string]bool{}
+	}
+	m.unclaimed[key] = true
+	names := make([]string, len(m.children))
+	for i, c := range m.children {
+		names[i] = c.Name
+	}
+	slog.Warn("multi-driver: a write reaches no driver: no driver in the set takes this output, so its value goes nowhere",
+		"key", key, "drivers", names)
+}
+
+// Unclaimed lists, sorted, every key a WriteOutputs held that no child
+// claimed (each is logged once, when first seen).
+func (m *Multi) Unclaimed() []string {
+	m.unclaimedMu.Lock()
+	defer m.unclaimedMu.Unlock()
+	out := make([]string, 0, len(m.unclaimed))
+	for k := range m.unclaimed {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Quality merges the children's reports. Ownership is disjoint, so the

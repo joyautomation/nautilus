@@ -23,10 +23,23 @@ const wiringPump = `wirings:
       Cmd.Start: { to: drive, table: coil, address: 10 }
 `
 
+const wiringTypes = `TYPE PumpCmd : STRUCT
+  Start : BOOL;
+END_STRUCT; END_TYPE
+TYPE Pump : STRUCT
+  Running : BOOL;
+  Cmd     : PumpCmd;
+END_STRUCT; END_TYPE
+TYPE Motor : STRUCT
+  SpeedSP : REAL;
+END_STRUCT; END_TYPE
+`
+
 func wiringFS(manifest string, files map[string]string) fstest.MapFS {
 	fs := fstest.MapFS{
 		"nautilus.yaml": {Data: []byte(manifest)},
 		"main.st":       {Data: []byte("PROGRAM Main\nEND_PROGRAM\n")},
+		"types.st":      {Data: []byte(wiringTypes)},
 	}
 	for n, c := range files {
 		fs[n] = &fstest.MapFile{Data: []byte(c)}
@@ -41,13 +54,23 @@ func readWiring(t *testing.T, manifest string, files map[string]string) error {
 }
 
 // A project with wiring that is wrong hears every mistake, with where; a
-// project whose wiring is right hears that this build does not run it, so
-// nothing is silently ignored.
-func TestWiringIsCheckedThenRefusedAsNotRunning(t *testing.T) {
+// project whose wiring is right gets its instance and the connection's
+// companions as tags.
+func TestWiringIsCheckedThenResolved(t *testing.T) {
 	good := wiringManifest + wiringPump + "instances:\n  - { name: P1, type: Pump, params: { endpoint: 10.0.0.1 } }\n"
-	err := readWiring(t, good, nil)
-	if err == nil || !strings.Contains(err.Error(), "decoded and checked, but this build does not run them yet") {
-		t.Fatalf("a valid wiring must be refused as not running yet, got %v", err)
+	m, err := ReadManifest(wiringFS(good, nil), "")
+	if err != nil {
+		t.Fatalf("a valid wiring: %v", err)
+	}
+	got := map[string]TagConfig{}
+	for _, tc := range m.Tags {
+		got[tc.Name] = tc
+	}
+	if p := got["P1"]; p.instance == nil || p.Type != "Pump" {
+		t.Errorf("P1 must be an instance of Pump: %+v", p)
+	}
+	if got["P1__Online"].Role != "input" || got["P1__Outages"].Type != "DINT" {
+		t.Errorf("the connection's companions: %+v", got)
 	}
 
 	bad := wiringManifest + wiringPump + "instances:\n  - { name: P1, type: Pump }\n"
@@ -55,16 +78,13 @@ func TestWiringIsCheckedThenRefusedAsNotRunning(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `nautilus.yaml:12: instance P1 does not give param "endpoint"`) {
 		t.Errorf("a missing param must name the manifest and its line, got %v", err)
 	}
-	if strings.Contains(err.Error(), "does not run them yet") {
-		t.Errorf("mistakes come before the refusal, not with it: %v", err)
-	}
 }
 
 func TestWiringFiles(t *testing.T) {
 	m := wiringManifest + "wiring-files: [wiring/pumps.yaml]\n"
 	files := map[string]string{"wiring/pumps.yaml": wiringPump + "instances:\n  - { name: P1, type: Pump, params: { endpoint: a } }\n"}
-	if err := readWiring(t, m, files); err == nil || !strings.Contains(err.Error(), "does not run them yet") {
-		t.Errorf("a valid include file must decode, check and then be refused as not running: %v", err)
+	if err := readWiring(t, m, files); err != nil {
+		t.Errorf("a valid include file must decode, check and resolve: %v", err)
 	}
 
 	// A mistake in the file names the file and its line.
@@ -134,15 +154,17 @@ func TestWiringResolvesDriversByName(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `source "plc" is a modbus field device`) {
 		t.Errorf("both: on a modbus entry named like a controller must be refused: %v", err)
 	}
-	// An eip entry carries it.
-	err = readWiring(t, both("drivers:\n  - { type: eip, name: line-plc, host: 192.0.2.1, manifest: eip.yaml }\n", "line-plc"), nil)
-	if err == nil || !strings.Contains(err.Error(), "does not run them yet") {
-		t.Errorf("both: on an eip entry must pass the checks: %v", err)
-	}
-	// A bare driver type needs no entry.
-	err = readWiring(t, both("", "eip"), nil)
-	if err == nil || !strings.Contains(err.Error(), "does not run them yet") {
-		t.Errorf("a driver type with no drivers: entry: %v", err)
+	// An eip entry passes the format's checks, and this build refuses it
+	// as not wired yet (slice 12), both: with it.
+	for _, tc := range []struct{ entry, name string }{
+		{"drivers:\n  - { type: eip, name: line-plc, host: 192.0.2.1, manifest: eip.yaml }\n", "line-plc"},
+		{"", "eip"}, // a bare driver type needs no entry
+	} {
+		err = readWiring(t, both(tc.entry, tc.name), nil)
+		if err == nil || !strings.Contains(err.Error(), `source "plc" uses the eip driver: this build runs struct wiring on Modbus only`) ||
+			!strings.Contains(err.Error(), `member "SpeedSP": both: is for a peer controller, which this build does not wire yet`) {
+			t.Errorf("both: on eip (%s): %v", tc.name, err)
+		}
 	}
 	// A name that is neither is named.
 	err = readWiring(t, both("", "nope"), nil)

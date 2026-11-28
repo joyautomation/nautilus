@@ -3,6 +3,7 @@ package io
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
@@ -364,5 +365,36 @@ func TestMultiForwardsBeginScan(t *testing.T) {
 	m.BeginScan()
 	if a.begun != 1 || b.begun != 1 {
 		t.Fatalf("BeginScan reached %d and %d children, want 1 each", a.begun, b.begun)
+	}
+}
+
+// A value no child claims reaches no device, and is never dropped without a
+// word (#1458 slice 5, hard condition 1): the first write that holds it logs
+// it, naming the key, and Unclaimed lists it. The claimed values still go
+// out, and the push is not failed for them.
+func TestMultiNamesAnUnclaimedWrite(t *testing.T) {
+	var logged strings.Builder
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+
+	a := named{Memory: NewMemory(), outs: []string{"P101.Cmd.Start"}}
+	m, err := NewMulti(NamedDriver{"a", a})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := m.WriteOutputs(Values{"P101.Cmd.Start": true, "P101.Cmd.Stop": true}); err != nil {
+			t.Fatalf("an unclaimed key must not fail the claimed ones: %v", err)
+		}
+	}
+	if got := m.Unclaimed(); !reflect.DeepEqual(got, []string{"P101.Cmd.Stop"}) {
+		t.Errorf("Unclaimed = %v", got)
+	}
+	if n := strings.Count(logged.String(), "key=P101.Cmd.Stop"); n != 1 {
+		t.Errorf("the unclaimed key is logged %d times, want once:\n%s", n, logged.String())
+	}
+	if v, _ := a.ReadInputs(); v["P101.Cmd.Start"] != true {
+		t.Errorf("the claimed key did not go out: %v", v)
 	}
 }

@@ -36,6 +36,8 @@ import (
 	"github.com/joyautomation/nautilus/snmp"
 	"github.com/joyautomation/nautilus/sparkplug"
 	sphost "github.com/joyautomation/nautilus/sparkplug/host"
+	"github.com/joyautomation/nautilus/wirebind"
+	"github.com/joyautomation/nautilus/wiring"
 )
 
 // checkNetworkSections validates the server sections that open sockets,
@@ -362,7 +364,7 @@ func opcuaManifest(fsys fs.FS, d DriverConfig) (opcua.Manifest, error) {
 // with the project's devices: merged in. A live I/O apply (ioconfig.go)
 // diffs it source by source.
 func modbusManifest(fsys fs.FS, d DriverConfig) (modbus.Manifest, error) {
-	if d.Manifest == "" && d.devices == nil {
+	if d.Manifest == "" && d.devices == nil && d.wired == nil {
 		return modbus.Manifest{}, fmt.Errorf("driver modbus: manifest (the imported modbus_manifest.yaml) is required")
 	}
 	var mm modbus.Manifest
@@ -382,6 +384,19 @@ func modbusManifest(fsys fs.FS, d DriverConfig) (modbus.Manifest, error) {
 		// the same driver so they share its scan and its status row.
 		var err error
 		if mm, err = d.devices.MergeModbus(mm); err != nil {
+			return mm, fmt.Errorf("driver modbus: %w", err)
+		}
+	}
+	if d.wired != nil {
+		// The struct wiring instances on this driver (#1458): a source per
+		// instance and a binding per from: and to: member, named by the
+		// member's full path, the key the runtime delivers and pushes.
+		add, problems := d.wired.ModbusManifest(wiredOwns(d, d.Name))
+		if err := wiring.Err(problems); err != nil {
+			return mm, err
+		}
+		var err error
+		if mm, err = wirebind.MergeModbus(mm, add); err != nil {
 			return mm, fmt.Errorf("driver modbus: %w", err)
 		}
 	}

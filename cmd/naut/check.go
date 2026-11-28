@@ -30,6 +30,7 @@ import (
 	swriter "github.com/joyautomation/nautilus/siemens/writer"
 	"github.com/joyautomation/nautilus/sparkplug"
 	"github.com/joyautomation/nautilus/virtdev"
+	"github.com/joyautomation/nautilus/wirebind"
 )
 
 // runCheck compiles every program (.st, .ld, .fbd, .sfc) under the given paths (files or
@@ -619,6 +620,29 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 	if (target == "logix" || target == "siemens") && proj.Devices().Len() > 0 {
 		errs++
 		fmt.Printf("%s: error: %s\n", loc.file, devicesOnTargetMessage(target))
+	}
+
+	// A wired instance (#1458) is filled and commanded by the nautilus
+	// runtime's drivers. Neither writer carries wiring yet: the TYPE would be
+	// written and nothing on the controller would fill its members. Our gap,
+	// named, with the issue that closes it (design §14).
+	// (The Siemens writer's own input refuses it too, so the Siemens
+	// target's rules below report it as well; Logix is said here.)
+	if target == "logix" {
+		if m, err := project.ReadManifest(os.DirFS(dir), manifestName); err == nil {
+			if err := project.WiredOnTarget(m, target); err != nil {
+				errs++
+				fmt.Printf("%s: error: %s\n", loc.file, err)
+			}
+		}
+	}
+
+	// Memory members are not retained yet (slice 6): until then each starts
+	// from its initial value on every restart. Said once, naming them, so a
+	// member left out of the wiring (which makes it memory) is seen too.
+	if w := retainedMemoryWarning(proj.Wired()); w != "" {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
 
 	// Without an alarms: section nothing watches the devices: the profiles'
@@ -1498,6 +1522,22 @@ type sizingStore struct{}
 func (sizingStore) Load() (retain.State, error) { return retain.State{}, nil }
 func (sizingStore) Save(retain.State) error     { return nil }
 func (sizingStore) Kind() string                { return "none" }
+
+// retainedMemoryWarning says which instances' memory members would be
+// retained memory and are not retained yet; "" when none.
+func retainedMemoryWarning(set *wirebind.Set) string {
+	var parts []string
+	for _, in := range set.InstancesList() {
+		if r := in.Retained(); len(r) > 0 {
+			parts = append(parts, in.Name+" ("+strings.Join(r, ", ")+")")
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "instances " + strings.Join(parts, "; ") + ": these members are memory (a member the wiring leaves out is memory too), " +
+		"which will be retained; this build does not retain them yet (slice 6 of struct wiring, #1458), so each starts from its initial value on every restart"
+}
 
 // devicesOnTargetMessage is the refusal for devices: rows on a target whose
 // writer does not realise them.

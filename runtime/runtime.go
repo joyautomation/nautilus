@@ -673,6 +673,9 @@ func New(o Options) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := tags.instanceKeysClaimed(o.Driver); err != nil {
+		return nil, err
+	}
 	// Set before any scan or goroutine can observe it, so the store's NowMs
 	// and the scan's dt always read the same clock.
 	tags.clock = o.Clock

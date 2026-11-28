@@ -46,6 +46,9 @@ func siemensWriterInput(dir, manifestName string) (swriter.Input, error) {
 	if err != nil {
 		return swriter.Input{}, err
 	}
+	if err := project.WiredOnTarget(m, "siemens"); err != nil {
+		return swriter.Input{}, err
+	}
 	var in swriter.Input
 	var st *project.SiemensTarget
 	if m.Target != nil {

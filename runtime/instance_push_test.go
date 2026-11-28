@@ -535,19 +535,21 @@ func TestPushResumedLeadershipRebasesEvents(t *testing.T) {
 	wantAbsent(t, p.d.last(t), "P101.Cmd.Stop")
 }
 
-// namedPush is a pushDriver a Multi can route to.
+// namedPush is a pushDriver a Multi can route to. It delivers the
+// instance's members whole, under the instance's name, and takes its
+// commands.
 type namedPush struct {
 	*pushDriver
 	outs []string
 }
 
-func (n namedPush) InputNames() []string  { return nil }
+func (n namedPush) InputNames() []string  { return []string{"P101"} }
 func (n namedPush) OutputNames() []string { return n.outs }
 
 // A driver swapped in is handed every output, but no event: command it was
 // never handed: its held value is the new baseline.
 func TestPushDriverSwapRebasesEvents(t *testing.T) {
-	outs := []string{"P101.Cmd.Stop", "P101.Cmd.Start"}
+	outs := []string{"P101.Cmd.Stop", "P101.Cmd.Start", "P101.Cmd.SpeedRef"}
 	a := namedPush{&pushDriver{}, outs}
 	m, err := nio.NewMulti(nio.NamedDriver{Name: "a", Driver: a})
 	if err != nil {
