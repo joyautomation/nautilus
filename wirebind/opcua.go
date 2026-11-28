@@ -77,7 +77,7 @@ func (s *Set) OPCUAConns() ([]OPCUAConn, []wiring.Problem) {
 				}
 				oc.Endpoint = ep
 			}
-			commands := map[string]string{} // node -> the command that writes it
+			var commands []opcua.TagBinding // the commands so far, for one writer per node
 			for _, mem := range in.Members {
 				if mem.Source != c.Source || (mem.Kind != wiring.From && mem.Kind != wiring.To) {
 					continue
@@ -91,12 +91,17 @@ func (s *Set) OPCUAConns() ([]OPCUAConn, []wiring.Problem) {
 					oc.Warnings = append(oc.Warnings, fmt.Sprintf("instance %s: member %s %s", in.Name, mem.Path, warn))
 				}
 				if b.Writable {
-					node := b.Namespace + "|" + b.NodeID
-					if prev, dup := commands[node]; dup {
-						add(mem.Pos, "instance %s: commands %s and %s both write node %s: two commands on one node fight, and the server takes whichever came last", in.Name, prev, mem.Path, b.NodeID)
+					clash := ""
+					for _, o := range commands {
+						if SameNode(o, b) {
+							clash = strings.TrimPrefix(o.Name, in.Name+".")
+						}
+					}
+					if clash != "" {
+						add(mem.Pos, "instance %s: commands %s and %s both write node %s: two commands on one node fight, and the server takes whichever came last", in.Name, clash, mem.Path, b.NodeID)
 						continue
 					}
-					commands[node] = mem.Path
+					commands = append(commands, b)
 				}
 				oc.Tags = append(oc.Tags, b)
 			}
@@ -123,6 +128,9 @@ func opcuaBinding(key string, mem Member) (opcua.TagBinding, string, error) {
 	}
 	b.NodeID = node
 	if v, ok := mem.Addr["namespace"]; ok {
+		if v == nil || fmt.Sprint(v) == "" {
+			return b, "", fmt.Errorf("namespace: is empty: give the namespace's URI (as naut opcua browse shows it), or leave the key out")
+		}
 		b.Namespace = fmt.Sprint(v)
 	}
 	iec := typeName(mem.Type)
@@ -209,16 +217,52 @@ func nodeNamespace(node string) int {
 	return n
 }
 
+// SameNode says whether two bindings may address one node of a server.
+// The driver re-targets a binding's namespace index from its URI when it
+// connects, so a node is its URI and its identifier, whatever index its id
+// was written with. A binding with no URI keeps its index, which may now
+// be any namespace's: it is taken as the same node as any binding with its
+// identifier, so a doubtful pair is refused rather than written twice.
+func SameNode(a, b opcua.TagBinding) bool {
+	ida, ia := nodeIdent(a.NodeID)
+	idb, ib := nodeIdent(b.NodeID)
+	if ida != idb {
+		return false
+	}
+	switch {
+	case a.Namespace != "" && b.Namespace != "":
+		return a.Namespace == b.Namespace
+	case a.Namespace == "" && b.Namespace == "" && (ia == 0) != (ib == 0):
+		return false // the standard namespace is never renumbered
+	}
+	return true
+}
+
+// nodeIdent is a node id without its namespace index ("ns=3;s=x" is
+// "s=x", 3).
+func nodeIdent(node string) (string, int) {
+	rest, ok := strings.CutPrefix(node, "ns=")
+	if !ok {
+		return node, 0
+	}
+	i := strings.IndexByte(rest, ';')
+	if i < 0 {
+		return node, 0
+	}
+	n, _ := strconv.Atoi(rest[:i])
+	return rest[i+1:], n
+}
+
 // MergeOPCUA adds a shared connection's bindings to the manifest of the
 // driver it names. A binding name both declare, or a node a command of each
-// writes, is an error naming it.
+// may write (SameNode), is an error naming it.
 func MergeOPCUA(own opcua.Manifest, add []opcua.TagBinding) (opcua.Manifest, error) {
 	names := map[string]bool{}
-	writes := map[string]string{}
+	var writes []opcua.TagBinding
 	for _, t := range own.Tags {
 		names[ir.NameKey(t.Name)] = true
 		if t.Writable {
-			writes[t.Namespace+"|"+t.NodeID] = t.Name
+			writes = append(writes, t)
 		}
 	}
 	for _, t := range add {
@@ -226,13 +270,15 @@ func MergeOPCUA(own opcua.Manifest, add []opcua.TagBinding) (opcua.Manifest, err
 			return own, fmt.Errorf("the OPC UA driver already binds %s (its manifest, or another instance): rename one", t.Name)
 		}
 		names[ir.NameKey(t.Name)] = true
-		if t.Writable {
-			k := t.Namespace + "|" + t.NodeID
-			if prev, dup := writes[k]; dup {
-				return own, fmt.Errorf("%s and %s both write node %s on one server: two commands on one node fight, and the server takes whichever came last", prev, t.Name, t.NodeID)
-			}
-			writes[k] = t.Name
+		if !t.Writable {
+			continue
 		}
+		for _, w := range writes {
+			if SameNode(w, t) {
+				return own, fmt.Errorf("%s and %s both write node %s on one server: two commands on one node fight, and the server takes whichever came last", w.Name, t.Name, t.NodeID)
+			}
+		}
+		writes = append(writes, t)
 	}
 	out := own
 	out.Tags = append(append([]opcua.TagBinding(nil), own.Tags...), add...)

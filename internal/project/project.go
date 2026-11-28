@@ -1236,10 +1236,10 @@ type DriverConfig struct {
 	wiredByType bool `yaml:"-"`
 	// wiredConn is the instance connection an opcua-client driver Load made
 	// for a source with its own endpoint (wirebind.Conn.ID), and
-	// wiredTemplate says it was made from a drivers: section; not manifest
-	// keys.
-	wiredConn     string `yaml:"-"`
-	wiredTemplate bool   `yaml:"-"`
+	// wiredFrom names the drivers: section it was made from ("" for none);
+	// not manifest keys.
+	wiredConn string `yaml:"-"`
+	wiredFrom string `yaml:"-"`
 	// opcuaDevice is the OPC UA device an opcua-client driver Load made
 	// for a devices: row is; not a manifest key.
 	opcuaDevice string `yaml:"-"`
@@ -2636,13 +2636,14 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		}
 		configs = []DriverConfig{m.Driver}
 	}
+	raw := configs
 	if m.devices.Len() > 0 {
 		var err error
 		if configs, err = withDevices(configs, m.devices); err != nil {
 			return nil, nil, err
 		}
 	}
-	configs, err := withWired(configs, m.wired)
+	configs, err := withWired(configs, raw, m.wired)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -254,6 +254,11 @@ func wiredTags(set *wirebind.Set, m *Manifest) ([]TagConfig, error) {
 				// declared here unless the project (an import's tag file)
 				// or another instance already did.
 				name := m.sharedOPCUACompanion(c.Driver)
+				for _, t := range m.Tags {
+					if ir.SameName(t.Name, name) && (!strings.EqualFold(t.Role, "input") || !strings.EqualFold(t.Type, "BOOL")) {
+						return nil, fmt.Errorf("instance %s: its shared OPC UA session's companion %s is declared as a %s %s tag; the driver delivers it as an input BOOL: declare it role: input, type: BOOL, or leave it to the wiring", in.Name, name, t.Role, t.Type)
+					}
+				}
 				if _, dup := taken[ir.NameKey(name)]; !dup {
 					taken[ir.NameKey(name)] = "the shared OPC UA session's companion"
 					out = append(out, TagConfig{Name: name, Role: "input", Type: "BOOL", Desc: c.Driver + ": the OPC UA server answers"})
@@ -294,7 +299,7 @@ func memberKind(k wiring.Kind) runtime.MemberKind {
 // source names: a drivers: entry by name, or, by the type modbus, the
 // project's one Modbus driver (added when it has none, as devices: rows add
 // one). The configs are copied, not changed.
-func withWired(configs []DriverConfig, set *wirebind.Set) ([]DriverConfig, error) {
+func withWired(configs, raw []DriverConfig, set *wirebind.Set) ([]DriverConfig, error) {
 	if set == nil {
 		return configs, nil
 	}
@@ -337,7 +342,7 @@ func withWired(configs []DriverConfig, set *wirebind.Set) ([]DriverConfig, error
 			out[at].wired = set
 		}
 	}
-	return withWiredOPCUA(out, set)
+	return withWiredOPCUA(out, raw, set)
 }
 
 // wiredOwns says whether a connection's driver: names the driver d (named

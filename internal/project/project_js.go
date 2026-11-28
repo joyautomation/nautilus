@@ -144,7 +144,7 @@ func platformNotices(m Manifest) []string {
 // withWiredOPCUA: in the browser every driver is simulated and an
 // address is checked by naut check, not here, so an instance's own OPC UA
 // connection only needs a driver of its name for its inputs and companion.
-func withWiredOPCUA(configs []DriverConfig, set *wirebind.Set) ([]DriverConfig, error) {
+func withWiredOPCUA(configs, _ []DriverConfig, set *wirebind.Set) ([]DriverConfig, error) {
 	for _, in := range set.InstancesList() {
 		for _, c := range in.Conns {
 			if c.DriverType == "opcua-client" && !c.Shared {

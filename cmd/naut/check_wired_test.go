@@ -247,3 +247,34 @@ func TestCheckWarnsAnExprSiblingShadowsATag(t *testing.T) {
 		t.Errorf("no shadow warning:\n%s", out)
 	}
 }
+
+// naut check prints what it has to say about an instance's OPC UA session
+// (#1458 slice 9a-1): a session with no template is security None, and a
+// node read by namespace index alone could be misread after a renumbering.
+func TestCheckWarnsAboutAnOPCUASession(t *testing.T) {
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": "name: d\ntasks:\n  - program: main.st\n    scan: 100ms\n" + `wirings:
+  - type: Pump
+    sources:
+      drive: { driver: opcua-client, endpoint: "opc.tcp://192.0.2.1:4840" }
+    members:
+      Running: { from: drive, node: "ns=2;s=P101/Running" }
+      Start:   { to: drive, node: "ns=2;s=P101/Start", namespace: "urn:x:drives" }
+instances:
+  - { name: P101, type: Pump }
+`,
+		"main.st":  "PROGRAM main\nEND_PROGRAM\n",
+		"types.st": checkPumpTypes,
+	})
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	for _, want := range []string{
+		"nautilus.yaml: warning: instance P101: source drive connects with security None, anonymous",
+		"nautilus.yaml: warning: instance P101: member Running is read by namespace index 2 alone",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("naut check does not say %q:\n%s", want, out)
+		}
+	}
+}

@@ -293,13 +293,14 @@ func driverConfigs(m *Manifest) ([]DriverConfig, error) {
 		}
 		configs = []DriverConfig{m.Driver}
 	}
+	raw := configs
 	if m.devices.Len() > 0 {
 		var err error
 		if configs, err = withDevices(configs, m.devices); err != nil {
 			return nil, err
 		}
 	}
-	configs, err := withWired(configs, m.wired)
+	configs, err := withWired(configs, raw, m.wired)
 	if err != nil {
 		return nil, err
 	}

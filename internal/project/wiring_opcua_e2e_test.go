@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	uaid "github.com/gopcua/opcua/id"
@@ -152,7 +155,7 @@ tags:
 func TestOPCUAInstanceEndToEnd(t *testing.T) {
 	drive := startUADrive(t, freeUAPort(t), "P101")
 	proj := uaPumpProject(t, drive.url)
-	if ws := proj.WiringWarnings(); len(ws) != 1 || !strings.Contains(ws[0], "instance P101: source drive connects with security None") {
+	if ws := proj.WiringWarnings(); len(ws) != 1 || !strings.Contains(ws[0], "instance P101: source drive connects with security None, anonymous: it names no drivers: opcua-client section") {
 		t.Errorf("warnings = %q, want the security None one", ws)
 	}
 	rt := startWired(t, proj)
@@ -220,6 +223,11 @@ type standbyLead struct{}
 
 func (standbyLead) IsLeader() bool { return false }
 
+// flipLead is a coordinator a test makes the leader.
+type flipLead struct{ lead atomic.Bool }
+
+func (l *flipLead) IsLeader() bool { return l.lead.Load() }
+
 // A standby sends nothing to an instance's own OPC UA driver, and neither
 // does a leader whose write gate is shut: the driver Load makes for the
 // source is the project's driver, so it gets the gate every driver gets
@@ -240,12 +248,12 @@ func TestOPCUAInstanceStandbySendsNothing(t *testing.T) {
 			if !ok {
 				t.Fatalf("the instance's driver is %T, want its own *opcua.Driver", proj.Runtime.Driver)
 			}
-			if tc.standby {
-				proj.Runtime.Coordinator = standbyLead{}
-			}
-			if tc.shut {
-				drv.SetWriteGate(func() bool { return false })
-			}
+			lead := &flipLead{}
+			lead.lead.Store(!tc.standby)
+			proj.Runtime.Coordinator = lead
+			var open atomic.Bool
+			open.Store(!tc.shut)
+			drv.SetWriteGate(open.Load)
 			rt := startWired(t, proj)
 			// The session must be up, or "nothing was sent" would prove
 			// nothing (a standby reads nothing into its tags).
@@ -262,6 +270,23 @@ func TestOPCUAInstanceStandbySendsNothing(t *testing.T) {
 			if got := drive.get(t, "P101/SpeedRef"); got != 7.0 {
 				t.Errorf("SpeedRef was commanded: %v", got)
 			}
+			// The path works, only the guard held it: lift it and a level
+			// command goes out (Start is an event, whose first value after
+			// a reopen or a new leadership is a baseline). A gate that
+			// reopens re-asserts the held SpeedRef; a new leader sends an
+			// operator's next write.
+			lead.lead.Store(true)
+			open.Store(true)
+			want := 40.0
+			if tc.standby {
+				want = 41.0 // written (again) once the new leadership has begun
+			}
+			eventually(t, "a level command once the guard lifts", func() bool {
+				if tc.standby {
+					_ = rt.Tags().Write([]runtime.WriteOp{{Path: "P101.Cmd.SpeedRef", Value: want}})
+				}
+				return drive.get(t, "P101/SpeedRef") == want
+			})
 		})
 	}
 }
@@ -342,6 +367,27 @@ func TestOPCUAWiredLoadRefusals(t *testing.T) {
 			"source drive gives no endpoint, so it shares the session of the drivers: entry it names, and the project has no opcua-client entry"},
 		"a template with a manifest": {wire("drivers:\n  - { name: ua, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\", manifest: m.yaml }\n", `{ driver: ua, endpoint: "{endpoint}" }`, "      Running: { from: drive, node: \"i=1\" }\n"),
 			"driver: ua is the section the instance's own session is made from, which may set only security"},
+		"an empty namespace": {wire("", own, "      Cmd.Start: { to: drive, node: \"ns=2;s=P/Start\", namespace: \"\" }\n"), "member Cmd.Start: namespace: is empty"},
+		"a template that is also a shared session": {base + "drivers:\n  - { name: ua, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\" }\n" + `wirings:
+  - type: Pump
+    params: { endpoint: "opc.tcp://192.0.2.1:4840" }
+    sources:
+      own: { driver: ua, endpoint: "{endpoint}" }
+    members:
+      Running: { from: own, node: "i=1" }
+  - type: Counter
+    sources:
+      sh: { driver: ua }
+    members:
+      Count: { from: sh, node: "i=2", type: Int32 }
+instances:
+  - { name: P101, type: Pump }
+  - { name: C1, type: Counter }
+`, "driver: ua is the section the instance's own session is made from, which may set only security, security-mode, pki-dir, username, read-mode, scan-rate and reassert-on-reconnect, not endpoint"},
+		"the type with two entries": {wire("drivers:\n  - { name: a, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\" }\n  - { name: b, type: opcua-client, endpoint: \"opc.tcp://192.0.2.8:4840\" }\n", own, "      Running: { from: drive, node: \"i=1\" }\n"),
+			"driver: opcua-client, and the project has more than one opcua-client driver: name the drivers: entry instead"},
+		"a companion declared as something else": {strings.Replace(wire("drivers:\n  - { name: ua, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\" }\n", `{ driver: ua }`, "      Running: { from: drive, node: \"i=1\" }\n"), "drivers:", "tags:\n  - { name: ua__Online, role: state, type: DINT }\ndrivers:", 1),
+			"its shared OPC UA session's companion ua__Online is declared as a state DINT tag"},
 		"a driver named like the instance": {wire("drivers:\n  - { name: P101, type: modbus }\n", own, "      Running: { from: drive, node: \"i=1\" }\n"),
 			"the project already has a driver P101"},
 	} {
@@ -491,5 +537,63 @@ instances:
 	}
 	if len(sm.Tags) != 2 || sm.Tags[0].Name != "P101.Running" || sm.Tags[1].Name != "P102.Running" {
 		t.Errorf("the shared entry's manifest: %+v", sm.Tags)
+	}
+}
+
+// One drivers: section may be the template of devices: rows and of
+// instances' own sessions alike: the instance's session gets the section's
+// security, pki-dir and username, and naut check has no None warning to
+// give. By name or by the type (the project's one opcua-client section).
+func TestWiredOPCUATemplateSecurity(t *testing.T) {
+	ice3, err := os.ReadFile("../../devprofile/profiles/pepperl-fuchs-ice3.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, drv := range []string{"sec", "opcua-client"} {
+		t.Run(drv, func(t *testing.T) {
+			fsys := wiredProject(`name: w
+tasks: [{ program: main.st }]
+drivers:
+  - { name: sec, type: opcua-client, security: Basic256Sha256, security-mode: SignAndEncrypt, pki-dir: pki, username: op }
+devices:
+  - { name: PF1, profile: pepperl-fuchs-ice3, endpoint: "opc.tcp://192.0.2.5:4840", points: [Model], driver: sec, validate: static }
+wirings:
+  - type: Pump
+    sources:
+      drive: { driver: `+drv+`, endpoint: "opc.tcp://192.0.2.1:4840" }
+    members:
+      Running: { from: drive, node: "ns=1;s=P/Running", namespace: "urn:x" }
+instances:
+  - { name: P101, type: Pump }
+`, "PROGRAM Main\nEND_PROGRAM\n")
+			fsys["profiles/pepperl-fuchs-ice3.yaml"] = &fstest.MapFile{Data: ice3}
+			proj, err := Load(fsys, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range proj.WiringWarnings() {
+				if strings.Contains(w, "security None") {
+					t.Errorf("a None warning for a secured session: %s", w)
+				}
+			}
+			m, err := ReadManifest(fsys, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfgs, err := driverConfigs(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range cfgs {
+				if c.Name != "P101" {
+					continue
+				}
+				if c.Security != "Basic256Sha256" || c.SecurityMode != "SignAndEncrypt" || c.PKIDir != "pki" || c.Username != "op" || c.wiredFrom != "sec" {
+					t.Fatalf("the instance's session lost its template's security: %+v", c)
+				}
+				return
+			}
+			t.Fatalf("no driver P101 in %+v", cfgs)
+		})
 	}
 }

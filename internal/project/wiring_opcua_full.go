@@ -12,8 +12,10 @@ import (
 
 // wiredWarnings are what naut check says about the instances' OPC UA
 // connections: one that connects with security None, and a from: node read
-// by namespace index alone (wirebind). The binding errors themselves are
-// the driver's build's (opcuaManifest), at Load.
+// by namespace index alone (wirebind). The security is read from the very
+// configs the drivers are built from (driverConfigs), so the warning and
+// the session cannot disagree. The binding errors themselves are the
+// driver's build's (opcuaManifest), at Load.
 func wiredWarnings(m *Manifest) []string {
 	if m.wired == nil {
 		return nil
@@ -22,24 +24,28 @@ func wiredWarnings(m *Manifest) []string {
 	if len(problems) > 0 {
 		return nil // Load refuses them when the driver is built
 	}
-	configs := m.Drivers
-	if len(configs) == 0 && m.Driver.Type != "" {
-		configs = []DriverConfig{m.Driver}
+	built := map[string]DriverConfig{}
+	if cfgs, err := driverConfigs(m); err == nil { // else Load refuses it
+		for _, c := range cfgs {
+			if c.wiredConn != "" {
+				built[strings.ToLower(c.wiredConn)] = c
+			}
+		}
 	}
-	names := driverNames(configs)
 	var out []string
 	for _, oc := range conns {
 		out = append(out, oc.Warnings...)
 		if oc.Conn.Shared {
 			continue
 		}
-		at, err := opcuaEntry(configs, names, oc.Conn.Driver)
+		d, ok := built[strings.ToLower(oc.Conn.ID)]
 		switch {
-		case err != nil:
-		case at < 0:
+		case !ok:
+		case !strings.EqualFold(d.Security, "None") && !strings.EqualFold(d.SecurityMode, "None"):
+		case d.wiredFrom == "":
 			out = append(out, fmt.Sprintf("instance %s: source %s connects with security None, anonymous: it names no drivers: opcua-client section with its own security, so the session is neither signed nor encrypted even if the server offers more", oc.Instance, oc.Conn.Source))
-		case strings.EqualFold(configs[at].Security, "None") || strings.EqualFold(configs[at].SecurityMode, "None"):
-			out = append(out, fmt.Sprintf("instance %s: source %s connects with security None, as its drivers: section %s sets", oc.Instance, oc.Conn.Source, names[at]))
+		default:
+			out = append(out, fmt.Sprintf("instance %s: source %s connects with security None, as its drivers: section %s sets", oc.Instance, oc.Conn.Source, d.wiredFrom))
 		}
 	}
 	return out
@@ -47,35 +53,41 @@ func wiredWarnings(m *Manifest) []string {
 
 // withWiredOPCUA hands the instances' OPC UA connections to their drivers:
 // a driver per per-instance connection, and the shared ones' bindings to
-// the entries they name (wired). A section a per-instance source names is
-// a template and is not built itself. The configs are copied, not changed.
-func withWiredOPCUA(configs []DriverConfig, set *wirebind.Set) ([]DriverConfig, error) {
+// the entries they name (wired). A per-instance source's section is looked
+// up in raw, the drivers: list as written, so one section may be the
+// template of devices: rows and of instances alike; a section only
+// instances use as a template is not built itself. The configs are copied,
+// not changed.
+func withWiredOPCUA(configs, raw []DriverConfig, set *wirebind.Set) ([]DriverConfig, error) {
 	out := append([]DriverConfig(nil), configs...)
 	names := driverNames(out)
+	rawNames := driverNames(raw)
 	taken := map[string]bool{}
 	for _, n := range names {
 		taken[strings.ToLower(n)] = true
 	}
-	template := map[int]bool{}
-	shared := map[int]bool{}
+	template := map[string]bool{} // raw section names used as templates
 	var made []DriverConfig
 	for _, in := range set.InstancesList() {
 		for _, c := range in.Conns {
 			if c.DriverType != "opcua-client" {
 				continue
 			}
-			at, err := opcuaEntry(out, names, c.Driver)
-			if err != nil {
-				return nil, fmt.Errorf("instance %s: source %s: %w", in.Name, c.Source, err)
-			}
 			if c.Shared {
+				at, err := opcuaEntry(out, names, c.Driver)
+				if err != nil {
+					return nil, fmt.Errorf("instance %s: source %s: %w", in.Name, c.Source, err)
+				}
 				if at < 0 {
 					return nil, fmt.Errorf("instance %s: source %s gives no endpoint, so it shares the session of the drivers: entry it names, and the project has no opcua-client entry %s: add one with its endpoint and manifest, or give the source endpoint: for a session of the instance's own", in.Name, c.Source, c.Driver)
 				}
 				out[at].wired = set
 				out[at].wiredByType = out[at].wiredByType || strings.EqualFold(c.Driver, "opcua-client")
-				shared[at] = true
 				continue
+			}
+			at, err := opcuaEntry(raw, rawNames, c.Driver)
+			if err != nil {
+				return nil, fmt.Errorf("instance %s: source %s: %w", in.Name, c.Source, err)
 			}
 			if taken[strings.ToLower(c.ID)] {
 				return nil, fmt.Errorf("instance %s: source %s is a connection of the instance's own, whose driver is named after it, and the project already has a driver %s: rename one", in.Name, c.Source, c.ID)
@@ -86,23 +98,23 @@ func withWiredOPCUA(configs []DriverConfig, set *wirebind.Set) ([]DriverConfig, 
 			// (naut check says so, as for a devices: row).
 			d := DriverConfig{Type: "opcua-client", Security: "None", SecurityMode: "None"}
 			if at >= 0 {
-				if err := opcuaWiredTemplate(out[at]); err != nil {
+				if err := opcuaWiredTemplate(raw[at], rawNames[at]); err != nil {
 					return nil, fmt.Errorf("instance %s: source %s: %w", in.Name, c.Source, err)
 				}
-				template[at] = true
-				d = out[at]
+				template[strings.ToLower(rawNames[at])] = true
+				d = raw[at]
+				d.wiredFrom = rawNames[at]
 			}
 			d.Name, d.Endpoint = c.ID, fmt.Sprint(c.Keys["endpoint"])
-			d.wired, d.wiredConn, d.wiredTemplate = set, c.ID, at >= 0
+			d.wired, d.wiredConn = set, c.ID
 			made = append(made, d)
 		}
 	}
+	// A template is never also a shared session: a session needs its
+	// endpoint, which a template refuses (opcuaWiredTemplate).
 	kept := out[:0:0]
 	for i, c := range out {
-		if template[i] && shared[i] {
-			return nil, fmt.Errorf("drivers: %s is a template for instances' own OPC UA sessions and a session instances share: give each its own entry", names[i])
-		}
-		if !template[i] {
+		if !template[strings.ToLower(names[i])] {
 			kept = append(kept, c)
 		}
 	}
@@ -112,19 +124,19 @@ func withWiredOPCUA(configs []DriverConfig, set *wirebind.Set) ([]DriverConfig, 
 // opcuaWiredTemplate refuses a section an instance's own session cannot be
 // made from: it may set only how the session connects (templateKeys); the
 // source gives the endpoint and the wiring the bindings.
-func opcuaWiredTemplate(c DriverConfig) error {
+func opcuaWiredTemplate(c DriverConfig, name string) error {
 	var set []string
 	v := reflect.ValueOf(c)
 	for i := 0; i < v.NumField(); i++ {
 		f := v.Type().Field(i)
 		key, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
-		if f.PkgPath != "" || key == "" || key == "-" || templateKeys[key] || key == "reassert-on-reconnect" || v.Field(i).IsZero() {
+		if f.PkgPath != "" || key == "" || key == "-" || key == "name" || templateKeys[key] || key == "reassert-on-reconnect" || v.Field(i).IsZero() {
 			continue
 		}
 		set = append(set, key)
 	}
 	if len(set) > 0 {
-		return fmt.Errorf("driver: %s is the section the instance's own session is made from, which may set only security, security-mode, pki-dir, username, read-mode, scan-rate and reassert-on-reconnect, not %s (the source gives the endpoint, the wiring the bindings)", c.Name, strings.Join(set, ", "))
+		return fmt.Errorf("driver: %s is the section the instance's own session is made from, which may set only security, security-mode, pki-dir, username, read-mode, scan-rate and reassert-on-reconnect, not %s (the source gives the endpoint, the wiring the bindings)", name, strings.Join(set, ", "))
 	}
 	return nil
 }
