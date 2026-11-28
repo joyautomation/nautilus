@@ -61,6 +61,7 @@ into another's.
 | **Plant model** | `internal/plant` ([plant-model.md](plant-model.md)) | plant, area, equipment, asset type, class, flow, nozzle. `plant.yaml` is the one list of what is in the plant and what feeds what; mimics and 3D scenes draw it and reference its ids. | Manifest (`internal/project` reads `plant:` and checks it against tags, devices and alarms), HMI 2D and 3D (a drawing names a plant id), CLI (`naut hmi build` generates asset pages from it), playground (`cmd/naut-wasm` hands the same pages to the screen builder) | **Published language** (`internal/plant`, a leaf like `devprofile`: the file format and its own rules). Equipment classes follow DEXPI's names where an obvious match exists and connections run equipment to equipment through a named nozzle, so a future DEXPI importer is a mapping (nothing is imported today). The manifest resolves a row's `tag`/`device` against the tags and device rows; the leaf knows neither. `internal/assetpages` turns a plant and the device rows (both passed in, never the manifest) into the HMI's asset and area descriptors, for the CLI and the playground alike |
 | **Tag file** | `internal/tagfile` | one row: name, role, type, init, unit, desc, alias. | every codegen, `lang/l5x` | **Shared kernel.** The one format every importer renders and the manifest reads |
 | **Device library** | `devprofile` `devbind` | device profile, point, doc (provenance), simulator source, built-in profile, vendored profile; device (a `devices:` row), device type, command tag, member. A profile's point rows reuse the driver manifests' column names. | Manifest, Languages (`internal/stproject` composes the device types), Virtual devices, CLI | **Published language** (`devprofile`, a leaf: one file per device type). `devbind` derives what a row means (the type, the tags, the drivers' manifests) and adapts a driver so a device arrives as one struct; the drivers themselves never learn of it |
+| **Struct wiring** | `wiring` `wirebind` (planned, [one-struct-model.md](one-struct-model.md)) | wiring, instance, member kind (from, to, memory, expr, both), source, fill, param, read-back. A wiring says where each member of a plain IEC `TYPE` comes from; an instance is a tag of the type. | Manifest, Device library (`devbind` produces wiring), Languages (the expression compile), CLI | **Published language** (`wiring`, a leaf: the file format, kinds, params and its checks; imports only `lang/ir` and `lang/st`, and learns drivers and types through hooks the manifest hands it). `wirebind` (planned) derives each driver's manifest and the adapter that delivers an instance as one struct, so the drivers never learn of it |
 | **IO-Link** | `iolink/iodd` `iolink` (planned, [iolink.md](iolink.md)) | IODD, port, port device, process data in and out, record item, identity, ISDU, variable. | Device library (`devbind` reads a master's `ports:`), CLI | **Published language** (`iolink/iodd`, a leaf like `devprofile`: the IODD model and the process data codec). `iolink` derives a port device's type and tags from its IODD and the master profile's `iolink:` block, and adapts the master's driver so a port arrives decoded and identity-checked; the IODD's names stop there |
 | **Virtual devices** | `virtdev` | instance, simulator, process model, plant, wire face, in-process face. | CLI, Verification | Serves a device's store through the protocol packages' servers (`modbus/slave`, `opcua/server`); hosts its simulators and process model in a plant `runtime`. A test-time context: only the CLI and Verification import it, and it imports no manifest |
 
@@ -189,6 +190,12 @@ break one changes this section first and says why.
 - `devprofile` imports no other nautilus package: the profile format is
   read by the manifest, virtual devices and the CLI, and depends on none
   of them.
+- `wiring` imports only `lang/ir` and `lang/st`: the format is read by the
+  manifest, the device library and the CLI, and depends on none of them.
+  `wirebind` (planned) keeps `devbind`'s distance, and may import the drivers'
+  manifest packages and `hw`. Field and IT drivers never import `wiring` or
+  `wirebind`; `devbind` may import both; the operator surface imports neither
+  (the Runtime carries what it needs, one `runtime.InstanceDef` per instance).
 - `devbind` never imports `runtime`, `server`, `alarm`, `acceptance`,
   `internal/project`, `virtdev` or the CLI: the manifest composes it.
   Field drivers never import `devbind`, `devprofile` or `iolink`.
@@ -283,7 +290,9 @@ Legitimate per-context meanings, so nobody "deduplicates" them:
 | **Quality** | One meaning, `io.Quality`, in every context. Keep it that way |
 | **Component** | HMI 2D: a mimic symbol (`*.component.json` + `.svelte`). HMI 3D uses **kind** (`*.kind.json`) for the same role on purpose, so the two are never confused |
 | **Scene** | HMI 3D only. The 2D equivalent is **mimic** |
-| **Source** | Field and IT drivers: one polled endpoint (`Source`, `SourceConfig`, `SourceHealth`). Languages: a file of IEC text. Say "IEC source" when both are in play |
+| **Instance** | IEC: a function block instance. Virtual devices: a simulated device (`virtdev.Instance`). Struct wiring: a tag of a wired type (`wiring.Instance`) |
+| **Parameter** | The parameters workflow (`naut params`): a scalar setpoint with a literal `init:`, tuned live. Struct wiring and device profiles: a `{name}` an instance gives and a wiring substitutes into addresses (`params:`) |
+| **Source** | Field and IT drivers: one polled endpoint (`Source`, `SourceConfig`, `SourceHealth`). Struct wiring: a named connection in a wiring (`wiring.Source`), which a driver makes one or more polled endpoints of. Languages: a file of IEC text. Say "IEC source" when both are in play |
 
 Known duplicates, kept on purpose under §2.3:
 

@@ -131,8 +131,8 @@ func rules(u universe) []rule {
 		},
 		{
 			from: []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug/host"},
-			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "cmd", "devbind", "devprofile", "iolink"},
-			why:  "drivers sit behind io.Driver and the tag file; the protocol side of the map never reaches back into the runtime side, nor knows the device library or the IO-Link layer above it",
+			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "cmd", "devbind", "devprofile", "iolink", "wiring", "wirebind"},
+			why:  "drivers sit behind io.Driver and the tag file; the protocol side of the map never reaches back into the runtime side, nor knows the device library, the IO-Link layer or struct wiring above it",
 		},
 		{
 			from: []string{"siemens/station", "siemens/tiad", "siemens/webapi", "siemens/writer", "siemens/importer"},
@@ -141,7 +141,7 @@ func rules(u universe) []rule {
 		},
 		{
 			from: []string{"server"},
-			to:   []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug", "logix", "siemens", "internal/project"},
+			to:   []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug", "logix", "siemens", "internal/project", "wiring", "wirebind"},
 			why:  "the operator surface serves a runtime and alarms; it knows no protocol and is composed by the manifest, not the reverse",
 		},
 		{
@@ -153,6 +153,16 @@ func rules(u universe) []rule {
 			from: []string{"internal/plant"},
 			to:   u.allBut(),
 			why:  "the plant model is a published language like the profile format: the manifest, the HMI build and the CLI read it, and it reads none of them (a row's tag or device is resolved by the manifest)",
+		},
+		{
+			from: []string{"wiring"},
+			to:   u.allBut("lang/ir", "lang/st"),
+			why:  "the struct wiring format is a published language like the profile format: the manifest, the device library and the CLI read it, and it reads none of them (a driver, a type's members and a tag are resolved by the manifest through hooks)",
+		},
+		{
+			from: []string{"wirebind"},
+			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "virtdev", "cmd"},
+			why:  "wirebind derives each driver's manifest and the adapter that delivers an instance as one struct, as devbind does; the manifest composes it, so it never reaches into the runtime side",
 		},
 		{
 			from: []string{"iolink/iodd"},

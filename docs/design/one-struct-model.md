@@ -967,6 +967,9 @@ steps, with `naut sparkplug import` regenerating them. (Q14)
 wiring-files: [wiring/pumps.yaml, wiring/tanks.yaml]
 ```
 
+- **Slice 2 reads `wirings:` and `instances:` only.** A `devices:` key in a
+  wiring file is refused as an unknown key until slice 10, which is where
+  device rows get their include file.
 - Paths resolve inside the project, as `tag-files:` does. What `naut build`
   ships is what a reviewer sees.
 - Decoding is strict: a misspelled key is an error with its file and line.

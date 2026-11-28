@@ -33,6 +33,7 @@ import (
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/devbind"
+	"github.com/joyautomation/nautilus/wiring"
 	"gopkg.in/yaml.v3"
 )
 
@@ -165,6 +166,62 @@ func TestSchemaMatchesLoader(t *testing.T) {
 		if !reflect.DeepEqual(tc.got, tc.schema) {
 			t.Errorf("%s: the loader accepts %v, the extension's schema declares %v\n"+
 				"update %s to match", tc.what, tc.got, tc.schema, schemaPath)
+		}
+	}
+}
+
+// The wiring definitions in the manifest schema offer exactly the keys the
+// wiring package decodes (#1458): the structs by their yaml tags, the
+// custom-decoded entries by the lists the package exports.
+func TestSchemaWiringKeys(t *testing.T) {
+	s := loadSchema(t)
+	sorted := func(ks []string) []string { return slices.Sorted(slices.Values(ks)) }
+	for _, tc := range []struct {
+		what   string
+		got    []string
+		schema string
+	}{
+		{"a wiring", goKeys(wiring.Wiring{}), "wiring"},
+		{"a wiring instance", goKeys(wiring.Instance{}), "wiring-instance"},
+		{"a wiring alarm", goKeys(wiring.AlarmRule{}), "wiring-alarm"},
+		{"a wiring member", sorted(wiring.MemberKeys), "wiring-member"},
+		{"a wiring source", sorted(wiring.SourceKeys), "wiring-source"},
+		{"a wiring fill", sorted(wiring.FillKeys), "wiring-fill"},
+		{"an alarm tuning", sorted(wiring.TuningKeys), "wiring-tuning"},
+	} {
+		props := s.Definitions[tc.schema].Properties
+		if tc.schema == "wiring-tuning" {
+			// anyOf false | object: the object arm lists the keys.
+			raw, err := os.ReadFile(schemaPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc struct {
+				Definitions map[string]struct {
+					AnyOf []struct {
+						Properties map[string]json.RawMessage `json:"properties"`
+					} `json:"anyOf"`
+				} `json:"definitions"`
+			}
+			if err := json.Unmarshal(raw, &doc); err != nil {
+				t.Fatal(err)
+			}
+			props = nil
+			for _, arm := range doc.Definitions["wiring-tuning"].AnyOf {
+				if arm.Properties != nil {
+					props = arm.Properties
+				}
+			}
+		}
+		if tc.schema == "wiring-source" {
+			// The source's own keys are the driver's: the schema names only `driver`.
+			if got := schemaKeys(props); !reflect.DeepEqual(got, sorted(wiring.SourceKeys)) {
+				t.Errorf("a wiring source: schema declares %v, the decoder names %v", got, wiring.SourceKeys)
+			}
+			continue
+		}
+		if got := schemaKeys(props); !reflect.DeepEqual(tc.got, got) {
+			t.Errorf("%s: the loader accepts %v, the extension's schema declares %v\nupdate %s to match", tc.what, tc.got, got, schemaPath)
 		}
 	}
 }
