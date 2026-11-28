@@ -991,7 +991,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	_, markErr := os.Stat(filepath.Join(dir, pairLogMark))
 	preMark := statErr == nil && errors.Is(markErr, os.ErrNotExist)
 	identity, pending := m.logIdentity(filepath.Join(dir, pairLogMark))
-	n, err := oplog.New(oplog.Options{
+	lo := oplog.Options{
 		Self: self, Peers: peers,
 		Leadership: pairLeadership{q: m.q, peers: m.peers},
 		File:       file, Mark: filepath.Join(dir, pairLogMark),
@@ -1025,7 +1025,9 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		// node never looks for a compaction nor marks its terms.
 		Compact: server.NewKeeper().Decide,
 		Base:    sl.Base,
-	})
+	}
+	testLogOptions("pair", &lo)
+	n, err := oplog.New(lo)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("operator-intent log: %w", err)
 	}
@@ -1483,6 +1485,7 @@ func (m *pairMember) logStatus() *leader.LogStatus {
 		ls.Vouch = &leader.LogVouch{By: v.By, At: time.UnixMilli(v.At).UTC(), LastTerm: v.LastTerm, LastSeq: v.LastSeq}
 	}
 	ls.History, ls.HistoryBy, ls.SupersedeTo, ls.Superseded = st.History, st.HistoryBy, st.SupersedeTo, st.Superseded
+	ls.CompactedThrough = st.CompactThrough
 	for _, f := range st.Forked {
 		ls.Forked = append(ls.Forked, f.Peer)
 	}

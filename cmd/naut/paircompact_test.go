@@ -2,7 +2,13 @@ package main
 
 import (
 	"bytes"
+	"go/ast"
+	"go/build"
+	"go/parser"
+	"go/token"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -100,3 +106,79 @@ func TestCompactionStaysDarkInThisBuild(t *testing.T) {
 		}
 	}
 }
+
+// TestTheCompactionSeamIsNotInAReleaseBuild (#1455 PR 2b-1.9, the lead's
+// condition): the oplogtest seam, which sets a keep-rules version and
+// short timings, is compiled only with its tag. In cmd/naut and oplog the
+// files that name the tag are exactly the seam's; a release build (the
+// release config sets no tags or flags) takes the no-op hook, whose body
+// is empty, and leaves the seam out; and in oplog only the seam sets a
+// keep-rules version (cmd/naut's is TestCompactionStaysDarkInThisBuild's).
+func TestTheCompactionSeamIsNotInAReleaseBuild(t *testing.T) {
+	ctx := build.Default
+	ctx.BuildTags = nil
+	want := map[string]bool{"logseam_off.go": true, "logseam_on.go": false, "../../oplog/compact_seam.go": false}
+	for _, dir := range []string{".", "../../oplog"} {
+		files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range files {
+			if strings.HasSuffix(f, "_test.go") {
+				continue
+			}
+			src, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			in, err := ctx.MatchFile(dir, filepath.Base(f))
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := filepath.Base(f)
+			if dir != "." {
+				name = filepath.Join(dir, name)
+			}
+			seam, listed := want[name]
+			switch {
+			case bytes.Contains(src, []byte("oplogtest")) != listed:
+				t.Errorf("%s: names the oplogtest tag %v, but the seam's files are exactly %v", name, !listed, want)
+			case listed && in != seam:
+				t.Errorf("%s in a release build: %v, want %v", name, in, seam)
+			case dir != "." && in && setsRules.Match(src):
+				t.Errorf("%s sets a keep-rules version in a release build: only the seam may", name)
+			}
+		}
+	}
+	// The no-op hook does nothing.
+	fs := token.NewFileSet()
+	af, err := parser.ParseFile(fs, "logseam_off.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range af.Decls {
+		if fd, ok := d.(*ast.FuncDecl); ok && fd.Name.Name == "testLogOptions" && len(fd.Body.List) != 0 {
+			t.Error("logseam_off.go's testLogOptions does something: a release build would change the logs' options")
+		}
+	}
+	// Build tags or flags in the release's config (release.yml's own
+	// `tags:` is its trigger, a git tag filter).
+	for f, pats := range map[string][]string{
+		"../../.goreleaser.yaml":              {`oplogtest`, `GOFLAGS`, `(?m)(^|\s)-tags[ =]`, `(?m)(^|\s)flags:`, `(?m)(^|\s)tags:`},
+		"../../.github/workflows/release.yml": {`oplogtest`, `GOFLAGS`, `(?m)(^|\s)-tags[ =]`, `(?m)(^|\s)flags:`},
+	} {
+		cfg, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range pats {
+			if regexp.MustCompile(p).Match(cfg) {
+				t.Errorf("%s matches %q: check the oplogtest seam stays out of a release", f, p)
+			}
+		}
+	}
+}
+
+// setsRules finds an Options keep-rules version set in source: an
+// assignment to o.CompactRules or the field in an Options literal.
+var setsRules = regexp.MustCompile(`(?s)\bo\.CompactRules\s*=[^=]|Options\{[^}]*\bCompactRules:`)

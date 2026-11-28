@@ -98,7 +98,7 @@ func (wl *witnessLogs) open(cluster string) (*witnessLog, int, error) {
 	base := filepath.Join(wl.dir, cluster+".oplog")
 	file, mark := base+".jsonl", base+".mark"
 	self := "witness"
-	n, err := oplog.New(oplog.Options{
+	lo := oplog.Options{
 		// Symbolic: the witness never calls a peer, and three of them keep
 		// it from ever being standalone (which would sequence alone).
 		Self: self, Peers: []string{"a", "b", self},
@@ -114,7 +114,9 @@ func (wl *witnessLogs) open(cluster string) (*witnessLog, int, error) {
 		// No runtime applies the witness's copy: a newer log history
 		// supersedes it in place (#1029 3c-3c-2a).
 		ResetInPlace: !mutNaut("witness_supersede_waits"),
-	})
+	}
+	testLogOptions("witness", &lo)
+	n, err := oplog.New(lo)
 	if err != nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("the cluster's operator-intent log: %w", err)
 	}

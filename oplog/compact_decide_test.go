@@ -87,6 +87,8 @@ func (tr *dtrio) ready() {
 		tr.t.Fatal(err)
 	}
 	tr.nodes[0].markRules(tr.ctx(), nil) // the first look's marker, at the start
+	tr.beat(0)
+	tr.nodes[0].markAll(tr.ctx(), tr.nodes[0].limits()) // and its all-marker: every copy runs the rules
 	tr.fillOver(0, 60, 1)
 	tr.clk.advance(8 * day)
 	tr.fillOver(0, 3, 2)
@@ -341,6 +343,57 @@ func TestARollingUpgradeUnderSevenDaysRaisesNothing(t *testing.T) {
 	}
 }
 
+// TestTheFirstCompactionWaitsSevenDaysFromTheSwitchOn (the lead's call,
+// 2b-1.9): a log grown long on builds from before compaction is not
+// compacted the moment every copy runs a compacting build, but the margin
+// after the all-marker (the first look whose gate holds writes it), so a
+// downgrade works for those 7 days.
+func TestTheFirstCompactionWaitsSevenDaysFromTheSwitchOn(t *testing.T) {
+	var rules atomic.Int64
+	tr := decideTrio(t, func(_ int, o *Options) { o.CompactRules = int(rules.Load()) })
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	tr.fillOver(0, 60, 1)
+	tr.clk.advance(90 * day)
+	tr.fillOver(0, 3, 2)
+	// Every copy updated at once.
+	rules.Store(1)
+	for i := range 3 {
+		tr.restart(i)
+	}
+	tr.lead(0)
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	// The first look writes the marker and compacts nothing.
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideNotWanted {
+		t.Fatalf("the first look after the switch-on: outcome %d, want not wanted", got)
+	}
+	// T is the newest entry's TS at most, so each step writes one.
+	for _, d := range []time.Duration{time.Hour, 3 * day, 3*day + 20*time.Hour} { // 6 d 21 h in all
+		tr.clk.advance(d)
+		tr.fill(0, 1, uint64(d))
+		tr.beat(0)
+		if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideNotWanted {
+			t.Fatalf("under 7 days after the switch-on (+%s): outcome %d, want not wanted", d, got)
+		}
+		if st := tr.nodes[0].Status(); st.CompactThrough != 0 {
+			t.Fatalf("compacted through %d under 7 days after the switch-on", st.CompactThrough)
+		}
+	}
+	tr.clk.advance(4 * time.Hour)
+	tr.fill(0, 1, 99)
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideProposed {
+		t.Fatalf("7 days after the switch-on: outcome %d, want proposed (status %+v)", got, tr.nodes[0].Status())
+	}
+	if st := tr.nodes[0].Status(); st.CompactThrough == 0 {
+		t.Fatal("not compacted 7 days after the switch-on")
+	}
+}
+
 // TestATransientReasonStartsNoWait: a new leader not caught up for its
 // term yet (a takeover) makes a look wait, but neither starts nor clears
 // the blocked time; a write in flight is the sequencing's to refuse.
@@ -567,17 +620,19 @@ func TestALeaderOnTheRulesMarksItsTerm(t *testing.T) {
 			}
 			continue
 		}
-		if len(es) != 1 || es[0].Kind != KindNoop || string(es[0].Value) != `{"rules":1}` {
-			t.Fatalf("rules 1: after a look %+v, want one noop naming the rules", es)
+		// The marker; and, the gate holding (every copy on the rules), the
+		// all-marker that starts the first compaction's 7 days (2b-1.9).
+		if len(es) != 2 || es[0].Kind != KindNoop || string(es[0].Value) != `{"rules":1}` || string(es[1].Value) != `{"rules":1,"all":true}` {
+			t.Fatalf("rules 1: after a look %s, want a noop naming the rules, then the all-marker", entryJSON(es))
 		}
-		// Once: the next leader's look writes no other.
+		// Once each: the next leader's look writes no other.
 		tr.lead(1)
 		if err := tr.nodes[1].SyncLeader(tr.ctx()); err != nil {
 			t.Fatal(err)
 		}
 		tr.nodes[1].decideForTest(tr.ctx())
-		if got := tr.nodes[1].After(0); len(got) != 1 {
-			t.Fatalf("a second term marked again: %+v", got)
+		if got := tr.nodes[1].After(0); len(got) != 2 {
+			t.Fatalf("a second term marked again: %s", entryJSON(got))
 		}
 	}
 }
@@ -610,5 +665,157 @@ func TestTheRulesMarkerNamesWhatMustLapse(t *testing.T) {
 	last := es[len(es)-1]
 	if last.Kind != KindLapse || !slices.Contains(last.Refs, stale.Seq) || string(last.Value) != `{"rules":1}` {
 		t.Fatalf("the marker %+v, want a KindLapse naming %d with the rules", last, stale.Seq)
+	}
+}
+
+// allMarkers is how many all-markers n0's log holds.
+func (tr *dtrio) allMarkers() int {
+	k := 0
+	for _, e := range tr.nodes[0].After(0) {
+		if e.Kind == KindNoop && strings.Contains(string(e.Value), `"all":true`) {
+			k++
+		}
+	}
+	return k
+}
+
+// TestAStaggeredUpgradeGetsSevenDaysFromTheLastMember (the lead's call A',
+// 2b-1.9): the controllers run a compacting build on day 0 and the witness
+// on day 8. The 7 days count from the witness's update, the first time all
+// three run it, not from the first leader on compaction's rules; while the
+// witness is old the compaction is blocked, as before.
+func TestAStaggeredUpgradeGetsSevenDaysFromTheLastMember(t *testing.T) {
+	var rules [3]atomic.Int64
+	tr := decideTrio(t, func(i int, o *Options) { o.CompactRules = int(rules[i].Load()) })
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	tr.fillOver(0, 60, 1)
+	tr.clk.advance(90 * day)
+	tr.fillOver(0, 3, 2)
+	rules[0].Store(1)
+	rules[1].Store(1)
+	tr.restart(0)
+	tr.restart(1)
+	tr.lead(0)
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideBlocked {
+		t.Fatalf("day 0, the witness old: outcome %d, want blocked", got)
+	}
+	// Day 8: the witness updated.
+	tr.clk.advance(8 * day)
+	rules[2].Store(1)
+	tr.restart(2)
+	tr.fill(0, 1, 3)
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideNotWanted {
+		t.Fatalf("day 8, all three on the rules: outcome %d, want not wanted (the 7 days begin)", got)
+	}
+	if n := tr.allMarkers(); n != 1 {
+		t.Fatalf("%d all-markers; want 1, written as all three run the rules", n)
+	}
+	for _, d := range []time.Duration{3 * day, 3*day + 22*time.Hour} { // day 14 22 h
+		tr.clk.advance(d)
+		tr.fill(0, 1, uint64(d))
+		tr.beat(0)
+		if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideNotWanted {
+			t.Fatalf("under 7 days after the witness's update (+%s): outcome %d, want not wanted", d, got)
+		}
+	}
+	if n := tr.allMarkers(); n != 1 {
+		t.Fatalf("%d all-markers; want 1: it is written once", n)
+	}
+	tr.clk.advance(3 * time.Hour)
+	tr.fill(0, 1, 4)
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideProposed {
+		t.Fatalf("7 days after the witness's update: outcome %d, want proposed", got)
+	}
+}
+
+// TestABehindClockLeaderCannotShortenTheWait (the lead's call A', 2b-1.9):
+// a leader whose clock is a month behind (no RTC, before NTP) writes no
+// all-marker, since the gate refuses clocks that disagree; once its clock
+// is right the marker is dated now, so a log quiet for 10 days before the
+// update still waits the full 7 days.
+func TestABehindClockLeaderCannotShortenTheWait(t *testing.T) {
+	var rules atomic.Int64
+	tr := decideTrio(t, func(_ int, o *Options) { o.CompactRules = int(rules.Load()) })
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	tr.fillOver(0, 60, 1)
+	tr.clk.advance(60 * day)
+	tr.fillOver(0, 3, 4)
+	tr.clk.advance(10 * day) // quiet: no entry in 10 days
+	rules.Store(1)
+	tr.clk.skew[0].Store(-(30 * day).Milliseconds())
+	for i := range 3 {
+		tr.restart(i)
+	}
+	tr.lead(0)
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideBlocked {
+		t.Fatalf("the leader's clock a month behind: outcome %d, want blocked (clocks disagree)", got)
+	}
+	if n := tr.allMarkers(); n != 0 {
+		t.Fatalf("%d all-markers written while the clocks disagree", n)
+	}
+	tr.clk.skew[0].Store(0) // NTP
+	tr.fill(0, 1, 2)
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideNotWanted {
+		t.Fatalf("the clock right: outcome %d, want not wanted (the 7 days begin)", got)
+	}
+	tr.clk.advance(time.Hour)
+	tr.fill(0, 1, 3)
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideNotWanted {
+		t.Fatalf("an hour after the clock was put right: outcome %d, want not wanted", got)
+	}
+	if st := tr.nodes[0].Status(); st.CompactThrough != 0 {
+		t.Fatalf("compacted through %d an hour after the switch-on", st.CompactThrough)
+	}
+}
+
+// TestAnEntryFromAClockAheadDoesNotStallTheFirstCompaction (Fable,
+// 2b-1.9): an entry a leader stamped with its clock a year ahead lifts the
+// all-marker written after it by at most the spread, so the first
+// compaction still comes 7 days after all three run the rules, not a year.
+func TestAnEntryFromAClockAheadDoesNotStallTheFirstCompaction(t *testing.T) {
+	var rules atomic.Int64
+	tr := decideTrio(t, func(_ int, o *Options) { o.CompactRules = int(rules.Load()) })
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	tr.fillOver(0, 60, 1)
+	tr.clk.advance(60 * day)
+	tr.clk.skew[0].Store((365 * day).Milliseconds())
+	tr.fill(0, 1, 2) // stamped a year ahead, by a build from before
+	tr.clk.skew[0].Store(0)
+	rules.Store(1)
+	for i := range 3 {
+		tr.restart(i)
+	}
+	tr.lead(0)
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	tr.fill(0, 1, 3)
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideNotWanted {
+		t.Fatalf("the switch-on's look: outcome %d, want not wanted (the 7 days begin)", got)
+	}
+	tr.clk.advance(7*day + time.Hour)
+	tr.fill(0, 1, 4)
+	tr.beat(0)
+	if got := tr.nodes[0].decideForTest(tr.ctx()); got != decideProposed {
+		t.Fatalf("7 days after the switch-on, a year-ahead entry in the log: outcome %d, want proposed (status %+v)", got, tr.nodes[0].Status())
 	}
 }

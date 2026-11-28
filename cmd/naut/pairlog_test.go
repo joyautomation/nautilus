@@ -258,6 +258,9 @@ func (r *pairRig) call(n, method, path, body string) (int, string, http.Header) 
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if testPairAPIToken != "" {
+		req.Header.Set("Authorization", "Bearer "+testPairAPIToken) // the rig's API token, when it has one
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		r.t.Fatal(err)

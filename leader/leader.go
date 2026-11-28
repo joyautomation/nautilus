@@ -238,6 +238,10 @@ type LogStatus struct {
 	SupersedeTo uint64   `json:"supersedeTo,omitempty"`
 	Superseded  string   `json:"superseded,omitempty"`
 	Forked      []string `json:"forked,omitempty"` // by name
+	// CompactedThrough is the seq this copy's log was compacted through
+	// (#1455; 0: never). From the first compaction on, a build from before
+	// compaction can't open the file: no downgrade past it.
+	CompactedThrough uint64 `json:"compactedThrough,omitempty"`
 }
 
 // LogReplica is one copy of the log: a, b or the witness.

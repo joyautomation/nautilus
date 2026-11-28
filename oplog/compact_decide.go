@@ -148,12 +148,52 @@ func (n *Node) markRules(ctx context.Context, p *pacer) {
 // rulesMarkedNow records that a carrier naming the rules is committed.
 func (n *Node) rulesMarkedNow() { n.rulesMarked.Store(true) }
 
+// markAll sequences the all-marker: a noop naming the keep rules with
+// "all": true, once, the first time the gate holds before any compaction,
+// whether or not there is enough to compact yet
+// (every copy heard, synced, on compaction's rules, the clocks within the
+// spread). The first compaction waits the margin after the earliest
+// committed one (plan), so for 7 days after all three copies run a
+// compacting build the log holds every entry and a downgrade works as
+// before (the lead's call A', 2b-1.9). Under the gate the clocks agree, so
+// a leader whose clock is behind writes none. Best effort: a failure is
+// retried at the next look. Like markRules it is the term's carrier, so
+// what an earlier term left must lapse is named.
+func (n *Node) markAll(ctx context.Context, lim decideLimits) {
+	n.seqMu.Lock()
+	defer n.seqMu.Unlock()
+	if !n.isLeader() || !n.TermSynced() {
+		return
+	}
+	term := n.currentTerm()
+	n.mu.Lock()
+	if n.cut.Compact != 0 {
+		n.mu.Unlock()
+		return
+	}
+	if w := n.gateLocked(true, term, term, lim, n.o.Now()); w != "" && !mutOplog("all_marker_ungated") {
+		n.mu.Unlock()
+		return
+	}
+	e := n.carrierLocked(term)
+	n.mu.Unlock()
+	e.Value = json.RawMessage(fmt.Sprintf(`{"rules":%d,"all":true}`, n.o.CompactRules))
+	if _, err := n.sequenceLocked(ctx, e); err != nil {
+		n.log.Warn("oplog: could not mark that every copy runs compaction's rules; the next look tries again", "error", err)
+		return
+	}
+	n.log.Info("oplog: every copy runs compaction's keep rules: the first compaction waits the margin from now, until then a downgrade works as before", "margin", lim.margin)
+}
+
 // decision is one compaction the leader may propose.
 type decision struct {
 	term, prev, through, commit uint64
 	t                           time.Time
 	base                        baseState
 	snap                        []stored
+	// markAll: the gate holds before any compaction and the log has no
+	// committed all-marker: the look writes one (markAll) and waits.
+	markAll bool
 }
 
 // decideOutcome is what one look found, for tests and the log line.
@@ -226,6 +266,9 @@ func (n *Node) decideOnce(ctx context.Context) decideOutcome {
 		switch {
 		case !wanted:
 			n.setCompactBlocked("", time.Time{})
+			if d.markAll {
+				n.markAll(ctx, lim)
+			}
 			return decideNotWanted
 		case transient(why):
 			return decideWaiting
@@ -411,13 +454,45 @@ func (n *Node) plan(lim decideLimits, cap uint64, p *pacer) (d decision, wanted 
 	since = compactSince(d.snap, d.prev, prevK, lim, p)
 	wanted = (count >= lim.minEntries || size >= lim.minBytes || cap > 0) &&
 		(prevK == 0 || t.Sub(time.UnixMilli(prevK)) >= lim.gap) && !mutOplog("decide_never_wanted")
-	if !wanted || why != "" {
+	// Before the first compaction: when every copy first ran
+	// compaction's rules (the earliest committed all-marker), read
+	// outside mu like the rest.
+	floored := d.base.Compact == 0 && !mutOplog("first_compaction_unfloored")
+	if why != "" || !wanted && !floored {
 		return d, wanted, since, why
+	}
+	var allAt int64
+	var allOK bool
+	if floored {
+		allAt, allOK = firstAllMarker(d.snap, lim.spread, p)
+	}
+	if !wanted && allOK {
+		return d, false, since, ""
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if w := n.gateLocked(leader, term, d.term, lim, now); w != "" {
+	w := n.gateLocked(leader, term, d.term, lim, now)
+	ungated := floored && !allOK && mutOplog("all_marker_ungated")
+	if !wanted {
+		// Too little to compact yet, but the first time the gate holds
+		// the 7 days begin (markAll), however small the log.
+		d.markAll = w == "" || ungated
+		return d, false, since, ""
+	}
+	if w != "" && !ungated {
 		return d, wanted, since, w
+	}
+	if floored {
+		// The gate holds, so nothing is blocked: the first compaction
+		// waits the margin after the all-marker (markAll), and a downgrade
+		// works until then.
+		switch {
+		case !allOK:
+			d.markAll = true
+			return d, false, since, ""
+		case t.UnixMilli()-allAt < lim.margin.Milliseconds():
+			return d, false, since, ""
+		}
 	}
 	d.through = n.throughLocked(d.through)
 	if d.through <= d.prev {
@@ -498,6 +573,41 @@ func firstRulesTerm(snap []stored, p *pacer) (int64, bool) {
 		if !found || e.TS < first {
 			first, found = e.TS, true
 		}
+	}
+	return first, found
+}
+
+// firstAllMarker is when every copy first ran compaction's rules: the
+// least TS of the committed all-markers (markAll), each lifted to the
+// newest TS of the committed entries before it, by at most the spread (a
+// marker stamped by a clock that was behind dates nothing back; one entry
+// stamped by a clock far ahead stalls nothing: Fable, 2b-1.9). snap is
+// committed entries only.
+func firstAllMarker(snap []stored, spread time.Duration, p *pacer) (int64, bool) {
+	var first, prev int64
+	found := false
+	for _, s := range snap {
+		p.tick()
+		ts := tsOf(s)
+		if bytes.Contains(s.raw, []byte(`"all"`)) {
+			e := s.entry()
+			var v struct {
+				Rules int  `json:"rules"`
+				All   bool `json:"all"`
+			}
+			if (e.Kind == KindNoop || e.Kind == KindLapse) && e.By == "system" && json.Unmarshal(e.Value, &v) == nil && v.Rules >= 1 && (v.All || mutOplog("all_marker_ignored")) {
+				at := max(ts, min(prev, ts+spread.Milliseconds()))
+				if !found || at < first {
+					first, found = at, true
+				}
+			}
+		} else if mutOplog("all_marker_ignored") {
+			// the rules marker counts instead, as before the all-marker
+			if t, ok := firstRulesTerm([]stored{s}, nil); ok && (!found || t < first) {
+				first, found = t, true
+			}
+		}
+		prev = max(prev, ts)
 	}
 	return first, found
 }

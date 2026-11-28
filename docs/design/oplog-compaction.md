@@ -29,7 +29,9 @@ Compact the log by **dropping dead entries, not by snapshotting consumer state.*
   `naut notes export`, the `.superseded` reader and the checkout chain still
   read entries.
 - **When it starts:** compaction runs only while all three copies are heard,
-  synced, at or past Through, and on keep rules no newer than the leader's.
+  synced, at or past Through, and on keep rules no newer than the leader's;
+  the first one never before 7 days after the first time all three ran
+  compaction's rules (the all-marker, 2b-1.9).
 - **Old builds:** a build from before compaction refuses to open a compacted
   file, with a message that names the fix.
 
@@ -410,7 +412,11 @@ consumer reset is needed.
   every copy starts a new log; run `naut notes export` first (a compacting
   build reads moved-aside files). RELEASING.md, the release notes and the
   upgrade guide say so before anyone enables compaction. Before any
-  compaction, a downgrade works as today. A rules downgrade with files kept
+  compaction, a downgrade works as today, and the first compaction waits
+  the margin (7 days) after the all-marker, so a downgrade works for at
+  least the 7 days after all three copies first run a compacting build. A
+  revert and a later re-upgrade do not restart them (the lead's call A':
+  nothing is lost then, and putting the compacting build back still works). A rules downgrade with files kept
   (a copy moved to an older build that still compacts) is covered too: a
   leader does not compact if the log holds a K with a higher rules version
   than its own.
@@ -476,6 +482,10 @@ can be reverted on its own:
   (the substitutes' view mode), `Options.Compact`/`Options.Base` wired in
   `cmd/naut/pairrun.go`; the conditions. No production log sets a
   keep-rules version, so nothing is advertised, marked or proposed.
+- **2b-1.9 (before the switch-on, the lead's calls):** the all-marker and
+  the first compaction's 7 days (below); the pair rig through a committed
+  compaction (below); `compactedThrough` in `/api/cluster` and `naut
+  redundancy status`.
 - **2b-2 (the switch-on):** the pair's and the witness's logs set
   `CompactRules`, with the release notes, RELEASING.md and the guide's
   "no downgrade past compaction" lines, and the old build's refusal naming
@@ -523,6 +533,46 @@ change; the bench reports GC cycles and their marks per window (a look
 adds about one cycle per 216k entries it decodes, at most once per 24 h,
 its mark about 1.8 times the forced one's, no tick later than in that
 one: the lead's ruling).
+
+**The first compaction's 7 days (2b-1.9, the lead's call A').** The
+first time a look finds the gate holding (every copy heard, synced and on
+compaction's rules, the clocks within the spread) before any compaction,
+however small the log, the leader writes the all-marker: its term's
+carrier with `{"rules":N,"all":true}` in Value, once. The first
+compaction waits the margin after the earliest committed one, each
+lifted to the newest TS of the entries before it by at most the spread
+(so neither a clock behind nor one entry from a clock far ahead moves
+it far). So a
+staggered upgrade gets its 7 days from the last copy updated, and a
+leader whose clock is behind writes none (the gate refuses clocks that
+disagree). While the gate does not hold, the compaction is blocked as
+before (blocked-since from the rules marker), so an old witness still
+raises `oplog-compaction-blocked`. Until the 7 days pass nothing is
+blocked: the log just waits. A revert and a later re-upgrade do not
+restart them.
+
+**The production composition (2b-1.9).** The keep decision's tests run
+scratch consumers; the oplog's run a toy keep. One test runs what `naut
+run` wires: `cmd/naut`'s pair rig (two controllers and a witness on
+loopback, the server's `Keeper`, `SubstituteLog.Base`, the runtime, the
+alarm view, the notes index, a retain store) through a committed
+compaction, while the shipped build stays dark. Its keep-rules version and
+short timings (3 s margin, a look every 200 ms, from 20 entries, the keep
+decision held off until the test's snapshot) come only
+through the `oplogtest` build tag's seam (`oplog.TestCompaction`,
+`cmd/naut/logseam_on.go`), which a release build never compiles
+(`TestTheCompactionSeamIsNotInAReleaseBuild`). The test churns substitutes,
+alarm cycles (a chatter episode) and shelves, leaves a substitute, a shelf
+and notes standing, and compares the substitutes, the alarm view a
+takeover carries, the notes API and `naut notes export` before the
+compaction, after it, and after restarting the standby over its compacted
+file; checks the witness's compacted file against the leader's log; then
+the restarted standby takes over with the substitute running and the
+shelf in force, and the old leader restarts over its own compacted file.
+CI runs it in its own step of the rig job. A revert's one limit: a copy
+behind the base (wiped, or down through the compaction) can't be refilled
+by a reverted build, which sends no installs; putting the compacting
+build back refills it.
 
 **Blocked since (the lead's ruling, 2026-11-28).** Since when a compaction
 has waited is a pure function of the log: when the part after the base

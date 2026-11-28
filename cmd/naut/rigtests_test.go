@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"os"
@@ -69,6 +70,12 @@ func unlistedRigTests(t *testing.T, dir string, listed map[string]bool) []string
 	var tests []string
 	fset := token.NewFileSet()
 	for _, path := range files {
+		// A file behind a build tag (the oplogtest pair compaction,
+		// #1455) is not in the build the rig job lists: its own CI step
+		// runs it.
+		if ok, err := build.Default.MatchFile(filepath.Dir(path), filepath.Base(path)); err != nil || !ok {
+			continue
+		}
 		file, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
 			t.Fatal(err)

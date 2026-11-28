@@ -898,6 +898,74 @@ func TestTheHeaderKeepsTheRulesVersion(t *testing.T) {
 	}
 }
 
+// TestARevertedBuildRunsACompactedLog: the switch-on (#1455 PR 2b-2) is
+// the PR to revert, and a revert is this build with no keep-rules version
+// over files that may already be compacted. Each copy opens its file,
+// replays the kept log into the full log's state, and takes the tail as
+// before; only no compaction is looked for or proposed again.
+func TestARevertedBuildRunsACompactedLog(t *testing.T) {
+	var rules atomic.Int64
+	rules.Store(1)
+	tr := compactTrio(t, func(_ int, o *Options) { o.CompactRules = int(rules.Load()) })
+	mustSync(t, tr.trio, 0)
+	full := tr.fill(0, 30, 21)
+	keep := toyKeep(full, 20, 0)
+	tr.compact(0, 20, keep)
+	rules.Store(0) // the revert, on every copy
+	for i := range 3 {
+		tr.check(i, tr.expect(20, keep)) // restarts it: opened and replayed on the reverted build
+	}
+	mustSync(t, tr.trio, 0)
+	tr.fill(0, 6, 22)
+	tr.nodes[0].Heartbeat(tr.ctx())
+	for i := range 3 {
+		tr.check(i, tr.expect(20, keep))
+	}
+	if st := tr.nodes[0].Status(); st.CompactThrough != 20 || st.CompactBlocked != "" {
+		t.Fatalf("the reverted leader: base %d, blocked %q; want base 20, nothing blocked", st.CompactThrough, st.CompactBlocked)
+	}
+	if _, err := tr.nodes[0].proposeCompact(tr.ctx(), tr.nodes[0].Commit(), toyKeep(tr.full(), tr.nodes[0].Commit(), 0)); err == nil {
+		t.Fatal("a reverted build proposed a compaction")
+	}
+}
+
+// A reverted build over a K committed but not yet carried out in its
+// file (the copy's worker had not rewritten it): it opens, carries the K
+// out at its start like any copy, and replays the kept log (Fable, 2b-1.9).
+func TestARevertedBuildCarriesOutAPendingCompaction(t *testing.T) {
+	var rules atomic.Int64
+	rules.Store(1)
+	var slow atomic.Bool
+	slow.Store(true)
+	tr := compactTrio(t, func(i int, o *Options) {
+		o.CompactRules = int(rules.Load())
+		if i == 1 {
+			o.lim.compactDelay = func() time.Duration {
+				if slow.Load() {
+					return time.Hour
+				}
+				return 0
+			}
+		}
+	})
+	mustSync(t, tr.trio, 0)
+	full := tr.fill(0, 30, 23)
+	keep := toyKeep(full, 20, 0)
+	if _, err := tr.nodes[0].proposeCompact(tr.ctx(), 20, keep); err != nil {
+		t.Fatal(err)
+	}
+	tr.record(0)
+	tr.nodes[0].Heartbeat(tr.ctx())
+	if st := tr.nodes[1].Status(); st.CompactThrough != 20 || !st.CompactPending {
+		t.Fatalf("B before its rewrite: %+v; want the base at 20, the file pending", st)
+	}
+	rules.Store(0) // the revert
+	slow.Store(false)
+	tr.restart(1)
+	tr.settle()
+	tr.check(1, tr.expect(20, keep))
+}
+
 // A diverged copy commits and applies nothing more, with no mark too.
 func TestADivergedCopyAppliesNothingMore(t *testing.T) {
 	applied := map[uint64]int{}
