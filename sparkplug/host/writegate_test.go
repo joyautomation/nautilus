@@ -83,6 +83,25 @@ func (l *stateLog) states(t *testing.T) []stateBody {
 	return out
 }
 
+// distinctStates is states with a repeated death certificate folded away:
+// an OFFLINE that directly follows an OFFLINE of the same session
+// timestamp is the same certificate seen twice (the host's explicit death,
+// and the will the broker may also deliver for the session it dropped; both
+// say the same thing and either is retained as the same offline state).
+// Anything else is kept, so an OFFLINE after an ONLINE (a late will
+// landing over the new session's birth) is still in the list, and fails.
+func (l *stateLog) distinctStates(t *testing.T) []stateBody {
+	t.Helper()
+	var out []stateBody
+	for _, s := range l.states(t) {
+		if n := len(out); n > 0 && !s.Online && !out[n-1].Online && out[n-1].Timestamp == s.Timestamp {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // commands returns the SpeedSP values commanded so far.
 func (l *stateLog) commands(t *testing.T) []any {
 	t.Helper()
@@ -231,8 +250,8 @@ func TestWriteGateDrivesStateAndCommands(t *testing.T) {
 	// could outrank a successor's birth.
 	leader.Store(false)
 	writeSpeed(t, d, 9)
-	waitUntil(t, "STATE offline after demotion", func() bool { return len(w.states(t)) == 2 })
-	if s := w.states(t)[1]; s.Online || s.Timestamp != first.Timestamp {
+	waitUntil(t, "STATE offline after demotion", func() bool { return len(w.distinctStates(t)) == 2 })
+	if s := w.distinctStates(t)[1]; s.Online || s.Timestamp != first.Timestamp {
 		t.Fatalf("demotion certificate = %+v, want offline at the session timestamp %d", s, first.Timestamp)
 	}
 	waitConnected(t, d) // back as a standby
@@ -246,13 +265,35 @@ func TestWriteGateDrivesStateAndCommands(t *testing.T) {
 
 	// Re-promotion: online again, newer session, and the held 9 goes out.
 	leader.Store(true)
-	waitUntil(t, "STATE online after re-promotion", func() bool { return len(w.states(t)) == 3 })
-	if s := w.states(t)[2]; !s.Online || s.Timestamp <= first.Timestamp {
+	waitUntil(t, "STATE online after re-promotion", func() bool { return len(w.distinctStates(t)) >= 3 })
+	if s := w.distinctStates(t)[2]; !s.Online || s.Timestamp <= first.Timestamp {
 		t.Fatalf("re-promotion certificate = %+v, want online and newer than %d", s, first.Timestamp)
 	}
 	waitUntil(t, "the held command after re-promotion", func() bool { return len(w.commands(t)) == 2 })
 	if c := w.commands(t); c[1] != 9.0 {
 		t.Fatalf("commands = %v, want the held 9 last", c)
+	}
+	// The history must END online. A late offline (the dropped session's
+	// will, landing over the new session's birth) would leave the retained
+	// STATE saying the host is down to every edge node that connects later;
+	// the leader re-asserts its birth when it sees one (ownStateSeen), so an
+	// offline after the new ONLINE is tolerated only if an ONLINE follows it.
+	barrier(t, d, w)
+	time.Sleep(200 * time.Millisecond) // a late certificate trails the birth by a broker hop or two
+	barrier(t, d, w)
+	waitUntil(t, "STATE history ends online", func() bool {
+		seq := w.distinctStates(t)
+		return len(seq) >= 3 && seq[len(seq)-1].Online
+	})
+	seq := w.distinctStates(t)
+	for i := 3; i < len(seq); i++ {
+		if !seq[i].Online && (i+1 == len(seq) || !seq[i+1].Online) {
+			t.Fatalf("STATE history = %+v: an offline after the re-promotion's online was not answered by an online", seq)
+		}
+	}
+	last := seq[len(seq)-1]
+	if got := retainedState(t, addr, "late-gate-2", "h-gate"); !got.Online || got.Timestamp != last.Timestamp || got.Timestamp <= first.Timestamp {
+		t.Fatalf("retained STATE after re-promotion = %+v, want online at %d (newer than %d)", got, last.Timestamp, first.Timestamp)
 	}
 }
 
