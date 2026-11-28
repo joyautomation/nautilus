@@ -92,6 +92,8 @@ func TestExprPurityRules(t *testing.T) {
 		{"mutual recursion", "FUNCTION A : REAL\nVAR_INPUT x : REAL; END_VAR\nA := B(x);\nEND_FUNCTION\nFUNCTION B : REAL\nVAR_INPUT x : REAL; END_VAR\nB := A(x);\nEND_FUNCTION\n", "A(1.0)", "B", "calls A recursively", "A>B"},
 		{"an FB instance by name", "", "T1(IN := TRUE, PT := T#1s).Q", "", "calls T1, which is not a FUNCTION or a standard function", ""},
 		{"an unknown call in a function", inner("x := Mystery(x);\n"), "Outer(1.0)", "Inner", "calls Mystery, which is not a FUNCTION", "Outer>Inner"},
+		{"an FB instance named like a conversion", "", "X_TO_Y(IN := TRUE, PT := T#1s).Q", "", "calls X_TO_Y, which is not a FUNCTION", ""},
+		{"TO_ of no enumeration", "", "TO_Nope(1)", "", "calls TO_Nope, which is not a FUNCTION", ""},
 		{"user FB", "FUNCTION_BLOCK Blk\nEND_FUNCTION_BLOCK\n", "Blk()", "", "the function block Blk", ""},
 		{"call statement", "FUNCTION_BLOCK Blk\nEND_FUNCTION_BLOCK\n" + inner("Blk();\n"), "Outer(1.0)", "Inner", "the function block Blk", "Outer>Inner"},
 	} {
@@ -150,5 +152,26 @@ func TestExprProgramCompilesAndAttributesByLine(t *testing.T) {
 	prog, _ = Parse(lib + ExprProgram(units))
 	if _, err := LowerWithOpts(prog, LowerOpts{ImplicitGlobals: map[string]*ir.Type{"P101": types["Pump"], "Level": ir.RealT}}); err != nil {
 		t.Errorf("clean units: %v", err)
+	}
+}
+
+// A constant index names one element; a variable one reads the whole
+// array. Standard and enumeration conversions are pure.
+func TestExprRefsIndexesAndConversions(t *testing.T) {
+	sib := func(n string) bool { return n == "Vals" }
+	_, refs, err := RewriteExpr("P101", sib, "Vals[0].X + Vals[01] + Vals[i] + Vals[i].Y + Vals[2, 1]")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var full []string
+	for _, r := range refs {
+		full = append(full, r.Full("P101"))
+	}
+	if got := strings.Join(full, ","); got != "P101.Vals[0].X,P101.Vals[1],P101.Vals,i,P101.Vals,i,P101.Vals" {
+		t.Errorf("refs %s", got)
+	}
+	lib := "TYPE Mode : (Idle, Run); END_TYPE\n"
+	if ps := purityOf(t, lib, "TO_Mode(1) = Run AND INT_TO_REAL(3) > 1.0"); len(ps) != 0 {
+		t.Errorf("conversions refused: %+v", ps)
 	}
 }

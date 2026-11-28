@@ -64,6 +64,9 @@ func (r ExprRef) Full(instance string) string {
 	if r.Path == "" {
 		return root
 	}
+	if strings.HasPrefix(r.Path, "[") {
+		return root + r.Path
+	}
 	return root + "." + r.Path
 }
 
@@ -78,7 +81,7 @@ func ExprRefs(e Expression) []ExprRef {
 			out = append(out, ExprRef{Root: v.Name, Pos: v.Pos})
 		case *MemberExpr, *IndexExpr:
 			if root, path, ok := refChain(e); ok {
-				out = append(out, ExprRef{Root: root.Name, Path: path, Pos: root.Pos})
+				out = append(out, ExprRef{Root: root.Name, Path: strings.TrimSuffix(path, wholeMark), Pos: root.Pos})
 			}
 			indexExprs(e, walk)
 		case *BinaryExpr:
@@ -102,28 +105,53 @@ func ExprRefs(e Expression) []ExprRef {
 	return out
 }
 
-// refChain reads a member/index chain down to its root identifier. The
-// path stops at the first index: Levels[i].X reads Levels, whatever i is.
+// refChain reads a member/index chain down to its root identifier. A
+// constant index stays in the path (Vals[0] is not Vals[1]); a variable
+// one, or one of several dimensions, reads the whole array, so the path
+// stops there: Levels[i].X reads Levels.
 func refChain(e Expression) (*IdentExpr, string, bool) {
-	var segs []string
-	for {
-		switch v := e.(type) {
-		case *IdentExpr:
-			// segs were collected outermost first.
-			for i, j := 0, len(segs)-1; i < j; i, j = i+1, j-1 {
-				segs[i], segs[j] = segs[j], segs[i]
-			}
-			return v, strings.Join(segs, "."), true
-		case *MemberExpr:
-			segs = append(segs, v.Member)
-			e = v.Object
-		case *IndexExpr:
-			segs = segs[:0] // everything below an index is the indexed whole
-			e = v.Array
-		default:
-			return nil, "", false
+	switch v := e.(type) {
+	case *IdentExpr:
+		return v, "", true
+	case *MemberExpr:
+		root, path, ok := refChain(v.Object)
+		if !ok || strings.HasSuffix(path, wholeMark) {
+			return root, path, ok
 		}
+		if path == "" {
+			return root, v.Member, true
+		}
+		return root, path + "." + v.Member, true
+	case *IndexExpr:
+		root, path, ok := refChain(v.Array)
+		if !ok || strings.HasSuffix(path, wholeMark) {
+			return root, path, ok
+		}
+		if n, isNum := constIndex(v); isNum {
+			return root, path + "[" + n + "]", true
+		}
+		return root, path + wholeMark, true
 	}
+	return nil, "", false
+}
+
+// wholeMark ends a path whose last part is read whole (a variable index);
+// ExprRefs strips it.
+const wholeMark = "\x00"
+
+func constIndex(v *IndexExpr) (string, bool) {
+	if len(v.Indices) != 1 {
+		return "", false
+	}
+	n, ok := v.Indices[0].(*NumberLit)
+	if !ok || strings.ContainsAny(n.Value, ".eE#") {
+		return "", false
+	}
+	digits := strings.TrimLeft(n.Value, "0") // Vals[01] is Vals[1], as wiring spells it
+	if digits == "" {
+		digits = "0"
+	}
+	return digits, true
 }
 
 // indexExprs walks the index expressions inside a chain (they are reads
@@ -255,8 +283,13 @@ type ExprProblem struct {
 //     budget, so an expression must finish by construction, or it would
 //     hold the main scan.
 func ExprPurity(prog *Program, e Expression) []ExprProblem {
-	c := &purity{funcs: map[string]*FunctionDecl{}, fbs: map[string]bool{}, done: map[*FunctionDecl][]ExprProblem{}, onStack: map[*FunctionDecl]bool{}}
+	c := &purity{funcs: map[string]*FunctionDecl{}, fbs: map[string]bool{}, enums: map[string]bool{}, done: map[*FunctionDecl][]ExprProblem{}, onStack: map[*FunctionDecl]bool{}}
 	if prog != nil {
+		for _, td := range prog.TypeDecls {
+			if _, ok := td.Type.(*EnumType); ok {
+				c.enums[ir.NameKey(td.Name)] = true
+			}
+		}
 		for _, fd := range prog.FuncDecls {
 			c.funcs[ir.NameKey(fd.Name)] = fd
 		}
@@ -270,6 +303,7 @@ func ExprPurity(prog *Program, e Expression) []ExprProblem {
 type purity struct {
 	funcs   map[string]*FunctionDecl
 	fbs     map[string]bool
+	enums   map[string]bool // the project's enumerations (TO_<enum>)
 	done    map[*FunctionDecl][]ExprProblem
 	onStack map[*FunctionDecl]bool
 }
@@ -348,8 +382,8 @@ func (c *purity) call(v *CallExpr, via []string) []ExprProblem {
 		}
 		return out // a standard function: it computes from its arguments
 	}
-	if ir.IsConversion(up) || strings.Contains(up, "_TO_") {
-		return out // a type conversion, standard or of an enumeration
+	if ir.IsConversion(up) || (strings.HasPrefix(up, "TO_") && c.enums[ir.NameKey(v.Name[3:])]) {
+		return out // a type conversion, standard or TO_<an enumeration the project declares>
 	}
 	// Not a FUNCTION, a standard function or a conversion: a function block
 	// instance (a project tag of an FB type, T1(...)), which keeps state.

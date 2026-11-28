@@ -98,6 +98,10 @@ func TestExprMemberChecks(t *testing.T) {
 			"checks clean"},
 		{"an array member, narrowing", "      Vals[0]: { expr: \"Fault\" }\n", oneGauge, "", "",
 			"it gives BOOL, but the member is REAL"},
+		{"one element reads another: no cycle", "      Vals[0]: { expr: \"1.0\" }\n      Vals[1]: { expr: \"1.0 + Vals[0]\" }\n", oneGauge, "", "",
+			"checks clean"},
+		{"an FB tag named like a conversion", "      Healthy: { expr: \"X_TO_Y(IN := Fault, PT := T#1s).Q\" }\n", oneGauge, "", "tags:\n  - { name: X_TO_Y, role: state, type: TON }\n",
+			"calls X_TO_Y, which is not a FUNCTION"},
 		{"a cycle across instances", "      A: { expr: \"{peer}.A\" }\n", strings.Replace(twoGauges, "192.0.2.2 }", "192.0.2.2, peer: G1 }", 1) + "", "", "",
 			"G1.A → G2.A → G1.A"},
 	} {

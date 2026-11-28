@@ -257,7 +257,7 @@ func exprCycles(units []*exprUnit, f *exprFindings) {
 			read := ir.NameKey(r.Full(u.in.Name))
 			for j, v := range units {
 				n := ir.NameKey(v.full)
-				if !seen[j] && (read == n || strings.HasPrefix(n, read+".") || strings.HasPrefix(n, read+"[") || strings.HasPrefix(read, n+".")) {
+				if !seen[j] && (read == n || strings.HasPrefix(n, read+".") || strings.HasPrefix(n, read+"[") || strings.HasPrefix(read, n+".") || strings.HasPrefix(read, n+"[")) {
 					seen[j] = true
 					edges[i] = append(edges[i], j)
 				}
