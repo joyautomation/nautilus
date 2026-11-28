@@ -386,22 +386,20 @@ func (m *Multi) WriteOutputs(vals Values) error {
 		perChild[i][k] = v
 	}
 	var errs []error
-	var took []Values
 	for i, sub := range perChild {
 		if len(sub) == 0 {
 			continue
 		}
 		if err := m.children[i].Driver.WriteOutputs(sub); err != nil {
 			errs = append(errs, fmt.Errorf("driver %q: %w", m.children[i].Name, err))
-		} else {
-			took = append(took, sub)
+			perChild[i] = nil // not taken
 		}
 	}
 	if len(errs) == 0 {
 		return nil
 	}
 	taken := map[string]bool{}
-	for _, sub := range took {
+	for _, sub := range perChild {
 		for k := range sub {
 			taken[k] = true
 		}

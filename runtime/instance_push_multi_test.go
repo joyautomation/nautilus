@@ -147,8 +147,7 @@ func TestPushBothTakenByOneChildWhileASiblingFailsIsHanded(t *testing.T) {
 	write(t, r, "T1.Note", 1) // Lamp moves, so S has a share to fail
 	s.fail = true
 	r.Scan() // P takes 20 (and echoes it), S fails
-	s.fail = false
-	r.Scan() // the peer shows 20
+	r.Scan() // the peer shows 20; S still fails, so no push succeeds whole
 	n := p.count()
 	p.set("T1.Valve", 30.0) // another client of the peer wrote it
 	r.Scan()
