@@ -500,6 +500,30 @@ clock stamped later are judged at T like any other. An over-size K is retried
 on a smaller range. K's lapse check runs on the committed entries outside
 the locks; under them only the tail is scanned.
 
+**Pacing (2b-1.5, the gate before the switch-on).** The decision and
+the file rewrite are long CPU jobs beside the scan. On one small core a
+job that runs flat out holds every other goroutine back (the 2b-1 bench
+saw a 10 ms ticker wake 40-60 ms late). So both are duty-cycled
+(`oplog/compact_pace.go`): a chunk of work measured by the clock (2 ms),
+a rest that keeps the job to a quarter of the time, and the processor
+given up every 250 µs inside a chunk. One pacer serves the whole look: the
+log's loops, `CompactInput.Entries`, and `CompactInput.Pace` for the keep
+decision's own loops (the closure, the digests). Nothing rests under the
+node's locks (K's build under them passes no pacer), and a cancelled
+look rests no more. The decision takes longer, which nothing waits on
+(216k entries on the Verdin-like bench: 26 s → 29 s; on an idle fast core
+about four times as long).
+The acceptance bench is the Verdin-like scope with a **1 ms** quota
+period. A 10 ms or 100 ms period hands the whole period's CPU to any
+chunk that starts in it, so pacing shows no effect there: both are
+artifacts for duty-cycled work. Ticks inside a GC cycle are counted
+apart. Go's forced GC (every 2 minutes) marks the heap slowly on a small
+core and makes ticks late in a quiet log too, which compaction can't
+change; the bench reports GC cycles and their marks per window (a look
+adds about one cycle per 216k entries it decodes, at most once per 24 h,
+its mark about 1.8 times the forced one's, no tick later than in that
+one: the lead's ruling).
+
 **Blocked since (the lead's ruling, 2026-11-28).** Since when a compaction
 has waited is a pure function of the log: when the part after the base
 reached the threshold, plus the margin; after a compaction, never before

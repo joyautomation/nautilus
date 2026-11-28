@@ -232,7 +232,7 @@ func TestOldBuildsReadAndKeepTheRulesMarker(t *testing.T) {
 	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
 		t.Fatal(err)
 	}
-	tr.nodes[0].markRules(tr.ctx())
+	tr.nodes[0].markRules(tr.ctx(), nil)
 	tr.fill(0, 5, 1)
 	tr.beat(0)
 	f := tr.logFile(1)
@@ -269,7 +269,7 @@ func TestOldBuildsReadAndKeepTheRulesMarker(t *testing.T) {
 	if err := json.Unmarshal(again, &back); err != nil || string(back.Value) != `{"rules":1}` {
 		t.Fatalf("re-marshalled by an older build: %s (%v)", again, err)
 	}
-	if ts, ok := firstRulesTerm([]stored{storedOf(back)}); !ok || ts != back.TS {
+	if ts, ok := firstRulesTerm([]stored{storedOf(back)}, nil); !ok || ts != back.TS {
 		t.Fatalf("the re-marshalled marker is not found: %d %t", ts, ok)
 	}
 }

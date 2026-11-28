@@ -448,6 +448,10 @@ var table = []mutation{
 	{"leader_catchup_term_unchecked", []string{"TestLeaderCatchUpStopsAtANewerTerm"}},
 	{"rewrite_failure_kept", []string{"TestFailedRewriteKeepsTheOldSuffix"}},
 	{"entry_unbounded", []string{"TestTooLargeEntryIsRefusedAtProposal"}},
+	// #1455 PR 2b-1.5: the compaction's pacing.
+	{"compaction_unpaced", []string{"TestThePacerKeepsItsShareOfTheTime", "TestTheLookAndTheRewriteArePaced"}},
+	{"rewrite_unpaced", []string{"TestTheLookAndTheRewriteArePaced"}},
+	{"keep_unpaced", []string{"TestTheKeepDecisionIsPaced"}},
 	// #710 PR 3b-4b: the witness as the log's third copy, wired into the
 	// pair. In the elector (quorum/node): the unsynced controller's
 	// preference and yield.
@@ -1048,6 +1052,9 @@ var rowPkgs = map[string][]string{
 	"diverged_says_vouch":               {"./cmd/naut"},
 	"blocked_at_once":                   {"./cmd/naut"},
 	"entry_unbounded":                   {"./oplog"},
+	"compaction_unpaced":                {"./oplog"},
+	"rewrite_unpaced":                   {"./oplog"},
+	"keep_unpaced":                      {"./server"},
 	"term_not_persisted":                {"./oplog"},
 	"unnamed_leader_admitted":           {"./oplog"},
 	"vouch_unchecked":                   {"./oplog"},

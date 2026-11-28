@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,7 +27,7 @@ func NewBenchTrio(t *testing.T, n int, compact Compactor) *BenchTrio {
 	tr := newTrio(t, func(i int, o *Options) {
 		o.CompactRules = 1
 		o.Compact = compact
-		o.decide = decideLimits{every: 24 * time.Hour}
+		o.decide = decideLimits{every: 24 * time.Hour, paceWork: benchPace.work, paceDuty: benchPace.duty}
 		o.lim.compactDelay = func() time.Duration { return 0 }
 	})
 	for i := range 3 {
@@ -54,6 +56,30 @@ func NewBenchTrio(t *testing.T, n int, compact Compactor) *BenchTrio {
 		t.Fatal(err)
 	}
 	return &BenchTrio{tr: tr}
+}
+
+// benchPace is the pacing the bench runs under: OPLOG_BENCH_PACE=work,duty
+// (e.g. 2ms,0.25; duty 1 is unpaced); unset, the defaults.
+var benchPace = func() (p struct {
+	work time.Duration
+	duty float64
+}) {
+	w, d, ok := strings.Cut(os.Getenv("OPLOG_BENCH_PACE"), ",")
+	if !ok {
+		return p
+	}
+	p.work, _ = time.ParseDuration(w)
+	p.duty, _ = strconv.ParseFloat(d, 64)
+	return p
+}()
+
+// Pacing is the pacing a look runs under, for the table.
+func (b *BenchTrio) Pacing() string {
+	l := b.tr.nodes[0].limits()
+	if l.paceDuty >= 1 {
+		return "unpaced"
+	}
+	return fmt.Sprintf("%s at %.0f%%", l.paceWork, l.paceDuty*100)
 }
 
 // Node is copy i.
@@ -163,8 +189,8 @@ func (b *BenchTrio) Sections(keep []uint64, through uint64) (build, carry time.D
 	n := b.tr.nodes[0]
 	term := n.currentTerm()
 	// K's body as proposeDecided builds it: outside the locks.
-	d, _, _, _ := n.plan(n.limits(), through)
-	pre, perr := compactBodyOf(d.base, d.snap, through, keep, n.o.CompactRules, d.termAt)
+	d, _, _, _ := n.plan(n.limits(), through, nil)
+	pre, perr := compactBodyOf(d.base, d.snap, through, keep, n.o.CompactRules, d.termAt, nil)
 	if perr != nil {
 		return 0, 0, perr
 	}

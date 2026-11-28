@@ -86,7 +86,7 @@ func (tr *dtrio) ready() {
 	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
 		tr.t.Fatal(err)
 	}
-	tr.nodes[0].markRules(tr.ctx()) // the first look's marker, at the start
+	tr.nodes[0].markRules(tr.ctx(), nil) // the first look's marker, at the start
 	tr.fillOver(0, 60, 1)
 	tr.clk.advance(8 * day)
 	tr.fillOver(0, 3, 2)
@@ -257,7 +257,7 @@ func TestBlockedSinceIsTheLogsNotTheProcesss(t *testing.T) {
 			return storedOf(Entry{Seq: seq, Term: seq, TS: ts, Kind: KindNoop, By: "system", Value: []byte(`{"rules":1}`)})
 		}
 		snap := []stored{mark(1, 5000), mark(2, 3000), storedOf(Entry{Seq: 3, Term: 3, TS: 4000, Kind: KindAck})}
-		if ts, ok := firstRulesTerm(snap); !ok || ts != 3000 {
+		if ts, ok := firstRulesTerm(snap, nil); !ok || ts != 3000 {
 			t.Fatalf("first rules term %d %t, want the earlier marker's 3000", ts, ok)
 		}
 	})
@@ -276,10 +276,10 @@ func TestBlockedSinceIsTheLogsNotTheProcesss(t *testing.T) {
 		if stored != 1 {
 			t.Fatal("the marker was not stored")
 		}
-		if _, ok := firstRulesTerm(snap); ok {
+		if _, ok := firstRulesTerm(snap, nil); ok {
 			t.Fatal("an uncommitted marker counts")
 		}
-		if !n0.needsRulesMark() {
+		if !n0.needsRulesMark(nil) {
 			t.Fatal("an uncommitted marker is taken for a committed one")
 		}
 		tr.clk.advance(time.Hour)
@@ -322,7 +322,7 @@ func TestARollingUpgradeUnderSevenDaysRaisesNothing(t *testing.T) {
 	if err := tr.nodes[0].SyncLeader(tr.ctx()); err != nil {
 		t.Fatal(err)
 	}
-	tr.nodes[0].markRules(tr.ctx())
+	tr.nodes[0].markRules(tr.ctx(), nil)
 	marked := tr.clk.ms.Load()
 	tr.clk.advance(2 * day)
 	tr.beat(0)
@@ -605,7 +605,7 @@ func TestTheRulesMarkerNamesWhatMustLapse(t *testing.T) {
 		t.Fatal(err)
 	}
 	n.mu.Unlock()
-	n.markRules(tr.ctx())
+	n.markRules(tr.ctx(), nil)
 	es := n.After(0)
 	last := es[len(es)-1]
 	if last.Kind != KindLapse || !slices.Contains(last.Refs, stale.Seq) || string(last.Value) != `{"rules":1}` {
