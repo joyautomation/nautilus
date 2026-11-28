@@ -159,6 +159,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a leader's catch-up takes the chosen copy's later pages without checking it still counts and is unchanged, so a copy that lost its log mid-read syncs the leader on a short log (`leader_catchup_pages_unchecked`), or goes on after a newer term was seen (`leader_catchup_term_unchecked`) | design §1, only a synced replica counts | #1455 (Fable review) |
 | a replaced suffix whose rewrite failed stays in memory while the file holds the old one (`rewrite_failure_kept`) | design §1, an acknowledged entry is on disk | #1455 (Fable review) |
 | a follower commits as far as a replication proved, short of the leader's commit index, so a resend chunk ends between a lapse and what it names and the follower carries out what the leader lapsed (`follower_commit_mid_range`) | design §1, lapse | #1466 |
+| a follower answers its last entry as held, past what the replication proved, so a stale tail of an old term counts as holding the leader's write (`have_past_proved`) | design §1, a write is on a majority | #1472 |
 | an unsynced standby campaigns over a reachable, synced peer that may campaign (`campaign_ignores_sync`) | design §1, an unsynced controller leads for control | 3b-4b |
 | an unsynced leader whose catch-up failed never hands over to a synced, able peer (`unsynced_leader_keeps_lead`) | design §1, an unsynced controller leads for control | 3b-4b |
 | a leader yields again within 10 minutes (`yield_undamped`) | design §1, the yield is damped | 3b-4b |

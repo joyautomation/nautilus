@@ -336,7 +336,9 @@ const (
 	// only outside the majority the new leader heard) ends it. A lapse
 	// counts only for entries committed in the same range as it, so every
 	// replica moves its commit index only to one some leader committed at
-	// (#1466): a leader commits a lapse and its entries together.
+	// (#1466): the lapse's leader, and every later one, commits it and its
+	// entries together. (An earlier term's commit past a named entry,
+	// known only outside the new leader's majority, is the case above.)
 	KindLapse = "lapse"
 )
 
@@ -2947,12 +2949,14 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 	resp, err := send(es)
 	// The peer is behind (a gap: Have is its last entry) or its entry
 	// before these is not ours (a mismatch: Have is its commit index), or
-	// it took a chunk that stops short of our last entry: send what is
-	// after Have, a chunk at a time, and again from what the peer answers
-	// (a gap's resend can meet a mismatch below it), until it has them.
-	// Each step moves Have, to the peer's commit index at worst, where the
-	// logs agree; the bound only guards a peer that answers nonsense, and
-	// the next heartbeat goes on (a rebuilt replica is filled over several).
+	// it took a chunk that stops short of our last entry (Have is as far
+	// as the request proved its log ours): send what is after Have, a
+	// chunk at a time, and again from what the peer answers (a gap's
+	// resend can meet a mismatch below it), until it has them. Each step
+	// after a mismatch moves Have past the chunk just taken, so a stale
+	// tail of the peer's is reached and replaced; the bound only guards a
+	// peer that answers nonsense, and the next heartbeat goes on (a rebuilt
+	// replica is filled over several).
 	for range n.o.lim.rounds {
 		var he *httpError
 		var from uint64
@@ -3529,8 +3533,8 @@ func (n *Node) Handler() http.Handler {
 			// Only at the leader's own commit index, and only once this
 			// request proved the logs equal that far (#1466). A leader
 			// commits a KindLapse and every entry it names in one range,
-			// so a commit index some leader committed at never falls
-			// between them; a commit cut short at what one chunk of a
+			// so no index the lapse's leader or a later one committed at
+			// falls between them; a commit cut short at what one chunk of a
 			// resend proved could, and the entries it names were then
 			// carried out here, while the leader and this replica's own
 			// replay record them as lapsed.
@@ -3550,8 +3554,16 @@ func (n *Node) Handler() http.Handler {
 			}
 		}
 		have := n.lastLocked()
-		if errors.Is(err, errMismatch) {
+		switch {
+		case errors.Is(err, errMismatch):
 			have = n.commit // resend from what is committed here
+		case err == nil && !mutOplog("have_past_proved"):
+			// Only as far as this request proved the logs equal (#1472):
+			// entries this replica holds past that may be an old term's,
+			// not the leader's, and the leader counts Have as holding its
+			// entries. Answering them made a write count on a copy that
+			// did not hold it, and kept a resend from reaching them.
+			have = req.PrevSeq + uint64(len(req.Entries))
 		}
 		commit := n.commit
 		if l := n.leaderAddr(); l != "" {

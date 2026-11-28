@@ -146,7 +146,10 @@ import "os"
 //
 //   - follower_commit_mid_range: a follower commits as far as a request
 //     proved, short of the leader's commit index, so a chunk of a resend
-//     can end between a KindLapse and the entries it names.
+//     can end between a KindLapse and the entries it names;
+//   - have_past_proved: a follower answers its last entry as held, past
+//     what the request proved, so a stale tail counts as holding the
+//     leader's write (#1472).
 //
 // Peer TLS (#710):
 //
