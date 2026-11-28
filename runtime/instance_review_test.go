@@ -260,4 +260,88 @@ func TestInstanceBitOfAReadOnlyMember(t *testing.T) {
 		t.Errorf("a bit of a from: member = %v, want ErrReadOnly", err)
 	}
 	wantPath(t, r, "P101.Status.Code", int64(0))
+	// A path that names no member, inside a struct holding a read-only one,
+	// fails closed.
+	if err := writeErr(r, "P101.Status.Bogus", 1); !errors.Is(err, ErrReadOnly) {
+		t.Errorf("an unresolvable path into Status = %v, want ErrReadOnly", err)
+	}
+}
+
+// Names resolve exactly as ir resolves them (case folding, not upper
+// case): the Kelvin sign K folds to k, so it must not slip a write past
+// the front door to a from: member, nor a declaration miss its member.
+func TestInstanceNamesFoldAsIRFoldsThem(t *testing.T) {
+	const lib = "TYPE Loop : STRUCT Kp : REAL; Ki : REAL; END_STRUCT; END_TYPE"
+	kelvin := "Kp" // the Kelvin sign, then p
+	for _, decl := range []string{"Kp", kelvin} {
+		r, err := New(Options{
+			Program: "PROGRAM Main\nEND_PROGRAM", Libraries: []string{lib}, Driver: &instDriver{},
+			Tags: []TagDef{InstanceTag("L1", "Loop", InstanceDef{Members: map[string]MemberDef{decl: {Kind: MemberFrom}}})},
+		})
+		if err != nil {
+			t.Fatalf("declared %q: %v", decl, err)
+		}
+		for _, w := range []struct {
+			path string
+			v    any
+		}{{"L1.Kp", 5.0}, {"L1." + kelvin, 5.0}, {"L1", map[string]any{kelvin: 6.0}}} {
+			if err := writeErr(r, w.path, w.v); !errors.Is(err, ErrReadOnly) {
+				t.Errorf("declared %q, write %q = %v, want ErrReadOnly", decl, w.path, err)
+			}
+		}
+		wantPath(t, r, "L1.Kp", 0.0)
+		if err := writeErr(r, "L1.Ki", 1.0); err != nil {
+			t.Errorf("Ki is memory: %v", err)
+		}
+		r.Scan()
+		if q := r.TagQuality("L1." + kelvin); q != nio.NotConnected {
+			t.Errorf("TagQuality via the Kelvin spelling = %v, want the member's NotConnected", q)
+		}
+	}
+}
+
+// A struct delivered under a key whose leaves are all delivered still has
+// to have the member's shape: another is refused and counted, and the key
+// reads Bad.
+func TestInstanceMisShapedStructUnderOneKeyIsRefused(t *testing.T) {
+	def := InstanceDef{Members: map[string]MemberDef{"Sensor": {Kind: MemberFrom}}}
+	r, d := newTankRuntime(t, func(o *Options) { o.Tags = []TagDef{InstanceTag("T1", "Tank", def)} })
+	one := ir.StructDef{Name: "One", Fields: []ir.StructField{{Name: "X", Type: &ir.Type{Kind: ir.TypeReal}}}}
+	d.set("T1.Sensor", ir.Value{Kind: ir.TypeStruct, Struct: &one, Fld: []ir.Value{ir.RealVal(1)}})
+	r.Scan()
+	in := r.tags.instanceOf("T1")
+	if in.drops.Load() == 0 {
+		t.Error("a mis-shaped struct was not counted")
+	}
+	if got, _ := r.Tags().ReadGlobal("T1"); len(got.Fld[1].Fld) != 2 {
+		t.Fatalf("the store took the mis-shaped struct: %+v", got.Fld[1])
+	}
+	if q := r.TagQuality("T1.Sensor"); q != nio.Bad {
+		t.Errorf("the refused key reads %v, want Bad", q)
+	}
+}
+
+// The driver's own quality map is read, never edited, also on a standby:
+// a driver may hand back the same map every call.
+type ownMapDriver struct {
+	instDriver
+	q map[string]nio.Quality
+}
+
+func (d *ownMapDriver) Quality() map[string]nio.Quality { return d.q }
+
+func TestInstanceQualityLeavesTheDriversMapAlone(t *testing.T) {
+	d := &ownMapDriver{q: map[string]nio.Quality{"P101.Speed": nio.Good, "P101.Fault": nio.Substituted}}
+	r, err := New(Options{
+		Program: "PROGRAM Main\nEND_PROGRAM", Libraries: []string{pumpLib}, Driver: d,
+		Tags: []TagDef{InstanceTag("P101", "Pump", pumpDef())},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.driverSaid(true)
+	_ = r.TagQuality("P101.Speed")
+	if len(d.q) != 2 {
+		t.Errorf("the driver's map was edited: %v", d.q)
+	}
 }

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -133,9 +134,11 @@ func InstanceTag(name, typeName string, def InstanceDef, opts ...TagOpt) TagDef 
 type knode struct {
 	kind   MemberKind
 	leaf   bool
-	path   string   // as the type spells it ("Cmd.Start", "Levels[1]"), "" at the root
-	names  []string // a struct's member names, folded
-	lo     int      // an array's lower bound
+	path   string      // as the type spells it ("Cmd.Start", "Levels[1]"), "" at the root
+	canon  string      // path, canonical: the one key for this member
+	names  []string    // a struct's member names, as declared (nil for an array)
+	lo     int         // an array's lower bound
+	own    *MemberKind // the kind its own InstanceDef entry gives, if any
 	kids   []knode
 	hasRO  bool // some leaf beneath is read-only
 	hasDel bool // some leaf beneath is delivered
@@ -189,36 +192,10 @@ type instInfo struct {
 type instKey struct {
 	key  string   // "P101.Speed", as delivered
 	segs []string // the path below the root, for SetFieldTyped
+	idx  []int    // the same path as positions, for valueAt
 	node *knode
-}
-
-// canonSeg is one path segment's canonical form: a name folded like every
-// IEC identifier, an index as its number ("[01]" and "[+1]" are "[1]",
-// which is how ir resolves them).
-func canonSeg(s string) (string, bool) {
-	if !strings.HasPrefix(s, "[") {
-		return ir.NameKey(s), true
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(strings.Trim(s, "[]")))
-	if err != nil {
-		return "", false
-	}
-	return "[" + strconv.Itoa(n) + "]", true
-}
-
-func canonPath(segs []string) (string, bool) {
-	var b strings.Builder
-	for i, s := range segs {
-		c, ok := canonSeg(s)
-		if !ok {
-			return "", false
-		}
-		if i > 0 && !strings.HasPrefix(c, "[") {
-			b.WriteByte('.')
-		}
-		b.WriteString(c)
-	}
-	return b.String(), true
+	// bad: the last value delivered under this key was refused.
+	bad *atomic.Bool
 }
 
 // walk resolves segs in the tree; ok is false for a path the type does not
@@ -228,36 +205,41 @@ func (in *instInfo) walk(segs []string) ([]*knode, bool) {
 	chain := []*knode{&in.root}
 	n := &in.root
 	for _, s := range segs {
-		c, ok := canonSeg(s)
-		if !ok || n.leaf {
+		i, ok := n.child(s)
+		if !ok {
 			return chain, false
 		}
-		if strings.HasPrefix(c, "[") {
-			i, _ := strconv.Atoi(strings.Trim(c, "[]"))
-			i -= n.lo
-			if n.names != nil || i < 0 || i >= len(n.kids) {
-				return chain, false
-			}
-			n = &n.kids[i]
-		} else {
-			i := slicesIndex(n.names, c)
-			if i < 0 {
-				return chain, false
-			}
-			n = &n.kids[i]
-		}
+		n = &n.kids[i]
 		chain = append(chain, n)
 	}
 	return chain, true
 }
 
-func slicesIndex(names []string, s string) int {
-	for i, n := range names {
-		if n == s {
-			return i
+// child resolves one segment below n exactly as ir resolves it: a member
+// name by case folding (ir.SameName), an index as its number.
+func (n *knode) child(s string) (int, bool) {
+	if n.leaf {
+		return 0, false
+	}
+	if strings.HasPrefix(s, "[") {
+		if n.names != nil {
+			return 0, false
+		}
+		v, err := strconv.Atoi(strings.TrimSpace(strings.Trim(s, "[]")))
+		if err != nil {
+			return 0, false
+		}
+		if i := v - n.lo; i >= 0 && i < len(n.kids) {
+			return i, true
+		}
+		return 0, false
+	}
+	for i, name := range n.names {
+		if ir.SameName(name, s) {
+			return i, true
 		}
 	}
-	return -1
+	return 0, false
 }
 
 // kindAt is the effective kind of the member at segs (memory for a path the
@@ -283,37 +265,43 @@ func newInstInfo(d TagDef, types map[string]*ir.Type) (*instInfo, error) {
 	if t.Kind != ir.TypeStruct || t.Struct == nil {
 		return nil, fmt.Errorf("instance %s: type %s is not a STRUCT: an instance is a struct whose members are wired", d.Name, d.Type)
 	}
-	kinds := map[string]MemberKind{}
-	declared := map[string]string{}
 	paths := make([]string, 0, len(d.Instance.Members))
 	for p := range d.Instance.Members {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
+	in := &instInfo{name: d.Name, typ: t}
+	in.root = buildShape(t, "", "")
+	declared := map[*knode]string{}
 	for _, p := range paths {
 		m := d.Instance.Members[p]
 		segs := ir.PathSegments(p)
 		if len(segs) == 0 {
 			return nil, fmt.Errorf("instance %s: an empty member path", d.Name)
 		}
-		if _, err := memberType(t, segs); err != nil {
-			return nil, fmt.Errorf("instance %s: member %s: %w", d.Name, p, err)
-		}
 		if m.Kind > MemberExpr {
 			return nil, fmt.Errorf("instance %s: member %s: %v is not a member kind", d.Name, p, m.Kind)
 		}
-		c, _ := canonPath(segs)
-		if prev, dup := declared[c]; dup {
+		chain, ok := in.walk(segs)
+		if !ok {
+			_, err := memberType(t, segs)
+			if err == nil {
+				err = fmt.Errorf("no such member")
+			}
+			return nil, fmt.Errorf("instance %s: member %s: %w", d.Name, p, err)
+		}
+		node := chain[len(chain)-1]
+		if prev, dup := declared[node]; dup {
 			return nil, fmt.Errorf("instance %s: member %s is listed twice (also as %s)", d.Name, p, prev)
 		}
-		declared[c] = p
-		kinds[c] = m.Kind
+		declared[node] = p
+		k := m.Kind
+		node.own = &k
 		if m.Event && m.Kind != MemberTo {
 			return nil, fmt.Errorf("instance %s: member %s: Event is for a MemberTo, and this one is %s", d.Name, p, m.Kind)
 		}
 	}
-	in := &instInfo{name: d.Name, typ: t}
-	in.root = buildTree(t, nil, "", MemberMemory, kinds)
+	settle(&in.root, MemberMemory)
 	for _, p := range paths {
 		m := d.Instance.Members[p]
 		segs := ir.PathSegments(p)
@@ -324,65 +312,78 @@ func newInstInfo(d TagDef, types map[string]*ir.Type) (*instInfo, error) {
 				return nil, fmt.Errorf("instance %s: member %s: Readback is for a MemberTo, and this one is %s", d.Name, p, m.Kind)
 			}
 			rs := ir.PathSegments(m.Readback)
-			if _, err := memberType(t, rs); err != nil {
+			rc, ok := in.walk(rs)
+			if !ok {
+				_, err := memberType(t, rs)
+				if err == nil {
+					err = fmt.Errorf("no such member")
+				}
 				return nil, fmt.Errorf("instance %s: member %s: readback %s: %w", d.Name, p, m.Readback, err)
 			}
-			if k := in.kindAt(rs); k != MemberFrom && k != MemberBoth && k != MemberExpr {
+			if k := rc[len(rc)-1].kind; k != MemberFrom && k != MemberBoth && k != MemberExpr {
 				return nil, fmt.Errorf("instance %s: member %s: readback %s is %s: a read-back shows the device, so it is from, both or expr", d.Name, p, m.Readback, k)
 			}
 		}
 		if m.Kind.delivered() {
-			in.keys = append(in.keys, instKey{key: d.Name + addrSuffix(node.path), segs: segs, node: node})
+			idx := make([]int, len(segs))
+			n := &in.root
+			for i, sg := range segs {
+				idx[i], _ = n.child(sg)
+				n = &n.kids[idx[i]]
+			}
+			in.keys = append(in.keys, instKey{key: d.Name + addrSuffix(node.path), segs: segs, idx: idx, node: node, bad: new(atomic.Bool)})
 		}
 	}
 	in.got = make([]atomic.Bool, len(in.keys))
 	return in, nil
 }
 
-// buildTree makes the node for type t at segs, with its effective kind.
-func buildTree(t *ir.Type, segs []string, path string, inherited MemberKind, kinds map[string]MemberKind) knode {
-	n := knode{kind: inherited, path: path}
-	if c, ok := canonPath(segs); ok && len(segs) > 0 {
-		if k, listed := kinds[c]; listed {
-			n.kind = k
-		}
-	}
-	child := func(seg, p string, et *ir.Type) {
-		s := append(append([]string(nil), segs...), seg)
-		n.kids = append(n.kids, buildTree(et, s, p, n.kind, kinds))
-	}
+// buildShape makes the node for type t, spelled path and keyed canon,
+// with no kinds yet (settle gives them).
+func buildShape(t *ir.Type, path, canon string) knode {
+	n := knode{path: path, canon: canon}
 	switch {
 	case t.Kind == ir.TypeStruct && t.Struct != nil:
 		for _, f := range t.Struct.Fields {
-			n.names = append(n.names, ir.NameKey(f.Name))
-			p := f.Name
+			n.names = append(n.names, f.Name)
+			p, c := f.Name, ir.NameKey(f.Name)
 			if path != "" {
-				p = path + "." + f.Name
+				p, c = path+"."+p, canon+"."+c
 			}
-			child(f.Name, p, f.Type)
+			n.kids = append(n.kids, buildShape(f.Type, p, c))
 		}
 	case t.Kind == ir.TypeArray && t.Elem != nil:
 		n.lo = t.ArrLoBound
 		for i := 0; i < t.ArrLen; i++ {
 			idx := "[" + strconv.Itoa(t.ArrLoBound+i) + "]"
-			child(idx, path+idx, t.Elem)
+			n.kids = append(n.kids, buildShape(t.Elem, path+idx, canon+idx))
 		}
 	}
-	if len(n.kids) == 0 {
-		n.leaf = true
+	n.leaf = len(n.kids) == 0
+	return n
+}
+
+// settle gives every node its effective kind (its own entry's, else its
+// parent's) and its subtree's flags.
+func settle(n *knode, inherited MemberKind) {
+	n.kind = inherited
+	if n.own != nil {
+		n.kind = *n.own
+	}
+	if n.leaf {
 		n.hasRO = n.kind.readOnly()
 		n.hasDel = n.kind.delivered()
 		n.allDel = n.hasDel
-		return n
+		return
 	}
-	n.allDel = true
+	n.hasRO, n.hasDel, n.allDel = false, false, true
 	for i := range n.kids {
 		k := &n.kids[i]
+		settle(k, n.kind)
 		n.hasRO = n.hasRO || k.hasRO
 		n.hasDel = n.hasDel || k.hasDel
 		n.allDel = n.allDel && k.allDel
 	}
-	return n
 }
 
 // addrSuffix is how a member path follows its root in an address.
@@ -462,7 +463,7 @@ func mergeLeaves(n *knode, base, src ir.Value, p pick) (ir.Value, bool) {
 		}
 		if src.Struct != nil && src.Struct != base.Struct {
 			for i, f := range src.Struct.Fields {
-				if i >= len(n.names) || ir.NameKey(f.Name) != n.names[i] {
+				if i >= len(n.names) || !ir.SameName(f.Name, n.names[i]) {
 					return base, false
 				}
 			}
@@ -492,29 +493,24 @@ func mergeLeaves(n *knode, base, src ir.Value, p pick) (ir.Value, bool) {
 	return res, true
 }
 
-// valueAt walks v along a key's node path, for the unchanged-leaf check.
-func valueAt(in *instInfo, v ir.Value, segs []string) (ir.Value, bool) {
-	n, cur := &in.root, v
-	for _, s := range segs {
-		c, ok := canonSeg(s)
-		if !ok {
-			return ir.Value{}, false
-		}
-		var i int
-		if strings.HasPrefix(c, "[") {
-			i, _ = strconv.Atoi(strings.Trim(c, "[]"))
-			i -= n.lo
-			if i < 0 || i >= len(cur.Arr) || i >= len(n.kids) {
-				return ir.Value{}, false
-			}
-			cur = cur.Arr[i]
-		} else {
-			if i = slicesIndex(n.names, c); i < 0 || i >= len(cur.Fld) {
+// valueAt walks v along a key's positions, for the unchanged-leaf check.
+func valueAt(v ir.Value, idx []int) (ir.Value, bool) {
+	cur := v
+	for _, i := range idx {
+		switch cur.Kind {
+		case ir.TypeStruct:
+			if i >= len(cur.Fld) {
 				return ir.Value{}, false
 			}
 			cur = cur.Fld[i]
+		case ir.TypeArray:
+			if i >= len(cur.Arr) {
+				return ir.Value{}, false
+			}
+			cur = cur.Arr[i]
+		default:
+			return ir.Value{}, false
 		}
-		n = &n.kids[i]
 	}
 	return cur, true
 }
@@ -567,28 +563,32 @@ func (t *Tags) deliverLocked(in *instInfo, vals map[string]any) {
 		}
 		seen = true
 		if k.node.leaf {
-			if leaf, ok := valueAt(in, nv, k.segs); ok && sameLeaf(leaf, raw) {
+			if leaf, ok := valueAt(nv, k.idx); ok && sameLeaf(leaf, raw) {
 				in.got[i].Store(true)
+				k.bad.Store(false)
 				continue
 			}
 		}
 		cand, err := ir.SetFieldTyped(nv, in.typ, k.segs, deliveryValue(raw), "instance "+in.name)
 		if err != nil {
 			dropped = true
+			k.bad.Store(true)
 			continue
 		}
-		if !k.node.allDel {
-			// A member of another kind lies below this key: take only the
-			// delivered leaves.
+		if !k.node.leaf {
+			// A struct or array under one key: take only its delivered
+			// leaves, and only if it has the member's shape.
 			m, ok := mergeLeaves(&in.root, nv, cand, pickDelivered)
 			if !ok {
 				dropped = true
+				k.bad.Store(true)
 				continue
 			}
 			cand = m
 		}
 		nv, changed = cand, true
 		in.got[i].Store(true)
+		k.bad.Store(false)
 	}
 	if seen {
 		in.dropped.Store(dropped)
@@ -653,6 +653,12 @@ func (in *instInfo) writable(segs []string) error {
 		}
 	}
 	if !ok {
+		// A path the tree cannot resolve: refused where it would reach
+		// into a read-only member, else left to the write's own resolution,
+		// which refuses it.
+		if stop := chain[len(chain)-1]; stop.hasRO {
+			return fmt.Errorf("instance %s: %s does not name a member, and %s holds read-only members: %w", in.name, strings.Join(segs, "."), in.name+addrSuffix(stop.path), ErrReadOnly)
+		}
 		return nil
 	}
 	if n := chain[len(chain)-1]; n.hasRO {
@@ -713,6 +719,8 @@ func (in *instInfo) stripReadOnly(committed, stored ir.Value) ir.Value {
 	if v, ok := mergeLeaves(&in.root, committed, stored, pickReadOnly); ok {
 		return v
 	}
+	in.drops.Add(1)
+	slog.Warn("runtime: an instance's committed value has another shape; the commit lands nothing", "instance", in.name)
 	return stored
 }
 
@@ -734,7 +742,10 @@ func (t *Tags) installCarried(name string, v ir.Value) {
 	}
 	if m, ok := mergeLeaves(&in.root, t.writeBase(key, cur), v, pickNotDelivered); ok {
 		t.writeLocked(key, m)
+		return
 	}
+	in.drops.Add(1)
+	slog.Warn("runtime: an instance in the takeover image has another shape; its memory and commands were not taken", "instance", in.name)
 }
 
 // memberSubstituted reports whether a substitute covers the member at segs
@@ -753,16 +764,19 @@ func (t *Tags) memberSubstituted(in *instInfo, segs []string) bool {
 	if len(segs) == 0 {
 		return len(ss.entries) > 0 // the root: any of its members
 	}
-	p, ok := canonPath(segs)
+	chain, ok := in.walk(segs)
 	if !ok {
 		return false
 	}
+	p := chain[len(chain)-1].canon
 	for _, e := range ss.entries {
 		if len(e.path) == 0 {
 			return true
 		}
-		if ep, ok := canonPath(e.path); ok && (pathUnder(p, ep) || pathUnder(ep, p)) {
-			return true
+		if ec, ok := in.walk(e.path); ok {
+			if ep := ec[len(ec)-1].canon; pathUnder(p, ep) || pathUnder(ep, p) {
+				return true
+			}
 		}
 	}
 	return false
@@ -825,6 +839,8 @@ func (r *Runtime) rollInstance(in *instInfo, said map[string]nio.Quality, standb
 	for i, k := range in.keys {
 		q, ok := said[k.key]
 		switch {
+		case k.bad.Load():
+			q = nio.Bad
 		case ok:
 		case rootSaid:
 			q = rootQ
@@ -857,15 +873,20 @@ func (r *Runtime) driverSaid(standby bool) map[string]nio.Quality {
 	if !ok {
 		return nil
 	}
-	said := qr.Quality()
-	if standby {
-		for k, q := range said {
-			if q == nio.Good || q == nio.Substituted {
-				delete(said, k)
-			}
+	// Copied, never edited: a driver may hand back its own map. Good is
+	// dropped (absent means Good, as Quality reads it), and on a standby
+	// Substituted too.
+	var out map[string]nio.Quality
+	for k, q := range qr.Quality() {
+		if q == nio.Good || (standby && q == nio.Substituted) {
+			continue
 		}
+		if out == nil {
+			out = map[string]nio.Quality{}
+		}
+		out[k] = q
 	}
-	return said
+	return out
 }
 
 // instanceQualities adds every instance's member and root qualities to
@@ -913,11 +934,10 @@ func (r *Runtime) instanceTagQuality(in *instInfo, segs []string, standby bool) 
 				q = nio.Stale
 			}
 		default:
-			p, _ := canonPath(segs)
+			p := n.canon
 			var qs []nio.Quality
 			for i, k := range in.keys {
-				kp, _ := canonPath(k.segs)
-				if pathUnder(p, kp) || pathUnder(kp, p) {
+				if kp := k.node.canon; pathUnder(p, kp) || pathUnder(kp, p) {
 					qs = append(qs, roll.members[i])
 				}
 			}
