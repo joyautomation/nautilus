@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"slices"
@@ -1374,6 +1375,69 @@ func baselines(rows []mutation) [][]string {
 	return out
 }
 
+// checkBaselines runs rows' baselines, writing a row to w for each that is
+// red, and reports whether they are all green. A test red in a baseline
+// is run once more alone (#1096): a rig test can miss a timing bound on a
+// loaded runner, and one such miss would stop the whole leg. Green alone,
+// it is written as flaky (its report lines under it) and the leg goes on;
+// red alone, or a build or setup failure, stops it. flaky are the tests
+// green alone: a row they catch is run twice (judge).
+func checkBaselines(w io.Writer, rows []mutation, where string, run func(name string, args []string) []byte) (ok bool, flaky []string) {
+	for _, args := range baselines(rows) {
+		r := parse(run("", args))
+		b, why := baseline(r)
+		if b {
+			continue
+		}
+		if r.broken == "" && len(r.failed) > 0 {
+			pkgs := args[2:]
+			alone := true
+			for _, t := range r.failed {
+				if ok, _ := baseline(parse(run("", testArgs([]string{t}, pkgs)))); !ok {
+					alone = false
+				}
+			}
+			if alone {
+				fmt.Fprintf(w, "| (baseline: the tag on, no mutation; %s) | flaky: %s red with the leg's tests, green alone (log it on #1120) |\n", where, strings.Join(r.failed, ", "))
+				fmt.Fprint(w, r.why())
+				for _, t := range r.failed {
+					fmt.Fprint(w, r.full(t))
+				}
+				flaky = append(flaky, r.failed...)
+				continue
+			}
+		}
+		fmt.Fprintf(w, "| (baseline: the tag on, no mutation; %s) | %s |\n", where, why)
+		fmt.Fprint(w, r.why())
+		for _, t := range r.failed {
+			fmt.Fprint(w, r.full(t))
+		}
+		return false, flaky
+	}
+	return true, flaky
+}
+
+// judge runs row m and judges it. A row naming a test that was flaky in
+// the leg's baseline is caught only if a second run catches it too
+// (#1096): one red run of a flaky test is no catch.
+func judge(m mutation, flaky []string, run func(name string, args []string) []byte) (bool, string) {
+	caught, why := verdict(m, parse(run(m.name, m.args())))
+	var named []string
+	for _, t := range m.expect {
+		if slices.Contains(flaky, t) {
+			named = append(named, t)
+		}
+	}
+	if !caught || len(named) == 0 {
+		return caught, why
+	}
+	again, why2 := verdict(m, parse(run(m.name, m.args())))
+	if !again {
+		return false, "NOT COUNTED: caught once, not on a second run (" + strings.Join(named, ", ") + " flaky in this leg's baseline): " + why2
+	}
+	return true, why + " (twice: " + strings.Join(named, ", ") + " flaky in this leg's baseline)"
+}
+
 // shard picks the rows of shard k of n, round robin, so the nightly can
 // split the table across jobs (#1096). n of 1 is every row.
 func shard(rows []mutation, k, n int) []mutation {
@@ -1412,6 +1476,23 @@ type result struct {
 	// lines, "--- FAIL", a panic), the last tailLines of them, so a red
 	// baseline says why, not only which test (#1120).
 	said map[string][]string
+	// all holds each top-level test's output, the last allLines lines,
+	// for a red baseline's full log (#1096: a rig test's timing miss is
+	// read from what it logged, not from its report line alone).
+	all map[string][]string
+}
+
+// allLines is how much of a red baseline test's output is kept.
+const allLines = 300
+
+// full gives test's output, the last allLines lines, indented.
+func (r result) full(test string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "    --- %s's output (the last %d lines):\n", test, allLines)
+	for _, l := range r.all[test] {
+		b.WriteString("    " + strings.TrimRight(l, "\n") + "\n")
+	}
+	return b.String()
 }
 
 // tailLines is how many of a failing test's report lines are kept.
@@ -1453,6 +1534,16 @@ func parse(out []byte) result {
 		}
 		if strings.HasPrefix(e.Output, "panic: ") {
 			r.panicked = true
+		}
+		if e.Action == "output" && e.Test != "" {
+			top, _, _ := strings.Cut(e.Test, "/")
+			if r.all == nil {
+				r.all = map[string][]string{}
+			}
+			r.all[top] = append(r.all[top], e.Output)
+			if n := len(r.all[top]); n > 2*allLines {
+				r.all[top] = append([]string(nil), r.all[top][n-allLines:]...)
+			}
 		}
 		if e.Action == "output" && e.Test != "" && reportLine(e.Output) {
 			top, _, _ := strings.Cut(e.Test, "/")
@@ -1552,18 +1643,14 @@ func main() {
 		rows = []mutation{table[i]}
 	}
 	fmt.Println("| mutation | result |\n|---|---|")
-	for _, args := range baselines(rows) {
-		r := parse(run("", args))
-		if b, why := baseline(r); !b {
-			fmt.Printf("| (baseline: the tag on, no mutation; shard %d/%d) | %s |\n", k, n, why)
-			fmt.Print(r.why())
-			os.Exit(1)
-		}
+	bok, flaky := checkBaselines(os.Stdout, rows, fmt.Sprintf("shard %d/%d", k, n), run)
+	if !bok {
+		os.Exit(1)
 	}
 	fmt.Printf("| (baseline: the tag on, no mutation; shard %d/%d, %d rows) | green |\n", k, n, len(rows))
 	ok := true
 	for _, m := range rows {
-		caught, why := verdict(m, parse(run(m.name, m.args())))
+		caught, why := judge(m, flaky, run)
 		ok = ok && caught
 		fmt.Printf("| %s | %s |\n", m.name, why)
 	}

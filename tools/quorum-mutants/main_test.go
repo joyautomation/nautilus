@@ -216,3 +216,92 @@ func TestDoneRowIsWhatTheReportLooksFor(t *testing.T) {
 		t.Fatal("quorum-nightly-issue.sh no longer looks for the done row's shape")
 	}
 }
+
+// A test red in a baseline is run once more alone (#1096): green alone,
+// the leg goes on and says it was flaky; red alone, or a build failure,
+// stops the leg.
+func TestABaselineRedTestIsRunAgainAlone(t *testing.T) {
+	rows := []mutation{{name: "x", expect: []string{"TestA", "TestB"}}}
+	fake := func(aloneRed bool, broken bool) (func(string, []string) []byte, *[]string) {
+		var calls []string
+		return func(name string, args []string) []byte {
+			calls = append(calls, args[1])
+			switch {
+			case broken:
+				return stream("FAIL\tp [build failed]")
+			case args[1] == "^(TestA|TestB)$":
+				return stream(failA, pkgF) // the leg's run: TestA red
+			case aloneRed:
+				return stream(failA, pkgF)
+			}
+			return stream(pass)
+		}, &calls
+	}
+	var out strings.Builder
+	run, calls := fake(false, false)
+	if ok, flaky := checkBaselines(&out, rows, "shard 0/1", run); !ok || !slices.Equal(flaky, []string{"TestA"}) {
+		t.Fatalf("a test green alone stopped the leg: %s", out.String())
+	}
+	if !slices.Equal(*calls, []string{"^(TestA|TestB)$", "^(TestA)$"}) || !strings.Contains(out.String(), "flaky: TestA red with the leg's tests, green alone") {
+		t.Fatalf("calls %v, out %q; want TestA run again alone and said flaky", *calls, out.String())
+	}
+	out.Reset()
+	run, _ = fake(true, false)
+	if ok, _ := checkBaselines(&out, rows, "shard 0/1", run); ok || !strings.Contains(out.String(), "baseline red: TestA") {
+		t.Fatalf("a test red alone too went on: %q", out.String())
+	}
+	out.Reset()
+	run, calls = fake(false, true)
+	if ok, _ := checkBaselines(&out, rows, "shard 0/1", run); ok || len(*calls) != 1 || !strings.Contains(out.String(), "BROKEN") {
+		t.Fatalf("a broken baseline went on, or was run again: calls %v, %q", *calls, out.String())
+	}
+}
+
+// A row naming a test flaky in the leg's baseline is caught only if a
+// second run catches it too (#1096, naut-lead): one red run of a flaky
+// test is no catch. A row naming none runs once.
+func TestARowCaughtByAFlakyTestIsRunAgain(t *testing.T) {
+	m := mutation{name: "x", expect: []string{"TestA"}}
+	seq := func(outs ...[]byte) (func(string, []string) []byte, *int) {
+		n := 0
+		return func(string, []string) []byte {
+			o := outs[min(n, len(outs)-1)]
+			n++
+			return o
+		}, &n
+	}
+	red, green := stream(failA, pkgF), stream(pass)
+	run, n := seq(red, green)
+	if caught, why := judge(m, []string{"TestA"}, run); caught || *n != 2 || !strings.HasPrefix(why, "NOT COUNTED") {
+		t.Fatalf("red then green with TestA flaky: %v %q after %d runs, want not counted after 2", caught, why, *n)
+	}
+	run, n = seq(red, red)
+	if caught, why := judge(m, []string{"TestA"}, run); !caught || *n != 2 || !strings.Contains(why, "twice") {
+		t.Fatalf("red twice with TestA flaky: %v %q after %d runs", caught, why, *n)
+	}
+	run, n = seq(red, green)
+	if caught, _ := judge(m, []string{"TestB"}, run); !caught || *n != 1 {
+		t.Fatalf("a row naming no flaky test: caught %v after %d runs, want caught after 1", caught, *n)
+	}
+}
+
+// A red baseline test's own output goes into the leg's log, not only its
+// report lines (#1096: a timing miss is read from what the test logged).
+func TestARedBaselineKeepsTheTestsOutput(t *testing.T) {
+	out := func(test, line string) string {
+		return `{"Action":"output","Package":"p","Test":"` + test + `","Output":` + strconv.Quote(line) + `}`
+	}
+	lines := []string{out("TestA", "2026/11/28 00:30:00 INFO redundancy: b campaigns\n")}
+	for i := range 3 * allLines {
+		lines = append(lines, out("TestA", "log "+strconv.Itoa(i)+"\n"))
+	}
+	lines = append(lines, out("TestA", "    x_test.go:9: timed out waiting for a leader\n"), failA, pkgF)
+	r := parse(stream(lines...))
+	f := r.full("TestA")
+	if !strings.Contains(f, "timed out waiting for a leader") || !strings.Contains(f, "log "+strconv.Itoa(3*allLines-1)) || strings.Contains(f, "INFO redundancy: b campaigns") {
+		t.Fatalf("full output: want the last %d lines (not the first): %d lines", allLines, strings.Count(f, "\n"))
+	}
+	if got := len(r.all["TestA"]); got < allLines || got > 2*allLines {
+		t.Fatalf("kept %d lines, want between %d and %d", got, allLines, 2*allLines)
+	}
+}

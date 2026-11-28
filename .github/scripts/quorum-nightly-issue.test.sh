@@ -87,6 +87,17 @@ cat >"$tmp/mutants-short.log" <<'EOF'
 | (baseline: the tag on, no mutation; shard 1/3, 2 rows) | green |
 | retry_on_grid | caught (1 tests red) |
 EOF
+# A green night with a baseline test flaky in one leg.
+cat >"$tmp/mutants-flaky.log" <<'EOF'
+| mutation | result |
+|---|---|
+| (baseline: the tag on, no mutation; shard 0/1) | flaky: TestPairHandBackToAGoodPeer red with the leg's tests, green alone (log it on #1120) |
+    pairhandback_test.go:102: timed out after 10s waiting for b to win the lease
+| (baseline: the tag on, no mutation; shard 0/1, 2 rows) | green |
+| no_rho | caught (8 tests red) |
+| handback_x | caught (1 tests red) (twice: TestPairHandBackToAGoodPeer flaky in this leg's baseline) |
+| (shard 0/1: 2 rows judged) | done |
+EOF
 cat >"$tmp/mutants-broken.log" <<'EOF'
 # github.com/joyautomation/nautilus/quorum
 quorum/vote.go:12:2: undefined: rho
@@ -183,6 +194,22 @@ MUTANTS_LEGS=3 check "a leg that never finished is named" 7 cancelled mutants-sh
   '^issue comment 7 ' 'was cancelled' \
   '^\| \(shard 1/3\) \| never finished' '^\| \(shard 2/3\) \| never finished' \
   '!shard 0/3\)' '!no_rho' 'The other 2 mutations were caught'
+# A flaky baseline test is said on a green night too: the issue is not
+# closed, the flaky row heads it, and no mutants section (it was green).
+check "a flaky baseline on a green night comments" 7 success mutants-flaky.log success seeds-green.log \
+  '^issue comment 7 ' 'green, but a baseline test was flaky' '### Flaky in a baseline' \
+  'flaky: TestPairHandBackToAGoodPeer red with the leg' '!quorum-mutants`' '!The seeded schedules' '!no_rho'
+check "a flaky baseline with no open issue opens one" '' success mutants-flaky.log success seeds-green.log \
+  '^issue create ' '### Flaky in a baseline'
+# On a red night it heads the issue, and is not repeated as a row not caught.
+cat "$tmp/mutants-flaky.log" "$tmp/mutants-red.log" >"$tmp/mutants-flaky-red.log"
+check "a flaky baseline on a red night heads the issue" 7 failure mutants-flaky-red.log success seeds-green.log \
+  '^issue comment 7 ' 'the quorum nightly is red' '### Flaky in a baseline' '^\| no_observe \| SURVIVED'
+if [ "$(grep -c 'flaky: TestPairHandBackToAGoodPeer' "$tmp/body" 2>/dev/null)" != 1 ] || [ "$(grep -n '### Flaky' "$tmp/body" | cut -d: -f1)" -gt "$(grep -n 'quorum-mutants`' "$tmp/body" | cut -d: -f1)" ]; then
+  echo "FAIL flaky on a red night: want the flaky row once, above the mutants section"
+  cat "$tmp/body"
+  fail=1
+fi
 # A build break: no table, so the log's tail.
 check "mutants broken shows the log" '' failure mutants-broken.log success seeds-green.log \
   '^issue create ' 'undefined: rho'

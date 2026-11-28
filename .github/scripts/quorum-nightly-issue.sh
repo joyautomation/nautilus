@@ -26,7 +26,14 @@ title="quorum: nightly simulator"
 num=$("$gh" issue list --repo "$repo" --state open --search "\"$title\" in:title" \
   --json number,title --jq "[.[]|select(.title==\"$title\")][0].number // empty")
 
-if [ "$mutants" = success ] && [ "$seeds" = success ]; then
+log() { [ -f "$1" ] && cat "$1" || true; }
+
+# Tests red in a leg's baseline and green alone (#1096): said at the top
+# of the issue on any night they happen, a green one too, so a flaky
+# failover test is never hidden by a rerun.
+flaky=$(log "${MUTANTS_LOG:-}" | grep -E '^\| .* \| flaky: ' || true)
+
+if [ "$mutants" = success ] && [ "$seeds" = success ] && [ -z "$flaky" ]; then
   if [ -n "$num" ]; then
     "$gh" issue close "$num" --repo "$repo" --comment "Green again: $run"
     echo "closed #$num"
@@ -46,12 +53,24 @@ said() {
   esac
 }
 
-log() { [ -f "$1" ] && cat "$1" || true; }
-
 body=$(mktemp)
 trap 'rm -f "$body"' EXIT
 {
-  echo "Main at **${sha::8}**: the quorum nightly is red: $run"
+  if [ "$mutants" = success ] && [ "$seeds" = success ]; then
+    echo "Main at **${sha::8}**: the quorum nightly is green, but a baseline test was flaky: $run"
+  else
+    echo "Main at **${sha::8}**: the quorum nightly is red: $run"
+  fi
+  if [ -n "$flaky" ]; then
+    echo
+    echo "### Flaky in a baseline"
+    echo
+    echo "Red with its leg's tests (the tag on, no mutation), green run alone. A row such a test catches counted only if a second run caught it too. Log each on #1120 with its output from the leg's log (the run's quorum-mutants-<k> artifact)."
+    echo
+    echo "| baseline | result |"
+    echo "|---|---|"
+    echo "$flaky"
+  fi
   if [ "$mutants" != success ]; then
     echo
     echo "### \`go run ./tools/quorum-mutants\` $(said "$mutants")"
@@ -61,7 +80,7 @@ trap 'rm -f "$body"' EXIT
     # The legs' tables run together (#1096): one header, then only the
     # rows that were not caught (a caught row and a green baseline say
     # nothing), with a count of the caught.
-    rows=$(log "${MUTANTS_LOG:-}" | grep -E '^\| ' | grep -vE '^\| mutation \| result \|$|\| caught \(|\| (green|done) \|$' || true)
+    rows=$(log "${MUTANTS_LOG:-}" | grep -E '^\| ' | grep -vE '^\| mutation \| result \|$|\| caught \(|\| (green|done) \|$|\| flaky: ' || true)
     legs=${MUTANTS_LEGS:-0}
     all=$(log "${MUTANTS_LOG:-}") # read once: grep -q quitting early would SIGPIPE a cat under pipefail
     for ((k = 0; k < legs; k++)); do
