@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	goruntime "runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,8 +286,8 @@ func TestRepeatedCompactionsMatchTheUncompactedLog(t *testing.T) {
 			return true
 		})
 		for i, c := range whole {
-			a, at := c.digest(T, base)
-			b, bt := part[i].digest(T, base)
+			a, at := c.digest(T, base, nil)
+			b, bt := part[i].digest(T, base, nil)
 			if a != b {
 				t.Fatalf("seed %d: %s after 4 compactions (%d of %d entries left): %s", seed, c.name(), len(cur), len(full), firstDiff(at, bt))
 			}
@@ -372,5 +374,43 @@ func TestAClockSteppedForwardDropsNothingInForce(t *testing.T) {
 	}
 	if len(keep) != 3 {
 		t.Fatalf("kept %v, want only the three in force (the acks are cleared)", keep)
+	}
+}
+
+// TestTheKeepDecisionIsPaced: the keep decision's own loops (the closure
+// over what is kept, and the check's digests, outside
+// CompactInput.Entries) call CompactInput.Pace between steps, so the
+// decision keeps to its share of a core beside the scan (oplog's
+// compact_pace.go).
+func TestTheKeepDecisionIsPaced(t *testing.T) {
+	r := rand.New(rand.NewSource(1455))
+	es := randomLog(r, 400, time.UnixMilli(1_700_000_000_000))
+	in := inputOf(es, time.UnixMilli(es[len(es)-1].TS), uint64(len(es)))
+	by := map[string]int{}
+	in.Pace = func() {
+		pcs := make([]uintptr, 32)
+		frames := goruntime.CallersFrames(pcs[:goruntime.Callers(2, pcs)])
+		for {
+			f, more := frames.Next()
+			switch {
+			case strings.Contains(f.Function, "digest"):
+				by["digest"]++
+				return
+			case strings.Contains(f.Function, "decideKeep"):
+				by["closure"]++
+				return
+			}
+			if !more {
+				by["?"]++
+				return
+			}
+		}
+	}
+	keep, err := NewKeeper().Decide(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if by["closure"] < len(keep) || by["digest"] == 0 {
+		t.Fatalf("Pace called %v for a decision keeping %d entries", by, len(keep))
 	}
 }

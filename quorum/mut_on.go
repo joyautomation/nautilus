@@ -774,6 +774,9 @@ var Mutations = []string{
 	"keep_check_refuses",          // server: the check before proposing refuses every decision
 	"keep_undone_shelf_dropped",   // server: an unshelve is dropped while the shelve it undid could still be in a retain store: an unsynced takeover brings the shelf back
 	"view_maybe_dropped",          // runtime: a retry the view did not apply (its request ID's first start was refused by the runtime, which then runs the retry) is dropped by a compaction
+	"compaction_unpaced",          // oplog: the compaction's decision and rewrite run flat out, never resting (#1455 PR 2b-1.5)
+	"rewrite_unpaced",             // oplog: the compaction's file rewrite runs flat out, never resting
+	"keep_unpaced",                // server: the keep decision's own loops never call CompactInput.Pace
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

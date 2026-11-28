@@ -272,7 +272,15 @@ type CompactInput struct {
 	// kept entries, then every entry after the base up to Commit, each
 	// Lapsed as at open (a KindLapse in the log names it). Compactions and
 	// noops, which nothing applies, are left out. f returns false to stop.
+	// It is paced itself (Pace, between entries).
 	Entries func(f func(Entry) bool)
+	// Pace is called between steps of the keep decision's own long loops
+	// (those not inside Entries): it rests when the decision has run its
+	// chunk, so the decision keeps to its share of a core beside the scan
+	// (compact_pace.go). Never under a lock. Not safe for concurrent use:
+	// a keep decision that fans out paces one goroutine only. nil: no
+	// pacing.
+	Pace func()
 }
 
 // Compactor is the keep decision (Options.Compact): the seqs up to

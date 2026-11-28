@@ -118,10 +118,21 @@ func (n *Node) compactOnce() (done bool, err error) {
 		}
 	}
 
+	// The build and the write outside mu are paced as the decision is
+	// (compact_pace.go): a year's file is hundreds of MB of lines.
+	p := newPacer(n.done, n.limits())
+	if mutOplog("rewrite_unpaced") {
+		p = nil
+	}
 	committed := es[:sort.Search(len(es), func(i int) bool { return es[i].Seq > commit })]
-	next := make([]stored, 0, len(target.Kept)+len(committed))
+	// Sized to what is kept, never to the whole log: a year's log is
+	// 876k entries, and one allocation that large is a stall of its own
+	// on a small box.
+	after := len(committed) - sort.Search(len(committed), func(i int) bool { return committed[i].Seq > target.Through })
+	next := make([]stored, 0, len(target.Kept)+after)
 	k := 0
 	for _, s := range committed {
+		p.tick()
 		if s.Seq <= target.Through {
 			if k < len(target.Kept) && target.Kept[k] == s.Seq {
 				next = append(next, s)
@@ -148,6 +159,7 @@ func (n *Node) compactOnce() (done bool, err error) {
 			Compact: target.Compact, Kept: len(target.Kept), Digest: target.Digest, Rules: target.Rules, Lineage: hist}}))
 		var line []byte
 		for _, s := range next {
+			p.tick()
 			line = s.line(line[:0])
 			w.Write(line)
 		}
@@ -546,7 +558,8 @@ func (n *Node) compactEntryLocked(term, through uint64, keep []uint64, pre *comp
 		return Entry{}, fmt.Errorf("%w: K was built over the base at %d, it is at %d", errDecisionStale, pre.PrevThrough, cur.Through)
 	default:
 		var err error
-		if b, err = compactBodyOf(cur, n.entries, through, keep, n.o.CompactRules, n.termAtLocked); err != nil {
+		// Under the locks: unpaced (a nil pacer never rests).
+		if b, err = compactBodyOf(cur, n.entries, through, keep, n.o.CompactRules, n.termAtLocked, nil); err != nil {
 			return Entry{}, err
 		}
 	}
@@ -561,7 +574,7 @@ func (n *Node) compactEntryLocked(term, through uint64, keep []uint64, pre *comp
 // held, at or below through, and not one an earlier compaction dropped.
 // termAt is the term at a seq (0: not held). It reads only committed
 // entries, so the decision runs it outside the locks.
-func compactBodyOf(cur baseState, entries []stored, through uint64, keep []uint64, rules int, termAt func(uint64) uint64) (compactBody, error) {
+func compactBodyOf(cur baseState, entries []stored, through uint64, keep []uint64, rules int, termAt func(uint64) uint64, p *pacer) (compactBody, error) {
 	if !slices.IsSorted(keep) || len(slices.Compact(slices.Clone(keep))) != len(keep) {
 		return compactBody{}, errors.New("oplog: the keep list is not sorted and distinct")
 	}
@@ -573,9 +586,8 @@ func compactBodyOf(cur baseState, entries []stored, through uint64, keep []uint6
 	for _, s := range keep {
 		kept[s] = true
 	}
-	var y yielder
 	for _, s := range entries {
-		y.tick()
+		p.tick()
 		if s.Seq > through {
 			break
 		}

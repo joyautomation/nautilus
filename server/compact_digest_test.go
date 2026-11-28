@@ -100,7 +100,7 @@ func alarmWith(f func(l *AlarmLog)) string {
 	if f != nil {
 		f(l)
 	}
-	d, _ := l.digest(digestT)
+	d, _ := l.digest(digestT, nil)
 	return d
 }
 
@@ -176,7 +176,7 @@ func sessionsWith(f func(ss *sessions)) string {
 	if f != nil {
 		f(ss)
 	}
-	d, _ := c.digest(digestT, 0)
+	d, _ := c.digest(digestT, 0, nil)
 	return d
 }
 

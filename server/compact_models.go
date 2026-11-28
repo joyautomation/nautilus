@@ -3,13 +3,10 @@
 package server
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -344,8 +341,8 @@ func (c *alarmCheck) name() string        { return "alarms" }
 func (c *alarmCheck) apply(e oplog.Entry) { _, _ = c.l.Apply(e) }
 func (c *alarmCheck) base(uint64)         {}
 
-func (c *alarmCheck) digest(t time.Time, _ uint64) (string, string) {
-	return c.l.digest(t)
+func (c *alarmCheck) digest(t time.Time, _ uint64, pace func()) (string, string) {
+	return c.l.digest(t, pace)
 }
 
 // digest is the view's complete state, normalised at t (see the keep
@@ -356,13 +353,14 @@ func (c *alarmCheck) digest(t time.Time, _ uint64) (string, string) {
 // liveness hint a compacted log may make earlier, the safe direction:
 // episodes then read as over sooner). TestAlarmDigestCoversEveryField
 // keeps the list honest.
-func (l *AlarmLog) digest(t time.Time) (string, string) {
+func (l *AlarmLog) digest(t time.Time, pace func()) (string, string) {
 	ms := t.UnixMilli()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	var b strings.Builder
-	ids := slices.Sorted(maps.Keys(l.view))
+	d := newDigestText()
+	ids := sortedKeys(l.view, nil, pace)
 	for _, id := range ids {
+		paceStep(pace)
 		v := l.view[id]
 		v.ackGen = 0
 		if !v.shelfSet || v.shelfUntilMs <= ms {
@@ -371,38 +369,38 @@ func (l *AlarmLog) digest(t time.Time) (string, string) {
 		if v == (alarmIntent{}) {
 			continue
 		}
-		fmt.Fprintf(&b, "view %q acked %t by %q ms %d seq %d occ %q active %d wait %d shelf %d %q %d %t chat %d %d %d\n",
+		fmt.Fprintf(d, "view %q acked %t by %q ms %d seq %d occ %q active %d wait %d shelf %d %q %d %t chat %d %d %d\n",
 			id, v.acked, v.ackBy, v.ackMs, v.ackSeq, v.occ, v.activeMs, v.waitMs, v.shelfUntilMs, v.shelfBy, v.shelfSeq, v.shelfSet,
 			v.chatSinceMs, v.chatActs, v.chatEpisodes)
 	}
 	oos := func(tag string, m map[string]oosIntent) {
-		for _, k := range slices.Sorted(maps.Keys(m)) {
+		for _, k := range sortedKeys(m, func(o oosIntent) bool { return o.untilMs > ms }, pace) {
 			if o := m[k]; o.untilMs > ms {
-				fmt.Fprintf(&b, "%s %q %q until %d granted %d start %d by %q reason %q seq %d\n", tag, k, o.name, o.untilMs, o.grantedMs, o.startMs, o.by, o.reason, o.seq)
+				fmt.Fprintf(d, "%s %q %q until %d granted %d start %d by %q reason %q seq %d\n", tag, k, o.name, o.untilMs, o.grantedMs, o.startMs, o.by, o.reason, o.seq)
 			}
 		}
 	}
 	oos("oos", l.oos)
 	oos("ending", l.ending)
-	for _, id := range slices.Sorted(maps.Keys(l.spent)) {
+	for _, id := range sortedKeys(l.spent, func(ts int64) bool { return ms-ts <= linkSpentFor.Milliseconds() }, pace) {
 		if ts := l.spent[id]; ms-ts <= linkSpentFor.Milliseconds() {
-			fmt.Fprintf(&b, "spent %q %d\n", id, ts)
+			fmt.Fprintf(d, "spent %q %d\n", id, ts)
 		}
 	}
-	for _, s := range slices.Sorted(maps.Keys(l.lapsed)) {
+	for _, s := range sortedKeys(l.lapsed, nil, pace) {
+		paceStep(pace)
 		j, _ := json.Marshal(l.lapsed[s])
-		fmt.Fprintf(&b, "lapsed %d %s\n", s, j)
+		fmt.Fprintf(d, "lapsed %d %s\n", s, j)
 	}
-	for _, id := range slices.Sorted(maps.Keys(l.adopt)) {
+	for _, id := range sortedKeys(l.adopt, nil, pace) {
 		a := l.adopt[id]
-		fmt.Fprintf(&b, "adopt %q %q %d %q\n", id, a.occ, a.activeMs, a.by)
+		fmt.Fprintf(d, "adopt %q %q %d %q\n", id, a.occ, a.activeMs, a.by)
 	}
 	if l.flood != nil {
 		j, _ := json.Marshal(l.flood)
-		fmt.Fprintf(&b, "flood %s\n", j)
+		fmt.Fprintf(d, "flood %s\n", j)
 	}
-	h := sha256.Sum256([]byte(b.String()))
-	return hex.EncodeToString(h[:]), b.String()
+	return d.sum()
 }
 
 // ── sessions ──
@@ -487,20 +485,21 @@ func (c *sessionCheck) apply(e oplog.Entry) {
 	}
 }
 
-func (c *sessionCheck) digest(time.Time, uint64) (string, string) {
+func (c *sessionCheck) digest(_ time.Time, _ uint64, pace func()) (string, string) {
 	ss := c.ss
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	ss.pruneLocked()
-	var b strings.Builder
-	for _, h := range slices.Sorted(maps.Keys(ss.byHash)) {
+	d := newDigestText()
+	for _, h := range sortedKeys(ss.byHash, nil, pace) {
+		paceStep(pace)
 		se := ss.byHash[h]
-		fmt.Fprintf(&b, "session %s user %q oidc %t iss %q sub %q groups %q created %d expires %d cred %q local %t authAt %d fails %d\n",
+		fmt.Fprintf(d, "session %s user %q oidc %t iss %q sub %q groups %q created %d expires %d cred %q local %t authAt %d fails %d\n",
 			h, se.user, se.oidc, se.issuer, se.sub, se.groups, se.created.UnixMilli(), se.expires.UnixMilli(), se.cred, se.local, se.authAt.UnixMilli(), se.fails)
 	}
-	for _, h := range slices.Sorted(maps.Keys(ss.ended)) {
-		fmt.Fprintf(&b, "ended %s %d\n", h, ss.ended[h].UnixMilli())
+	for _, h := range sortedKeys(ss.ended, nil, pace) {
+		paceStep(pace)
+		fmt.Fprintf(d, "ended %s %d\n", h, ss.ended[h].UnixMilli())
 	}
-	sum := sha256.Sum256([]byte(b.String()))
-	return hex.EncodeToString(sum[:]), b.String()
+	return d.sum()
 }

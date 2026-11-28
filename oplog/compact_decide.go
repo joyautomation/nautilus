@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	goruntime "runtime"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -30,15 +29,19 @@ import (
 // decideLimits are the decision's timings and thresholds (Options.decide:
 // tests set them; zero fields take the defaults).
 type decideLimits struct {
-	every      time.Duration // between two looks (default 5 min)
-	margin     time.Duration // the tail never dropped, by TS before T (7 d)
-	minEntries int           // the part older than the margin compacts from this many entries (20,000)
-	minBytes   int           // or this many bytes (8 MB)
-	gap        time.Duration // between two compactions, by TS (24 h)
-	spread     time.Duration // the three clocks' spread that refuses (5 min)
-	heard      time.Duration // how recent a copy's answer must be (10 s)
-	shrink     int           // how many times an over-size decision is retried smaller (8)
-	maxK       int           // tests: a smaller cap on K's size than the entry cap
+	every      time.Duration                               // between two looks (default 5 min)
+	margin     time.Duration                               // the tail never dropped, by TS before T (7 d)
+	minEntries int                                         // the part older than the margin compacts from this many entries (20,000)
+	minBytes   int                                         // or this many bytes (8 MB)
+	gap        time.Duration                               // between two compactions, by TS (24 h)
+	spread     time.Duration                               // the three clocks' spread that refuses (5 min)
+	heard      time.Duration                               // how recent a copy's answer must be (10 s)
+	shrink     int                                         // how many times an over-size decision is retried smaller (8)
+	maxK       int                                         // tests: a smaller cap on K's size than the entry cap
+	paceWork   time.Duration                               // the decision's and the rewrite's chunk of work (2 ms): compact_pace.go
+	paceDuty   float64                                     // their share of the time, 0 to 1 (0.25; 1: unpaced)
+	paceNow    func() time.Time                            // tests: the pacer's clock
+	paceSleep  func(done <-chan struct{}, d time.Duration) // tests: the pacer's rest
 }
 
 // limits is the Node's decideLimits with the defaults filled in: a copy
@@ -72,6 +75,10 @@ func (d decideLimits) withDefaults() decideLimits {
 	if d.shrink <= 0 {
 		d.shrink = 8
 	}
+	def(&d.paceWork, 2*time.Millisecond)
+	if d.paceDuty <= 0 || d.paceDuty > 1 {
+		d.paceDuty = 0.25
+	}
 	return d
 }
 
@@ -91,7 +98,7 @@ type decideState struct {
 // before any compaction, so blocked-since has a start (compactSince). The
 // log is read outside mu, from the decision loop, never a takeover's
 // catch-up (SyncLeader stays as it was: Fable, 2b-1).
-func (n *Node) needsRulesMark() bool {
+func (n *Node) needsRulesMark(p *pacer) bool {
 	if n.o.CompactRules == 0 || n.o.Compact == nil || n.rulesMarked.Load() || mutOplog("carrier_unmarked") {
 		return false
 	}
@@ -102,7 +109,7 @@ func (n *Node) needsRulesMark() bool {
 		n.rulesMarked.Store(true) // a K floors blocked-since: no marker is needed
 		return false
 	}
-	if _, ok := firstRulesTerm(snap); ok {
+	if _, ok := firstRulesTerm(snap, p); ok {
 		n.rulesMarked.Store(true)
 		return false
 	}
@@ -112,8 +119,8 @@ func (n *Node) needsRulesMark() bool {
 // markRules sequences the noop naming this build's keep rules, when the
 // log holds none (needsRulesMark), for a leader caught up for its term.
 // Best effort: a failure is retried at the next look.
-func (n *Node) markRules(ctx context.Context) {
-	if !n.needsRulesMark() {
+func (n *Node) markRules(ctx context.Context, p *pacer) {
+	if !n.needsRulesMark(p) {
 		return
 	}
 	n.seqMu.Lock()
@@ -209,10 +216,13 @@ func (n *Node) decideOnce(ctx context.Context) decideOutcome {
 		n.mu.Unlock()
 		return decideNotLeader
 	}
-	n.markRules(ctx)
+	// One pacer for the whole look: every loop over the log, here and in
+	// the keep decision (CompactInput.Pace), shares its budget.
+	p := newPacer(ctx.Done(), lim)
+	n.markRules(ctx, p)
 	var limit uint64 // a smaller Through after an over-size decision
 	for try := 0; ; try++ {
-		d, wanted, since, why := n.plan(lim, limit)
+		d, wanted, since, why := n.plan(lim, limit, p)
 		switch {
 		case !wanted:
 			n.setCompactBlocked("", time.Time{})
@@ -223,7 +233,7 @@ func (n *Node) decideOnce(ctx context.Context) decideOutcome {
 			n.setCompactBlocked(why, since)
 			return decideBlocked
 		}
-		keep, err := n.o.Compact(ctx, d.input())
+		keep, err := n.o.Compact(ctx, d.input(p))
 		switch {
 		case errors.Is(err, ErrCompactRefused):
 			n.mu.Lock()
@@ -238,12 +248,12 @@ func (n *Node) decideOnce(ctx context.Context) decideOutcome {
 		n.mu.Lock()
 		n.decideRefused = ""
 		n.mu.Unlock()
-		_, err = n.proposeDecided(ctx, d, keep)
+		_, err = n.proposeDecided(ctx, d, keep, p)
 		switch {
 		case errors.Is(err, ErrTooLarge) && try < lim.shrink:
 			// Over the entry cap (a year's first compaction): compact a
 			// smaller range, then the rest next time.
-			limit = d.midpoint()
+			limit = d.midpoint(p)
 			if limit == 0 || mutOplog("decide_no_shrink") {
 				n.log.Warn("oplog: the compaction's decision is over the entry cap and can't be made smaller", "through", d.through, "error", err)
 				return decideWaiting
@@ -279,20 +289,19 @@ func transient(why string) bool {
 // base, the gate no longer holds): it is thrown away.
 var errDecisionStale = errors.New("oplog: the decision is stale")
 
-// input is d as the keep decision is given it.
-func (d decision) input() CompactInput {
-	var y yielder
+// input is d as the keep decision is given it, paced by p.
+func (d decision) input(p *pacer) CompactInput {
 	kept := map[uint64]bool{}
 	for _, s := range d.base.Kept {
 		kept[s] = true
 	}
-	return CompactInput{T: d.t, Through: d.through, Base: d.prev, Commit: d.commit, Entries: func(f func(Entry) bool) {
+	return CompactInput{T: d.t, Through: d.through, Base: d.prev, Commit: d.commit, Pace: p.Pace, Entries: func(f func(Entry) bool) {
 		// Lapsed as applyRange marks it, over the whole committed log (as
 		// at open).
 		lapsed := map[uint64]bool{}
 		live := func(s stored) bool { return s.Seq > d.base.Through || kept[s.Seq] }
 		for _, s := range d.snap {
-			y.tick()
+			p.tick()
 			if !live(s) || !s.mayLapse() {
 				continue
 			}
@@ -303,7 +312,7 @@ func (d decision) input() CompactInput {
 			}
 		}
 		for _, s := range d.snap {
-			y.tick()
+			p.tick()
 			if !live(s) {
 				continue
 			}
@@ -321,11 +330,10 @@ func (d decision) input() CompactInput {
 
 // midpoint is a smaller Through for an over-size decision: the seq half
 // way through the entries after the base, 0 when there is none.
-func (d decision) midpoint() uint64 {
-	var y yielder
+func (d decision) midpoint(p *pacer) uint64 {
 	var after []uint64
 	for _, s := range d.snap {
-		y.tick()
+		p.tick()
 		if s.Seq > d.prev && s.Seq <= d.through {
 			after = append(after, s.Seq)
 		}
@@ -334,18 +342,6 @@ func (d decision) midpoint() uint64 {
 		return 0
 	}
 	return after[len(after)/2-1]
-}
-
-// yielder gives the processor up every so many steps of a long loop
-// outside the locks: the decision is CPU spent beside the scan and the
-// writes, and on a small box (one core, a Verdin's) a goroutine that runs
-// its whole time slice holds every other back for it (the #1455 bench).
-type yielder int
-
-func (y *yielder) tick() {
-	if *y++; *y%32 == 0 {
-		goruntime.Gosched()
-	}
 }
 
 // tsOf is an entry's TS, read without decoding the rest.
@@ -362,8 +358,7 @@ func tsOf(s stored) int64 {
 // when (from the log alone, compactSince), why the gate does not hold
 // ("" when it does), and what it would be. cap, when set, bounds Through
 // (a smaller range after an over-size one).
-func (n *Node) plan(lim decideLimits, cap uint64) (d decision, wanted bool, since time.Time, why string) {
-	var y yielder
+func (n *Node) plan(lim decideLimits, cap uint64, p *pacer) (d decision, wanted bool, since time.Time, why string) {
 	term, leader := n.currentTerm(), n.isLeader()
 	n.mu.Lock()
 	now := n.o.Now()
@@ -395,7 +390,7 @@ func (n *Node) plan(lim decideLimits, cap uint64) (d decision, wanted bool, sinc
 	cut := t.Add(-lim.margin).UnixMilli()
 	count, size := 0, 0
 	for _, s := range d.snap {
-		y.tick()
+		p.tick()
 		if s.Seq <= d.prev {
 			continue
 		}
@@ -407,13 +402,13 @@ func (n *Node) plan(lim decideLimits, cap uint64) (d decision, wanted bool, sinc
 		}
 	}
 	for _, s := range d.snap {
-		y.tick()
+		p.tick()
 		if s.Seq > d.prev && s.Seq <= d.through {
 			count++
 			size += len(s.raw)
 		}
 	}
-	since = compactSince(d.snap, d.prev, prevK, lim)
+	since = compactSince(d.snap, d.prev, prevK, lim, p)
 	wanted = (count >= lim.minEntries || size >= lim.minBytes || cap > 0) &&
 		(prevK == 0 || t.Sub(time.UnixMilli(prevK)) >= lim.gap) && !mutOplog("decide_never_wanted")
 	if !wanted || why != "" {
@@ -442,15 +437,14 @@ func (n *Node) plan(lim decideLimits, cap uint64) (d decision, wanted bool, sinc
 // compaction was switched on waits the margin from then, and a rolling
 // upgrade raises nothing. TS follow the sequencing leaders' clocks, so a
 // stepped clock moves it, never the process's own start.
-func compactSince(snap []stored, prev uint64, prevK int64, lim decideLimits) time.Time {
-	var y yielder
+func compactSince(snap []stored, prev uint64, prevK int64, lim decideLimits, p *pacer) time.Time {
 	if mutOplog("blocked_since_now") {
 		return time.Now()
 	}
 	count, size := 0, 0
 	var at int64
 	for _, s := range snap {
-		y.tick()
+		p.tick()
 		if s.Seq <= prev {
 			continue
 		}
@@ -468,7 +462,7 @@ func compactSince(snap []stored, prev uint64, prevK int64, lim decideLimits) tim
 	case prevK > 0:
 		at = max(at, prevK+lim.gap.Milliseconds())
 	case !mutOplog("blocked_since_unfloored"):
-		if first, ok := firstRulesTerm(snap); ok {
+		if first, ok := firstRulesTerm(snap, p); ok {
 			at = max(at, first+lim.margin.Milliseconds())
 		} else if len(snap) > 0 {
 			at = max(at, tsOf(snap[len(snap)-1])+lim.margin.Milliseconds())
@@ -483,12 +477,11 @@ func compactSince(snap []stored, prev uint64, prevK int64, lim decideLimits) tim
 // either sees the other's, so the least TS of them all, never the first
 // found. snap is committed entries only: an uncommitted tail may be
 // replaced.
-func firstRulesTerm(snap []stored) (int64, bool) {
-	var y yielder
+func firstRulesTerm(snap []stored, p *pacer) (int64, bool) {
 	var first int64
 	found := false
 	for _, s := range snap {
-		y.tick()
+		p.tick()
 		if !bytes.Contains(s.raw, []byte(`"rules"`)) {
 			continue
 		}
@@ -629,13 +622,13 @@ func (n *Node) throughLocked(want uint64) uint64 {
 // sequencing lock: the same term, the same base, the gate still holding,
 // nothing uncommitted (proposeCompact's own checks). A decision the log
 // moved under is errDecisionStale.
-func (n *Node) proposeDecided(ctx context.Context, d decision, keep []uint64) (Entry, error) {
+func (n *Node) proposeDecided(ctx context.Context, d decision, keep []uint64, p *pacer) (Entry, error) {
 	lim := n.limits()
 	// K's body, built here over the committed entries read outside mu
 	// (compactBodyOf: the keep list checked, the lapses its kept entries
 	// need, the digest): under the locks only the tail is scanned (a
 	// year's first compaction holds about 876k entries up to Through).
-	pre, err := compactBodyOf(d.base, d.snap, d.through, keep, n.o.CompactRules, d.termAt)
+	pre, err := compactBodyOf(d.base, d.snap, d.through, keep, n.o.CompactRules, d.termAt, p)
 	if err != nil {
 		return Entry{}, err
 	}

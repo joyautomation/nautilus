@@ -3,10 +3,13 @@
 package server
 
 import (
+	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	goruntime "runtime"
+	"hash"
 	"slices"
 	"strings"
 	"time"
@@ -68,8 +71,11 @@ type checker interface {
 	// replay.
 	base(through uint64)
 	// digest is the complete state, normalised at t: its hash and the text
-	// hashed (the evidence).
-	digest(t time.Time, through uint64) (sum, text string)
+	// hashed (the evidence). pace (nil: none) is called between items:
+	// a year's spent links and ended sessions are many. Only the check's
+	// scratch consumers are digested, so a rest under their own mutex
+	// holds nothing back: never pass a pace for a live consumer.
+	digest(t time.Time, through uint64, pace func()) (sum, text string)
 }
 
 // claimed are the kinds a model of this build reads; any other is kept
@@ -122,6 +128,47 @@ func (k *Keeper) Decide(ctx context.Context, in oplog.CompactInput) ([]uint64, e
 	return keep, nil
 }
 
+// pace is in's pacing step, when it has one.
+func pace(in oplog.CompactInput) { paceStep(in.Pace) }
+
+// paceStep is one step of a paced loop (nil: none).
+func paceStep(pace func()) {
+	if pace != nil && !mutServer("keep_unpaced") {
+		pace()
+	}
+}
+
+// digestText is a digest's text and its hash, hashed a line at a time as
+// it is written: one sha256 over a year's text (a megabyte) would be a
+// stall the pacing can't break.
+type digestText struct {
+	b strings.Builder
+	h hash.Hash
+}
+
+func newDigestText() *digestText { return &digestText{h: sha256.New()} }
+
+func (d *digestText) Write(p []byte) (int, error) {
+	d.h.Write(p)
+	return d.b.Write(p)
+}
+
+// sum is the hash (hex) and the text.
+func (d *digestText) sum() (string, string) { return hex.EncodeToString(d.h.Sum(nil)), d.b.String() }
+
+// sortedKeys is m's keys that keep says to, sorted, paced between keys.
+func sortedKeys[K cmp.Ordered, V any](m map[K]V, keep func(V) bool, pace func()) []K {
+	ks := make([]K, 0, len(m))
+	for k, v := range m {
+		paceStep(pace)
+		if keep == nil || keep(v) {
+			ks = append(ks, k)
+		}
+	}
+	slices.Sort(ks)
+	return ks
+}
+
 // decideKeep is the provenance decision (see above).
 func decideKeep(ctx context.Context, in oplog.CompactInput, models []keepModel) ([]uint64, error) {
 	var (
@@ -149,13 +196,10 @@ func decideKeep(ctx context.Context, in oplog.CompactInput, models []keepModel) 
 		return v
 	}
 	var stop error
-	in.Entries(func(e oplog.Entry) bool {
-		if len(seqs)%32 == 0 {
-			if ctx.Err() != nil {
-				stop = ctx.Err()
-				return false
-			}
-			goruntime.Gosched()
+	in.Entries(func(e oplog.Entry) bool { // paced by the log
+		if len(seqs)%32 == 0 && ctx.Err() != nil {
+			stop = ctx.Err()
+			return false
 		}
 		i := int32(len(seqs))
 		seqs, kinds = append(seqs, e.Seq), append(kinds, e.Kind)
@@ -210,10 +254,8 @@ func decideKeep(ctx context.Context, in oplog.CompactInput, models []keepModel) 
 	for _, s := range seeds {
 		add(s)
 	}
-	for n := 0; len(work) > 0; n++ {
-		if n%32 == 0 {
-			goruntime.Gosched() // see oplog's yielder: CPU beside the scan
-		}
+	for len(work) > 0 {
+		pace(in) // CPU beside the scan: CompactInput.Pace
 		i := work[len(work)-1]
 		work = work[:len(work)-1]
 		for _, d := range deps[depOff[i]:depOff[i+1]] {
@@ -259,12 +301,9 @@ func (k *Keeper) check(ctx context.Context, in oplog.CompactInput, keep []uint64
 	n := 0
 	var stop error
 	in.Entries(func(e oplog.Entry) bool {
-		if n++; n%32 == 0 {
-			if ctx.Err() != nil {
-				stop = ctx.Err()
-				return false
-			}
-			goruntime.Gosched()
+		if n++; n%32 == 0 && ctx.Err() != nil { // paced by the log
+			stop = ctx.Err()
+			return false
 		}
 		for _, c := range full {
 			c.apply(e)
@@ -280,8 +319,8 @@ func (k *Keeper) check(ctx context.Context, in oplog.CompactInput, keep []uint64
 		return stop
 	}
 	for i, c := range full {
-		a, at := c.digest(in.T, in.Through)
-		b, bt := part[i].digest(in.T, in.Through)
+		a, at := c.digest(in.T, in.Through, in.Pace)
+		b, bt := part[i].digest(in.T, in.Through, in.Pace)
 		if a != b || mutServer("keep_check_refuses") {
 			return fmt.Errorf("%w: %s: a replay of the %d kept entries and the tail gives state %.12s, the whole log's %.12s (first difference: %s)",
 				oplog.ErrCompactRefused, c.name(), len(keep), b, a, firstDiff(at, bt))
@@ -363,7 +402,7 @@ type subCheck struct{ v *runtime.IntentView }
 func (c *subCheck) name() string        { return "substitutes" }
 func (c *subCheck) apply(e oplog.Entry) { stepView(c.v, e) }
 func (c *subCheck) base(through uint64) { c.v.Base(through) }
-func (c *subCheck) digest(t time.Time, through uint64) (string, string) {
+func (c *subCheck) digest(t time.Time, through uint64, _ func()) (string, string) {
 	return c.v.Digest(t, through)
 }
 
