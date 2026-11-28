@@ -414,13 +414,12 @@ func runCheck(args []string) int {
 				// instance member. Said at the library's own line, once,
 				// like any library error, so `naut check main.st` reports
 				// it even when the library file is not named.
-				if sg, line, ok := stproject.Locate(res.segs, w.Pos.Line); ok {
-					col := w.Pos.Col
-					if sg.Transpiled {
-						line, col = 1, 1
-					}
-					libErrs = append(libErrs, libErr{path: sg.Path, line: line, col: col,
-						msg: "error: " + w.Message(blockLocation(w, res, mapLine))})
+				// A line no library claims is still said, on the program.
+				if le, ok := libWriteErr(w, res, mapLine); ok {
+					libErrs = append(libErrs, le)
+				} else {
+					markBad(f)
+					fmt.Printf("%s:1:1: %s\n", f, le.msg)
 				}
 				continue
 			}
@@ -1576,6 +1575,22 @@ func devicesOnTargetMessage(target string) string {
 	return "devices: rows run on the nautilus runtime (its drivers poll the device and its adapter computes the struct, derived members included); the " +
 		target + " writer does not carry them, so the device's tag would never be filled on the controller. " +
 		"Not supported on this target yet: remove the devices: rows, or run the project on nautilus"
+}
+
+// libWriteErr places a refused write inside the library prelude at its
+// library's own line. ok is false when no library claims the line: le.msg
+// is then the error to say on the program instead, never dropped.
+func libWriteErr(w st.InstanceWrite, res checkResult, mapLine func(int) int) (le libErr, ok bool) {
+	msg := "error: " + w.Message(blockLocation(w, res, mapLine))
+	sg, line, ok := stproject.Locate(res.segs, w.Pos.Line)
+	if !ok {
+		return libErr{msg: "error: in project library files: " + w.Message(blockLocation(w, res, mapLine))}, false
+	}
+	col := w.Pos.Col
+	if sg.Transpiled {
+		line, col = 1, 1
+	}
+	return libErr{path: sg.Path, line: line, col: col, msg: msg}, true
 }
 
 // blockLocation says where the block assignment behind a refused write is:
