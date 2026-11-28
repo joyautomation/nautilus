@@ -480,10 +480,11 @@ type Options struct {
 	// waits for the next start (Mark.SupersedeTo).
 	ResetInPlace bool
 
-	transport     http.RoundTripper // tests: an in-process network
-	afterVouchAsk func()            // tests: Vouch, between its asks and its mark
-	lim           limits            // tests: smaller chunks and bounds
-	markWrite     func(Mark) error  // tests: fails a mark write
+	transport     http.RoundTripper    // tests: an in-process network
+	afterVouchAsk func()               // tests: Vouch, between its asks and its mark
+	lim           limits               // tests: smaller chunks and bounds
+	markWrite     func(Mark) error     // tests: fails a mark write
+	fileSync      func(*os.File) error // tests: observes or fails a log file sync
 }
 
 // Mark is a replica's log mark, kept in Options.Mark.
@@ -1481,9 +1482,9 @@ func (n *Node) open() (damaged bool, err error) {
 		return false, err
 	}
 	if good < size {
-		// A torn write is only ever the last line: each line goes out in
-		// one write, newline last, synced before it is acknowledged. A bad
-		// line with more after it is damage.
+		// A torn write is only ever at the end: lines go out in one write
+		// (appendLines), newline last, synced before any is acknowledged.
+		// A bad line with more after it is damage.
 		if damaged && n.o.Mark != "" {
 			// Nothing applied, nothing truncated: openMarked keeps the
 			// file whole, aside, and starts empty.
@@ -1639,14 +1640,47 @@ func (n *Node) afterLocked(seq uint64) []Entry {
 
 // writeLine appends one line to the file and syncs it. Caller holds mu.
 func (n *Node) writeLine(l fileLine) error {
-	if n.file == nil {
+	return n.appendLines(appendLine(nil, l))
+}
+
+// appendLine adds l to buf as one line of the file.
+func appendLine(buf []byte, l fileLine) []byte {
+	b, _ := json.Marshal(l)
+	return append(append(buf, b...), '\n')
+}
+
+// appendLines appends whole lines to the file in one write and syncs
+// once: a crash leaves the lines before it and, at most, the last one cut
+// short (a torn write, which open drops). Nothing they hold counts as
+// stored until it returns. A failed write or sync cuts the file back to
+// where it was, so a line that may not be on disk is not on it later
+// either; if even that fails the file is closed, and every later write
+// fails, so nothing more is stored or acknowledged here. Caller holds mu.
+func (n *Node) appendLines(buf []byte) error {
+	if n.file == nil || len(buf) == 0 {
 		return nil
 	}
-	b, _ := json.Marshal(l)
-	if _, err := n.file.Write(append(b, '\n')); err != nil {
+	end, err := n.file.Seek(0, io.SeekEnd)
+	if err != nil {
 		return err
 	}
-	return n.file.Sync()
+	_, err = n.file.Write(buf)
+	switch {
+	case err != nil || mutOplog("batch_not_synced"):
+	default:
+		if n.o.fileSync != nil {
+			err = n.o.fileSync(n.file)
+		} else {
+			err = n.file.Sync()
+		}
+	}
+	if err != nil {
+		if terr := n.file.Truncate(end); terr != nil {
+			n.file.Close()
+			return errors.Join(err, terr)
+		}
+	}
+	return err
 }
 
 // rewrite replaces the file with the current entries and commit mark,
@@ -1746,8 +1780,7 @@ var errMismatch = errors.New("mismatch")
 // (leaderCatchUp). An older term's uncommitted entry can sit at a seq where
 // that log holds a lower term's entry, so a term comparison here would
 // refuse the very replacement that keeps the logs equal.
-func (n *Node) acceptLocked(es []Entry) (int, error) {
-	fresh := 0
+func (n *Node) acceptLocked(es []Entry) (fresh int, err error) {
 	if len(es) > 0 && n.o.Mark != "" && !n.mark.Held {
 		// Held before the first entry is stored, so it is durable before
 		// any entry is acknowledged: a log lost after that is seen.
@@ -1757,6 +1790,22 @@ func (n *Node) acceptLocked(es []Entry) (int, error) {
 			return 0, fmt.Errorf("oplog: the log's mark: %w", err)
 		}
 	}
+	// The new lines go out together, in one write and one sync, on every
+	// way out (#1455: one fsync per batch, not per entry): an entry taken
+	// into memory is counted by the next answer that carries this log's
+	// last seq, so it is on disk before this returns, error or not.
+	// If they can't be written and synced, the entries they hold leave
+	// memory too: an answer must never count what the disk may not hold.
+	var buf []byte
+	durable := len(n.entries)
+	defer func() {
+		if ferr := n.appendLines(buf); ferr != nil {
+			if !mutOplog("batch_kept_on_sync_failure") {
+				n.entries = n.entries[:durable]
+			}
+			err = errors.Join(err, ferr)
+		}
+	}()
 	for _, e := range es {
 		last := n.lastLocked()
 		switch {
@@ -1764,9 +1813,7 @@ func (n *Node) acceptLocked(es []Entry) (int, error) {
 			return fresh, fmt.Errorf("%w: have %d, got %d", errGap, last, e.Seq)
 		case e.Seq == last+1:
 			n.entries = append(n.entries, e)
-			if err := n.writeLine(fileLine{E: &e}); err != nil {
-				return fresh, err
-			}
+			buf = appendLine(buf, fileLine{E: &e})
 			fresh++
 		default:
 			i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq >= e.Seq })
@@ -1777,11 +1824,20 @@ func (n *Node) acceptLocked(es []Entry) (int, error) {
 			if e.Seq <= n.commit {
 				return fresh, fmt.Errorf("%w: a different entry at committed seq %d", errConflict, e.Seq)
 			}
-			// Replace the uncommitted suffix.
+			// Replace the uncommitted suffix. The lines so far go to the
+			// file first, as each did before the batch, so a rewrite that
+			// fails leaves the file as it would have been.
+			if err := n.appendLines(buf); err != nil {
+				buf = nil
+				n.entries = n.entries[:durable]
+				return fresh, err
+			}
+			buf = nil
 			n.entries = append(n.entries[:i:i], e)
 			if err := n.rewrite(); err != nil {
 				return fresh, err
 			}
+			durable = len(n.entries)
 			fresh++
 		}
 		if err := n.raiseTermLocked(e.Term); err != nil {

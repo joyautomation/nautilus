@@ -373,6 +373,9 @@ var table = []mutation{
 	{"behind_counted", []string{"TestAPeerStillBehindDoesNotCount"}},
 	{"synced_before_commit", []string{"TestFirstChunkDoesNotSyncARebuiltReplica"}},
 	{"unsynced_self_counted", []string{"TestOnlyASyncedLeaderSyncsAFollower"}},
+	// #1455: one sync per batch of entries.
+	{"batch_not_synced", []string{"TestNoAckBeforeTheBatchSync", "TestFailedBatchSyncIsNotKept"}},
+	{"batch_kept_on_sync_failure", []string{"TestFailedBatchSyncIsNotKept"}},
 	{"entry_unbounded", []string{"TestTooLargeEntryIsRefusedAtProposal"}},
 	// #710 PR 3b-4b: the witness as the log's third copy, wired into the
 	// pair. In the elector (quorum/node): the unsynced controller's
@@ -903,6 +906,8 @@ var rowPkgs = map[string][]string{
 	"behind_counted":                    {"./oplog"},
 	"synced_before_commit":              {"./oplog"},
 	"unsynced_self_counted":             {"./oplog"},
+	"batch_not_synced":                  {"./oplog"},
+	"batch_kept_on_sync_failure":        {"./oplog"},
 	"entry_unbounded":                   {"./oplog"},
 	"term_not_persisted":                {"./oplog"},
 	"unnamed_leader_admitted":           {"./oplog"},

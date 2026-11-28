@@ -125,6 +125,13 @@ import "os"
 //     conditions, so a copy silent, lost, at a history or holding entries
 //     is overridden without --accept-loss.
 //
+// One sync per batch (#1455):
+//
+//   - batch_not_synced: a batch of entries is written but not synced
+//     before the answer that acknowledges it;
+//   - batch_kept_on_sync_failure: a batch whose write or sync failed stays
+//     in memory, so the next answer counts entries the disk may not hold.
+//
 // Peer TLS (#710):
 //
 //   - peer_tls_log_plain: the log's calls ignore Options.TLS and go out

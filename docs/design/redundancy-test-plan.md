@@ -154,6 +154,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a peer still short of the leader's log after the resend rounds counts as having stored the entry (`behind_counted`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
 | a follower marks itself synced from a request that proves its log only below the commit index (`synced_before_commit`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
 | an unsynced leader counts its own log in its catch-up (`unsynced_self_counted`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
+| a batch of entries the log takes is written but not synced before it is acknowledged (`batch_not_synced`), or, its write or sync failed, stays in memory for the next answer to count (`batch_kept_on_sync_failure`) | design §1, an acknowledged entry is on disk | #1455 |
 | an unsynced standby campaigns over a reachable, synced peer that may campaign (`campaign_ignores_sync`) | design §1, an unsynced controller leads for control | 3b-4b |
 | an unsynced leader whose catch-up failed never hands over to a synced, able peer (`unsynced_leader_keeps_lead`) | design §1, an unsynced controller leads for control | 3b-4b |
 | a leader yields again within 10 minutes (`yield_undamped`) | design §1, the yield is damped | 3b-4b |
