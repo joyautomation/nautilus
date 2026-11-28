@@ -688,6 +688,7 @@ var Mutations = []string{
 	// oplog: one sync per batch of entries (#1455).
 	"batch_not_synced",           // a batch is written but not synced before it is acknowledged
 	"batch_kept_on_sync_failure", // a batch whose write or sync failed stays in memory, counted by the next answer
+	"catchup_commit_per_page",    // a follower's catch-up commits as each page arrives, splitting a lapse from what it names
 
 	"leaderless_alarm_one_episode",         // node: the no-leader alarm keeps one episode across spells, so a page queued in one spell may leave in the next (#1436)
 	"leaderless_alarm_second_never_defers", // node: the second-named controller raises the no-leader alarm despite the first's fresh word that it pages it: paged twice (#1436)

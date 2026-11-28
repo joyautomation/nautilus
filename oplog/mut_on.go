@@ -130,7 +130,10 @@ import "os"
 //   - batch_not_synced: a batch of entries is written but not synced
 //     before the answer that acknowledges it;
 //   - batch_kept_on_sync_failure: a batch whose write or sync failed stays
-//     in memory, so the next answer counts entries the disk may not hold.
+//     in memory, so the next answer counts entries the disk may not hold;
+//   - catchup_commit_per_page: a follower's catch-up commits as each page
+//     arrives, so a lapse on one page and the entries it names on the one
+//     before are applied apart (#1466).
 //
 // Peer TLS (#710):
 //

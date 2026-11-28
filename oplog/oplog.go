@@ -2027,7 +2027,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// is one of the candidates, when it counts.
 	from := n.commit
 	last := n.lastLocked()
-	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
+	own := afterResp{Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
 	selfCounts := n.syncedLocked() || mutOplog("unsynced_self_counted")
 	// A vouched log's first catch-up as leader (Vouch): it waits for every
 	// peer, and only when EVERY peer answered, takes the most up-to-date
@@ -2053,6 +2053,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// identity) may lack committed entries, and a majority that counted
 	// it might hold them nowhere (#710 3b-4).
 	var best afterResp
+	var bestPeer string
 	bestSelf, answered, commit := false, 0, uint64(0)
 	if selfCounts {
 		best, bestSelf = own, true
@@ -2076,8 +2077,11 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// holds every committed entry), after a short wait for the rest. A
 	// straggler that has seen a newer term is not waited for: this
 	// leader's own lease ends it, and its replication is refused by term.
+	// Each peer's first page decides: every page names its whole log (its
+	// last entry, commit, term, history). Only the chosen log's further
+	// pages are read, after the choice (#1455).
 	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) answer {
-		got, err := n.fetchAfter(ctx, p, from)
+		got, err := n.fetchPage(ctx, p, from)
 		return answer{got, err}
 	}, func(p string, a answer) bool {
 		switch {
@@ -2110,7 +2114,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 			answered++
 			commit = max(commit, a.got.Commit)
 			if better(a.got, best) {
-				best, bestSelf = a.got, false
+				best, bestSelf, bestPeer = a.got, false, p
 			}
 		}
 		return !alone && answered >= n.majority()
@@ -2185,21 +2189,44 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		}
 		return fmt.Errorf("%w: catch-up heard from %d of %d that count (%s)%s", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "), why)
 	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
-		// A newer history was heard while the peers were asked.
-		return fmt.Errorf("%w: the log history moved during the catch-up", ErrReadOnly)
-	}
 	// A counting copy's entries (the same history's) are taken first: a
 	// crash before the bump below then leaves this copy at the old history
 	// with them and its one-shot pending, never at the new one without
-	// them (#1177 review nit).
-	if !bestSelf && len(best.Entries) > 0 {
-		if _, err := n.acceptLocked(best.Entries); err != nil {
+	// them (#1177 review nit). Page by page, each synced as it is taken
+	// (#1455); nothing is committed until the last.
+	moved := fmt.Errorf("%w: the log history moved during the catch-up", ErrReadOnly)
+	take := func(es []Entry) error {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
+			return moved // a newer history was heard while the peers were asked
+		}
+		if _, err := n.acceptLocked(es); err != nil {
 			n.log.Warn("oplog: leader catch-up", "error", err)
 			return err
 		}
+		return nil
+	}
+	if !bestSelf && len(best.Entries) > 0 {
+		if err := take(best.Entries); err != nil {
+			return err
+		}
+		if best.More {
+			_, err := n.fetchAfter(ctx, bestPeer, best.Entries[len(best.Entries)-1].Seq, func(p afterResp) error {
+				if p.Term != best.Term || !p.Lineage.same(best.Lineage) {
+					return fmt.Errorf("%w: %s's log moved while it was read page by page", ErrReadOnly, n.name(bestPeer))
+				}
+				return take(p.Entries)
+			})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
+		return moved
 	}
 	if useVouch || resolves {
 		// Spent before it is used: a mark that can't record that never
@@ -2890,13 +2917,15 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 			return resp, err
 		}
 		n.mu.Lock()
-		missing := n.afterLocked(from)
+		var missing []Entry
+		if mutOplog("resend_unchunked") {
+			missing = n.afterLocked(from)
+		} else {
+			missing, _ = n.pageLocked(from)
+		}
 		n.mu.Unlock()
 		if len(missing) == 0 {
 			return resp, err
-		}
-		if !mutOplog("resend_unchunked") {
-			missing, _ = n.chunk(missing)
 		}
 		resp, err = send(missing)
 	}
@@ -2931,19 +2960,23 @@ func (n *Node) replicateToErr(ctx context.Context, peer string, es []Entry, term
 	return err
 }
 
-// chunk is the head of es one request carries: at most the limits' chunk
-// entries, and about their chunk bytes (always at least one entry). more:
-// es goes on.
-func (n *Node) chunk(es []Entry) (head []Entry, more bool) {
+// pageLocked is one page of the log after seq, for a reader that reads it
+// page by page (a catch-up) or a lagging peer's resend: at most
+// chunkEntries entries and chunkBytes of them, at least one. It copies
+// only the page, never the whole tail (#1455: a replacement's catch-up
+// asked for every page with the whole log copied each time). more: the
+// log goes on past it. Caller holds mu.
+func (n *Node) pageLocked(seq uint64) (page []Entry, more bool) {
+	i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq > seq })
 	size := 0
-	for i, e := range es {
-		b, _ := json.Marshal(e)
+	for k := i; k < len(n.entries); k++ {
+		b, _ := json.Marshal(n.entries[k])
 		size += len(b) + 1
-		if i > 0 && (i >= n.o.lim.chunkEntries || size > n.o.lim.chunkBytes) {
-			return es[:i], true
+		if k > i && (k-i >= n.o.lim.chunkEntries || size > n.o.lim.chunkBytes) {
+			return slices.Clone(n.entries[i:k]), true
 		}
 	}
-	return es, false
+	return slices.Clone(n.entries[i:]), false
 }
 
 // others are the peers but this instance.
@@ -2997,42 +3030,46 @@ func fanOut[T any](ctx context.Context, n *Node, peers []string, f func(context.
 	}
 }
 
-// fetchAfter reads a peer's log after seq, page by page.
-func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64) (afterResp, error) {
-	var all afterResp
+// fetchPage reads one page of a peer's log after seq and notes what it
+// says of itself (its sync, identity and history).
+func (n *Node) fetchPage(ctx context.Context, peer string, after uint64) (afterResp, error) {
+	var got afterResp
+	if err := n.call(ctx, peer, fmt.Sprintf("/api/oplog?after=%d&page=1", after), nil, &got); err != nil {
+		return afterResp{}, err
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.notePeerLocked(peer, got.Unsynced, got.Identity, got.Lineage)
+	if err := n.learnHistoryLocked(got.Lineage); err != nil {
+		return afterResp{}, err
+	}
+	return got, nil
+}
+
+// fetchAfter reads a peer's log after seq page by page, handing each page
+// to take as it arrives: it holds one page at a time, and a log of any
+// length is read (#1455: it gathered every page first, so a replacement
+// held the log twice, and refused one over 16,384 pages). The pages must
+// come from one log: the same term and history, each starting where the
+// last ended. It returns the last page, its entries dropped.
+func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64, take func(afterResp) error) (afterResp, error) {
+	var first afterResp
 	for page := 0; ; page++ {
-		var got afterResp
-		if err := n.call(ctx, peer, fmt.Sprintf("/api/oplog?after=%d&page=1", after), nil, &got); err != nil {
+		got, err := n.fetchPage(ctx, peer, after)
+		if err != nil {
 			return afterResp{}, err
 		}
 		if page == 0 {
-			all = got
-			all.Entries = append([]Entry(nil), got.Entries...)
-		} else {
-			if got.Term != all.Term || len(got.Entries) > 0 && got.Entries[0].Seq != after+1 {
-				return afterResp{}, fmt.Errorf("oplog: %s's log moved while it was read page by page", peer)
-			}
-			all.Entries = append(all.Entries, got.Entries...)
-			all.Commit, all.LastSeq, all.LastTerm = got.Commit, got.LastSeq, got.LastTerm
-			if !got.Lineage.same(all.Lineage) {
-				return afterResp{}, fmt.Errorf("oplog: %s's log moved while it was read page by page", peer)
-			}
-			all.Unsynced, all.Identity, all.Lost = got.Unsynced, got.Identity, got.Lost
-			all.LeaderSynced = all.LeaderSynced && got.LeaderSynced
+			first = got
+		} else if got.Term != first.Term || !got.Lineage.same(first.Lineage) || len(got.Entries) > 0 && got.Entries[0].Seq != after+1 {
+			return afterResp{}, fmt.Errorf("oplog: %s's log moved while it was read page by page", peer)
+		}
+		if err := take(got); err != nil {
+			return afterResp{}, err
 		}
 		if !got.More || len(got.Entries) == 0 {
-			all.More = false
-			n.mu.Lock()
-			n.notePeerLocked(peer, all.Unsynced, all.Identity, all.Lineage)
-			err := n.learnHistoryLocked(all.Lineage)
-			n.mu.Unlock()
-			if err != nil {
-				return afterResp{}, err
-			}
-			return all, nil
-		}
-		if page >= 1<<14 {
-			return afterResp{}, fmt.Errorf("oplog: %s's log did not end after %d pages", peer, page)
+			got.Entries, got.More = nil, false
+			return got, nil
 		}
 		after = got.Entries[len(got.Entries)-1].Seq
 	}
@@ -3086,37 +3123,44 @@ func (n *Node) CatchUp(ctx context.Context) error {
 	}
 	// From the commit index, not the last entry: an uncommitted entry this
 	// instance holds may be stale, and only the leader's entries from the
-	// commit on replace it (see acceptLocked).
-	got, err := n.fetchAfter(ctx, leader, n.Commit())
-	if err != nil {
-		return err
-	}
-	if !got.LeaderSynced && !mutOplog("unsynced_leader_writes") {
-		// Its entries past our commit index may be an earlier term's
-		// leftovers that would replace one a later term committed (#1050
-		// review). Its heartbeat or a later pull brings them once it has
-		// caught up.
-		return errTermNotSynced
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	switch {
-	case n.supersedingLocked():
-		return errSuperseded
-	case !got.Lineage.same(n.mark.Lineage) && !mutOplog("history_lower_counted") && !mutOplog("history_fork_counted"):
-		// A lower history's leader (its log is one a person accepted to
-		// lose; a higher one superseded this copy in fetchAfter), or a
-		// forked one.
-		return fmt.Errorf("%w: the leader's log is at history %d (id %x), this copy's at %d (id %x)", errConflict, got.History, got.HistoryID, n.mark.History, n.mark.HistoryID)
-	}
-	if got.Term < n.term {
-		return fmt.Errorf("%w: leader at term %d, have seen %d", errConflict, got.Term, n.term)
-	}
-	if _, err := n.acceptLocked(got.Entries); err != nil {
-		return err
-	}
-	n.commitTo(got.Commit)
-	return nil
+	// commit on replace it (see acceptLocked). Each page is checked and
+	// taken as it arrives, synced with it (#1455); the commit index moves
+	// once, with the last page, so a lapse and the entries it names are
+	// applied in one range (see applyRange, #1466).
+	_, err := n.fetchAfter(ctx, leader, n.Commit(), func(got afterResp) error {
+		if !got.LeaderSynced && !mutOplog("unsynced_leader_writes") {
+			// Its entries past our commit index may be an earlier term's
+			// leftovers that would replace one a later term committed
+			// (#1050 review). Its heartbeat or a later pull brings them
+			// once it has caught up.
+			return errTermNotSynced
+		}
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		switch {
+		case n.supersedingLocked():
+			return errSuperseded
+		case !got.Lineage.same(n.mark.Lineage) && !mutOplog("history_lower_counted") && !mutOplog("history_fork_counted"):
+			// A lower history's leader (its log is one a person accepted
+			// to lose; a higher one superseded this copy in fetchPage),
+			// or a forked one.
+			return fmt.Errorf("%w: the leader's log is at history %d (id %x), this copy's at %d (id %x)", errConflict, got.History, got.HistoryID, n.mark.History, n.mark.HistoryID)
+		}
+		if got.Term < n.term {
+			return fmt.Errorf("%w: leader at term %d, have seen %d", errConflict, got.Term, n.term)
+		}
+		if _, err := n.acceptLocked(got.Entries); err != nil {
+			return err
+		}
+		switch {
+		case !got.More || len(got.Entries) == 0:
+			n.commitTo(got.Commit)
+		case mutOplog("catchup_commit_per_page"):
+			n.commitTo(min(got.Commit, got.Entries[len(got.Entries)-1].Seq))
+		}
+		return nil
+	})
+	return err
 }
 
 // Status for /api/quorum.
@@ -3300,15 +3344,17 @@ func (n *Node) Handler() http.Handler {
 		_, _ = fmt.Sscanf(r.URL.Query().Get("after"), "%d", &after)
 		n.mu.Lock()
 		last := n.lastLocked()
-		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
+		resp := afterResp{Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
 			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lineage: n.mark.Lineage, Lost: n.mark.Lost != "", SetAside: n.mark.SetAside != ""}
 		resp.LeaderSynced = n.isLeader() && n.syncedTerm != 0 && n.syncedTerm == n.currentTerm()
-		n.mu.Unlock()
 		// Pages only for a reader that asks (page=1): one from before
 		// pages would take the first page for the whole tail.
 		if r.URL.Query().Get("page") == "1" && !mutOplog("resend_unchunked") {
-			resp.Entries, resp.More = n.chunk(resp.Entries)
+			resp.Entries, resp.More = n.pageLocked(after)
+		} else {
+			resp.Entries = n.afterLocked(after)
 		}
+		n.mu.Unlock()
 		writeJSON(w, http.StatusOK, resp)
 	}))
 	mux.HandleFunc("POST /api/oplog/propose", auth(func(w http.ResponseWriter, r *http.Request) {
