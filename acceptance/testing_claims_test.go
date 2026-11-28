@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -75,7 +76,9 @@ END_PROGRAM`
 	if !strings.Contains(r.Failure.Reason, "logic error") || !strings.Contains(strings.ToLower(r.Failure.Detail), "bounds") {
 		t.Errorf("failure = %q / %q, want the logic error and its message", r.Failure.Reason, r.Failure.Detail)
 	}
-	if r.Failure.At <= 0 || r.Failure.At != r.Elapsed {
-		t.Errorf("failure time = %v, want the virtual time the run reached (%v)", r.Failure.At, r.Elapsed)
+	// Two scans of the default 100 ms period: the virtual time the run
+	// reached, not wall time.
+	if r.Failure.At != 200*time.Millisecond {
+		t.Errorf("failure time = %v, want 200ms of virtual time", r.Failure.At)
 	}
 }

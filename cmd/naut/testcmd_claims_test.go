@@ -87,7 +87,9 @@ func TestNautTestNeverOpensASocket(t *testing.T) {
 	if c, err := net.Dial("tcp", ln.Addr().String()); err == nil {
 		c.Close()
 	}
-	time.Sleep(100 * time.Millisecond)
+	for i := 0; i < 100 && conns.Load() != 1; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if conns.Load() != 1 {
 		t.Fatalf("the listener counted %d dials of the control, want 1", conns.Load())
 	}

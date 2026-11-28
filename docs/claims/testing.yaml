@@ -153,6 +153,10 @@ claims:
     source: "#given-setting-the-world"
     tests:
       - go ./cmd/naut TestNautTestNeverOpensASocket
+    partial: true
+    note: >-
+      Shown with an eip driver (a live listener sees no connection); the stub
+      is installed whatever the driver type, but no other type is tried.
   - id: TEST-015
     claim: >-
       Expectations take an exact value (BOOL, STRING or number) or a
