@@ -419,3 +419,77 @@ devices: [{ name: CONV, profile: abb-acs355-fmbt21, endpoint: 192.0.2.9, unit-id
 		t.Errorf("an instance on a device row's device: %v", err)
 	}
 }
+
+// pumpCtlBlock is the function block of one-struct-model §2.4 and the
+// struct-wiring guide: it takes the instance as a VAR_IN_OUT, commands it,
+// and reads its from: members. It never assigns Running or Speed.
+const pumpCtlBlock = `FUNCTION_BLOCK PumpCtl
+  VAR_IN_OUT P : Pump; END_VAR
+  VAR_INPUT Demand : BOOL; END_VAR
+  P.Cmd.Start := Demand AND NOT P.Running;
+  IF Demand THEN
+    P.Cmd.SpeedRef := P.SpeedSP;
+  END_IF;
+END_FUNCTION_BLOCK
+`
+
+// The PumpCtl block on a Modbus instance, in sequence (#1458 slice 7): only
+// what the block assigned on a call is committed. While there is no demand
+// the conditional SpeedRef is not assigned, so the drive's own reference is
+// never commanded to a zero; with demand it is sent once, and when demand
+// ends it is left where it was.
+func TestPumpCtlBlockSequence(t *testing.T) {
+	srv := slave.NewServer("", nil)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	drive := srv.Unit(1)
+	drive.SetCoil(0, false) // not running
+	drive.SetHolding(4, 0)
+	drive.SetHolding(20, 77) // the drive's own reference
+
+	files := wiredProject(`name: w
+tasks: [{ program: main.st, scan: 20ms }]
+drivers: [{ type: modbus, scan-rate: 20ms }]
+tags:
+  - { name: Demand, role: setpoint, type: BOOL, init: false }
+`+pumpWiring+`instances:
+  - { name: P101, type: Pump, params: { endpoint: "`+srv.Addr()+`" } }
+`, pumpCtlBlock+`PROGRAM Main
+VAR Ctl : PumpCtl; END_VAR
+  Ctl(P := P101, Demand := Demand);
+END_PROGRAM
+`)
+	proj, err := Load(files, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := startWired(t, proj)
+	eventually(t, "the drive answers", func() bool { return rt.Tags().Bool("P101__Online") })
+
+	// No demand: nothing is commanded, the drive's reference is untouched.
+	time.Sleep(200 * time.Millisecond)
+	if drive.Coil(10) || drive.Holding(20) != 77 {
+		t.Fatalf("with no demand: start %v, reference %d (want false, 77)", drive.Coil(10), drive.Holding(20))
+	}
+
+	if err := rt.Tags().SetPath("Demand", true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "demand starts the pump and sends its reference", func() bool {
+		return drive.Coil(10) && drive.Holding(20) == 500 // SpeedSP 50.0 % at scale 0.1
+	})
+
+	// The drive's own reference moves while demand holds; nothing resends
+	// the unchanged command, and ending demand leaves the reference alone.
+	drive.SetHolding(20, 321)
+	if err := rt.Tags().SetPath("Demand", false); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the end of demand stops the pump", func() bool { return !drive.Coil(10) })
+	time.Sleep(200 * time.Millisecond)
+	if got := drive.Holding(20); got != 321 {
+		t.Errorf("the reference the block no longer assigns was commanded to %d (want the drive's own 321)", got)
+	}
+}

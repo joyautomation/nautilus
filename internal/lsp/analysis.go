@@ -168,6 +168,34 @@ func analyzeIn(text string, e env) analysis {
 			Message:  sh.Message(),
 		})
 	}
+	// A program must not assign a member its wiring reads from a device or
+	// computes, itself or through a block it passes the instance to
+	// (#1458, design §2.4); `naut check` says the same.
+	for _, w := range st.InstanceWrites(lowerProg, runtime.WiredKinds(e.tags)) {
+		if w.Pos.Line <= preludeLines {
+			continue // inside a library: its own file says it
+		}
+		pos, end := w.Pos, w.End
+		pos.Line -= preludeLines
+		end.Line -= preludeLines
+		blockAt := ""
+		if w.BlockPos.Line > preludeLines {
+			blockAt = "line " + strconv.Itoa(w.BlockPos.Line-preludeLines)
+		} else if w.BlockPos.Line > 0 {
+			if sg, line, ok := stproject.Locate(e.segs, w.BlockPos.Line); ok {
+				blockAt = sg.Path
+				if !sg.Transpiled {
+					blockAt += ":" + strconv.Itoa(line)
+				}
+			}
+		}
+		a.Diags = append(a.Diags, Diagnostic{
+			Range:    spanRange(text, pos, end),
+			Severity: SeverityError,
+			Source:   "nautilus-st",
+			Message:  w.Message(blockAt),
+		})
+	}
 	if _, err := st.LowerWithOpts(lowerProg, opts); err != nil {
 		pos := st.Pos{Line: 1, Col: 1}
 		var end st.Pos

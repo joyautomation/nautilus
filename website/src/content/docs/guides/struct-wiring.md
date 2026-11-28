@@ -93,6 +93,49 @@ is sent again (a level). On top of that:
   the read-back's value when it first arrives. That is no command; it only
   means "commanded, not reached" does not show after every restart.
 
+## A block that takes an instance
+
+A function block takes an instance as a `VAR_IN_OUT`, and one block then
+serves every pump:
+
+```iecst
+FUNCTION_BLOCK PumpCtl
+  VAR_IN_OUT P : Pump; END_VAR
+  VAR_INPUT Demand : BOOL; END_VAR
+  P.Cmd.Start := Demand AND NOT P.Running;
+  IF Demand THEN
+    P.Cmd.SpeedRef := P.SpeedSP;
+  END_IF;
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+  VAR Ctl1, Ctl2 : PumpCtl; END_VAR
+  Ctl1(P := P101, Demand := Level > StartLevel);
+  Ctl2(P := P102, Demand := Level > StartLevel + 10.0);
+END_PROGRAM
+```
+
+The block assigns commands and memory and only reads `Running`. A call
+commits what the block assigned on that call and nothing else, so a
+conditional `P.Cmd.SpeedRef` is not sent as a zero while there is no demand.
+
+A program cannot assign a `from:` member (or an `expr:` member), itself or
+through a block. `naut check` and the editor refuse it where it happens, on
+the line, naming the member and its kind:
+
+```text
+main.st:7:1: error: calling Reset with P101 would assign P101.Running, which is
+read from the device (from:): Reset assigns P.Running (lib/reset.st:5). Remove the
+assignment, or wire the member as memory: (or to: for a command) if the program is
+meant to set it, or pass a local variable of that type, which a block may assign freely
+```
+
+The same block called with a plain local variable of the type is fine, so one
+block serves both. A whole assignment (`P101 := Spare;`) is refused when the
+type has a `from:` member: assign the writable members one at a time.
+Ladder and function-block-diagram programs get the same check, on the rung or
+block that writes.
+
 ## Params and overrides
 
 `{param}` substitutes into a source's keys and a member's address keys. A

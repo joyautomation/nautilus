@@ -110,6 +110,28 @@ type InstanceDef struct {
 	Members map[string]MemberDef
 }
 
+// WiredKinds is the kind of each wired member of each instance tag in defs,
+// by tag name then member path ("from", "to", "both", "memory", "expr"), for
+// the check-time write check (lang/st InstanceWrites). A tag that is no
+// instance is left out.
+func WiredKinds(defs []TagDef) map[string]map[string]string {
+	var out map[string]map[string]string
+	for _, d := range defs {
+		if d.Instance == nil {
+			continue
+		}
+		if out == nil {
+			out = map[string]map[string]string{}
+		}
+		m := make(map[string]string, len(d.Instance.Members))
+		for path, md := range d.Instance.Members {
+			m[path] = md.Kind.String()
+		}
+		out[d.Name] = m
+	}
+	return out
+}
+
 // InstanceTag declares a tag of a wired type. typeName is the project's TYPE
 // (a STRUCT); the tag is seeded at its zero, or at Init. Experimental while
 // struct wiring (#1458) lands: memory is not yet retained and expressions are
