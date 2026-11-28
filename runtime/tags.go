@@ -176,6 +176,10 @@ type tagVal struct {
 	// releases: the takeover hold's release tag (hold.go). The program
 	// writes it; a write or a force from anyone else is refused.
 	releases bool
+	// computed: an instance's combined companion (InstanceDef.Online), which
+	// the runtime writes after each delivery. An outside write is refused; a
+	// force holds it, as it holds any input, so an alarm on it can be tried.
+	computed bool
 	// held: an output seeded at its type's zero (no init:) that nothing has
 	// written yet. The logic and every reader see the zero; readMany, the
 	// driver push, leaves it out until the first write. See Tags.hold.
@@ -444,7 +448,39 @@ func (t *Tags) setMany(names []string, in map[string]any) uint64 {
 	for _, inst := range t.instList {
 		t.deliverLocked(inst, in)
 	}
+	for _, inst := range t.instList {
+		if inst.online != "" {
+			t.writeOnlineLocked(inst)
+		}
+	}
 	return t.gen
+}
+
+// instancesOffline writes every instance's combined companion FALSE: the
+// read failed, so whether its connections answer is unknown.
+func (t *Tags) instancesOffline() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, in := range t.instList {
+		if in.online != "" {
+			t.writeLocked(in.online, ir.BoolVal(false))
+		}
+	}
+}
+
+// writeOnlineLocked writes an instance's combined companion: TRUE while
+// every connection companion it reads holds TRUE (InstanceDef.Online).
+// Caller holds t.mu, right after a delivery.
+func (t *Tags) writeOnlineLocked(in *instInfo) {
+	all := true
+	for _, c := range in.onlineOf {
+		tv, _, ok := t.lookupLocked(c)
+		if !ok || tv.v.Kind != ir.TypeBool || !tv.v.B {
+			all = false
+			break
+		}
+	}
+	t.writeLocked(in.online, ir.BoolVal(all))
 }
 
 // readMany fills dst with the named tags' driver-facing values under a

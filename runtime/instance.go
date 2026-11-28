@@ -117,6 +117,21 @@ type InstanceDef struct {
 	// member takes its own entry's kind, else its nearest listed ancestor's,
 	// else MemberMemory.
 	Members map[string]MemberDef
+	// Online names the instance's combined companion when it reads more
+	// than one connection (#1458 slice 9a-2): TRUE while every tag in
+	// OnlineOf (each connection's __Online) is TRUE, FALSE otherwise,
+	// a missing or non-BOOL one included, and FALSE after a read that
+	// failed. It is an Input tag of type BOOL the manifest declares, with
+	// no init; no driver delivers it, so it is seeded FALSE (as a Comms
+	// input is) and the runtime writes it right after each delivery,
+	// reading the companions as the store holds them (a force on one
+	// counts). An outside write (Tags.Write, the API, the OPC UA server,
+	// Sparkplug) and a substitute are refused; a force holds it, and a
+	// program that assigns it, as any input, is overwritten by the next
+	// delivery.
+	// Experimental, as InstanceTag is.
+	Online   string
+	OnlineOf []string
 }
 
 // WiredKinds is the kind of each wired member of each instance tag in defs,
@@ -166,7 +181,7 @@ func InstanceTag(name, typeName string, def InstanceDef, opts ...TagOpt) TagDef 
 	for k, v := range def.Members {
 		m[k] = v
 	}
-	d.Instance = &InstanceDef{Members: m}
+	d.Instance = &InstanceDef{Members: m, Online: def.Online, OnlineOf: append([]string(nil), def.OnlineOf...)}
 	return d
 }
 
@@ -218,10 +233,14 @@ func (n *knode) takes(p pick) bool {
 
 // instInfo is one instance as the store uses it.
 type instInfo struct {
-	name    string // the stored spelling
-	typName string // its TYPE, as the tag names it
-	typ     *ir.Type
-	root    knode
+	// online is the combined companion the runtime writes after each
+	// delivery, the AND of onlineOf (InstanceDef.Online); "" for none.
+	online   string
+	onlineOf []string
+	name     string // the stored spelling
+	typName  string // its TYPE, as the tag names it
+	typ      *ir.Type
+	root     knode
 	// keys are the delivery keys a driver may use, one per delivered entry
 	// ("P101.Speed"); got says whether each has been delivered yet.
 	keys []instKey
@@ -309,6 +328,9 @@ func (in *instInfo) kindAt(segs []string) MemberKind {
 // newInstInfo validates an instance's definition against its type and
 // builds its tree.
 func newInstInfo(d TagDef, types map[string]*ir.Type) (*instInfo, error) {
+	if d.Instance.Online != "" && len(d.Instance.OnlineOf) == 0 {
+		return nil, fmt.Errorf("instance %s: Online %s names no connection companions (OnlineOf)", d.Name, d.Instance.Online)
+	}
 	if d.Type == "" {
 		return nil, fmt.Errorf("instance %s: an instance needs its TYPE", d.Name)
 	}
@@ -324,7 +346,7 @@ func newInstInfo(d TagDef, types map[string]*ir.Type) (*instInfo, error) {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
-	in := &instInfo{name: d.Name, typName: d.Type, typ: t}
+	in := &instInfo{name: d.Name, typName: d.Type, typ: t, online: d.Instance.Online, onlineOf: d.Instance.OnlineOf}
 	in.root = buildShape(t, "", "")
 	declared := map[*knode]string{}
 	for _, p := range paths {

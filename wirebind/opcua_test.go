@@ -26,7 +26,10 @@ func TestSameNode(t *testing.T) {
 		{b("i=2259", ""), b("ns=2;i=2259", ""), false}, // no URI on either: the indexes decide
 		{b("ns=2;i=7", ""), b("ns=3;i=7", ""), false},
 		{b("ns=2;i=7", ""), b("ns=2;i=7", ""), true},
-		{b("i=7", ""), b("ns=2;i=7", "urn:x"), false}, // the standard namespace never moves
+		{b("i=7", ""), b("ns=2;i=7", "urn:x"), false},                  // the standard namespace never moves
+		{b("i=7", ""), b("i=7", "http://opcfoundation.org/UA/"), true}, // its URI is index 0
+		{b("i=7", "http://opcfoundation.org/UA/"), b("i=7", ""), true},
+		{b("ns=2;i=7", ""), b("i=7", "http://opcfoundation.org/UA/"), false},
 	} {
 		if got := SameNode(tc.a, tc.b); got != tc.same {
 			t.Errorf("SameNode(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.same)

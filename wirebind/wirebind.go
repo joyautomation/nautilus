@@ -17,7 +17,9 @@
 // (opcua.go): a source with its own endpoint is a connection (and a driver)
 // of the instance's own, one without shares the drivers: entry it names. The
 // rest is refused here, naming the slice it arrives with, never run
-// half-way.
+// half-way. Slice 9a-2: an instance may read several connections, of any
+// of those drivers, each with its own companion; the manifest declares
+// their AND as <Instance>__Online, which the runtime computes.
 package wirebind
 
 import (
@@ -361,9 +363,6 @@ func (r *resolver) instance(in *wiring.Instance) *Instance {
 		srcs = append(srcs, s)
 	}
 	sort.Strings(srcs)
-	if len(srcs) > 1 {
-		r.add(in.Pos, "instance %s reads %d connections (%s): an instance on more than one connection arrives with slice 9a-2 of struct wiring (#1458, mixed sources), with a companion per connection; until then give each its own type, or one source", in.Name, len(srcs), strings.Join(srcs, ", "))
-	}
 	for _, s := range srcs {
 		src := w.Sources[s]
 		typ, _ := r.driverType(src.Driver)

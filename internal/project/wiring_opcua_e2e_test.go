@@ -15,6 +15,8 @@ import (
 	uasrv "github.com/gopcua/opcua/server"
 	"github.com/gopcua/opcua/ua"
 
+	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/modbus/slave"
 	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -404,6 +406,17 @@ instances:
 			"driver: opcua-client, and the project has more than one opcua-client driver: name the drivers: entry instead"},
 		"a companion declared as something else": {strings.Replace(wire("drivers:\n  - { name: ua, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\" }\n", `{ driver: ua }`, "      Running: { from: drive, node: \"i=1\" }\n"), "drivers:", "tags:\n  - { name: ua__Online, role: state, type: DINT }\ndrivers:", 1),
 			"its shared OPC UA session's companion ua__Online is declared as a state DINT tag"},
+		"a shared driver named like the instance": {base + "drivers:\n  - { name: P101, type: opcua-client, endpoint: \"opc.tcp://192.0.2.9:4840\" }\n" + `wirings:
+  - type: Pump
+    sources:
+      pump: { driver: modbus, endpoint: 192.0.2.1 }
+      ua:   { driver: P101 }
+    members:
+      Running: { from: pump, table: coil, address: 0 }
+      Speed:   { from: ua, node: "i=1", type: Double }
+instances:
+  - { name: P101, type: Pump }
+`, "source ua shares driver P101, whose companion P101__Online is the name of the instance's combined companion: rename the driver"},
 		"a driver named like the instance": {wire("drivers:\n  - { name: P101, type: modbus }\n", own, "      Running: { from: drive, node: \"i=1\" }\n"),
 			"the project already has a driver P101"},
 	} {
@@ -612,4 +625,144 @@ instances:
 			t.Fatalf("no driver P101 in %+v", cfgs)
 		})
 	}
+}
+
+// An instance on two connections of two drivers (#1458 slice 9a-2): a
+// Modbus pump and an OPC UA level transmitter. Each connection has its own
+// companion, <Instance>_<source>__Online, and <Instance>__Online is their
+// AND, computed by the runtime: one connection down makes it FALSE while
+// the other's companion stays TRUE, and the readings of the live one keep
+// arriving.
+func TestMixedSourceInstance(t *testing.T) {
+	ua := startUADrive(t, freeUAPort(t), "T1")
+	srv := slave.NewServer("127.0.0.1:0", nil)
+	pump := srv.Unit(1)
+	pump.SetCoil(0, true)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	proj, err := Load(wiredProject(`name: w
+tasks: [{ program: main.st, scan: 20ms }]
+drivers: [{ type: modbus, scan-rate: 20ms }]
+wirings:
+  - type: Pump
+    params: { pump: null, ua: null }
+    sources:
+      pump:  { driver: modbus, endpoint: "{pump}", unit-id: 1, timeout: 200ms }
+      level: { driver: opcua-client, endpoint: "{ua}" }
+    members:
+      Running: { from: pump, table: coil, address: 0 }
+      Speed:   { from: level, node: "ns=1;s={name}/Speed", namespace: "`+uaDriveNS+`", type: Double }
+instances:
+  - { name: T1, type: Pump, params: { pump: "`+srv.Addr()+`", ua: "`+ua.url+`" } }
+`, "PROGRAM Main\nEND_PROGRAM\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	declared := map[string]string{}
+	for _, tg := range proj.Runtime.Tags {
+		if strings.Contains(tg.Name, "__") {
+			declared[tg.Name] = tg.Type
+		}
+	}
+	for _, want := range []string{"T1_pump__Online", "T1_pump__Outages", "T1_level__Online", "T1__Online"} {
+		if _, ok := declared[want]; !ok {
+			t.Errorf("companion %s not declared (have %v)", want, declared)
+		}
+	}
+	rt := startWired(t, proj)
+	eventually(t, "both connections answer, so T1__Online is TRUE", func() bool {
+		run, _ := rt.Tags().ReadPath("T1.Running")
+		spd, _ := rt.Tags().ReadPath("T1.Speed")
+		return run == true && spd == 50.0 && rt.Tags().Bool("T1_pump__Online") && rt.Tags().Bool("T1_level__Online") && rt.Tags().Bool("T1__Online")
+	})
+	srv.Stop()
+	eventually(t, "the pump is gone: T1__Online FALSE, the level still answers", func() bool {
+		return !rt.Tags().Bool("T1_pump__Online") && !rt.Tags().Bool("T1__Online") && rt.Tags().Bool("T1_level__Online")
+	})
+	if err := rt.Tags().Write([]runtime.WriteOp{{Path: "T1__Online", Value: true}})[0]; err == nil {
+		t.Error("an outside write to the combined companion must be refused")
+	}
+}
+
+// One Modbus driver carries both connections of an instance on two
+// devices: a source each, named <Instance>_<source>, and the AND as
+// <Instance>__Online.
+func TestOneDriverTwoConnections(t *testing.T) {
+	start := func() *slave.Server {
+		s := slave.NewServer("127.0.0.1:0", nil)
+		s.Unit(1).SetCoil(0, true)
+		if err := s.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(s.Stop)
+		return s
+	}
+	a, b := start(), start()
+	proj, err := Load(wiredProject(`name: w
+tasks: [{ program: main.st, scan: 20ms }]
+drivers: [{ type: modbus, scan-rate: 20ms }]
+wirings:
+  - type: Pump
+    params: { a: null, b: null }
+    sources:
+      x: { driver: modbus, endpoint: "{a}", unit-id: 1, timeout: 200ms }
+      y: { driver: modbus, endpoint: "{b}", unit-id: 1, timeout: 200ms }
+    members:
+      Running:   { from: x, table: coil, address: 0 }
+      Cmd.Start: { to: y, table: coil, address: 0 }
+instances:
+  - { name: T1, type: Pump, params: { a: "`+a.Addr()+`", b: "`+b.Addr()+`" } }
+`, "PROGRAM Main\nT1.Cmd.Start := TRUE;\nEND_PROGRAM\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := proj.Runtime.Driver.(*modbus.Driver); !ok {
+		t.Fatalf("the two connections are not one Modbus driver: %T", proj.Runtime.Driver)
+	}
+	rt := startWired(t, proj)
+	eventually(t, "both answer", func() bool {
+		return rt.Tags().Bool("T1_x__Online") && rt.Tags().Bool("T1_y__Online") && rt.Tags().Bool("T1__Online")
+	})
+	eventually(t, "the command reaches the second device", func() bool { return b.Unit(1).Coil(0) })
+	b.Stop()
+	eventually(t, "the second device is gone: T1__Online FALSE", func() bool {
+		return !rt.Tags().Bool("T1_y__Online") && !rt.Tags().Bool("T1__Online") && rt.Tags().Bool("T1_x__Online")
+	})
+}
+
+// An instance on its own Modbus connection and a shared OPC UA session:
+// the shared one's companion is the driver's own, and it is part of the
+// instance's combined companion.
+func TestMixedSourceWithASharedSession(t *testing.T) {
+	proj, err := Load(wiredProject(`name: w
+tasks: [{ program: main.st }]
+drivers:
+  - { name: plant-ua, type: opcua-client, endpoint: "opc.tcp://192.0.2.9:4840", security: None, security-mode: None }
+wirings:
+  - type: Pump
+    params: { pump: null }
+    sources:
+      pump:  { driver: modbus, endpoint: "{pump}" }
+      level: { driver: plant-ua }
+    members:
+      Running: { from: pump, table: coil, address: 0 }
+      Speed:   { from: level, node: "ns=1;s={name}/Speed", namespace: "urn:x", type: Double }
+instances:
+  - { name: T1, type: Pump, params: { pump: 192.0.2.1 } }
+`, "PROGRAM Main\nEND_PROGRAM\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range proj.Runtime.Tags {
+		if d.Instance == nil {
+			continue
+		}
+		if d.Instance.Online != "T1__Online" || strings.Join(d.Instance.OnlineOf, ",") != "plant_ua__Online,T1_pump__Online" {
+			t.Fatalf("combined companion %s of %v, want T1__Online of T1_pump__Online and the shared plant_ua__Online", d.Instance.Online, d.Instance.OnlineOf)
+		}
+		return
+	}
+	t.Fatal("no instance tag")
 }

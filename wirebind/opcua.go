@@ -231,17 +231,29 @@ func SameNode(a, b opcua.TagBinding) bool {
 	if ida != idb {
 		return false
 	}
+	// The standard namespace's URI is index 0 on every server: a binding
+	// spelling it is the same as one in ns=0 with no URI.
+	na, nb := a.Namespace, b.Namespace
+	if na == standardNamespace {
+		na, ia = "", 0
+	}
+	if nb == standardNamespace {
+		nb, ib = "", 0
+	}
 	switch {
-	case a.Namespace != "" && b.Namespace != "":
-		return a.Namespace == b.Namespace
-	case a.Namespace == "" && b.Namespace == "":
+	case na != "" && nb != "":
+		return na == nb
+	case na == "" && nb == "":
 		return ia == ib
-	case a.Namespace == "":
+	case na == "":
 		return ia != 0
 	default:
 		return ib != 0
 	}
 }
+
+// standardNamespace is the OPC UA namespace's URI, index 0 everywhere.
+const standardNamespace = "http://opcfoundation.org/UA/"
 
 // nodeIdent is a node id without its namespace index ("ns=3;s=x" is
 // "s=x", 3).

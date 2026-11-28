@@ -636,6 +636,9 @@ func New(o Options) (*Runtime, error) {
 			return nil, fmt.Errorf("tag %s: retain is for state the logic owns; %s on the first scan, so it is never retained", d.Name, what)
 		}
 	}
+	if o.Tags, err = seedInstanceOnline(o.Tags); err != nil {
+		return nil, err
+	}
 	var held, untyped []string
 	if o, held, untyped, err = expandTags(o, types, unionGlobals(prog, tasks)); err != nil {
 		return nil, err
@@ -707,6 +710,15 @@ func New(o Options) (*Runtime, error) {
 		// was configured with. Set's member-path guard is for operator
 		// writes, which may only address a tag that already exists.
 		tags.setAny(k, v)
+	}
+	// An instance's combined companion is the runtime's to write.
+	for _, in := range tags.instList {
+		if in.online == "" {
+			continue
+		}
+		if tv, _, ok := tags.lookupLocked(in.online); ok {
+			tv.computed = true
+		}
 	}
 	// A typed output with no init: starts at its type's zero, but the
 	// driver is not handed that zero until something writes the tag (see
@@ -1608,6 +1620,11 @@ func (r *Runtime) scanAt(due time.Time) {
 			// whole delivery, and a re-delivered identical value is not a
 			// write at all — see Tags' "Write generations".
 			r.tags.setMany(r.inputs, in)
+		} else {
+			// A read that failed tells nothing of the connections: an
+			// instance's combined companion fails false rather than hold a
+			// stale TRUE (InstanceDef.Online).
+			r.tags.instancesOffline()
 		}
 	}
 	if r.coord == nil && !r.mainIn.Load() {
@@ -1875,3 +1892,65 @@ func (r *Runtime) UntypedCommsInputs() []string {
 
 // Outputs returns the driver-bound output tag names.
 func (r *Runtime) Outputs() []string { return r.outputs }
+
+// seedInstanceOnline marks each instance's combined companion
+// (InstanceDef.Online) a Comms input, so it is seeded FALSE and a program
+// reading it before the first delivery runs: no driver delivers it, the
+// runtime writes it after each delivery. It must be a declared input of
+// type BOOL. The defs are copied, not changed.
+func seedInstanceOnline(defs []TagDef) ([]TagDef, error) {
+	online := map[string]string{} // name -> its instance
+	for _, d := range defs {
+		if d.Instance != nil && d.Instance.Online != "" {
+			if prev, dup := online[ir.NameKey(d.Instance.Online)]; dup {
+				return nil, fmt.Errorf("instances %s and %s both name %s their combined companion", prev, d.Name, d.Instance.Online)
+			}
+			online[ir.NameKey(d.Instance.Online)] = d.Name
+		}
+	}
+	if len(online) == 0 {
+		return defs, nil
+	}
+	out := append([]TagDef(nil), defs...)
+	declared := map[string]TagDef{}
+	for _, d := range defs {
+		declared[ir.NameKey(d.Name)] = d
+	}
+	for _, d := range defs {
+		if d.Instance == nil {
+			continue
+		}
+		for _, c := range d.Instance.OnlineOf {
+			cd, ok := declared[ir.NameKey(c)]
+			switch {
+			case !ok:
+				return nil, fmt.Errorf("instance %s: its combined companion reads %s, which is no declared tag", d.Name, c)
+			case ir.SameName(c, d.Instance.Online):
+				return nil, fmt.Errorf("instance %s: its combined companion %s reads itself (a shared session's driver named like the instance?): rename the driver", d.Name, c)
+			case cd.Role != RoleInput || !strings.EqualFold(cd.Type, "BOOL"):
+				return nil, fmt.Errorf("instance %s: its combined companion reads %s, which is not an input of type BOOL: a connection's companion is the driver's", d.Name, c)
+			}
+		}
+	}
+	found := map[string]bool{}
+	for i := range out {
+		inst, ok := online[ir.NameKey(out[i].Name)]
+		if !ok {
+			continue
+		}
+		if out[i].Role != RoleInput || !strings.EqualFold(out[i].Type, "BOOL") {
+			return nil, fmt.Errorf("instance %s: its combined companion %s is not an input of type BOOL (type %q); declare it role input, type BOOL", inst, out[i].Name, out[i].Type)
+		}
+		if out[i].Init != nil {
+			return nil, fmt.Errorf("instance %s: its combined companion %s has an init: it is FALSE until every connection answers, so it takes none", inst, out[i].Name)
+		}
+		out[i].Comms = true
+		found[ir.NameKey(out[i].Name)] = true
+	}
+	for n, inst := range online {
+		if !found[n] {
+			return nil, fmt.Errorf("instance %s: its combined companion is no declared tag: declare it an input of type BOOL", inst)
+		}
+	}
+	return out, nil
+}

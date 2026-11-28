@@ -141,6 +141,20 @@ func platformNotices(m Manifest) []string {
 	return out
 }
 
+// oneSimulated: in the browser every field driver is simulated, and a
+// simulated driver declares no outputs, so an io.Multi of them cannot route
+// (it runs alone). When every driver of a set is simulated, one stands in
+// for them all: the first, which claims every declared input and reads
+// every __Online TRUE (simulateDrivers), as a lone driver does.
+func oneSimulated(named []nio.NamedDriver) (nio.Driver, bool) {
+	for _, n := range named {
+		if _, ok := n.Driver.(*simulated); !ok {
+			return nil, false
+		}
+	}
+	return named[0].Driver, len(named) > 0
+}
+
 // withWiredOPCUA: in the browser every driver is simulated and an
 // address is checked by naut check, not here, so an instance's own OPC UA
 // connection only needs a driver of its name for its inputs and companion.

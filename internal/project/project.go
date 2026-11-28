@@ -2663,6 +2663,9 @@ func buildDrivers(fsys fs.FS, m Manifest) (nio.Driver, []nio.NamedDriver, error)
 		labelCuts(d, name, true)
 		named = append(named, nio.NamedDriver{Name: name, Driver: d})
 	}
+	if d, ok := oneSimulated(named); ok {
+		return d, named, nil
+	}
 	multi, err := nio.NewMulti(named...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("drivers: %w", err)

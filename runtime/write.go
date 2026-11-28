@@ -94,6 +94,9 @@ func (t *Tags) readOnlyLocked(path string) error {
 	if ok && tv.releases {
 		return fmt.Errorf("tag %s releases the takeover hold: only the program sets it: %w", key, ErrReadOnly)
 	}
+	if ok && tv.computed {
+		return fmt.Errorf("tag %s is computed by the runtime, the AND of its instance's connection companions: %w", key, ErrReadOnly)
+	}
 	return nil
 }
 

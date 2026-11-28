@@ -278,3 +278,46 @@ instances:
 		}
 	}
 }
+
+// naut test computes an instance's combined companion too (#1458 slice
+// 9a-2): the runtime writes <Instance>__Online from its connections'
+// companions after each delivery, so a suite that gives the companions
+// sees the AND, with no driver of its own.
+func TestNautTestComputesTheCombinedCompanion(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"nautilus.yaml": "name: d\ntasks:\n  - program: main.st\n    scan: 100ms\n" + `wirings:
+  - type: Pump
+    sources:
+      x: { driver: modbus, endpoint: 192.0.2.1 }
+      y: { driver: modbus, endpoint: 192.0.2.2 }
+    members:
+      Running: { from: x, table: coil, address: 0 }
+      Start:   { to: y, table: coil, address: 10 }
+instances:
+  - { name: P101, type: Pump }
+`,
+		"main.st":  "PROGRAM main\nVAR_EXTERNAL P101__Online : BOOL; END_VAR\nVAR up : BOOL; END_VAR\nup := P101__Online;\nEND_PROGRAM\n",
+		"types.st": checkPumpTypes,
+		"main_test.yaml": `tests:
+  - name: both connections answer
+    given: { P101_x__Online: true, P101_y__Online: true }
+    scans: 2
+    expect: { P101__Online: true }
+  - name: one connection down
+    given: { P101_x__Online: true, P101_y__Online: false }
+    scans: 2
+    expect: { P101__Online: false }
+`,
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var code int
+	out := captureStdout(t, func() int { code = runTest([]string{dir}); return code })
+	if code != 0 {
+		t.Fatalf("naut test exit %d:\n%s", code, out)
+	}
+}

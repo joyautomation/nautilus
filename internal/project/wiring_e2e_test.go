@@ -273,18 +273,6 @@ func TestWiredLoadRefusals(t *testing.T) {
 		"wiring alarms": {wire("      Running: { from: drive, table: coil, address: 0 }\n    alarms:\n      - { member: Running, name: run }\n"), "alarms: in a wiring arrive with slice 9"},
 		"set": {strings.Replace(wire("      Running: { from: drive, table: coil, address: 0 }\n"), "192.0.2.1 }", "192.0.2.1 }, set: { SpeedSP: 1.0 }", 1),
 			"set: (initial values for memory members) arrives with slice 6"},
-		"two sources": {base + `wirings:
-  - type: Pump
-    params: { a: null, b: null }
-    sources:
-      x: { driver: modbus, endpoint: "{a}" }
-      y: { driver: modbus, endpoint: "{b}" }
-    members:
-      Running: { from: x, table: coil, address: 0 }
-      Speed:   { from: y, table: holding, address: 0, format: float32 }
-instances:
-  - { name: P101, type: Pump, params: { a: 192.0.2.1, b: 192.0.2.2 } }
-`, "instance P101 reads 2 connections (x, y): an instance on more than one connection arrives with slice 9"},
 		"one device twice": {wire("      Running: { from: drive, table: coil, address: 0 }\n") + "  - { name: P102, type: Pump, params: { endpoint: 192.0.2.1 } }\n",
 			"instance P101 and instance P102 are both on 192.0.2.1:502 unit 0"},
 		"a numeric event command": {wire("      Cmd.SpeedRef: { to: drive, table: holding, address: 20, format: int16, event: true }\n"),
