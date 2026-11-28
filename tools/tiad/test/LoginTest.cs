@@ -187,8 +187,13 @@ namespace Tiad.Test
             True(a.AccessControlOn && a.TrustedNothing, "refused for the lock, nothing trusted");
             var b = FingerprintRule.Mark(new TiaException("x"), false, new List<string> { "credentials (OnlineReadAccessPassword)" }, 1);
             True(b.AccessControlOn && !b.TrustedNothing, "the password-only logon after a trust");
-            var c = FingerprintRule.Mark(new TiaException("x"), false, new List<string> { "credentials (OnlineAuthenticationConfiguration): no password", "trust the TLS certificate of PLC_1" }, 0);
-            True(!c.AccessControlOn && !c.TrustedNothing, "other refusals are not the lock");
+            var c = FingerprintRule.Mark(new TiaException("x"), false, new List<string> { "trust the TLS certificate of PLC_1", "a question tiad does not know (X)" }, 0);
+            True(!c.AccessControlOn && !c.TrustedNothing, "a certificate or an unknown question is not the lock");
+            var c2 = FingerprintRule.Mark(new TiaException("x"), false, new List<string> { "credentials (OnlinePasswordConfiguration)" }, 0);
+            True(c2.AccessControlOn && c2.TrustedNothing, "any credentials question answered no is the lock");
+            string before = FingerprintRule.UnavailableBefore("192.0.2.10");
+            Contains(before, "(" + FingerprintRule.AnsweredBeforeHow + ")", "names how it showed before going online");
+            Contains(before, "Nothing was trusted and no password was sent; " + FingerprintRule.UseVerify + FingerprintRule.RetireFix, "names verify and the retire");
             var d = FingerprintRule.Mark(new TiaException("x"), true, new List<string>(), 2);
             True(d.AccessControlOn && !d.TrustedNothing, "a trust is never nothing trusted");
             string m = FingerprintRule.Unavailable("192.0.2.10", a);

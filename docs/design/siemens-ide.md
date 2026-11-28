@@ -1263,7 +1263,7 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/show` | `{block}` → `{block, type, number, group}`. Opens the program block named `block` (compared without case) in TIA Portal's editor, with Openness's `ShowInEditor`. Refused (`bad_request`) unless the agent runs with `TIAD_UI=1`, before TIA is asked anything; a block the project lacks is `not_found`. It changes nothing in the project. `group` is the block's group path (`""` for the root) |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; every other online call (verify, compare, download, online, fingerprint) checks the pin first, on the operator's `deviceAttestation` while tiad cannot read a CPU's identity online |
 | `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, outsideChanges?, tia, archive, attestation, deviceAttestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
-| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
+| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}, deviceAttestation?}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, fingerprintUnavailable?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
 
 **Blocks outside the group (#789).** TIA's generate-from-source does not
 stop at the group it is given. On the TIA VM a source declaring
@@ -2535,14 +2535,22 @@ everywhere. So:
   (`LoginUse.Refusing`, `FingerprintRule.LockedWhy`), before any other
   reason, and writes no password; the request's `secrets` are read and not
   used;
-- TIA asking credentials on the project's connection means the CPU's
-  access control is on: the service is never called, so nothing is
-  trusted, even with the opt-in, and the call answers `409
-  fingerprint_unavailable`, naming verify, the locked CPU's reference;
-- if the service asks the password-only logon anyway (a TIA that kept a
-  logon asks the project's connection nothing), it is answered no, and the
-  read is `fingerprint_unavailable` too; the trust it answered before stays
-  recorded, as for any read that failed after its opt-in;
+- a CPU tiad answered credentials for earlier in the same TIA instance
+  (`InstanceLogons.AnsweredBefore`: a download, compare or verify logged
+  on) has access control on: the read is refused before anything goes
+  online, so a TIA that kept that logon never reaches the service. That
+  holds until the instance retires, so a CPU whose access control was
+  turned off since reads again once every session is closed; the refusal
+  says so;
+- otherwise, TIA asking credentials on the project's connection, or any
+  question answered no there, stops the read before the service is
+  called; either way nothing is trusted, even with the opt-in, and the
+  call answers `409 fingerprint_unavailable`, naming verify, the locked
+  CPU's reference;
+- if the service asks a credentials question anyway (the password-only
+  logon of a CPU whose anonymous user may go online, say), it is answered
+  no, and the read is `fingerprint_unavailable` too; the trust it answered
+  before stays recorded, as for any read that failed after its opt-in;
 - the refusal holds no login, so it forgets no instance-logon evidence and
   marks nothing answered;
 - a deploy's or a verify's read reports it as `fingerprintUnavailable`,

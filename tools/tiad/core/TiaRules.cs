@@ -1041,6 +1041,14 @@ namespace Tiad
             return new LoginUse(null, call, address, why ?? "");
         }
 
+        // TrustedAny is true once a handler of this operation answered a
+        // certificate question Trusted (Trusted, recorded before the
+        // write): FingerprintRule.Mark reads it.
+        public bool TrustedAny
+        {
+            get { lock (mu) return trusted; }
+        }
+
         // RefusedAll is true once Refusing's why answered a credentials
         // question no: TIA asked credentials, so the CPU's access control
         // is on.

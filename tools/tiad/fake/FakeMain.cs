@@ -299,7 +299,7 @@ namespace Tiad.Fake
         string compareTree = "";
         string downloadState = "";
         bool uploadAsksTls;
-        bool fingerprintAsksTls;
+        bool fingerprintAsksTls, fingerprintAsksPasswordOnly;
         List<KeyValuePair<string, string>> fingerprintItems = new List<KeyValuePair<string, string>>();
         bool fingerprintNoItems;
         string cannotApply = "";
@@ -492,6 +492,21 @@ namespace Tiad.Fake
                 lock (mu)
                 {
                     return fingerprintAsksTls;
+                }
+            }
+        }
+
+        // FingerprintAsksPasswordOnly makes TIA's fingerprint service ask
+        // its password-only logon (OnlineReadAccessPassword) even when the
+        // project's connection asked no credentials: a CPU whose anonymous
+        // user may go online but not read (#1336).
+        public bool FingerprintAsksPasswordOnly
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return fingerprintAsksPasswordOnly;
                 }
             }
         }
@@ -947,6 +962,7 @@ namespace Tiad.Fake
             string dlState = r.Str("downloadState");
             bool asksTls = r.Bool("uploadAsksTls");
             bool fpAsksTls = r.Bool("fingerprintAsksTls");
+            bool fpAsksPw = r.Bool("fingerprintAsksPasswordOnly");
             var fpItems = new List<KeyValuePair<string, string>>();
             foreach (var x in r.Children("fingerprintItems")) fpItems.Add(new KeyValuePair<string, string>(x.Str("identifier"), x.Str("value")));
             bool fpNone = r.Bool("fingerprintNoItems");
@@ -1018,6 +1034,7 @@ namespace Tiad.Fake
                 downloadState = dlState;
                 uploadAsksTls = asksTls;
                 fingerprintAsksTls = fpAsksTls;
+                fingerprintAsksPasswordOnly = fpAsksPw;
                 fingerprintItems = fpItems;
                 fingerprintNoItems = fpNone;
                 cannotApply = cannot;
@@ -2724,11 +2741,11 @@ namespace Tiad.Fake
                 // TIA went on after credentials answered no: no service.
                 if (use.RefusedAll) throw new TiaException(TiaNames.OnlineRefused(address, refused, "TIA went on with the fingerprint read"));
                 if (script.FingerprintAsksTls) AskTls(address, trustUnverifiedCertificate, r.TrustedBlindly, use);
-                if (logins.ContainsKey(address)) AskPasswordOnly(address, use, refused);
+                if (logins.ContainsKey(address) || script.FingerprintAsksPasswordOnly) AskPasswordOnly(address, use, refused);
             }
             catch (TiaException e)
             {
-                FingerprintRule.Mark(e, use.RefusedAll, refused, r.TrustedBlindly.Count);
+                FingerprintRule.Mark(e, use.RefusedAll, refused, r.TrustedBlindly.Count + (use.TrustedAny ? 1 : 0));
                 throw;
             }
             if (script.FingerprintNoItems) return r;

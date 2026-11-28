@@ -123,6 +123,10 @@ type Script struct {
 	// FingerprintAsksTLS makes a fingerprint read ask TLS trust, as the
 	// bench CPU's does, until the fake's TIA trusted once.
 	FingerprintAsksTLS bool `json:"fingerprintAsksTls,omitempty"`
+	// FingerprintAsksPasswordOnly makes TIA's fingerprint service ask its
+	// password-only logon even when the project's connection asked no
+	// credentials (FingerprintScript.AsksPasswordOnly).
+	FingerprintAsksPasswordOnly bool `json:"fingerprintAsksPasswordOnly,omitempty"`
 	// FingerprintItems, when set, is what every fingerprint read returns;
 	// FingerprintNoItems makes it return none.
 	FingerprintItems   []tiad.FingerprintItem `json:"fingerprintItems,omitempty"`
@@ -428,6 +432,7 @@ func (p *Process) SetFingerprint(t testing.TB, fs FingerprintScript) {
 	t.Helper()
 	p.mu.Lock()
 	p.script.FingerprintAsksTLS = fs.AsksTLS
+	p.script.FingerprintAsksPasswordOnly = fs.AsksPasswordOnly
 	p.script.FingerprintItems = fs.Items
 	p.script.FingerprintNoItems = fs.NoItems
 	var failures []ScriptedCall

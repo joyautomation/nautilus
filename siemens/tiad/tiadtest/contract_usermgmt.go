@@ -310,7 +310,7 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		// restore: an as-found project with access control off and no
 		// users, loaded over the CPU tiad turned on, logged on as
 		// "nautilus", a user the project being loaded does not hold.
-		a, s := compiledBench(t, start)
+		a, s := compiledBench(t, start, benchCPU, otherCPU)
 		c := a.Client()
 		a.SetQuestions(t, benchHardwareChecks)
 		load := func(cpu string, secrets *tiad.Secrets) tiad.DownloadRequest {
@@ -367,7 +367,7 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		noPw.Secrets = nil
 		_, err = r.Download(ctx, noPw)
 		wantResetRefused(t, "the restore without a password", err, tiad.ResetNoPassword)
-		trustThroughKeptLogon(t, a, r, LogonScript{})
+		TrustBlindlyElsewhere(t, a, r, adoptedStation())
 		if _, err := r.Download(ctx, restore); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "has to log on to the CPU first, so nothing was sent to the CPU") {
 			t.Fatalf("the restore after a blind trust: %v", err)
 		}
@@ -601,13 +601,14 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		// The evidence of the compare after A goes with a blind trust and
 		// the instance it retires; an unequal compare that logs on in the
 		// next instance earns nothing.
-		a, s := compiledBench(t, start)
+		a, s := compiledBench(t, start, benchCPU, otherCPU)
 		a.SetQuestions(t, benchHardwareChecks)
 		a.SetLogon(t, LogonScript{CredentialsAfterChecks: true})
 		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
 			t.Fatalf("A: %v", err)
 		}
-		trustThroughKeptLogon(t, a, s, LogonScript{CredentialsAfterChecks: true})
+		TrustBlindlyElsewhere(t, a, s, BenchStation())
+		a.SetFingerprint(t, FingerprintScript{})
 		// Closing every session retires the instance that trusted.
 		closeFirst(t, s)
 		r := RestoreSession(t, a)
@@ -680,24 +681,4 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		_, err = s.Download(ctx, att)
 		wantResetRefused(t, "the session set access control", err, "does not keep access control")
 	})
-}
-
-// trustThroughKeptLogon makes the agent's TIA instance trust the bench
-// CPU's certificate blindly while its access control is on: with a TIA
-// that keeps a logon, a compare logs on, and a fingerprint read with the
-// opt-in then reaches TIA's fingerprint service, trusts its TLS question
-// and is refused at its password-only logon (#1336), so the trust stays
-// (the read failed after it). The logon script goes back to after; a logon
-// kept stays kept until the instance retires.
-func trustThroughKeptLogon(t *testing.T, a Target, s *tiad.Session, after LogonScript) {
-	t.Helper()
-	a.SetLogon(t, LogonScript{KeepsLogon: true})
-	if _, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: BenchLogin}); err != nil {
-		t.Fatalf("a compare that logs on: %v", err)
-	}
-	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
-	_, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true})
-	lockedFingerprint(t, "a read that trusts blindly", err, true)
-	a.SetFingerprint(t, FingerprintScript{})
-	a.SetLogon(t, after)
 }

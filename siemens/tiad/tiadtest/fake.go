@@ -2408,6 +2408,12 @@ type FingerprintScript struct {
 	// AsksTLS makes a read ask TLS trust, as the bench CPU's does (#789
 	// stage 1b), until the fake's TIA trusted once.
 	AsksTLS bool
+	// AsksPasswordOnly makes TIA's fingerprint service ask its
+	// password-only logon (OnlineReadAccessPassword, #1336) even when the
+	// project's connection asked no credentials: a CPU whose anonymous user
+	// may go online but not read. A CPU with access control on that the
+	// read reaches the service of asks it anyway.
+	AsksPasswordOnly bool
 	// Items, when set, is what every read returns instead of the fake
 	// CPU's own; NoItems makes it return none.
 	Items   []tiad.FingerprintItem
@@ -2517,6 +2523,11 @@ func (f *Fake) fingerprintOf(s *session, address string, trust bool, fix string)
 	// never logs on: credentials going online are answered no and the
 	// service is never called; the password-only logon is answered no.
 	// Neither touches the agent's logon evidence or its blind trust.
+	// tiad answered credentials for the CPU earlier in this instance: its
+	// access control is on, refused before going online.
+	if f.answered[address] {
+		return tiad.FingerprintResult{}, fail(http.StatusConflict, tiad.KindFingerprintUnavailable, "%s", fingerprintUnavailableBefore(address))
+	}
 	_, locked := f.logins[address]
 	if locked && !(f.keepsLogon && f.keptLogons[address]) {
 		return tiad.FingerprintResult{}, fail(http.StatusConflict, tiad.KindFingerprintUnavailable, "%s", fingerprintUnavailable(address, false, true))
@@ -2531,7 +2542,7 @@ func (f *Fake) fingerprintOf(s *session, address string, trust bool, fix string)
 		f.tlsTrusted = true
 		trusted = append(trusted, ask)
 	}
-	if locked {
+	if locked || f.fingerprint.AsksPasswordOnly {
 		// The read failed after its trust: the agent records it as
 		// unknown (TrustingCall).
 		if trust && len(trusted) > 0 {
@@ -2574,6 +2585,19 @@ func fingerprintUnavailable(address string, service, nothingTrusted bool) string
 		"TIA's fingerprint service reads over a connection of its own, which needs a blind certificate trust and then a password-only logon, " +
 		"and tiad sends no password over a connection it cannot verify. " + sent + FingerprintUseVerify
 }
+
+// fingerprintUnavailableBefore is the agent's
+// FingerprintRule.UnavailableBefore.
+func fingerprintUnavailableBefore(address string) string {
+	return "fingerprint unavailable: the CPU at " + address + " has access control on (" + FingerprintAnsweredBefore + "), and a fingerprint read never logs on: " +
+		"TIA's fingerprint service reads over a connection of its own, which needs a blind certificate trust and then a password-only logon, " +
+		"and tiad sends no password over a connection it cannot verify. Nothing was trusted and no password was sent; " + FingerprintUseVerify +
+		"; if its access control was turned off since, close every session (the agent then retires the TIA instance) and read again"
+}
+
+// FingerprintAnsweredBefore is how the agent's refusal before going online
+// says the access control showed (FingerprintRule.AnsweredBeforeHow).
+const FingerprintAnsweredBefore = "tiad answered its credentials question earlier in this TIA instance"
 
 // fingerprintTrustFix is the agent's fix for a fingerprint read TIA's TLS
 // question refused.

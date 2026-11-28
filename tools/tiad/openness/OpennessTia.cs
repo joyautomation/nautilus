@@ -2416,7 +2416,7 @@ namespace Tiad.Openness
                 {
                     var asked = new List<string>(online.Asked);
                     asked.AddRange(asks.Asked);
-                    return FingerprintRule.Mark(e, use.RefusedAll, asked, online.TrustedBlindly.Count + asks.TrustedBlindly.Count);
+                    return FingerprintRule.Mark(e, use.RefusedAll, asked, online.TrustedBlindly.Count + asks.TrustedBlindly.Count + (use.TrustedAny ? 1 : 0));
                 };
                 try
                 {
@@ -2429,9 +2429,10 @@ namespace Tiad.Openness
                             if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
                             throw new TiaException("fingerprint read: TIA could not go online to " + address + ": " + st);
                         }
-                        // TIA went on after its credentials question was
-                        // answered no: the service is never called.
-                        if (use.RefusedAll) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "TIA went on with the fingerprint read"));
+                        // TIA went on after a question going online was
+                        // answered no (its credentials, a certificate): the
+                        // service is never called.
+                        if (use.RefusedAll || online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "TIA went on with the fingerprint read"));
                         FingerprintDataResult res = fp.GetFingerprintData(fat, asks.Handle);
                         if (res == null || res.FingerprintDataItems == null) throw new TiaException("fingerprint read: TIA returned no result");
                         foreach (FingerprintDataItem it in res.FingerprintDataItems)
