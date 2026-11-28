@@ -90,7 +90,8 @@ is sent again (a level). On top of that:
   reopened is a baseline, and only a later change goes out. One assigned
   while its device is unreachable is not sent late when the device answers
   again: the driver drops it, logs it and counts it (Modbus:
-  `droppedEvents` on the device row).
+  `droppedEvents` on the device row). Its release (FALSE, or 0) still goes
+  out, so the device is never left asserted.
 - **`readback: <member>`** names the `from:` member that shows what the
   device did. A command of the same type that nothing has written yet takes
   the read-back's value when it first arrives. That is no command; it only

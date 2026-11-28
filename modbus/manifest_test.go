@@ -198,16 +198,6 @@ func TestValidateErrors(t *testing.T) {
 			"writeonly without writable",
 		},
 		{
-			"event without writable",
-			src("  - {name: T, source: A, table: coil, address: 0, event: true}\n"),
-			"event without writable",
-		},
-		{
-			"event with rewrite",
-			src("  - {name: T, source: A, table: coil, address: 0, writable: true, event: true, rewrite: 1s}\n"),
-			"event and rewrite",
-		},
-		{
 			"duplicate tag names",
 			src("  - {name: T, source: A, table: holding, address: 0, format: int16}\n" +
 				"  - {name: T, source: B, table: holding, address: 4, format: int16}\n"),

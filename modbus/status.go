@@ -42,9 +42,9 @@ type SourceHealth struct {
 	// NOW, waiting for a reconnect — a gauge that clears itself when the
 	// source comes back and they go out.
 	QueuedWrites int `json:"queuedWrites"`
-	// DroppedEvents counts the event commands (TagBinding.Event) written
-	// while the source was offline and dropped at its reconnect rather than
-	// sent late (free-running).
+	// DroppedEvents counts, since start, the event commands
+	// (TagBinding.Event) raised while the source was offline and dropped at
+	// its reconnect rather than sent late. It moves only at a reconnect.
 	DroppedEvents uint64 `json:"droppedEvents"`
 }
 

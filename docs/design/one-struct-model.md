@@ -253,7 +253,9 @@ not go out again after a reopen. That is the `dropAndRebaseline` rule,
 applied per member on any driver, and it is a slice 4 test. An event leaf
 written while its connection is down is not delivered late on the
 reconnect either: the driver drops it, logs it once and counts it (Modbus
-`TagBinding.Event`, `droppedEvents`; naut-lead's ruling during slice 9). A profile
+`TagBinding.Event`, `droppedEvents`, #1494). A value at rest (FALSE, 0)
+is the trigger's release and still goes out, so the device is never left
+asserted. A profile
 point may declare `event: true` too, and its generated `Cmd` member
 inherits it. (Q22)
 

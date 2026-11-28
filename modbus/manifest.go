@@ -118,11 +118,16 @@ type TagBinding struct {
 	// a writable binding is also polled, and the read-back is the source of
 	// truth after a restart.
 	WriteOnly bool
-	// Event marks a command that is a trigger, not a level (a struct-wiring
-	// `event: true` member, #1458): one written while its source is offline
-	// is dropped when the source reconnects, never sent late, and the drop
-	// is logged and counted (SourceHealth.DroppedEvents). A level command
-	// queued meanwhile goes out on the reconnect, as ever.
+	// Event marks a command that is a trigger, not a level. Struct wiring
+	// sets it for an `event: true` member (#1458); it has no manifest key,
+	// because the runtime's event rules (a baseline after a start, a gate
+	// reopen or a takeover) are what keep a trigger from going out twice on
+	// the driver's other paths. The driver's part: one raised while the
+	// source is offline is dropped when the source reconnects, never sent
+	// late, and the drop is logged and counted (SourceHealth.DroppedEvents).
+	// A value at rest (FALSE, 0) is the trigger's release and still goes
+	// out, so the device is never left asserted. A level command queued
+	// meanwhile goes out on the reconnect, as ever.
 	Event bool
 }
 
@@ -229,7 +234,6 @@ type tagYAML struct {
 	Rewrite   duration
 	ScanClass string
 	WriteOnly bool
-	Event     bool
 }
 
 func (t *TagBinding) UnmarshalYAML(node *yaml.Node) error {
@@ -241,7 +245,7 @@ func (t *TagBinding) UnmarshalYAML(node *yaml.Node) error {
 		Name: r.Name, Source: r.Source, Table: r.Table, Address: r.Address,
 		Format: r.Format, Scale: r.Scale, Offset: r.Offset,
 		Writable: r.Writable, Rewrite: time.Duration(r.Rewrite),
-		ScanClass: r.ScanClass, WriteOnly: r.WriteOnly, Event: r.Event,
+		ScanClass: r.ScanClass, WriteOnly: r.WriteOnly,
 	}
 	return nil
 }
@@ -251,7 +255,7 @@ func (t TagBinding) MarshalYAML() (any, error) {
 		Name: t.Name, Source: t.Source, Table: t.Table, Address: t.Address,
 		Format: t.Format, Scale: t.Scale, Offset: t.Offset,
 		Writable: t.Writable, Rewrite: duration(t.Rewrite),
-		ScanClass: t.ScanClass, WriteOnly: t.WriteOnly, Event: t.Event,
+		ScanClass: t.ScanClass, WriteOnly: t.WriteOnly,
 	}, nil
 }
 

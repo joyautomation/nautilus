@@ -11,6 +11,7 @@ import (
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/slave"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -177,7 +178,11 @@ END_PROGRAM
 	if err := rt.Tags().SetPath("Demand", true); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(150 * time.Millisecond) // several scans assign Cmd.Start TRUE while it is gone
+	queued := func() int {
+		h := proj.Runtime.Driver.(interface{ Health() modbus.Health }).Health()
+		return h.Sources[0].QueuedWrites
+	}
+	eventually(t, "the program's Cmd.Start TRUE is queued while the drive is gone", func() bool { return queued() == 1 })
 
 	back := slave.NewServer(addr, nil)
 	drive := back.Unit(1)

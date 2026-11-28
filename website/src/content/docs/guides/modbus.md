@@ -360,6 +360,8 @@ dropped when the source reconnects, never sent late. A Start pressed while
 the device could not be reached must not fire minutes later. The drop is
 logged once per command per outage, naming it, and counted as
 `droppedEvents` on the device row. Press it again once the device answers.
+Its release (FALSE, or 0) still goes out on the reconnect, so a device that
+took the press before the link broke is never left asserted.
 
 **An exception to a write depends on whether the write ran.** When the
 device itself refuses a write (0x02 illegal data address, 0x03 illegal

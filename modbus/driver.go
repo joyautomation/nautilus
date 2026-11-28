@@ -1530,17 +1530,19 @@ func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
 	open := d.gateOpen()
 	now := time.Now()
 	s.mu.Lock()
-	// An event command still queued here was written while the device was
-	// unreachable (or its flush broke with the link): it is a trigger, and
-	// one sent now would fire late, so it is dropped, said and counted. Its
-	// written value stays, so a re-push of the same value is no change and
-	// only the binding's next change goes out.
+	// An event command still queued here was raised while the device could
+	// not be reached (or its write did not complete before the link broke):
+	// it is a trigger, and one sent now would fire late, so it is dropped,
+	// said and counted. Its written value stays, so a re-push of the same
+	// value is no change and only the binding's next change goes out. A
+	// queued value at rest (FALSE, 0) is the trigger's release and still
+	// goes out: dropping it would leave the device asserted.
+	var dropped []string
 	for _, name := range sortedPending(s) {
-		if bs, ok := s.byName[name]; ok && bs.b.Event {
+		if bs, ok := s.byName[name]; ok && bs.b.Event && !atRest(s.pending[name]) {
 			delete(s.pending, name)
 			s.dropped++
-			d.log.Warn("modbus: event command dropped: it was written while the device was offline, and a trigger is never sent late",
-				"source", s.cfg.ID, "tag", name)
+			dropped = append(dropped, name)
 		}
 	}
 	for _, rw := range s.rewrites {
@@ -1550,6 +1552,10 @@ func (d *Driver) prime(ctx context.Context, s *source, c conn) bool {
 		rw.next = now.Add(rw.period)
 	}
 	s.mu.Unlock()
+	for _, name := range dropped {
+		d.log.Warn("modbus: event command dropped at the reconnect: it was raised while the device could not be reached, and a trigger is never sent late",
+			"source", s.cfg.ID, "tag", name)
+	}
 	if !d.flushWrites(ctx, s, c) {
 		return false
 	}
@@ -2455,4 +2461,26 @@ func sortedPending(s *source) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// atRest says whether a command value is a trigger's rest state: FALSE or
+// zero. An event command at rest is its release, which is safe to send late.
+func atRest(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return !x
+	case int64:
+		return x == 0
+	case int:
+		return x == 0
+	case int32:
+		return x == 0
+	case uint64:
+		return x == 0
+	case float64:
+		return x == 0
+	case float32:
+		return x == 0
+	}
+	return false
 }
