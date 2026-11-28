@@ -156,6 +156,8 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | an unsynced leader counts its own log in its catch-up (`unsynced_self_counted`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
 | a batch of entries the log takes is written but not synced before it is acknowledged (`batch_not_synced`), or, its write or sync failed, stays in memory for the next answer to count (`batch_kept_on_sync_failure`) | design §1, an acknowledged entry is on disk | #1455 |
 | a follower's catch-up, now taken page by page, commits as each page arrives, so a lapse and the entries it names can be applied apart (`catchup_commit_per_page`) | design §1, lapse | #1455 (#1466) |
+| a leader's catch-up takes the chosen copy's later pages without checking it still counts and is unchanged, so a copy that lost its log mid-read syncs the leader on a short log (`leader_catchup_pages_unchecked`), or goes on after a newer term was seen (`leader_catchup_term_unchecked`) | design §1, only a synced replica counts | #1455 (Fable review) |
+| a replaced suffix whose rewrite failed stays in memory while the file holds the old one (`rewrite_failure_kept`) | design §1, an acknowledged entry is on disk | #1455 (Fable review) |
 | an unsynced standby campaigns over a reachable, synced peer that may campaign (`campaign_ignores_sync`) | design §1, an unsynced controller leads for control | 3b-4b |
 | an unsynced leader whose catch-up failed never hands over to a synced, able peer (`unsynced_leader_keeps_lead`) | design §1, an unsynced controller leads for control | 3b-4b |
 | a leader yields again within 10 minutes (`yield_undamped`) | design §1, the yield is damped | 3b-4b |

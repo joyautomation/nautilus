@@ -1747,6 +1747,9 @@ func (n *Node) rewrite() error {
 	if err != nil {
 		// n.file stays the closed handle, so every later write fails
 		// loudly rather than being skipped as if there were no file.
+		if renameErr == nil {
+			err = fmt.Errorf("%w: %w", errRewritten, err) // the new file is in place
+		}
 		return errors.Join(renameErr, err)
 	}
 	n.file = f
@@ -1761,6 +1764,10 @@ func truncateStr(s string, n int) string {
 }
 
 var errGap = errors.New("gap")
+
+// errRewritten: rewrite put the new file in place, then could not reopen
+// it. The file holds what memory does; nothing more can be written.
+var errRewritten = errors.New("oplog: the log was rewritten but could not be reopened")
 
 // errTermNotSynced: this leader has not caught up for its term, so it
 // sends nothing (replicateTo) and a follower takes nothing from it
@@ -1841,8 +1848,15 @@ func (n *Node) acceptLocked(es []Entry) (fresh int, err error) {
 				return fresh, err
 			}
 			buf = nil
+			// A new slice (capacity i), so the old one is whole if the
+			// rewrite fails: then the file still holds the old suffix, and
+			// so must memory (Fable, #1455 review).
+			before := n.entries
 			n.entries = append(n.entries[:i:i], storedOf(e))
 			if err := n.rewrite(); err != nil {
+				if !errors.Is(err, errRewritten) && !mutOplog("rewrite_failure_kept") {
+					n.entries = before
+				}
 				return fresh, err
 			}
 			durable = len(n.entries)
@@ -2212,11 +2226,20 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// them (#1177 review nit). Page by page, each synced as it is taken
 	// (#1455); nothing is committed until the last.
 	moved := fmt.Errorf("%w: the log history moved during the catch-up", ErrReadOnly)
+	deposed := func() error {
+		if n.term > term && !mutOplog("leader_catchup_term_unchecked") {
+			return fmt.Errorf("%w: a newer term (%d) was seen during the catch-up for term %d", ErrReadOnly, n.term, term)
+		}
+		return nil
+	}
 	take := func(es []Entry) error {
 		n.mu.Lock()
 		defer n.mu.Unlock()
 		if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
 			return moved // a newer history was heard while the peers were asked
+		}
+		if err := deposed(); err != nil {
+			return err
 		}
 		if _, err := n.acceptLocked(es); err != nil {
 			n.log.Warn("oplog: leader catch-up", "error", err)
@@ -2229,8 +2252,13 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 			return err
 		}
 		if best.More {
+			// Every page from the log that was chosen, still the same and
+			// still counting (Fable, #1455 review: a copy that lost its log
+			// mid-read comes back empty at the same term and history, and
+			// its empty page would end the read short of what was chosen).
 			_, err := n.fetchAfter(ctx, bestPeer, best.Entries[len(best.Entries)-1].Seq, func(p afterResp) error {
-				if p.Term != best.Term || !p.Lineage.same(best.Lineage) {
+				same := p.Term == best.Term && p.Lineage.same(best.Lineage) && p.LastSeq == best.LastSeq && p.LastTerm == best.LastTerm
+				if !mutOplog("leader_catchup_pages_unchecked") && (!same || !n.counts(bestPeer, p.Unsynced, p.Identity, p.Lineage, hist)) {
 					return fmt.Errorf("%w: %s's log moved while it was read page by page", ErrReadOnly, n.name(bestPeer))
 				}
 				return take(p.Entries)
@@ -2244,6 +2272,9 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	defer n.mu.Unlock()
 	if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
 		return moved
+	}
+	if err := deposed(); err != nil {
+		return err
 	}
 	if useVouch || resolves {
 		// Spent before it is used: a mark that can't record that never

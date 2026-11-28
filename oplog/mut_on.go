@@ -133,7 +133,14 @@ import "os"
 //     in memory, so the next answer counts entries the disk may not hold;
 //   - catchup_commit_per_page: a follower's catch-up commits as each page
 //     arrives, so a lapse on one page and the entries it names on the one
-//     before are applied apart (#1466).
+//     before are applied apart (#1466);
+//   - leader_catchup_pages_unchecked: a leader's catch-up takes the chosen
+//     copy's later pages without checking that it still counts and its
+//     log is unchanged (a copy that lost its log mid-read ends it short);
+//   - leader_catchup_term_unchecked: a leader's catch-up goes on, and
+//     syncs its term, after a newer term was seen between its pages;
+//   - rewrite_failure_kept: a replaced suffix whose rewrite failed stays
+//     in memory while the file holds the old one.
 //
 // Peer TLS (#710):
 //

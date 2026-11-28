@@ -377,6 +377,9 @@ var table = []mutation{
 	{"batch_not_synced", []string{"TestNoAckBeforeTheBatchSync", "TestFailedBatchSyncIsNotKept"}},
 	{"batch_kept_on_sync_failure", []string{"TestFailedBatchSyncIsNotKept"}},
 	{"catchup_commit_per_page", []string{"TestCatchUpTakesEachPageAsItArrives"}},
+	{"leader_catchup_pages_unchecked", []string{"TestLeaderCatchUpStopsWhenTheChosenCopyLosesItsLog"}},
+	{"leader_catchup_term_unchecked", []string{"TestLeaderCatchUpStopsAtANewerTerm"}},
+	{"rewrite_failure_kept", []string{"TestFailedRewriteKeepsTheOldSuffix"}},
 	{"entry_unbounded", []string{"TestTooLargeEntryIsRefusedAtProposal"}},
 	// #710 PR 3b-4b: the witness as the log's third copy, wired into the
 	// pair. In the elector (quorum/node): the unsynced controller's
@@ -910,6 +913,9 @@ var rowPkgs = map[string][]string{
 	"batch_not_synced":                  {"./oplog"},
 	"batch_kept_on_sync_failure":        {"./oplog"},
 	"catchup_commit_per_page":           {"./oplog"},
+	"leader_catchup_pages_unchecked":    {"./oplog"},
+	"leader_catchup_term_unchecked":     {"./oplog"},
+	"rewrite_failure_kept":              {"./oplog"},
 	"entry_unbounded":                   {"./oplog"},
 	"term_not_persisted":                {"./oplog"},
 	"unnamed_leader_admitted":           {"./oplog"},
