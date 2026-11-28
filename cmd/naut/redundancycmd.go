@@ -548,6 +548,7 @@ func printClusterStatus(w io.Writer, b []byte) {
 			SupersedeTo uint64   `json:"supersedeTo"`
 			Superseded  string   `json:"superseded"`
 			Forked      []string `json:"forked"`
+			Compacted   uint64   `json:"compactedThrough"`
 		} `json:"log"`
 		Stream    *leader.StreamStatus `json:"stream"`
 		WritesCut map[string]int       `json:"writesCut"`
@@ -589,6 +590,9 @@ func printClusterStatus(w io.Writer, b []byte) {
 		fmt.Fprintf(bw, "operator-intent log: %s", state)
 		if l.History > 0 {
 			fmt.Fprintf(bw, "; history %d (a loss accepted by %s)", l.History, nonEmpty(l.HistoryBy, "a person"))
+		}
+		if l.Compacted > 0 {
+			fmt.Fprintf(bw, "; compacted through seq %d (a build from before log compaction can't open it)", l.Compacted)
 		}
 		fmt.Fprintln(bw)
 		if l.Lost != "" {

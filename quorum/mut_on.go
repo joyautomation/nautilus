@@ -759,6 +759,9 @@ var Mutations = []string{
 	"blocked_since_unfloored",     // oplog: a log grown before compaction was switched on counts its wait from long ago: every rolling upgrade raises oplog-compaction-blocked
 	"carrier_unmarked",            // oplog: a leader on compaction's rules does not say so in its term's first entry
 	"rules_mark_first_found",      // oplog: blocked-since counts from the first marker found, not the earliest (two leaders in a row each wrote one)
+	"first_compaction_unfloored",  // oplog: the first compaction waits no margin after the all-marker, so a downgrade closes at once (2b-1.9)
+	"all_marker_ignored",          // oplog: the first compaction counts its 7 days from the first leader on the rules, not from when all three ran them (2b-1.9)
+	"all_marker_ungated",          // oplog: the all-marker is written while the gate fails, so a leader with a clock behind dates it back (2b-1.9)
 	"marker_skips_lapses",         // oplog: the rules marker is a bare noop, which commits an earlier term's stale start un-lapsed
 	"decide_transient_blocks",     // oplog: a reason the next look clears by itself (a write in flight) starts the blocked time
 	"decide_clock_spread_ignored", // oplog: copies whose clocks spread over 5 minutes compact anyway

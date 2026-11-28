@@ -592,6 +592,14 @@ jobs:
           rig=$(.github/scripts/naut-rig.sh regex ${{ matrix.shard }} 2)
           [ -n "$rig" ] || { echo "::error::naut-rig.sh gave no regex"; exit 1; }
           go test -json -count=1 -timeout 20m -coverprofile=evidence/cover.out -run "$rig" ./cmd/naut | tee evidence/go-test.json | go run ./tools/evidence cat
+      # #1455 PR 2b-1.9: a pair on loopback, wired as naut run wires it,
+      # through a committed compaction (about 10 s), in shard 1. The
+      # oplogtest tag adds the seam that sets a keep-rules version and
+      # short timings, so it runs apart from the list above; a release build
+      # never has it (TestTheCompactionSeamIsNotInAReleaseBuild).
+      - name: go test -tags oplogtest (a pair through a log compaction)
+        if: matrix.shard == 1
+        run: go test -count=1 -tags oplogtest -run '^TestPairCompaction' ./cmd/naut/
       - name: Save the Go build cache (main, once a day)
         if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: actions/cache/save@v4

@@ -283,7 +283,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		eng = alarms.Engine
 		t.Cleanup(func() { alarms.Close() })
 	}
-	sl, al, _, err := m.startLog(rt, 0, eng)
+	sl, al, nl, err := m.startLog(rt, 0, eng)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,6 +318,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		sopts.Cluster = m.q
 		sopts.LeaderURLs = proj.Redundancy.LeaderURLs() // as runProject does (#716)
 		sopts.SubstituteLog = sl
+		sopts.NotesLog, sopts.SessionLog = nl, m.sess // as runProject does (#720)
 		if eng != nil {
 			sopts.Alarms, sopts.AlarmLog = eng, al
 		}

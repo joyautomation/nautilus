@@ -122,3 +122,18 @@ func TestStatusPrintsWritesCutAtTheSendDeadline(t *testing.T) {
 		t.Fatalf("no cuts, no line:\n%s", out.String())
 	}
 }
+
+// #1455: naut redundancy status says when this copy's log was compacted,
+// the point past which no build from before compaction opens it.
+func TestStatusSaysTheLogWasCompacted(t *testing.T) {
+	var out strings.Builder
+	printClusterStatus(&out, []byte(`{"mode":"quorum","pod":"a","leader":"a","isLeader":true,"log":{"synced":true,"compactedThrough":40210}}`))
+	if !strings.Contains(out.String(), "operator-intent log: synced; compacted through seq 40210 (a build from before log compaction can't open it)\n") {
+		t.Fatalf("status:\n%s", out.String())
+	}
+	out.Reset()
+	printClusterStatus(&out, []byte(`{"mode":"quorum","pod":"a","leader":"a","isLeader":true,"log":{"synced":true}}`))
+	if strings.Contains(out.String(), "compacted") {
+		t.Fatalf("never compacted, no word:\n%s", out.String())
+	}
+}
