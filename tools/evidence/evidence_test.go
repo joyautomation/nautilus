@@ -359,7 +359,7 @@ func TestNpmRefs(t *testing.T) {
 	}
 
 	res := newResults()
-	out := "\n> pkg@1 test\n> esbuild ...\n\nDraftKeeper: one person's text\n  ok   keeps a draft per target\n  FAIL drops a draft\n       boom\n"
+	out := "\n> pkg@1 test\n> esbuild ...\n\nDraftKeeper: one person's text\n  ok   keeps a draft per target\n  FAIL drops a draft\n       boom\nOther\n  ok   x\nDraftKeeper: one person's text\n  ok   settled late\n"
 	if err := res.readNpmText("hmi", strings.NewReader(out)); err != nil {
 		t.Fatal(err)
 	}
@@ -370,6 +370,10 @@ func TestNpmRefs(t *testing.T) {
 	r, _ = parseRef("npm hmi DraftKeeper: one person's text / drops a draft")
 	if got := res.lookup(r).Status; got != "fail" {
 		t.Errorf("failing test = %q", got)
+	}
+	r, _ = parseRef("npm hmi DraftKeeper: one person's text / settled late")
+	if got := res.lookup(r).Status; got != "pass" {
+		t.Errorf("a result printed after another describe = %q", got)
 	}
 	r, _ = parseRef("npm hmi DraftKeeper: one person's text / never ran")
 	if got := res.lookup(r).Status; got != "missing" {

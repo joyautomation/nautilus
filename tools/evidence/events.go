@@ -154,7 +154,7 @@ func (r *Results) readDir(dir string) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		if !strings.HasSuffix(p, ".json") && !strings.HasSuffix(p, ".ndjson") && !strings.HasSuffix(p, ".txt") || d.Name() == releaseRunFile {
+		if !strings.HasSuffix(p, ".json") && !strings.HasSuffix(p, ".ndjson") && !(strings.HasSuffix(p, ".txt") && strings.HasPrefix(d.Name(), "npm-")) || d.Name() == releaseRunFile {
 			return nil
 		}
 		f, err := os.Open(p)

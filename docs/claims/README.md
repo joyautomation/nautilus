@@ -86,6 +86,7 @@ claims:
     as their string literals read, joined by ` / `: `npm hmi DraftKeeper:
     one person's unsent text is theirs / keeps a draft per principal and per
     target`.
+    For a nested describe, cite the innermost one.
   - `naut <project root> <test name>` — a test in a project's
     `*_test.yaml`, which CI runs with `naut test -json` on nautilus: every
     project under `examples/`, `testdata/projects/` and
