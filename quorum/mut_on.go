@@ -692,6 +692,7 @@ var Mutations = []string{
 	"leader_catchup_pages_unchecked", // a leader's catch-up takes the chosen copy's later pages without checking it still counts and is unchanged
 	"leader_catchup_term_unchecked",  // a leader's catch-up goes on, and syncs its term, after a newer term was seen between pages
 	"rewrite_failure_kept",           // a replacement whose rewrite failed stays in memory, unlike the file
+	"follower_commit_mid_range",      // a follower commits as far as a request proved, short of the leader's commit, splitting a lapse from what it names (#1466)
 
 	"leaderless_alarm_one_episode",         // node: the no-leader alarm keeps one episode across spells, so a page queued in one spell may leave in the next (#1436)
 	"leaderless_alarm_second_never_defers", // node: the second-named controller raises the no-leader alarm despite the first's fresh word that it pages it: paged twice (#1436)

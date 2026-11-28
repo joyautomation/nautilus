@@ -333,7 +333,10 @@ const (
 	// Lapsed), deciding by this entry alone, never by its own clock, so
 	// they all agree; and Apply sees the KindLapse itself, so a replica
 	// that had already carried out a named entry (its commit was known
-	// only outside the majority the new leader heard) ends it.
+	// only outside the majority the new leader heard) ends it. A lapse
+	// counts only for entries committed in the same range as it, so every
+	// replica moves its commit index only to one some leader committed at
+	// (#1466): a leader commits a lapse and its entries together.
 	KindLapse = "lapse"
 )
 
@@ -3523,9 +3526,21 @@ func (n *Node) Handler() http.Handler {
 			_, err = n.acceptLocked(req.Entries)
 		}
 		if err == nil {
-			// Only as far as this request proved the logs equal.
+			// Only at the leader's own commit index, and only once this
+			// request proved the logs equal that far (#1466). A leader
+			// commits a KindLapse and every entry it names in one range,
+			// so a commit index some leader committed at never falls
+			// between them; a commit cut short at what one chunk of a
+			// resend proved could, and the entries it names were then
+			// carried out here, while the leader and this replica's own
+			// replay record them as lapsed.
 			proved := req.PrevSeq + uint64(len(req.Entries))
-			n.commitTo(min(req.Commit, proved))
+			switch {
+			case proved >= req.Commit:
+				n.commitTo(req.Commit)
+			case mutOplog("follower_commit_mid_range"):
+				n.commitTo(proved)
+			}
 			// A synced leader's log holds every committed entry, and this
 			// request proved ours equal to it up to its commit index:
 			// ours holds them too.

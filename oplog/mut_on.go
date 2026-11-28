@@ -142,6 +142,12 @@ import "os"
 //   - rewrite_failure_kept: a replaced suffix whose rewrite failed stays
 //     in memory while the file holds the old one.
 //
+// #1466:
+//
+//   - follower_commit_mid_range: a follower commits as far as a request
+//     proved, short of the leader's commit index, so a chunk of a resend
+//     can end between a KindLapse and the entries it names.
+//
 // Peer TLS (#710):
 //
 //   - peer_tls_log_plain: the log's calls ignore Options.TLS and go out
