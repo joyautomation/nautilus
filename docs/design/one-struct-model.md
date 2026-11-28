@@ -58,7 +58,8 @@ and read-backs and commands on one instance that an FB can take as a pin.
 
 **What must not break** (from the issue): a member shows the device's value,
 never the program's intent. No command is replayed after a write gate
-reopens. `hw.WriteDecl` is shared with the IT drivers. The `TYPE` stays plain
+reopens (the issue's words; it is true today only for the drivers whose gate
+mode says so, and §2.3 says how a wired member keeps it). `hw.WriteDecl` is shared with the IT drivers. The `TYPE` stays plain
 IEC, so the writers keep writing it.
 
 The 11-17 decision on #717, "derive at load, from a vendored copy", still
@@ -128,7 +129,11 @@ instances:
 - **A member the wiring does not name is memory, retained** (decision 5).
   In the example, `SpeedSP` is one. A name the wiring gives that the type
   does not have is an error with a did-you-mean, so a typo cannot turn a
-  device member into memory without a word. (Q2)
+  device member into memory without a word. Forgetting an entry
+  altogether would, so for a wiring with any source, `naut check` prints
+  one info line listing its implicit memory members. An alarm or a
+  `readback:` on an implicit memory member is an error: a forgotten `Fault`
+  would otherwise alarm on an operator-writable value. (Q2)
 - **Nested paths** (`Cmd.Start`) wire one leaf. Naming a struct member
   (`Cmd: { memory: initial }`) gives every leaf beneath it that kind, and a
   leaf entry below it wins.
@@ -180,10 +185,10 @@ member's kind.
 | | `from:` | `to:` | `memory: retained` | `memory: initial` | `expr:` | `both:` |
 |---|---|---|---|---|---|---|
 | **Like the role** | `input` | `output` | `setpoint` | `state` | (new) | `input` + `output` on one member |
-| **First scan** | its initial value, else zero, quality `notConnected` until delivered (every wiring source is a communications driver) | its initial value, else zero; not handed to the driver until something writes it (as a typed output) | the retained value, else `set:`, else its initial value, else zero | `set:`, else its initial value, else zero | evaluated on the first scan, `notConnected` until its inputs arrive | as `from:` |
+| **First scan** | its initial value, else zero, quality `notConnected` until delivered (every wiring source is a communications driver) | its initial value, else zero, as a seed only; not handed to the driver until something writes it in this leadership (§2.3) | the retained value, else `set:`, else its initial value, else zero | `set:`, else its initial value, else zero | evaluated on the first scan, `notConnected` until its inputs arrive | as `from:` |
 | **Kept across a restart** | never | never: a restart must not replay a command | yes (with a `retain:` section, Q3) | never | never | never |
 | **On a standby** | not read (stale) | not written | not changed there; writes go to the leader | not changed there | not evaluated (stale), since a standby runs no logic | not read, not written |
-| **After a failover** | read on the new leader's first scan | the driver's own takeover rule, as for an output today | reloaded from the retain store or the streamed image | the new leader's own copy, as for a `state` tag | evaluated on the new leader's first scan | as `from:`, and as `to:` |
+| **After a failover** | read on the new leader's first scan | not sent until written in the new leadership (§2.3); then the driver's own rules | reloaded from the retain store or the streamed image | as a `state` tag without `retain: true`: carried in the image on a hot takeover, the new leader's own copy on a cold one | evaluated on the new leader's first scan | delivered first, then sent only once written again (§2.3) |
 
 ### 2.3 What the runtime does
 
@@ -193,10 +198,11 @@ each scan, and the role belongs to the root tag (`runtime/runtime.go`
 manifest hands them in as runtime types, so the Runtime never imports the
 wiring.
 
-1. **Member kinds.** `runtime.TagDef` gets the kind of each member path of
-   an instance (additive, since `runtime` is stable Go API). The write paths
-   (`POST /api/tags`, forces, the OPC UA server, Sparkplug commands, a
-   test's `given:`) check the path against it. A whole-tag write to an
+1. **Member kinds.** `runtime.TagDef` gets the instance's `InstanceDef`
+   (below), with the kind of each member path (additive, since `runtime` is
+   stable Go API). The external write paths (`POST /api/tags`, the OPC UA
+   server, Sparkplug commands) check the path against it. Forces,
+   substitutes and `given:` are not external writes (below). A whole-tag write to an
    instance is a merge that may touch only writable members. One that names
    a `from:` or `expr:` member is refused whole, naming the member.
 2. **Partial delivery.** The wiring adapter delivers each instance's
@@ -216,10 +222,72 @@ the programs, commit, then push the changed `to:`/`both:` leaves.
 **Each driver keeps its own write rules.** A `to:` member is that driver's
 output, so it keeps the driver's first-value rule and gate mode. Modbus,
 OPC UA and EtherNet/IP compare the first value with what the device holds.
-The Sparkplug host takes it as a baseline and sends nothing. For the gate,
-the IT drivers use `dropAndRebaseline` and the Sparkplug host
-`holdAndDeliver`. The driver conformance suite gets a wired-instance row per
-driver, so the adapter cannot quietly change a mode.
+The Sparkplug host takes it as a baseline and sends nothing. The driver
+conformance suite gets a wired-instance row per driver, so the adapter
+cannot quietly change a mode. There are three gate modes
+(`internal/driverconformance`):
+
+- **`dropAndAsk`** (Modbus, EtherNet/IP, OptoMMP, PLCnext): when the gate
+  reopens, and on a takeover, the driver asks for every output and sends
+  each one again with the program's current value. A `to:` member on these
+  drivers is therefore a **level**: it is re-asserted.
+- **`holdAndDeliver`** (the Sparkplug host): the driver keeps the latest
+  command and sends it when the gate reopens.
+- **`dropAndRebaseline`** (SNMP, Redfish, Prometheus): the first push after
+  the gate reopens is a baseline, so a command is never sent twice.
+
+So "no command is replayed" holds only where the driver's mode says so.
+Under `dropAndAsk` a write-to-trigger command goes out again on every
+regain, as the EtherNet/IP guide warns today. For that case a `to:` member
+takes **`event: true`**. The adapter then leaves an event leaf out of the
+full push after a gate reopen, a takeover or a reconnect unless the program
+or an operator has written it again since. That is `dropAndRebaseline`,
+applied per member on any driver. A profile point may declare `event: true`
+too, and its generated `Cmd` member inherits it. (Q22)
+
+**A `to:` leaf is written per leadership.** After a restart or a takeover, a
+`to:` leaf that nothing has written in this leadership is not handed to the
+driver. That holds whatever the leaf's value is and whether or not a
+streamed image carried it over. The program usually writes its commands on
+its first scan, so they go out as they do today. An operator's
+`Cmd.SpeedRef` from before the takeover is not re-sent from a copy that may
+be stale. The device still holds what it was last given. Today the same
+rule exists per tag ("except a typed one with no `init:` that nothing has
+written yet"), and this makes it per leaf. `to:` leaves are never saved to
+the retain store, and a test proves one never comes back from a retain
+file.
+
+**A `to:` leaf's initial value is a seed, never a command.** This is
+unlike an output tag with an `init:`, which goes to the driver on the first
+scan. A `TYPE` initial value on a `to:` member only sets what the program
+reads before it writes the member.
+
+**Adopting the read-back.** A `to:` leaf that is unwritten in this
+leadership and has a `readback:` of the same type takes the read-back's
+value when it is first delivered. This is the Sparkplug host's "a member
+output adopts the site's live value" rule, generalized. The adopted value
+is not a command, but it means "commanded, not reached" (§10) does not alarm
+on every restart. (Q23)
+
+**`both:` leaves are never pushed before they are delivered** in this
+leadership. The first delivery is the baseline, and a full push after a gate
+reopen or a takeover sends a `both:` leaf only if it was written in this
+leadership after that delivery. A stale copy therefore never overwrites what
+another client of the peer wrote meanwhile.
+
+**Forces, substitutes and test inputs.** A force, a substitute and a
+test's `given:` may set `from:` and `both:` members. That is what those
+features are for, and they are not the API writes the kinds refuse. A force
+may also hold an `expr:` member, which the stage then skips while it is
+forced, so an alarm can be tried. The order in a scan is: deliver,
+substitute, force, evaluate `expr:`, run the programs.
+
+**What the consumers read.** The manifest hands the runtime one
+`runtime.InstanceDef` per instance. It holds the wiring's name, the
+Template version, the params with this instance's values, and for each
+member path its kind, `readback:`, `event:`, unit and desc. The Sparkplug
+edge, the server (`/api/meta`) and the OPC UA server read it through the
+runtime they already import, and none of them imports `wiring`.
 
 **Quality is per member.** Each leaf's quality is its binding's quality.
 An `expr:` member takes the worst of its inputs. `memory:` and `to:` are
@@ -234,18 +302,38 @@ quality without a kit change. (Q6)
 
 The headline use is an FB that takes the instance as a pin.
 
+```iecst
+FUNCTION_BLOCK PumpCtl
+  VAR_IN_OUT P : Pump; END_VAR
+  VAR_INPUT Demand : BOOL; END_VAR
+  P.Cmd.Start := Demand AND P.Healthy AND NOT P.Running;
+  P.Cmd.Stop  := NOT Demand AND P.Running;
+  IF P.Running THEN
+    P.RunHours := P.RunHours + 0.1 / 3600.0;
+  END_IF;
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+  VAR Ctl1, Ctl2 : PumpCtl; END_VAR
+  Ctl1(P := P101, Demand := Level > StartLevel);
+  Ctl2(P := P102, Demand := Level > StartLevel + 10.0);
+END_PROGRAM
+```
+
 - **`VAR_INPUT`** copies the instance in. Nothing is written back.
-- **`VAR_IN_OUT`**: the tag model counts every member as assigned on every
-  call, because the call copies the pin back. For an instance:
-  - `from:` and `expr:` leaves are **dropped from the write mask** at
-    commit. They are never the program's, and the check (below) refuses a
-    real assignment, so copy-back cannot write a stale value over a
-    delivery.
-  - `to:` and `both:` leaves copy back the value they had unless the FB
-    assigned them. An equal value is not a change, so no command goes out.
-  - `memory:` leaves follow today's rule: copy-back wins over an operator
-    write that landed during that scan. This is documented, and Q7 asks
-    whether to make it exact.
+- **`VAR_IN_OUT`**: today the tag model counts every member as assigned on
+  every call, because the call copies the pin back. For an instance that
+  rule would be unsafe. Copy-back would count as the first write of every
+  `to:` leaf, so on scan one Modbus or EtherNet/IP would decide a zero
+  `Cmd.*` against the device and write it. It would also lose an
+  operator's mid-scan write to a `to:`, `both:` or `memory:` leaf. So for a
+  wired instance **the mask is exact**: copy-back commits only the leaves
+  the block actually assigned on that call. That is a precise write set
+  through the in-out pin, which the checker's write analysis already
+  computes per block. In the example, `PumpCtl` commits `Cmd.Start`,
+  `Cmd.Stop` and, while running, `RunHours`, and nothing else. The
+  existing rule stays for plain structs (Q7). `from:` and `expr:` leaves
+  are never in the mask, since the check (below) refuses a real assignment.
 - **The check works at the call site.** The checker already follows writes
   through the blocks and functions a program calls (the "a program's own
   earlier write counts" analysis). A call that passes an instance to a
@@ -286,24 +374,39 @@ wirings:
   two `to:` members on two sources changed in one scan are two independent
   writes, in no guaranteed order. A sequence that needs order writes one,
   waits for its read-back, then writes the next.
-- **Companion tags.** An instance with one source gets `<Instance>__Online`
-  (and `__Outages` for Modbus), as a `devices:` row does. With several
-  sources, each source gets `<Instance>_<source>__Online`, and
-  `<Instance>__Online` is true only while every source answers. (Q8)
-- **Alarms are suppressed per source.** A member's alarm carries the
-  `enable:` of its own source's `__Online`, and each source raises its own
-  comms-loss alarm (§5).
-- **Sparkplug.** An instance whose `from:`/`both:` members all come from one
-  connection rides that connection's device, as a `devices:` row's struct
-  tag does. A mixed instance publishes at node level. (Q9)
+- **Companion tags are per connection, not per instance.** A source that
+  makes its own connection for an instance (its own `endpoint`) gets
+  `<Instance>__Online` (and `__Outages` for Modbus) when it is the
+  instance's only such source, as a `devices:` row does today. With several,
+  each gets `<Instance>_<source>__Online`. A source that shares one
+  connection among all instances (no `endpoint`, as `level:` above) uses
+  that connection's own companion (`plant_ua__Online`), so one server
+  outage is one companion going false, not one per tank.
+  `<Instance>__Online` is the AND of every connection the instance reads.
+  (Q8)
+- **Alarms are suppressed per connection.** A member's alarm carries the
+  `enable:` of its own connection's `__Online`. Each connection raises one
+  comms-loss alarm (§5), so a shared server that goes down raises one alarm,
+  not N.
+- **Sparkplug.** Every wired instance publishes at **node level**. Riding a
+  connection's Sparkplug device would make the instance's memory and `Cmd`
+  members die at DDEATH, reachable only by DCMD, and adding a second source
+  would move the metric. The connection's health still reaches the host:
+  its declared `__Online` companion rides its device as now. This moves
+  today's `devices:` struct tags from their device to node level, and is
+  part of the §12.1 switch and its report. (Q9)
 
 ## 4. Per-instance params and overrides
 
 **Params.** A wiring declares `params:` with defaults. `null` means each
 instance must give it. A value is substituted as `{name}` into source keys
-and member address keys. This is `devprofile`'s existing substitution
-(`Profile.Substitute`), so `{n}`, `{area}` and `{endpoint}` already work the
-same way in profiles. Two params come built in: `{name}` (the instance's
+and member address keys. `devprofile`'s `{name}` syntax is reused
+(`Profile.Substitute`), but today it fills only OPC UA node ids and IO-Link
+ids, and a row's `endpoint` is a key of its own. Substituting into source
+keys (`endpoint`, `unit-id`) and numeric address keys (`address`) is new.
+The text is substituted first and then parsed as the key's own type
+(`address: "{reg}"` with `reg: 40` is the integer 40). Two params come
+built in: `{name}` (the instance's
 name) and `{desc}`. There is no arithmetic in a substitution (§17). A
 substituted address that does not parse for its driver is an error naming
 the instance, the member and the value.
@@ -344,13 +447,15 @@ alarms do today (device-library.md §3.4), so these rules carry over:
 
 **Suppression and comms loss**, generalized from the device library:
 
-- each rule carries `enable:` set to its member's source's `__Online`.
-  An `expr:` member's rule carries the AND of the sources it reads.
+- each rule carries `enable:` set to its member's connection's `__Online`.
+  An `expr:` member's rule carries the AND of the connections it reads.
   A `memory:` member's rule has none;
-- each source of each instance raises a **comms-loss alarm**
-  (`<Instance>__Offline`, or `<Instance>_<source>__Offline` with several
-  sources). It fails active and has the same defaults (high, class `comms`,
-  5 s on-delay), tuned or turned off by the instance's `offline-alarm:`.
+- each **connection** raises one **comms-loss alarm**. A per-instance
+  connection's is `<Instance>__Offline` (or `<Instance>_<source>__Offline`
+  with several), tuned or turned off by the instance's `offline-alarm:`.
+  A shared connection's is named after its driver (`plant_ua__Offline`) and
+  tuned in the wiring's `sources:` entry. It fails active and has the same
+  defaults (high, class `comms`, 5 s on-delay).
 
 `{desc}`, `{name}` and the params substitute into an alarm's `name` and
 `notes`.
@@ -411,9 +516,12 @@ member's initial value in the `TYPE`, then the zero of its type.
 
 **`memory: retained`** (the default) keeps the value in the retain store,
 beside setpoints and `retain: true` tags. Only the retained memory members
-of an instance are saved. Its `from:`, `to:`, `expr:` and initial members
-are not. The retain store already brings a struct back member by member onto
-the current tag, so this needs no new format.
+of an instance are saved. Its `from:`, `to:`, `both:`, `expr:` and initial
+members are not. The retain store already brings a struct back member by
+member onto the current tag, so loading needs no new format. Saving does
+change: today the store saves whole struct tags (`runtime/retain.go`), so
+it gains a filter by member kind. A test proves that a `to:` value written
+into a retain file by hand is still not applied.
 
 **What a redeploy does** (decision 5 asks for this):
 
@@ -436,8 +544,11 @@ the current tag, so this needs no new format.
   starts at its initial value, and is logged and named in the retain
   diagnostics. (Q5)
 
-**`memory: initial`** starts from its initial value on every start and on
-every cold takeover, as a `state` tag without `retain: true` does today.
+**`memory: initial`** behaves exactly as a `state` tag without
+`retain: true` does today. It starts from its initial value on every
+restart. On a hot takeover the streamed image carries it (the image holds
+every tag the field does not provide). On a cold takeover the new leader
+keeps its own copy, which is its initial value if it has never led.
 
 **A redundant pair** replicates retained memory members to the standby the
 way it replicates any retained value. A quorum pair carries them in the
@@ -498,7 +609,7 @@ Its wiring says `fill: { member: Plc, from: plc, tag: "{tag}" }`.
 Extend is preferred because the imported type's members are the paths
 people already know from the peer, and a re-import does not move them.
 
-**`STRUCT EXTENDS` is a language change of its own** (slice 8). Nothing in
+**`STRUCT EXTENDS` is a language change of its own** (slice 10). Nothing in
 `lang/` parses `EXTENDS` today, not even for function blocks. IEC
 61131-3 defines `EXTENDS` only for function blocks and classes. The struct
 form is spelled the way CODESYS spells it, so it reads as familiar, but it
@@ -533,7 +644,11 @@ next poll can deliver the peer's old value before the write lands, and the
 store flickers back. The adapter holds a `both:` member at the written
 value until the driver answers that write (EtherNet/IP) or the peer's next
 data carries the member (Sparkplug), up to a bound of a few poll periods.
-After that, delivery is the truth again. (Q13)
+After that, delivery is the truth again. (Q13) On a gate reopen or a
+takeover a `both:` leaf follows §2.3: it is not pushed until it has been
+delivered in this leadership, and it is pushed after that only if it was
+written again. A full push never sends the peer a copy it may have changed
+since.
 
 Two writers on one `both:` member (the program and another client of the
 peer) fight, as two writers to one Logix tag do. The tag-model advice holds:
@@ -584,7 +699,14 @@ device did with it: `Cmd.SpeedRef: { to: drive, ..., readback: Speed }`.
   uses it to put a setpoint beside its reading.
 - **"Commanded, not reached"** is an `expr:` plus an alarm:
   `SpeedOff: { expr: "ABS(Cmd.SpeedRef - Speed) > 2.0" }`, with an alarm
-  that has an on-delay. A shorthand that generates the pair is Q16.
+  that has an on-delay. After a restart, `Cmd.SpeedRef` adopts `Speed`'s
+  value at the first delivery (§2.3, Q23), so the alarm does not fire
+  merely because the controller restarted while the drive kept running.
+  Where the types differ and nothing is adopted, the built-in function
+  `WRITTEN(Cmd.SpeedRef)` (in a program, `WRITTEN(P101.Cmd.SpeedRef)`) says
+  whether the leaf has been written in this leadership, and the expression
+  guards on it. It only reads, so §6 allows it. A shorthand that
+  generates the pair is Q16.
 
 ## 11. Sparkplug B Templates, both ways
 
@@ -602,15 +724,29 @@ host imports them as `LINT` and `LREAL`.
   is a nested Template (as now). `EXTENDS` is flattened into the
   definition, since Sparkplug has no inheritance and `lang/ir` has already
   flattened it.
+- **One definition per type, whatever its wirings.** A type may have
+  several wirings (§1), but a host sees one Template per type. So the
+  version and parameters belong to the type: they are computed over all of
+  its wirings.
 - **Version.** The definition's `version` is a short hash of what defines
-  it: the member names, types and order, and the param names. A change a
-  host must notice changes it, and nobody has to remember to bump it. A
-  wiring may set `version:` explicitly, which an imported type does in
-  order to keep the version its source published. (Q10)
-- **Parameters.** The wiring's `params:` become the definition's Template
-  parameters, with their defaults. Each instance carries its own values, the
-  way SCADA UDT parameters map onto them. This needs the parameters field in
-  the payload codec (`sparkplug/spb` and `payload.go`).
+  it: the member names, types, order and kinds (one per type, §2.4) and the
+  published param names. A change a host must notice changes it, and nobody
+  has to remember to bump it. A wiring may set `version:` explicitly, which
+  an imported type does in order to keep the version its source published.
+  Two wirings of one type that set different versions are a check error.
+  (Q10)
+- **Parameters.** The published params of all the type's wirings (their
+  union) become the definition's Template parameters. A default is given
+  where every wiring that declares the param agrees on it. Each instance
+  carries its own values, the way SCADA UDT parameters map onto them. A
+  param marked `publish: false` is left out, and a param that feeds a
+  source's `endpoint` is left out unless it is marked `publish: true`, since
+  addresses do not belong on a broker by default. `set:` and `wire:` are
+  not published: `set:` values are already visible as the memory members'
+  values, and `wire:` is addressing. The 11-28 comment says "instance
+  params (`prefix`, overrides)", so leaving overrides out is Q24. This
+  needs the parameters field in the payload codec (`sparkplug/spb` and
+  `payload.go`).
 - **Member properties.** Each definition member carries a small property
   set:
   - `kind` (`from`, `to`, `memory`, `expr`, `both`);
@@ -624,11 +760,19 @@ host imports them as `LINT` and `LREAL`.
   `memory:` members, and only where `sparkplug.writable` opens them and
   `auth:` grants it. A command to a `from:` or `expr:` member is refused,
   logged once per tag and counted in `commandsRefused`, as a command to an
-  input is now. The no-replay rules hold, because the command writes the
-  store and the push follows the driver's own gate mode (§2.3).
-- **Device or node.** See §3: an instance with one connection rides that
-  connection's device, so its `Cmd` members make a DCMD useful for the
-  first time.
+  input is now. A command writes the store like any other write, so what
+  reaches the device follows §2.3: the driver's gate mode, `event:`, and
+  the per-leadership rule. A Sparkplug command is never replayed by the
+  edge itself.
+- **Members Sparkplug cannot carry.** Sparkplug has no array of Templates
+  and no multi-dimensional array. The edge leaves such members out of the
+  definition and every instance today (`sparkplug/templates.go`), and it
+  keeps doing so for wired types: they are logged once, and `naut check`
+  warns on a wired type with such a member when the project has a
+  `sparkplug:` section. The round-trip test (§11.3) covers only the members
+  Sparkplug can carry.
+- **Node level.** Every wired instance publishes at node level (§3), so its
+  commands are NCMDs.
 - **`flatten-udts: true`** publishes members as metrics, as now
   (`P101/Cmd/Start`). There are no definitions in that mode, so there are
   no parameters or version either, and the documentation says so.
@@ -720,17 +864,25 @@ therefore an explicit switch:
    - ST, LD and FBD sources;
    - test manifests (`given:`/`expect:`);
    - HMI and mimic `bind`s;
-   - alarm and plant references.
+   - alarm and plant references;
+   - `opcua.writable` and `sparkplug.writable` patterns;
+   - historian tag lists and `auth:` area lists;
+   - parameter set files in the project.
 
-   It prints what it changed and refuses to run on a dirty git tree.
-   `examples/device-library` migrates in the same slice.
+   It prints what it changed and refuses to run on a dirty git tree. The
+   report also lists what it cannot rewrite because it lives outside the
+   project: every Sparkplug metric that disappears (`PUMP_ControlWord`) or
+   moves (a device's struct tag moves from its device to node level, §3),
+   and every OPC UA node that changes. Those are the hosts and clients to
+   update. `examples/device-library` migrates in the same slice.
 3. **The next minor release:** the default flips. A project without the key
    gets members, and `device-commands: tags` keeps the old shape with a
    deprecation warning.
 4. **The minor after that:** `tags` is removed.
 
-Sparkplug hosts see the type change as a new definition version (§11.1).
-The host-side member scalar tags (`W6_Pump1_Speed`) follow the same three
+A Sparkplug host sees more than a new definition version (§11.1): metrics
+disappear and move. That is why the switch is opt-in and reported. The
+host-side member scalar tags (`W6_Pump1_Speed`) follow the same three
 steps, with `naut sparkplug import` regenerating them. (Q14)
 
 ## 13. The include file for rows
@@ -762,7 +914,8 @@ wiring-files: [wiring/pumps.yaml, wiring/tanks.yaml]
   `expr:` member, and names it as our gap: "instance P101 is wired (source
   drive, Modbus); the Logix writer does not carry wiring yet (#NNNN), so
   nothing on the controller would fill it". It refuses `devices:` rows as
-  now. A tracking issue is filed with slice 13.
+  now. This refusal ships with the first instances (slice 4), and the
+  tracking issue is filed with slice 16.
 - **A memory-only instance** (every member memory) is just a tag with
   initial values. It can be written today as a controller tag of the type,
   with its `set:` as the initial value (Q15).
@@ -787,6 +940,9 @@ wiring-files: [wiring/pumps.yaml, wiring/tanks.yaml]
 | an `expr:` calling a function with a side effect | the function, its line, the rule (§6); "make it a program or a block" |
 | an `expr:` cycle | every member in the cycle |
 | `readback:` naming a member that is not `from:`/`both:`/`expr:` | the member and its kind |
+| an alarm or `readback:` on a member the wiring does not name (implicit memory) | the member; "wire it (from:, expr:), or write memory: if it is meant to be memory" |
+| two wirings of one type setting different `version:` | both wirings and both versions |
+| `event:` on a member that is not `to:` | the member and its kind |
 | a generator needing `Cmd` where the user has a member of that name | the member; "rename it, or the generator cannot add commands" |
 | `STRUCT EXTENDS` a non-struct, a repeated member, a cycle | the base, the member, both declarations |
 | retained memory with no `retain:` section (a warning) | the instances; "add `retain: {}`" |
@@ -816,7 +972,9 @@ The proposed row and rules go into `docs/design/context-map.md` and
 - `devbind` may import both.
 
 **The Runtime** gets member kinds, partial delivery and the expression
-stage as its own types (§2.3). It imports neither package.
+stage as its own types (§2.3). `runtime.InstanceDef` carries the kinds,
+read-backs, params and version to the Sparkplug edge, the server and the
+OPC UA server. The Runtime imports neither package.
 
 **Glossary rows** (§4 of the map), since these words already mean other
 things:
@@ -859,54 +1017,65 @@ things:
 
 Each slice is small and has its own tests, each mutation-checked (break the
 code, see the test fail, restore it). Each updates the guides it touches.
+"Needs" lists the slices that must be merged first.
 
 1. **This brief** (docs only).
 2. **`wiring` format.** Decode (strict), validate (kinds, params, unknown
-   members, one kind per member per type, `both:` refusal), the JSON schema
-   and `wiring-files:`, plus the context-map row and its `internal/contextmap`
-   rules. There is no behaviour yet. Tests: decode and refusal tables.
-3. **Runtime members.** Member kinds in `TagDef`, partial delivery through
-   the write mask, member writability in every write path (API, forces,
-   OPC UA server, Sparkplug commands, `given:`), per-member quality with the
-   root roll-up, and the `VAR_IN_OUT` mask rule. Tests:
+   members, one kind per member per type, `both:` refusal, substitution
+   typing), the JSON schema and `wiring-files:`, plus the context-map row
+   and its `internal/contextmap` rules. There is no behaviour yet. Tests:
+   decode and refusal tables. *Needs 1.*
+3. **Runtime members.** `InstanceDef` in `TagDef`, partial delivery through
+   the write mask, kind checks on the external write paths (API, OPC UA
+   server, Sparkplug commands), forces, substitutes and `given:` on
+   `from:` members, per-member quality with the root roll-up, the exact
+   `VAR_IN_OUT` mask for instances, and the per-leadership `to:` rule. The
+   `event:` and `both:` push rules are included. Tests:
    - a delivery leaves memory alone;
    - a POST to a `from:` member is a `400`;
-   - copy-back never writes a `from:` member;
-   - quality rolls up.
-4. **Modbus and memory, end to end.** `wirings:` and `instances:` in the
-   manifest, `wirebind` for Modbus, the call-site write check, retained and
-   initial memory, params by member path, the LSP, and a small example.
-   Tests include the redundancy replication test (§7).
-5. **Expressions.** Compile, the purity check, the stage and its order,
-   cycles, quality, and faults. Tests for each rule in §6, plus a
-   no-allocation benchmark guard.
-6. **OPC UA client, mixed sources, alarms.** Companions per source,
-   `__Offline` per source, wiring alarms and instance alarm tuning, and
-   `readback:` in `/api/meta`.
-7. **Device profiles produce wiring.** One adapter, `render` prints wiring,
-   `device-commands:`, `naut devices migrate`, faceplates on `Cmd`, the
-   example migrated. Tests: a profile project's struct, alarms and writes
-   are the same before and after the switch, apart from the command names.
-8. **`STRUCT EXTENDS`** in Languages: the parser, the checker, flattening
-   in `lang/ir`, the LSP, `stgen`, conformance cases, and the writers
-   flattening it.
-9. **EtherNet/IP fill.** `fill:`, extend and wrap, `both:` with the
-   in-flight hold.
-10. **Sparkplug.**
-    - The edge: version, parameters (codec), member properties, the
-      command refusal by kind, device placement.
-    - The host: fill, `both:`, parameters.
-    - The round-trip acceptance test.
-11. **IT drivers.** `Cmd` members through `WriteDecl`, and the generated
-    `hw` extensions.
-12. **IO-Link port devices** produce wiring.
-13. **Logix and Siemens:** the refusal wording, the tracking issue, and
-    memory-only instances if Q15 says yes.
+   - copy-back commits only what the block assigned;
+   - an unwritten `to:` leaf is not pushed at start or after a takeover,
+     and an `event:` leaf is not re-sent on a gate reopen;
+   - quality rolls up. *Needs 2.*
+4. **Modbus instances, end to end** (4a). `wirings:` and `instances:` in the
+   manifest, `wirebind` for Modbus, companions and the read-back adoption,
+   and the Logix/Siemens refusal from the first day instances exist (the
+   wording of §14). *Needs 3.*
+5. **Memory** (4b). Retained and initial memory, the retain-store filter,
+   `set:`, params by member path, and the redundancy replication test (§7).
+   *Needs 4.*
+6. **The call-site write check and the FB example** (4c). The checker's
+   refusals for ST, LD and FBD, the LSP diagnostics and hover, and §2.4's
+   `PumpCtl` as an example with a sequence test. *Needs 4.*
+7. **Expressions.** Compile, the purity check, the stage and its order,
+   cycles, quality, faults, `WRITTEN()`, and forcing an `expr:`. Tests for
+   each rule in §6, plus a no-allocation benchmark guard. *Needs 4.*
+8. **OPC UA client, mixed sources, alarms.** Shared and per-instance
+   connections, companions and `__Offline` per connection, wiring alarms
+   and instance alarm tuning, and `readback:` in `/api/meta`. *Needs 4.*
+9. **Device profiles produce wiring.** One adapter, `render` prints wiring,
+   `device-commands:`, `naut devices migrate` and its report, faceplates on
+   `Cmd`, and the example migrated. Tests: a profile project's struct,
+   alarms and writes are the same before and after the switch, apart from
+   the command names and the Sparkplug placement. *Needs 5, 7, 8.*
+10. **`STRUCT EXTENDS`** in Languages: the parser, the checker, flattening
+    in `lang/ir`, the LSP, `stgen`, conformance cases, and the writers
+    flattening it. *Needs 2 only.*
+11. **EtherNet/IP fill.** `fill:`, wrap, extend, and `both:` with the
+    in-flight hold. *Needs 4; extend needs 10.*
+12. **Sparkplug edge.** Version, parameters (codec), member properties, the
+    command refusal by kind, node-level placement. *Needs 5, 7.*
+13. **Sparkplug host and the round trip.** Fill, `both:`, parameters, and
+    the round-trip acceptance test. *Needs 10, 12.*
+14. **IT drivers.** `Cmd` members through `WriteDecl`, and the generated
+    `hw` extensions. *Needs 10.*
+15. **IO-Link port devices** produce wiring. *Needs 9.*
+16. **Logix and Siemens:** memory-only instances, if Q15 says yes, and the
+    tracking issue for the wiring gap. *Needs 5.*
 
-Slices 2 to 4 are the spine, and the rest can go in parallel after slice 4
-(8 needs nothing but slice 2). Slice 7 is the reason for the order: the
-longer `devices:` command tags are in released builds, the more projects a
-migration touches.
+Slices 2 to 4 are the spine. After 4, slices 5 to 8 and 10 can run in
+parallel. Slice 9 is the reason for the order: the longer `devices:`
+command tags are in released builds, the more projects a migration touches.
 
 ## 19. Open questions
 
@@ -916,10 +1085,12 @@ Each has a recommendation. A question that is James's call is marked.
    key?** Recommend their own `instances:` list. A tags row would grow
    params, set, wire and alarm keys, and the tag-file row is a shared kernel
    every importer renders. Changing it costs every context.
-2. **A member the wiring does not name is retained memory, with no word
-   said?** Recommend yes. The unknown-member error catches typos, `render`
-   lists every member's kind, and it is what makes user members on an
-   imported type need no wiring at all.
+2. **A member the wiring does not name is retained memory?** Recommend yes,
+   with the safeguards in §1: an info line listing implicit memory members
+   when the wiring has sources, and an error for an alarm or `readback:` on
+   one. It is what makes user members on an imported type need no wiring at
+   all. The alternative, requiring `memory:` on every member once a wiring
+   has sources, is stricter and wordier.
 3. **Retained memory without a `retain:` section:** warn (recommended) or
    add a `retain:` section implicitly? An implicit section would also start
    keeping every setpoint, which changes a project that never asked.
@@ -936,17 +1107,19 @@ Each has a recommendation. A question that is James's call is marked.
    already reads them. Today one bad register greys a device's every member
    on screen, and after this only the member is grey while the root still
    shows the device as degraded.
-7. **`VAR_IN_OUT` copy-back over an operator's mid-scan write to a memory
-   member:** keep today's documented rule in v1 (recommended), or make the
-   mask exact, so that copy-back commits only what the block assigned? The
-   exact form is a runtime change to every in-out call, so do it only if
-   someone hits it.
-8. **Companion names with several sources:** `<Instance>_<source>__Online`
-   per source, plus `<Instance>__Online` as their AND (recommended).
-9. **Sparkplug placement of a mixed instance:** node level (recommended),
-   while one with a single connection rides that device. The alternative,
-   splitting one instance across devices, breaks "one type is one
-   Template".
+7. **The exact `VAR_IN_OUT` mask for plain structs too?** It is required
+   for instances (§2.4). Recommend leaving plain structs on today's
+   documented rule until someone hits it, since changing them touches every
+   in-out call in every project.
+8. **Companion names:** one per connection, `<Instance>__Online` for a
+   per-instance connection (with `_<source>` when there are several), the
+   driver's own companion for a shared one, and `<Instance>__Online` as the
+   AND of everything the instance reads (recommended, §3).
+9. **Sparkplug placement:** every wired instance at node level
+   (recommended, §3), or ride the device when there is one connection? Node
+   level keeps memory and `Cmd` members alive across a DDEATH and keeps a
+   metric from moving when a source is added. The cost is that today's
+   `devices:` struct tags move, which the §12.1 switch reports.
 10. **Template version:** a content hash by default, with an explicit
     `version:` in the wiring for imported types (recommended), or always
     explicit? Explicit-only relies on people remembering to bump it, which
@@ -986,3 +1159,18 @@ Each has a recommendation. A question that is James's call is marked.
 21. **The keyword `fill:`** for a driver filling a type whole: keep it, or
     `from:` at the wiring level? Recommend `fill:`, so a reader never
     confuses "the whole type" with "this member".
+22. **`event: true` for write-to-trigger commands** on `dropAndAsk`
+    drivers (§2.3): recommend it, defaulting to a level (re-asserted), which
+    is what those drivers do today. The alternatives are making every `Cmd`
+    member an event (which would lose re-assertion of a drive control word
+    after a takeover) or only documenting the hazard. The profile format
+    gains `event:` per point, so a reset or a pulse command says so once.
+23. **A `to:` leaf adopting its read-back** after a restart or takeover
+    (§2.3): yes, when the types match (recommended). It is the Sparkplug
+    host's existing rule. Without it, a "commanded, not reached" alarm fires
+    on every restart while the device keeps running.
+24. **Template parameters for overrides:** the 11-28 comment says
+    "instance params (`prefix`, overrides)". Recommend publishing params
+    only. `set:` values already appear as members, `wire:` is addressing,
+    and params feeding an `endpoint` are left out unless marked
+    `publish: true` (§11.1). *James's call*, since it narrows his comment.
