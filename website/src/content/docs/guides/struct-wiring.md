@@ -163,13 +163,16 @@ members:
   reads. In `naut test` without virtual devices the test is the device: an
   instance's device members count as arrived from the first scan, holding
   what `given:` sets (their zero until then).
-- **A fault** (an index out of range, a division by zero) keeps its last
+- **A fault** (an index out of range, a division by zero, a REAL result
+  that is not a number or infinite) keeps its last
   value with quality `bad`. The log says when the fault starts and when it
   clears, the scan diagnostics (`scan.exprs.faulting` in `/api/state`) list
   the members faulting now,
   and the programs keep running.
-- **A force** on an expression holds it: the expression is not computed,
-  and everything that reads it sees the force, so an alarm can be tried.
+- **A force** on an expression, or on a part of one of a struct type, holds
+  it: the expression is not computed, and everything that reads it sees
+  the force, so an alarm can be tried. When the force goes, so does the
+  value it left: until its inputs arrive the expression is FALSE again.
 - **An online edit** that changes a `FUNCTION` an expression calls compiles
   the expressions with it, and is refused whole if one no longer compiles,
   naming the member.

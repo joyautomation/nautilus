@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -22,7 +23,8 @@ import (
 // tasks read the values the last main scan committed.
 //
 //   - One unit per member, each its own ir.Program over one shared frame, so
-//     a fault in one (an index out of range, a division by zero) stops only
+//     a fault in one (an index out of range, a division by zero, a REAL
+//     result that is NaN or infinite) stops only
 //     that one: it keeps its last value, its quality is Bad, the others and
 //     the programs run on. A fault is logged when it starts and when it
 //     clears, never once per scan.
@@ -41,6 +43,9 @@ import (
 //     a program: nothing is marked written for the push rules and the output
 //     generation does not move, so a changing expression sends nothing.
 //   - Quality is computed when asked (exprQuality), never in the scan.
+//   - A scalar member evaluates with no allocation, faulting or not. A
+//     member of a struct or array type, or an expression passing one to a
+//     FUNCTION, allocates in the VM, which copies aggregates by value.
 //
 // The units compile from the main program's own source (its library
 // prelude: the FUNCTIONs and TYPEs), so every install of the main program
@@ -112,6 +117,7 @@ type exprStage struct {
 	rootUnits [][]int
 	unitRoot  []int // each unit's root read slot
 	tagReads  [][]int
+	zeros     []ir.Value // each member's zero: what it holds while not computed
 }
 
 // exprHost is what the units' VM reads: the scan's snapshot of every tag the
@@ -147,7 +153,43 @@ func (h *exprHost) DivZero() {
 	h.store.DivZero()
 }
 
-var errExprDivZero = errors.New("division by zero")
+var (
+	errExprDivZero    = errors.New("division by zero")
+	errExprNotANumber = errors.New("the result is not a number (NaN or infinite)")
+)
+
+// sameBits is sameValue with a REAL compared by its bits, so a result that
+// is the same NaN every scan is no change.
+func sameBits(a, b *ir.Value) bool {
+	if a.Kind != b.Kind {
+		return false
+	}
+	switch a.Kind {
+	case ir.TypeReal:
+		return math.Float64bits(a.F) == math.Float64bits(b.F)
+	case ir.TypeStruct:
+		if len(a.Fld) != len(b.Fld) {
+			return false
+		}
+		for i := range a.Fld {
+			if !sameBits(&a.Fld[i], &b.Fld[i]) {
+				return false
+			}
+		}
+		return true
+	case ir.TypeArray:
+		if len(a.Arr) != len(b.Arr) {
+			return false
+		}
+		for i := range a.Arr {
+			if !sameBits(&a.Arr[i], &b.Arr[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return sameValue(a, b)
+}
 
 // exprBeforeCommit, set only by a test, runs between the units and the
 // commit: what another writer does while the stage computes.
@@ -323,7 +365,7 @@ func (ex *exprSet) compile(src string, opts st.LowerOpts, t *Tags) (*exprStage, 
 	}
 	shared := *low
 	shared.Slots = append([]ir.VarSlot(nil), low.Slots...)
-	s := &exprStage{units: make([]*ir.Program, len(ex.units)), slots: make([]int, len(ex.units)), unitRoot: make([]int, len(ex.units)), tagReads: make([][]int, len(ex.units))}
+	s := &exprStage{units: make([]*ir.Program, len(ex.units)), slots: make([]int, len(ex.units)), unitRoot: make([]int, len(ex.units)), tagReads: make([][]int, len(ex.units)), zeros: make([]ir.Value, len(ex.units))}
 	assigns := make([]*ir.Assign, len(ex.units))
 	for i, stmt := range low.Body {
 		a, ok := stmt.(*ir.Assign)
@@ -331,6 +373,7 @@ func (ex *exprSet) compile(src string, opts st.LowerOpts, t *Tags) (*exprStage, 
 			return nil, ex.unitErr(i, "uses EN/ENO execution control, which an expression does not take: call the function without EN")
 		}
 		assigns[i] = a
+		s.zeros[i] = ir.Zero(a.Target.ExprType())
 		s.slots[i] = len(shared.Slots)
 		shared.Slots = append(shared.Slots, ir.VarSlot{Name: fmt.Sprintf("__expr%d", i), Type: a.Target.ExprType(), Kind: ir.VarLocal})
 	}
@@ -442,6 +485,9 @@ func (ex *exprSet) run(t *Tags, now time.Time, events []exprEvent) []exprEvent {
 			if !u.seen.Load() {
 				u.seen.Store(true)
 			}
+			if u.faulted.Load() {
+				events = ex.faultClear(i, now, events) // not evaluated: no fault of its own
+			}
 			continue
 		}
 		ready := u.gateOK
@@ -452,33 +498,46 @@ func (ex *exprSet) run(t *Tags, now time.Time, events []exprEvent) []exprEvent {
 			ready = ready && ex.units[d].ready
 		}
 		u.ready = ready
+		var v ir.Value
 		if !ready {
-			continue
-		}
-		h.divZero = false
-		err := ir.Run(s.units[i], s.frame, h)
-		if err == nil && h.divZero {
-			err = errExprDivZero
-		}
-		if err != nil {
-			if !u.faulted.Load() {
-				events = ex.faultStart(i, err.Error(), now, events)
-			} else {
-				ex.mu.Lock()
-				u.fault.scans++
-				ex.mu.Unlock()
+			// Not computed: it holds its zero (FALSE), whatever a force, a
+			// substitute, an initial value or an earlier reading left there.
+			if u.faulted.Load() {
+				events = ex.faultClear(i, now, events)
 			}
-			continue
+			if u.seen.Load() {
+				u.seen.Store(false)
+			}
+			v = s.zeros[i]
+		} else {
+			h.divZero = false
+			err := ir.Run(s.units[i], s.frame, h)
+			if err == nil && h.divZero {
+				err = errExprDivZero
+			}
+			v = s.frame.Slots[s.slots[i]]
+			if err == nil && v.Kind == ir.TypeReal && (math.IsNaN(v.F) || math.IsInf(v.F, 0)) {
+				err = errExprNotANumber
+			}
+			if err != nil {
+				if !u.faulted.Load() {
+					events = ex.faultStart(i, err.Error(), now, events)
+				} else {
+					ex.mu.Lock()
+					u.fault.scans++
+					ex.mu.Unlock()
+				}
+				continue
+			}
+			if u.faulted.Load() {
+				events = ex.faultClear(i, now, events)
+			}
+			if !u.seen.Load() {
+				u.seen.Store(true)
+			}
 		}
-		if u.faulted.Load() {
-			events = ex.faultClear(i, now, events)
-		}
-		if !u.seen.Load() {
-			u.seen.Store(true)
-		}
-		v := s.frame.Slots[s.slots[i]]
 		ri := s.unitRoot[i]
-		if cur, ok := valueAt(h.vals[ri], u.idx); ok && sameValue(&cur, &v) {
+		if cur, ok := valueAt(h.vals[ri], u.idx); ok && sameBits(&cur, &v) {
 			continue
 		}
 		if !h.own[ri] {
@@ -512,7 +571,7 @@ func (ex *exprSet) run(t *Tags, now time.Time, events []exprEvent) []exprEvent {
 			if !u.ran {
 				continue
 			}
-			if leaf, ok := valueAt(nv, u.idx); ok && sameValue(&leaf, &u.val) {
+			if leaf, ok := valueAt(nv, u.idx); ok && sameBits(&leaf, &u.val) {
 				continue
 			}
 			if m, ok := setAt(nv, u.idx, ir.CopyValue(u.val)); ok {
@@ -580,7 +639,9 @@ func placeAt(v *ir.Value, idx []int, leaf ir.Value) {
 }
 
 // exprForcedLocked: a force covers the unit's member (the whole tag, the
-// member, or something it lies in). Caller holds t.mu.
+// member, or something it lies in) or a part of it (a member of a struct
+// expr: member): the member is then held as the force leaves it, so what
+// reads it sees the force. Caller holds t.mu.
 func (t *Tags) exprForcedLocked(u *exprUnit) bool {
 	if len(t.forces) == 0 {
 		return false
@@ -593,7 +654,7 @@ func (t *Tags) exprForcedLocked(u *exprUnit) bool {
 		if len(e.path) == 0 {
 			return true
 		}
-		if n, ok := u.in.nodeAt(e.path); ok && pathUnder(u.node.canon, n.canon) {
+		if n, ok := u.in.nodeAt(e.path); ok && (pathUnder(u.node.canon, n.canon) || pathUnder(n.canon, u.node.canon)) {
 			return true
 		}
 	}

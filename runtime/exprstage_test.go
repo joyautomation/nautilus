@@ -35,6 +35,11 @@ FUNCTION Double : INT
 VAR_INPUT x : INT; END_VAR
 Double := x * 2;
 END_FUNCTION
+FUNCTION NaNs : ARRAY[0..3] OF REAL
+VAR_INPUT x : INT; END_VAR
+NaNs[0] := SQRT(-1.0 * INT_TO_REAL(x));
+NaNs[1] := 2.0;
+END_FUNCTION
 FUNCTION RawOf : INT
 VAR_INPUT g : Gauge; END_VAR
 RawOf := g.Raw;
@@ -496,6 +501,9 @@ func TestExprStageIsNeverCarried(t *testing.T) {
 // and nor does a member faulting every scan (the VM hands back the same
 // index error, ir.IndexError, and the stage builds no text per scan).
 func TestExprStageAllocatesNothing(t *testing.T) {
+	if raceOn {
+		t.Skip("the race detector allocates")
+	}
 	plain := InstanceDef{Members: map[string]MemberDef{"Raw": {Kind: MemberFrom}, "Idx": {Kind: MemberFrom}, "Div": {Kind: MemberFrom}, "Cmd": {Kind: MemberTo}}}
 	measure := func(def InstanceDef, idx int64) float64 {
 		r, d := newGaugeRuntime(t, "Seen := G1.Ok;", def)
@@ -574,4 +582,53 @@ func TestTagsGivenCountsAsDelivered(t *testing.T) {
 	r.Tags().Set("G1.Div", int64(4))
 	r.Scan()
 	wantPath(t, r, "G1.Ratio", int64(25))
+}
+
+// A REAL result that is NaN (or infinite) is a fault, as a division by zero
+// is: the last value, quality Bad, listed. Inside an array member a NaN that
+// stays NaN is no change: nothing is committed while the inputs are steady.
+func TestExprStageNaNIsAFault(t *testing.T) {
+	def := gaugeDef()
+	def.Members["Pick"] = MemberDef{Kind: MemberExpr, Expr: "SQRT(INT_TO_REAL(Raw) - 5.0)"}
+	def.Members["Vals"] = MemberDef{Kind: MemberExpr, Expr: "NaNs(Raw)"}
+	def.Members["Both"] = MemberDef{Kind: MemberExpr, Expr: "Ok"}
+	r, d := newGaugeRuntime(t, "", def)
+	deliver(d, 9, 1, 1)
+	r.Scan()
+	wantPath(t, r, "G1.Pick", 2.0)
+	d.set("G1.Raw", int64(3))
+	r.Scan()
+	r.Scan()
+	wantPath(t, r, "G1.Pick", 2.0)
+	if q := r.TagQuality("G1.Pick"); q != nio.Bad {
+		t.Errorf("a NaN result: quality %v, want Bad", q)
+	}
+	if st := r.Stats().Exprs; len(st.Faulting) != 1 || !strings.Contains(st.Faulting[0].Error, "not a number") {
+		t.Errorf("a NaN result is not listed: %+v", st)
+	}
+	gen := r.Tags().Generation()
+	r.Scan()
+	r.Scan()
+	if g := r.Tags().Generation(); g != gen {
+		t.Errorf("an array member holding a NaN, steady inputs: the generation moved %d -> %d", gen, g)
+	}
+}
+
+// A member not computed reads NotConnected, also after a force on it held a
+// value and is gone, and while the reads fail (its inputs then read Stale).
+func TestExprStageNotComputedAfterAForce(t *testing.T) {
+	r, d := newGaugeRuntime(t, "", gaugeDef())
+	if err := r.Tags().Force("G1.Ok", true); err != nil {
+		t.Fatal(err)
+	}
+	r.Scan()
+	r.Tags().Unforce("G1.Ok")
+	d.mu.Lock()
+	d.fail = true
+	d.mu.Unlock()
+	r.Scan()
+	wantPath(t, r, "G1.Ok", false)
+	if q := r.TagQuality("G1.Ok"); q != nio.NotConnected {
+		t.Errorf("G1.Ok, not computed since its force went: %v, want NotConnected", q)
+	}
 }

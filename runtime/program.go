@@ -252,7 +252,8 @@ func (p *Program) Swap(src string) error {
 		}
 		p.prog, p.frame = prog, ir.NewFrame(prog)
 		if p.ex != nil {
-			p.ex.stage, p.ex.prev = stage, nil
+			// prev stays: it is the stage of prevProg, which a Swap keeps.
+			p.ex.stage = stage
 		}
 		p.written.Store(written)
 		p.carryIdx = p.carry.idxOf(*written)
@@ -376,10 +377,12 @@ func (p *Program) Rollback() (SwapReport, error) {
 	if p.prevProg == nil {
 		return SwapReport{}, errors.New("runtime: nothing to roll back")
 	}
-	p.source, p.prog, p.frame = p.prevSource, p.prevProg, p.prevFrame
 	if p.ex != nil {
-		p.ex.stage, p.ex.prev = p.ex.prev, nil // compiled with the program it goes back to
+		// The stage compiled with the program it goes back to: SwapWarm
+		// keeps it beside prevProg, and only Rollback clears both.
+		p.ex.stage, p.ex.prev = p.ex.prev, nil
 	}
+	p.source, p.prog, p.frame = p.prevSource, p.prevProg, p.prevFrame
 	p.written.Store(writtenOf(p.prog))
 	p.carryIdx = p.carry.idxOf(p.writtenKeys())
 	p.prevSource, p.prevProg, p.prevFrame = "", nil, nil
