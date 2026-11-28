@@ -123,12 +123,17 @@ claims:
       only on a click and shows its bitrate, and stops live video when the tab
       is hidden or the page closes.
     source: "#on-the-asset-page"
-    tests: []
+    tests:
+      - 'npm hmi nextState / starts snapshots, never live'
+      - 'npm hmi nextState / goes live only on watch, and only where there is a live stream'
+      - 'npm hmi nextState / stops live on stop, hidden and destroyed'
+      - 'npm hmi BitrateMeter / measures over the last ~10 s'
     note: >-
-      The kit's pure parts (bitrate text, the mode of a feed, the client) are
-      tested in hmi/tests/camera.test.ts, which this inventory does not run;
-      the click, the hidden tab and the stop were seen in a browser against a
+      The kit's feed modes, stop on hidden or destroyed, and bitrate meter are
+      tested in hmi/tests/camera.test.ts and hls.test.ts. The click, the
+      hidden tab and the stop on the page were seen in a browser against a
       running controller with a virtual camera, not automated.
+    partial: true
 
   - id: CAM-009
     claim: >-
@@ -211,11 +216,16 @@ claims:
       asks lazily and only for rows shown, asks no more after a 404, and says once
       that the person has no permission to view cameras.
     source: "#pictures-when-an-alarm-activates"
-    tests: []
+    tests:
+      - 'npm hmi SnapshotClient / remembers a 404: no other occurrence is asked'
+      - 'npm hmi SnapshotClient / remembers a 403: denied, and no more is asked'
+      - 'npm hmi SnapshotClient / runs at most 3 requests at once, and a 404 that returns settles the waiting ones'
     note: >-
-      The kit's client and helpers are tested in hmi/tests (not run by this
-      inventory); the journal's rendering was seen in a browser against a running
-      controller, not automated.
+      The kit's snapshot client (404 remembered, 403 denied, at most 3
+      requests at once) is tested. The journal's rendering, its laziness per
+      row shown and the one-time permission message were seen in a browser
+      against a running controller, not automated.
+    partial: true
 
   - id: CAM-015
     claim: >-
@@ -364,21 +374,30 @@ claims:
       when the tab is hidden and when the page goes away; a camera with no still
       shows a placeholder and no broken image.
     source: "#live-video-of-an-rtsp-camera"
-    tests: []
+    tests:
+      - 'npm hmi playHls / prefers Media Source Extensions over native HLS when both exist'
+      - 'npm hmi playHls (what a real browser does that the first fakes could not) / Apple''s managed MediaSource is used when there is no MediaSource: remote playback off, and segments only while it asks for them'
+      - 'npm hmi playHls / hands the playlist to the browser where HLS is native, and measures nothing'
+      - 'npm hmi BitrateMeter / measures over the last ~10 s'
+      - 'npm hmi playHls / stop() aborts, stops polling and is idempotent'
     note: >-
-      The player's pure parts (playlist, codec string, which segments to fetch,
-      buffer trimming, the bitrate meter) and its flow against fakes are tested
-      in hmi/tests/hls.test.ts, which this inventory does not run. The player was
-      run in Chrome against a controller and a fake RTSP camera serving a real
-      H.264 clip: it plays through MSE and measures the bitrate. Not run: Safari
-      or an iPhone (the managed and native paths), Firefox and a hidden tab. It was
-      also run once for four minutes against live H.264 from a USB webcam (1280x720,
-      15 frames a second, about 1.5 Mbit/s, encoded by ffmpeg and served as RTSP on the
-      loopback address): the video played from the first segment at full size, the
-      playback clock kept pace with the wall clock, the buffer held 2 to 4 seconds, no
-      stall was seen, 15 of 1703 frames were dropped by the browser (0.9%), and the
-      meter read 1.7 to 2.2 Mbit/s. That was by hand and is not repeatable by this
-      inventory; the stream came from a webcam, not from an IP camera with its own RTSP server.
+      The player's pure parts and its flow against fakes are tested in
+      hmi/tests/hls.test.ts (MSE preferred, Apple's managed variant, native
+      HLS, stop). Not covered by a test: starting only on a click, stopping
+      when the tab is hidden, the placeholder for a camera with no still. The
+      player was run in Chrome against a controller and a fake RTSP camera
+      serving a real H.264 clip: it plays through MSE and measures the
+      bitrate. Not run: Safari or an iPhone (the managed and native paths),
+      Firefox and a hidden tab. It was also run once for four minutes against
+      live H.264 from a USB webcam (1280x720, 15 frames a second, about 1.5
+      Mbit/s, encoded by ffmpeg and served as RTSP on the loopback address):
+      the video played from the first segment at full size, the playback clock
+      kept pace with the wall clock, the buffer held 2 to 4 seconds, no stall
+      was seen, 15 of 1703 frames were dropped by the browser (0.9%), and the
+      meter read 1.7 to 2.2 Mbit/s. That was by hand and is not repeatable by
+      this inventory; the stream came from a webcam, not from an IP camera
+      with its own RTSP server.
+    partial: true
 
   - id: CAM-021
     claim: >-
