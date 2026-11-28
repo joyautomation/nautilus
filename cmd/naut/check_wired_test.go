@@ -94,3 +94,86 @@ func TestWriterInputsRefuseWiredInstances(t *testing.T) {
 		t.Errorf("the Logix writer's tags: %v", err)
 	}
 }
+
+const checkWriteManifest = "name: d\ntasks:\n  - program: %s\n    scan: 100ms\n"
+
+func checkWriteFiles(program, body string, extra map[string]string) map[string]string {
+	files := map[string]string{
+		"nautilus.yaml": strings.Replace(checkWriteManifest, "%s", program, 1) + checkPumpWiring,
+		program:         body,
+		"types.st":      checkPumpTypes,
+	}
+	for k, v := range extra {
+		files[k] = v
+	}
+	return files
+}
+
+// A program that assigns a from: member is refused by check, on the line,
+// naming the member, its kind and the fix; commands and memory pass. ST,
+// FBD and LD all reach the same check, each reporting on its own source's
+// line (#1458 slice 7).
+func TestCheckRefusesAssigningAReadOnlyMember(t *testing.T) {
+	want := "P101.Running is read from the device (from:), so the program cannot assign it; remove the assignment, or wire the member as memory:"
+	for _, c := range []struct{ name, file, body, at string }{
+		{"ST", "main.st", "PROGRAM main\nVAR r : BOOL; END_VAR\nr := TRUE;\nP101.Running := r;\nEND_PROGRAM\n", "main.st:4:"},
+		{"FBD", "main.fbd", "PROGRAM main\nVAR\n  r : BOOL;\nEND_VAR\nFBD\n  NETWORK 'x'\n  P101.Running := AND(r, TRUE)\nEND_FBD\nEND_PROGRAM\n", "main.fbd:7:"},
+		{"LD", "main.ld", "PROGRAM main\nVAR\n  r : BOOL;\nEND_VAR\nLD\n  RUNG one\n    r ( P101.Running )\nEND_LD\nEND_PROGRAM\n", "main.ld:6:"},
+	} {
+		files := checkWriteFiles(c.file, c.body, nil)
+		out, code := checkIn(t, files)
+		if code != 1 || !strings.Contains(out, c.at) || !strings.Contains(out, "error: "+want) {
+			t.Errorf("%s: exit %d, want %s ... error: %s:\n%s", c.name, code, c.at, want, out)
+		}
+	}
+	// A command and a memory member are the program's to set.
+	body := "PROGRAM main\nP101.Start := TRUE;\nP101.SpeedSP := 40.0;\nEND_PROGRAM\n"
+	if out, code := checkIn(t, checkWriteFiles("main.st", body, nil)); code != 0 {
+		t.Errorf("commands and memory: exit %d:\n%s", code, out)
+	}
+}
+
+// A library block that assigns a from: member is refused where the instance
+// is passed to it, on the program's line, with the block's own file and
+// line; the same block on a plain local struct passes.
+func TestCheckRefusesPassingAnInstanceToABlockThatAssignsIt(t *testing.T) {
+	lib := "FUNCTION_BLOCK Reset\n  VAR_IN_OUT P : Pump; END_VAR\n  VAR_INPUT X : BOOL; END_VAR\n  IF X THEN\n    P.Running := FALSE;\n  END_IF;\nEND_FUNCTION_BLOCK\n"
+	main := "PROGRAM main\nVAR r : Reset; Spare : Pump; END_VAR\nr(P := Spare, X := TRUE);\nr(P := P101, X := TRUE);\nEND_PROGRAM\n"
+	out, code := checkIn(t, checkWriteFiles("main.st", main, map[string]string{"lib/reset.st": lib}))
+	for _, want := range []string{
+		"main.st:4:",
+		"calling Reset with P101 would assign P101.Running, which is read from the device (from:): Reset assigns P.Running (",
+		"lib/reset.st:5)",
+		"or pass a local variable of that type",
+	} {
+		if code != 1 || !strings.Contains(out, want) {
+			t.Errorf("exit %d, missing %q:\n%s", code, want, out)
+		}
+	}
+	if strings.Contains(out, "main.st:3:") {
+		t.Errorf("the plain local struct was refused:\n%s", out)
+	}
+}
+
+// The PumpCtl block of the struct-wiring guide (one-struct-model §2.4) takes
+// an instance, assigns only commands and memory, and so checks clean; called
+// with a plain local struct it checks clean too. What it reads of from:
+// members is never a write.
+func TestCheckAcceptsABlockThatTakesAnInstance(t *testing.T) {
+	lib := "FUNCTION_BLOCK PumpCtl\n  VAR_IN_OUT P : Pump; END_VAR\n  VAR_INPUT Demand : BOOL; END_VAR\n" +
+		"  P.Start := Demand AND NOT P.Running;\n  IF P.Running THEN\n    P.SpeedSP := P.SpeedSP + 0.1;\n  END_IF;\nEND_FUNCTION_BLOCK\n"
+	main := "PROGRAM main\nVAR Ctl1, Ctl2 : PumpCtl; Spare : Pump; END_VAR\nCtl1(P := P101, Demand := TRUE);\nCtl2(P := Spare, Demand := TRUE);\nEND_PROGRAM\n"
+	if out, code := checkIn(t, checkWriteFiles("main.st", main, map[string]string{"lib/pumpctl.st": lib})); code != 0 {
+		t.Errorf("exit %d:\n%s", code, out)
+	}
+}
+
+// A block declared in the program's own file is named by its line there.
+func TestCheckNamesTheBlocksLineInTheSameFile(t *testing.T) {
+	main := "FUNCTION_BLOCK Reset\n  VAR_IN_OUT P : Pump; END_VAR\n  P.Running := FALSE;\nEND_FUNCTION_BLOCK\n" +
+		"PROGRAM main\nVAR r : Reset; END_VAR\nr(P := P101);\nEND_PROGRAM\n"
+	out, code := checkIn(t, checkWriteFiles("main.st", main, nil))
+	if code != 1 || !strings.Contains(out, "main.st:7:") || !strings.Contains(out, "Reset assigns P.Running (line 3)") {
+		t.Errorf("exit %d:\n%s", code, out)
+	}
+}

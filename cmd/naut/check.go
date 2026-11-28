@@ -404,6 +404,21 @@ func runCheck(args []string) int {
 			}
 			fmt.Printf("%s:%d:%d: warning: %s\n", f, line, col, sh.Message())
 		}
+		// A program must not assign a member its wiring reads from a device
+		// or computes (from:, expr:), itself or through a block it passes
+		// the instance to (#1458, design §2.4). The runtime strips such a
+		// write at commit, so without this it would be silently lost.
+		for _, w := range st.InstanceWrites(res.composed, runtime.WiredKinds(tags)) {
+			if w.Pos.Line <= res.preludeLines {
+				continue // inside a library: its own check says it
+			}
+			markBad(f)
+			line, col := mapLine(w.Pos.Line-res.preludeLines), w.Pos.Col
+			if lineMap != nil {
+				col = 1
+			}
+			fmt.Printf("%s:%d:%d: error: %s\n", f, line, col, w.Message(blockLocation(w, res, mapLine)))
+		}
 		// Diagram structure (#561): a ladder, FBD or SFC file that compiles
 		// can still draw as a knot. The rules, their IDs and thresholds:
 		// lang/lint and docs/structure-warnings.md.
@@ -1214,6 +1229,10 @@ type checkResult struct {
 	inLib bool
 	lib   libErr
 	prog  *st.Program // the file's own parse, when it compiled
+	// preludeLines is how many lines of composed the library prelude
+	// takes; segs locate each library in it.
+	preludeLines int
+	segs         []stproject.Segment
 	// composed is the library prelude and the file parsed together (prog
 	// when there is no prelude).
 	composed *st.Program
@@ -1287,7 +1306,7 @@ func compileFile(src, prelude string, segs []stproject.Segment, tags []runtime.T
 		}
 		return checkResult{failed: true, msg: msg, pos: pos}
 	}
-	return checkResult{prog: prog, composed: lowerProg, warns: warns}
+	return checkResult{prog: prog, composed: lowerProg, warns: warns, preludeLines: preludeLines, segs: segs}
 }
 
 // inLibDir reports whether f lies under the lib/ directory of a manifest
@@ -1545,4 +1564,22 @@ func devicesOnTargetMessage(target string) string {
 	return "devices: rows run on the nautilus runtime (its drivers poll the device and its adapter computes the struct, derived members included); the " +
 		target + " writer does not carry them, so the device's tag would never be filled on the controller. " +
 		"Not supported on this target yet: remove the devices: rows, or run the project on nautilus"
+}
+
+// blockLocation says where the block assignment behind a refused write is:
+// a line of the checked file, or a library's path and line.
+func blockLocation(w st.InstanceWrite, res checkResult, mapLine func(int) int) string {
+	if w.BlockPos.Line == 0 {
+		return ""
+	}
+	if w.BlockPos.Line > res.preludeLines {
+		return fmt.Sprintf("line %d", mapLine(w.BlockPos.Line-res.preludeLines))
+	}
+	if sg, line, ok := stproject.Locate(res.segs, w.BlockPos.Line); ok {
+		if sg.Transpiled {
+			return sg.Path
+		}
+		return fmt.Sprintf("%s:%d", sg.Path, line)
+	}
+	return ""
 }
